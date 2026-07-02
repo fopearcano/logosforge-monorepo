@@ -39,10 +39,6 @@ export function ThemeSelector() {
                 onClick={() => setThemeId(t.id)}
                 title={t.name}
               >
-                <span className="theme-preview" style={{ background: t.appBg, borderColor: t.border }}>
-                  <span className="theme-preview-page" style={{ background: t.editorBg }} />
-                  <span className="theme-preview-accent" style={{ background: t.accent }} />
-                </span>
                 <span className="theme-option-name">{t.name}</span>
               </button>
             ))}
@@ -52,13 +48,6 @@ export function ThemeSelector() {
               onClick={() => setThemeId('custom')}
               title="Custom"
             >
-              <span
-                className="theme-preview"
-                style={{ background: customFields.appBg, borderColor: customFields.border }}
-              >
-                <span className="theme-preview-page" style={{ background: customFields.editorBg }} />
-                <span className="theme-preview-accent" style={{ background: customFields.accent }} />
-              </span>
               <span className="theme-option-name">Custom</span>
             </button>
           </div>

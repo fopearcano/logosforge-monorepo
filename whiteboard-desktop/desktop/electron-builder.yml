@@ -20,6 +20,7 @@ extraResources:
   - from: ../backend/dist/logosforge-whiteboard-backend
     to: backend
 win:
+  icon: build/icon.ico
   target:
     - target: nsis
       arch: [x64]
@@ -40,6 +41,11 @@ portable:
 # (identity: null): Gatekeeper will warn until an Apple Developer ID + notarization
 # are configured. Apple Silicon / universal are a later milestone.
 mac:
+  # A 1024×1024 PNG source — electron-builder generates the multi-resolution
+  # .icns on the macOS runner (its converter is more reliable than a hand-rolled
+  # .icns). The art is a rounded tile with transparent corners, so it reads
+  # correctly as a macOS squircle.
+  icon: build/icon.png
   category: public.app-category.productivity
   identity: null
   target:

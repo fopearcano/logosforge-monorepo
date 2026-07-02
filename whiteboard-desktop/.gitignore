@@ -14,6 +14,11 @@ env/
 *.sqlite
 dist/
 build/
+# ...but desktop/build/ is electron-builder's buildResources INPUT dir (the app
+# icons), not a build artifact — it MUST be tracked. Without this the generic
+# build/ rule silently drops the icons from the repo (cf. the core's models/ dir)
+# and CI packages with the default Electron icon.
+!desktop/build/
 
 # OS / editor
 .DS_Store
