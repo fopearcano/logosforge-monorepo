@@ -20,10 +20,10 @@ Workflows live in `.github/workflows/`. Each freezes the Python backend/core wit
 | Workflow | Product / platform | Trigger |
 |---|---|---|
 | `release-whiteboard-windows.yml` | Whiteboard — Windows (NSIS installer + portable) | tag `whiteboard-v*` |
-| `release-whiteboard-macos.yml` | Whiteboard — macOS Intel (DMG) | manual only — auto-trigger paused (`macos-13` runners won't allocate) |
+| `release-whiteboard-macos.yml` | Whiteboard — macOS Intel (DMG) | tag `whiteboard-v*` — runs on a **self-hosted Intel Mac** runner |
 | `release-windows.yml` | Pro — Windows | tag `v*` |
 
-Cutting a release: `git tag whiteboard-v0.1.0 && git push origin whiteboard-v0.1.0` (or run the workflow manually via *Actions → Run workflow* for artifacts without a Release).
+Cutting a release: `git tag whiteboard-v0.1.0 && git push origin whiteboard-v0.1.0` (or run the workflow manually via *Actions → Run workflow* for artifacts without a Release). The macOS job needs the self-hosted Intel Mac runner online (repo *Settings → Actions → Runners*) with **Python 3.11+** installed (Homebrew or python.org) — the workflow discovers it on the Mac rather than downloading one, since `actions/setup-python` can't install onto a self-hosted Mac.
 
 ## Local development
 
