@@ -18,7 +18,16 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core_client import CoreClient
 from app.local_state import WhiteboardCreate, migrate_legacy, whiteboard_store
-from app.routers import comments, documents, littleboy, outline, psyke, whiteboard, writing_modes
+from app.routers import (
+    comments,
+    documents,
+    littleboy,
+    outline,
+    psyke,
+    settings,
+    whiteboard,
+    writing_modes,
+)
 
 WRAPPER_VERSION = "0.1.0"
 
@@ -58,6 +67,7 @@ app.include_router(whiteboard.router)
 app.include_router(outline.router)
 app.include_router(littleboy.router)
 app.include_router(comments.router)
+app.include_router(settings.router)
 
 
 @app.get("/health")

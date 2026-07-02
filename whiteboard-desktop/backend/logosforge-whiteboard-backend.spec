@@ -17,34 +17,44 @@
 # in-process ASGI transport — no PySide6/torch/whisper.)
 
 import os
-from importlib.util import find_spec
+import sys
 
 from PyInstaller.utils.hooks import collect_all, collect_submodules, collect_data_files
 
+# The core (logosforge) SOURCE tree, resolved from THIS spec's location in the
+# monorepo (whiteboard-desktop/backend -> ../../logosforge). We add it to pathex
+# and enumerate the core's submodules from it directly, rather than trusting the
+# pip-installed copy, because BOTH prior approaches dropped ``logosforge.models``
+# and crashed the frozen backend:
+#   * ``collect_submodules('logosforge')`` enumerates by IMPORTING each submodule
+#     and the walk aborts at the PySide6-dependent ``logosforge.ui.*`` in a
+#     headless venv, silently dropping later submodules;
+#   * enumerating the INSTALLED wheel proved environment-dependent (the CI wheel's
+#     on-disk submodule set differed from a local install).
+# The source tree is identical in every checkout, so this is deterministic.
+CORE_ROOT = os.path.abspath(os.path.join(SPECPATH, "..", "..", "logosforge"))
+CORE_PKG = os.path.join(CORE_ROOT, "logosforge")
+
 
 def core_submodules():
-    """Enumerate every installed ``logosforge.*`` module from the FILESYSTEM
-    (without importing them), skipping the GUI/voice subpackages.
-
-    ``collect_submodules('logosforge')`` enumerates by *importing* each
-    submodule; in a headless build venv the walk aborts the moment it reaches
-    ``logosforge.ui.*`` (which imports PySide6, not installed here), and the
-    aborted walk silently drops later submodules like ``logosforge.models`` —
-    so the frozen backend crashes at startup with ``No module named
-    'logosforge.models'``. Walking the directory avoids the import entirely.
-    """
-    root = find_spec("logosforge").submodule_search_locations[0]
-    skip_top = {"ui", "voice"}  # heavy PySide6 / torch+whisper deps — never used headless
+    """Every ``logosforge.*`` module, enumerated from the SOURCE tree (no
+    imports), skipping the GUI/voice subpackages (heavy PySide6 / torch+whisper
+    deps the headless backend never uses)."""
+    skip_top = {"ui", "voice"}
     mods = set()
-    for dirpath, dirnames, filenames in os.walk(root):
-        rel = os.path.relpath(dirpath, root)
+    for dirpath, dirnames, filenames in os.walk(CORE_PKG):
+        rel = os.path.relpath(dirpath, CORE_PKG)
         parts = [] if rel == "." else rel.split(os.sep)
-        # never descend into __pycache__ or the skipped top-level subpackages
         dirnames[:] = [d for d in dirnames if d != "__pycache__" and not (not parts and d in skip_top)]
         for f in filenames:
             if f.endswith(".py"):
                 tail = [] if f == "__init__.py" else [f[:-3]]
                 mods.add(".".join(["logosforge", *parts, *tail]))
+    print(
+        f"[spec] core pkg={CORE_PKG!r} exists={os.path.isdir(CORE_PKG)} "
+        f"count={len(mods)} has_models={'logosforge.models' in mods}",
+        file=sys.stderr,
+    )
     return sorted(mods)
 
 
@@ -69,6 +79,9 @@ for pkg in ("uvicorn", "fastapi", "starlette", "sqlalchemy", "pydantic",
 # providers, deterministic handlers, route modules), and sqlmodel.
 hiddenimports += collect_submodules("app")
 hiddenimports += core_submodules()  # was collect_submodules("logosforge") — see core_submodules() above
+# Belt-and-braces: the backend imports these at startup (db.database -> models),
+# force them regardless of how enumeration/analysis resolves.
+hiddenimports += ["logosforge.models", "logosforge.models.models", "logosforge.models.psyke_details"]
 hiddenimports += collect_submodules("sqlmodel")
 
 # certifi ships cacert.pem (used for any HTTPS the providers make).
@@ -90,7 +103,7 @@ block_cipher = None
 
 a = Analysis(
     ["backend-entry.py"],
-    pathex=[],
+    pathex=[CORE_ROOT],  # core SOURCE tree — deterministic across local/CI (see CORE_ROOT)
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
