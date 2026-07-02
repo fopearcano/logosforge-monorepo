@@ -5,13 +5,14 @@ name: Release — LogosForge Whiteboard (macOS, Intel)
 # copy of the Whiteboard backend (which embeds the Python core) — no Python needed
 # on the user's machine.
 #
-# PAUSED (2026-07-02): the tag trigger is disabled. The macos-13 (Intel) runner
-# would not allocate on this account/repo — jobs sat `pending` indefinitely and
-# never ran — so every `whiteboard-v*` tag was spawning a stuck macOS job. Until
-# the macOS target is revisited (switch to `macos-latest` / arm64, go universal,
-# or resolve Intel-runner availability), run this manually via
-# "Actions -> Run workflow". Re-add the `push: tags` trigger below to restore
-# automatic per-tag macOS releases.
+# Runs on a SELF-HOSTED Intel Mac (labels: self-hosted, macOS, X64). GitHub's
+# hosted macos-13 (Intel) runner would not allocate on this account (jobs sat
+# `pending` forever), and you can't produce an x64 build on an arm64 runner
+# (PyInstaller can't cross-compile the backend) — so the build runs on your own
+# Intel Mac, which is also the test target. Set the runner up once via repo
+# Settings -> Actions -> Runners -> New self-hosted runner (macOS / x64); it
+# needs Xcode Command Line Tools + enough disk (~a few GB). The setup-python /
+# setup-node steps below download their toolchains into the runner's tool cache.
 #
 # NOTE: builds are UNSIGNED (no Apple Developer ID configured). macOS Gatekeeper
 # will block the app until it is signed + notarized — testers must clear the
@@ -24,7 +25,9 @@ name: Release — LogosForge Whiteboard (macOS, Intel)
 # file: deps), so only those two siblings are required.
 
 on:
-  # push: { tags: ["whiteboard-v*"] }   # PAUSED — see header note; re-enable to restore per-tag macOS builds
+  push:
+    tags:
+      - "whiteboard-v*"
   workflow_dispatch:
     inputs:
       publish_release:
@@ -41,7 +44,7 @@ concurrency:
 
 jobs:
   build-macos-intel:
-    runs-on: macos-13 # Intel (x64) runner
+    runs-on: [self-hosted, macOS, X64] # your Intel Mac (self-hosted runner)
     timeout-minutes: 45
     defaults:
       run:
