@@ -23,6 +23,7 @@ import { useUiVisibility } from './state/uiVisibilityStore';
 import { PREDEFINED_THEMES } from './styles/themes/predefinedThemes';
 import { ThemeSelector } from './styles/themes/ThemeSelector';
 import { useTheme } from './styles/themes/useTheme';
+import logoUrl from './assets/logo.png';
 
 function scrollToBlock(index: number) {
   const surface = document.querySelector('.wb-editor');
@@ -229,6 +230,7 @@ export function App() {
   return (
     <div className={appClass}>
       <header className="titlebar">
+        <img className="app-logo" src={logoUrl} alt="LogosForge" draggable={false} />
         <button
           type="button"
           className={`icon-toggle${ui.outlineVisible ? ' is-active' : ''}`}

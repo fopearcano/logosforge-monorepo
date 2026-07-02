@@ -1,33 +1,47 @@
 /**
  * One outliner row — Dynalist-style, story-oriented.
  *
- * Main line: disclosure · checkbox · color dot · type · title · status badge ·
- * (when selected) quick actions. A subtle tag line + an optional details panel
- * (type / status / color / tags / Note body) sit under the row.
+ * Main line: indent guides · disclosure · checkbox · color · type · title ·
+ * status · (on hover/selected) quick actions. Colour / status / type are inline
+ * pickers, so common edits never need the details panel. A subtle tag line + an
+ * optional details panel (type / status / color / tags) sit under the row.
+ *
+ * Drag-to-reorder: a row is draggable while it isn't being edited; dropping on
+ * the top/bottom third makes a sibling, the middle third nests it as a child.
  *
  * The title is the only keyboard-driven field (its onKeyDown is owned by the
  * outliner); the other controls are mouse-only so they never fight the editor.
  */
 
-import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type DragEvent,
+  type KeyboardEvent,
+  type MouseEvent,
+} from 'react';
 
 import { Popover } from '../../components/Popover';
 import {
   COLOR_LABELS,
+  dropZone,
   OUTLINE_COLORS,
   OUTLINE_STATUSES,
   OUTLINE_TYPES,
   STATUS_BADGE,
   STATUS_LABELS,
   TYPE_LABELS,
+  type DropPosition,
   type OutlineColor,
   type OutlineItemType,
+  type OutlineNode,
   type OutlineStatus,
   type VisibleRow,
 } from './outlineModel';
 import type { OutlineStore } from './useOutline';
 
-const INDENT_STEP = 14;
+const INDENT_STEP = 12;
 const BASE_PAD = 8;
 
 interface Props {
@@ -35,14 +49,27 @@ interface Props {
   store: OutlineStore;
   onKeyDown: (e: KeyboardEvent<HTMLInputElement>, atStart: boolean, atEnd: boolean) => void;
   onDelete: (id: string) => void;
+  /** Drag-to-reorder is disabled while a filter is active (order is ambiguous). */
+  canDrag: boolean;
+  onReveal?: (node: OutlineNode) => void;
+  canReveal?: (node: OutlineNode) => boolean;
 }
 
-export function OutlineRow({ row, store, onKeyDown, onDelete }: Props) {
+function dropZoneFor(e: DragEvent<HTMLElement>): DropPosition {
+  const rect = e.currentTarget.getBoundingClientRect();
+  return dropZone(e.clientY - rect.top, rect.height);
+}
+
+export function OutlineRow({ row, store, onKeyDown, onDelete, canDrag, onReveal, canReveal }: Props) {
   const { node, depth, hasChildren } = row;
   const selected = store.selectedId === node.id;
+  const multi = store.selectedIds.includes(node.id);
   const detailsOpen = store.detailsOpenId === node.id;
   const inputRef = useRef<HTMLInputElement>(null);
   const [tagDraft, setTagDraft] = useState('');
+  const [hovered, setHovered] = useState(false);
+  const [dropZone, setDropZone] = useState<DropPosition | null>(null);
+  const [dragging, setDragging] = useState(false);
 
   // When this row becomes selected, focus the title and place the caret at end.
   useEffect(() => {
@@ -54,12 +81,19 @@ export function OutlineRow({ row, store, onKeyDown, onDelete }: Props) {
     }
   }, [selected]);
 
+  const revealable = !!onReveal && (canReveal ? canReveal(node) : false);
+  const showAffordances = selected || hovered;
   const pad = BASE_PAD + depth * INDENT_STEP;
-  const isNote = node.type === 'note';
 
   const onDisclosureClick = (e: MouseEvent) => {
     if (e.altKey) store.collapseBranch(node.id, !node.collapsed); // recursive
     else store.toggleCollapse(node.id);
+  };
+
+  const selectFromClick = (e: MouseEvent) => {
+    if (e.shiftKey) store.selectRange(node.id);
+    else if (e.metaKey || e.ctrlKey) store.toggleMulti(node.id);
+    else store.selectOnly(node.id);
   };
 
   const commitTag = () => {
@@ -68,12 +102,66 @@ export function OutlineRow({ row, store, onKeyDown, onDelete }: Props) {
     setTagDraft('');
   };
 
+  // --- drag & drop ---
+  const onDragStart = (e: DragEvent<HTMLDivElement>) => {
+    e.dataTransfer.setData('text/plain', node.id);
+    e.dataTransfer.effectAllowed = 'move';
+    setDragging(true);
+  };
+  const onDragEnd = () => {
+    setDragging(false);
+    setDropZone(null);
+  };
+  const onDragOver = (e: DragEvent<HTMLDivElement>) => {
+    if (!canDrag) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const z = dropZoneFor(e);
+    setDropZone((prev) => (prev === z ? prev : z));
+  };
+  const onDragLeave = () => setDropZone(null);
+  const onDrop = (e: DragEvent<HTMLDivElement>) => {
+    if (!canDrag) return;
+    e.preventDefault();
+    const dragId = e.dataTransfer.getData('text/plain');
+    const z = dropZoneFor(e);
+    setDropZone(null);
+    if (dragId && dragId !== node.id) store.move(dragId, node.id, z);
+  };
+
+  const rowClass = [
+    'outline-row',
+    selected ? 'is-selected' : '',
+    multi ? 'is-multi' : '',
+    node.completed ? 'is-completed' : '',
+    dragging ? 'is-dragging' : '',
+    dropZone ? `drop-${dropZone}` : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+
   return (
     <li className="outline-node">
       <div
-        className={`outline-row${selected ? ' is-selected' : ''}${node.completed ? ' is-completed' : ''}`}
-        style={{ paddingLeft: pad }}
+        className={rowClass}
+        style={{ paddingLeft: BASE_PAD }}
+        draggable={canDrag && !selected}
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
       >
+        {depth > 0 && (
+          <span className="outline-indent" aria-hidden>
+            {Array.from({ length: depth }).map((_, i) => (
+              <span key={i} className="outline-guide" />
+            ))}
+          </span>
+        )}
+
         {hasChildren ? (
           <button
             type="button"
@@ -81,6 +169,7 @@ export function OutlineRow({ row, store, onKeyDown, onDelete }: Props) {
             aria-label={node.collapsed ? 'Expand' : 'Collapse'}
             aria-expanded={!node.collapsed}
             title={node.collapsed ? 'Expand (Alt+click: all)' : 'Collapse (Alt+click: all)'}
+            draggable={false}
             onMouseDown={(e) => e.preventDefault()}
             onClick={onDisclosureClick}
           >
@@ -98,32 +187,73 @@ export function OutlineRow({ row, store, onKeyDown, onDelete }: Props) {
           checked={node.completed}
           title="Completed"
           aria-label="Completed"
+          draggable={false}
           onMouseDown={(e) => e.stopPropagation()}
           onChange={() => store.toggleCompleted(node.id)}
         />
 
-        {node.colorLabel !== 'none' && (
-          <span
-            className={`outline-color-dot outline-color-${node.colorLabel}`}
-            title={COLOR_LABELS[node.colorLabel]}
-            aria-hidden
-          />
+        {(node.colorLabel !== 'none' || showAffordances) && (
+          <Popover
+            align="left"
+            triggerClassName={`outline-color-trigger${
+              node.colorLabel !== 'none' ? ` outline-color-${node.colorLabel}` : ' is-empty'
+            }`}
+            label={<span className="outline-a11y">Colour</span>}
+            title={`Colour: ${COLOR_LABELS[node.colorLabel]}`}
+          >
+            {(close) => (
+              <div className="wb-menu outline-color-menu">
+                {OUTLINE_COLORS.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    className={`outline-swatch outline-color-${c}${c === 'none' ? ' is-none' : ''}${
+                      node.colorLabel === c ? ' is-current' : ''
+                    }`}
+                    title={COLOR_LABELS[c]}
+                    aria-label={COLOR_LABELS[c]}
+                    onClick={() => {
+                      store.setColorLabel(node.id, c);
+                      close();
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+          </Popover>
         )}
 
-        <span
-          className="outline-type"
-          title={`${TYPE_LABELS[node.type]} — double-click to zoom in`}
-          onDoubleClick={() => store.zoomInto(node.id)}
+        <Popover
+          align="left"
+          triggerClassName="outline-type-trigger"
+          label={TYPE_LABELS[node.type]}
+          title={`Type: ${TYPE_LABELS[node.type]} — click to change`}
         >
-          {TYPE_LABELS[node.type]}
-        </span>
+          {(close) => (
+            <div className="wb-menu outline-pick-menu">
+              {OUTLINE_TYPES.map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  className={`wb-menu-item${node.type === t ? ' is-current' : ''}`}
+                  onClick={() => {
+                    store.setType(node.id, t);
+                    close();
+                  }}
+                >
+                  {TYPE_LABELS[t]}
+                </button>
+              ))}
+            </div>
+          )}
+        </Popover>
 
         {selected ? (
           <input
             ref={inputRef}
             className="outline-title-input"
             value={node.title}
-            placeholder={isNote ? 'Note title' : 'Untitled'}
+            placeholder="Untitled"
             spellCheck={false}
             onChange={(e) => store.rename(node.id, e.target.value)}
             onKeyDown={(e) => {
@@ -138,40 +268,51 @@ export function OutlineRow({ row, store, onKeyDown, onDelete }: Props) {
             type="button"
             className={`outline-title${node.title ? '' : ' is-untitled'}`}
             title={node.title || 'Untitled'}
-            onClick={() => store.setSelectedId(node.id)}
+            draggable={false}
+            onClick={selectFromClick}
           >
-            {node.title || (isNote ? 'Untitled note' : 'Untitled')}
+            {node.title || 'Untitled'}
           </button>
         )}
 
-        {node.status !== 'none' && (
-          <span
-            className={`outline-status outline-status-${node.status}`}
-            title={STATUS_LABELS[node.status]}
+        {(node.status !== 'none' || showAffordances) && (
+          <Popover
+            align="right"
+            triggerClassName={`outline-status-trigger${
+              node.status !== 'none' ? ` outline-status-${node.status}` : ' is-empty'
+            }`}
+            label={node.status !== 'none' ? STATUS_BADGE[node.status] : ''}
+            title={`Status: ${STATUS_LABELS[node.status]} — click to change`}
           >
-            {STATUS_BADGE[node.status]}
-          </span>
+            {(close) => (
+              <div className="wb-menu outline-pick-menu">
+                {OUTLINE_STATUSES.map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    className={`wb-menu-item${node.status === s ? ' is-current' : ''}`}
+                    onClick={() => {
+                      store.setStatus(node.id, s);
+                      close();
+                    }}
+                  >
+                    {STATUS_LABELS[s]}
+                  </button>
+                ))}
+              </div>
+            )}
+          </Popover>
         )}
 
-        {selected && (
+        {showAffordances && (
           <span className="outline-row-actions">
-            <button
-              type="button"
-              className="outline-act"
-              title="Add child (Ctrl/Cmd+Enter)"
-              aria-label="Add child"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => store.addChild(node.id)}
-            >
-              +
-            </button>
             <Popover label="⋯" title="Item actions" align="right">
               {(close) => (
                 <div className="wb-menu outline-menu">
                   <button type="button" className="wb-menu-item" onClick={() => { store.addChild(node.id); close(); }}>
                     Add child
                   </button>
-                  <button type="button" className="wb-menu-item" onClick={() => { store.setSelectedId(node.id); close(); }}>
+                  <button type="button" className="wb-menu-item" onClick={() => { store.selectOnly(node.id); close(); }}>
                     Rename
                   </button>
                   <button
@@ -179,8 +320,13 @@ export function OutlineRow({ row, store, onKeyDown, onDelete }: Props) {
                     className="wb-menu-item"
                     onClick={() => { store.setDetailsOpenId(detailsOpen ? null : node.id); close(); }}
                   >
-                    {detailsOpen ? 'Hide details' : (isNote ? 'Edit note…' : 'Edit details…')}
+                    {detailsOpen ? 'Hide details' : 'Edit details…'}
                   </button>
+                  {revealable && (
+                    <button type="button" className="wb-menu-item" onClick={() => { onReveal!(node); close(); }}>
+                      Reveal in editor
+                    </button>
+                  )}
                   <button type="button" className="wb-menu-item" onClick={() => { store.zoomInto(node.id); close(); }}>
                     Zoom into item
                   </button>
@@ -275,17 +421,6 @@ export function OutlineRow({ row, store, onKeyDown, onDelete }: Props) {
               />
             </div>
           </div>
-
-          <label className="outline-field-block">
-            <span>{isNote ? 'Note' : 'Notes'}</span>
-            <textarea
-              className="outline-notes"
-              placeholder={isNote ? 'LogosForge Note body…' : 'Notes…'}
-              value={node.notes}
-              rows={3}
-              onChange={(e) => store.setNotes(node.id, e.target.value)}
-            />
-          </label>
 
           <div className="outline-details-actions">
             <button type="button" className="outline-details-done" onClick={() => store.setDetailsOpenId(null)}>

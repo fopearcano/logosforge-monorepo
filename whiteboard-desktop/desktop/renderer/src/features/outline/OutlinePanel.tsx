@@ -9,9 +9,10 @@
  * The panel stays exactly where it is (left side, lightweight, Whiteboard Free).
  */
 
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 
 import { Popover } from '../../components/Popover';
+import { normalizeOutlineTitle } from './outlineColorStore';
 import { OutlineOutliner } from './OutlineOutliner';
 import {
   COLOR_LABELS,
@@ -23,6 +24,7 @@ import {
   isFilterActive,
   type OutlineColor,
   type OutlineItemType,
+  type OutlineNode,
   type OutlineStatus,
 } from './outlineModel';
 import type { OutlineItem, OutlineKind } from './types';
@@ -52,6 +54,7 @@ function derivedIndent(item: OutlineItem): number {
   if (item.kind === 'section') return 10 + Math.max(0, item.level - 1) * 14;
   return 24; // scenes / synopses / notes sit nested under sections
 }
+
 
 interface Props {
   derivedItems: OutlineItem[];
@@ -106,7 +109,7 @@ export function OutlinePanel({ derivedItems, onNavigate, baseUrl, ready, mode }:
       </div>
 
       {view === 'manual' ? (
-        <ManualView store={store} />
+        <ManualView store={store} derivedItems={derivedItems} onNavigate={onNavigate} />
       ) : (
         <DerivedView items={derivedItems} onNavigate={onNavigate} />
       )}
@@ -114,11 +117,61 @@ export function OutlinePanel({ derivedItems, onNavigate, baseUrl, ready, mode }:
   );
 }
 
-function ManualView({ store }: { store: ReturnType<typeof useOutline> }) {
+function ManualView({
+  store,
+  derivedItems,
+  onNavigate,
+}: {
+  store: ReturnType<typeof useOutline>;
+  derivedItems: OutlineItem[];
+  onNavigate?: (item: OutlineItem) => void;
+}) {
   const saveLabel = SAVE_LABEL[store.saveState] ?? '';
   // When zoomed in, "+ Add" adds a child of the zoom root (not a new top-level).
   const add = () => (store.zoomRootId ? store.addChild(store.zoomRootId) : store.addRoot());
   const filterOn = isFilterActive(store.filter);
+  const multiCount = store.selectedIds.length;
+
+  // Reveal-in-editor: match a manual item's title to document heading(s)/scene(s).
+  // Titles can collide (two "Chapter One" headings), so keep every match and
+  // cycle through them on repeated reveals rather than always jumping to the first.
+  const revealMap = useMemo(() => {
+    const m = new Map<string, OutlineItem[]>();
+    for (const it of derivedItems) {
+      const k = normalizeOutlineTitle(it.label);
+      if (!k) continue;
+      const arr = m.get(k);
+      if (arr) arr.push(it);
+      else m.set(k, [it]);
+    }
+    return m;
+  }, [derivedItems]);
+  const revealIdx = useRef(new Map<string, number>());
+  const canReveal = useCallback(
+    (node: OutlineNode) => {
+      const arr = revealMap.get(normalizeOutlineTitle(node.title));
+      return !!node.title.trim() && !!arr && arr.length > 0;
+    },
+    [revealMap],
+  );
+  const onReveal = useCallback(
+    (node: OutlineNode) => {
+      const k = normalizeOutlineTitle(node.title);
+      const arr = revealMap.get(k);
+      if (!arr || arr.length === 0) return;
+      const next = ((revealIdx.current.get(k) ?? -1) + 1) % arr.length;
+      revealIdx.current.set(k, next);
+      onNavigate?.(arr[next]);
+    },
+    [revealMap, onNavigate],
+  );
+
+  const deleteSelected = () => {
+    if (window.confirm(`Delete ${multiCount} selected items and their children?`)) {
+      store.removeSelected();
+    }
+  };
+
   return (
     <>
       <div className="outline-toolbar">
@@ -140,7 +193,7 @@ function ManualView({ store }: { store: ReturnType<typeof useOutline> }) {
         <input
           className="outline-search"
           type="search"
-          placeholder="Search title, note, #tag…"
+          placeholder="Search title, #tag…"
           value={store.filter.query}
           onChange={(e) => store.setFilter({ query: e.target.value })}
         />
@@ -199,13 +252,60 @@ function ManualView({ store }: { store: ReturnType<typeof useOutline> }) {
         </div>
       )}
 
+      {multiCount >= 2 && (
+        <div className="outline-batchbar" role="group" aria-label="Batch actions">
+          <span className="outline-batch-count">{multiCount} selected</span>
+          <Popover label="Status" title="Set status for selected" align="left">
+            {(close) => (
+              <div className="wb-menu outline-pick-menu">
+                {OUTLINE_STATUSES.map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    className="wb-menu-item"
+                    onClick={() => { store.setStatusSelected(s); close(); }}
+                  >
+                    {STATUS_LABELS[s]}
+                  </button>
+                ))}
+              </div>
+            )}
+          </Popover>
+          <Popover label="Colour" title="Set colour for selected" align="left">
+            {(close) => (
+              <div className="wb-menu outline-color-menu">
+                {OUTLINE_COLORS.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    className={`outline-swatch outline-color-${c}${c === 'none' ? ' is-none' : ''}`}
+                    title={COLOR_LABELS[c]}
+                    aria-label={COLOR_LABELS[c]}
+                    onClick={() => { store.setColorSelected(c); close(); }}
+                  />
+                ))}
+              </div>
+            )}
+          </Popover>
+          <button type="button" className="outline-tool" onClick={() => store.setCompletedSelected(true)}>
+            Done
+          </button>
+          <button type="button" className="outline-tool outline-tool-danger" onClick={deleteSelected}>
+            Delete
+          </button>
+          <button type="button" className="outline-inline-link" onClick={store.clearMulti}>
+            Clear
+          </button>
+        </div>
+      )}
+
       <div className="outline-body">
         {store.loading ? (
           <p className="outline-hint">Loading…</p>
         ) : store.error ? (
           <p className="outline-hint outline-error">Couldn’t load outline: {store.error}</p>
         ) : (
-          <OutlineOutliner store={store} />
+          <OutlineOutliner store={store} onReveal={onReveal} canReveal={canReveal} />
         )}
       </div>
     </>

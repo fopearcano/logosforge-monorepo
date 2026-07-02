@@ -105,7 +105,7 @@ throws('binary import rejected', () => parseImport('txt', 'PNG\u0000binary'));
 
 // 5. LogosForge envelope round-trip (content + mode + settings + title).
 {
-  const env = buildLogosforgeEnvelope(payload({ outline: [{ id: 'n1', parentId: null, type: 'act', title: 'Act One', notes: '', order: 0, collapsed: false, completed: false, status: 'none', tags: [], colorLabel: 'none', createdAt: 't', updatedAt: 't' }] }));
+  const env = buildLogosforgeEnvelope(payload({ outline: [{ id: 'n1', parentId: null, type: 'act', title: 'Act One', order: 0, collapsed: false, completed: false, status: 'none', tags: [], colorLabel: 'none', createdAt: 't', updatedAt: 't' }] }));
   check('envelope format', env.format === LOGOSFORGE_FORMAT);
   check('envelope version', env.version === '1.0');
   const json = JSON.stringify(env);

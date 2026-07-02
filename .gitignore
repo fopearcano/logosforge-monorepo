@@ -55,3 +55,15 @@ build-venv*/
 whiteboard-desktop/backend/build/
 # Claude Code local config (launch.json + session state) — not needed on GitHub/CI.
 .claude/
+
+# --- Secrets (NEVER commit — critical while the repo is public) --------------
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
+id_rsa
+id_rsa.*
+secrets.json
+credentials.json

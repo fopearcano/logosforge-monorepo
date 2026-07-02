@@ -24,18 +24,22 @@ import {
   hasChildren,
   isFilterActive,
   TYPE_LABELS,
+  type OutlineNode,
 } from './outlineModel';
 import { OutlineRow } from './OutlineRow';
 import type { OutlineStore } from './useOutline';
 
 interface Props {
   store: OutlineStore;
+  onReveal?: (node: OutlineNode) => void;
+  canReveal?: (node: OutlineNode) => boolean;
 }
 
-export function OutlineOutliner({ store }: Props) {
+export function OutlineOutliner({ store, onReveal, canReveal }: Props) {
   const rows = buildRows(store.items, store.zoomRootId, store.filter);
   const visibleIds = new Set(rows.map((r) => r.node.id));
   const filtering = isFilterActive(store.filter);
+  const canDrag = !filtering; // order is ambiguous under an active filter
   const crumbs = store.zoomRootId ? ancestorChain(store.items, store.zoomRootId) : [];
 
   const confirmDelete = (id: string) => {
@@ -81,7 +85,7 @@ export function OutlineOutliner({ store }: Props) {
       if (mod) store.moveUp(id);
       else {
         const i = rows.findIndex((r) => r.node.id === id);
-        if (i > 0) store.setSelectedId(rows[i - 1].node.id);
+        if (i > 0) store.selectOnly(rows[i - 1].node.id);
       }
       return;
     }
@@ -91,7 +95,7 @@ export function OutlineOutliner({ store }: Props) {
       if (mod) store.moveDown(id);
       else {
         const i = rows.findIndex((r) => r.node.id === id);
-        if (i >= 0 && i < rows.length - 1) store.setSelectedId(rows[i + 1].node.id);
+        if (i >= 0 && i < rows.length - 1) store.selectOnly(rows[i + 1].node.id);
       }
       return;
     }
@@ -99,7 +103,7 @@ export function OutlineOutliner({ store }: Props) {
       e.preventDefault();
       e.stopPropagation();
       if (hasChildren(store.items, id) && !node.collapsed) store.toggleCollapse(id);
-      else if (node.parentId && visibleIds.has(node.parentId)) store.setSelectedId(node.parentId);
+      else if (node.parentId && visibleIds.has(node.parentId)) store.selectOnly(node.parentId);
       return;
     }
     if (e.key === 'ArrowRight' && atEnd) {
@@ -110,7 +114,7 @@ export function OutlineOutliner({ store }: Props) {
       if (node.collapsed) store.toggleCollapse(id);
       else {
         const first = firstChildId(store.items, id);
-        if (first) store.setSelectedId(first);
+        if (first) store.selectOnly(first);
       }
       return;
     }
@@ -124,6 +128,7 @@ export function OutlineOutliner({ store }: Props) {
       e.preventDefault();
       e.stopPropagation();
       store.setSelectedId(null);
+      store.clearMulti();
       e.currentTarget.blur();
     }
   };
@@ -175,6 +180,9 @@ export function OutlineOutliner({ store }: Props) {
               store={store}
               onKeyDown={handleKey}
               onDelete={confirmDelete}
+              canDrag={canDrag}
+              onReveal={onReveal}
+              canReveal={canReveal}
             />
           ))}
         </ul>

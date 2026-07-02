@@ -9,9 +9,11 @@ interface Props {
   /** Render-prop receives a `close` callback (so menu items can dismiss). */
   children: (close: () => void) => ReactNode;
   align?: 'left' | 'right';
+  /** Trigger button class (defaults to the toolbar `wb-tool` look). */
+  triggerClassName?: string;
 }
 
-export function Popover({ label, title, children, align = 'left' }: Props) {
+export function Popover({ label, title, children, align = 'left', triggerClassName = 'wb-tool' }: Props) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
 
@@ -38,7 +40,7 @@ export function Popover({ label, title, children, align = 'left' }: Props) {
     <div className="wb-popover" ref={ref}>
       <button
         type="button"
-        className={`wb-tool${open ? ' is-active' : ''}`}
+        className={`${triggerClassName}${open ? ' is-active' : ''}`}
         aria-haspopup="dialog"
         aria-expanded={open}
         title={title}

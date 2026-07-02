@@ -109,6 +109,12 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 .titlebar button, .titlebar .app-title { -webkit-app-region: no-drag; }
 
+/* Brand mark (top-left). Transparent PNG — the titlebar colour shows through.
+   The source is a white mark; on light themes flip it dark so it stays legible
+   against a light titlebar (shape + glow preserved, colour only). */
+.app-logo { height: 24px; width: auto; flex: none; -webkit-app-region: no-drag; user-select: none; -webkit-user-drag: none; }
+[data-theme='light'] .app-logo { filter: invert(1); }
+
 .app-title-wrap { margin: 0 auto; position: relative; -webkit-app-region: no-drag; }
 .app-title {
   display: inline-flex; align-items: center; gap: 6px;
@@ -359,12 +365,25 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .outline-crumb:disabled { color: var(--text); }
 .outline-crumb + .outline-crumb::before { content: '›'; margin-right: 4px; color: var(--paper-muted); }
 
-.outline-body { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 7px 12px; }
+.outline-body { flex: 1; min-height: 0; overflow: hidden auto; padding: 2px 7px 12px; }
 .outline-tree, .outline-list { list-style: none; margin: 0; padding: 0; }
 .outline-node { list-style: none; }
-.outline-row { display: flex; align-items: center; gap: 6px; padding: 5px 6px; border-radius: var(--r-sm); transition: background var(--dur) var(--ease); }
+.outline-row { position: relative; display: flex; align-items: center; gap: 5px; padding: 5px 30px 5px 6px; border-radius: var(--r-sm); transition: background var(--dur) var(--ease); }
 .outline-row:hover { background: var(--hover); }
 .outline-node.is-selected > .outline-row { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
+.outline-row.is-multi { background: color-mix(in oklab, var(--accent-soft) 70%, transparent); box-shadow: inset 2px 0 0 color-mix(in oklab, var(--accent) 55%, transparent); }
+.outline-row.is-dragging { opacity: .45; }
+
+/* indent guides — one faint vertical rule per nesting level */
+.outline-indent { display: inline-flex; flex: none; align-self: stretch; }
+.outline-guide { width: 12px; align-self: stretch; border-left: 1px solid color-mix(in oklab, var(--border) 60%, transparent); }
+
+/* drag-and-drop drop indicators (before/after = sibling line, child = nest tint) */
+.outline-row.drop-before::after,
+.outline-row.drop-after::after { content: ''; position: absolute; left: 4px; right: 4px; height: 2px; background: var(--accent); border-radius: 2px; pointer-events: none; }
+.outline-row.drop-before::after { top: -1px; }
+.outline-row.drop-after::after { bottom: -1px; }
+.outline-row.drop-child { background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
 
 /* Outline glyphs: blend the muted tokens toward the text colour so the caret,
    leaf dot and TYPE badge stay legible on the darker themes (they sat at ~3.4:1). */
@@ -375,32 +394,63 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .outline-check:checked { background: var(--accent); border-color: var(--accent); }
 .outline-node.is-completed > .outline-row .outline-title { color: var(--paper-muted); text-decoration: line-through; opacity: .7; }
 
-.outline-color-dot { width: 8px; height: 8px; flex: none; border-radius: 2px; background: var(--muted); }
-.outline-color-red{background:#c0473b} .outline-color-amber{background:#c0883a} .outline-color-green{background:#4fa07a}
-.outline-color-blue{background:#5181a8} .outline-color-violet{background:#8a6cb8} .outline-color-gray{background:#9b988f}
+/* inline colour trigger (the dot) + swatch picker. Base rules come BEFORE the
+   colour variants so an element carrying both (trigger/swatch + colour) resolves
+   to the variant's background. */
+.outline-color-trigger { width: 11px; height: 11px; flex: none; padding: 0; border: 0; border-radius: 3px; background: var(--muted); cursor: pointer; }
+.outline-color-trigger.is-empty { background: transparent; box-shadow: inset 0 0 0 1.5px var(--border); }
+.outline-color-trigger.is-active { box-shadow: 0 0 0 2px var(--accent-soft); }
+.outline-swatch { width: 18px; height: 18px; border: 0; border-radius: 4px; background: var(--muted); cursor: pointer; box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ink) 12%, transparent); }
+.outline-swatch.is-none { background: transparent; box-shadow: inset 0 0 0 1.5px var(--border); }
+.outline-swatch.is-current { box-shadow: 0 0 0 2px var(--accent); }
+.outline-color-red{background:#c0473b} .outline-color-orange{background:#c0883a} .outline-color-yellow{background:#c9a227}
+.outline-color-green{background:#4fa07a} .outline-color-blue{background:#5181a8} .outline-color-purple{background:#8a6cb8}
+.outline-color-gray{background:#9b988f}
+.outline-color-menu { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; padding: 8px; }
+.outline-pick-menu { min-width: 128px; }
+.outline-menu { min-width: 150px; }
+.outline-pick-menu .wb-menu-item.is-current { color: var(--accent); font-weight: 600; }
+.outline-a11y { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 
-.outline-type { font: 500 8px/1 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: color-mix(in oklab, var(--muted) 55%, var(--text)); flex: none; }
-.outline-title { flex: 1; min-width: 0; font: 450 12px/1.3 var(--font-ui); color: var(--text); background: none; border: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.outline-type-trigger { font: 500 8px/1 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: color-mix(in oklab, var(--muted) 55%, var(--text)); flex: none; border: 0; background: none; padding: 2px 3px; border-radius: 3px; cursor: pointer; }
+.outline-type-trigger:hover, .outline-type-trigger.is-active { background: var(--hover); color: var(--text); }
+.outline-title { flex: 1; min-width: 0; font: 450 12px/1.3 var(--font-ui); color: var(--text); background: none; border: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: text; }
 .outline-title.is-untitled { color: var(--paper-muted); font-style: italic; }
 .outline-title-input { flex: 1; min-width: 0; font: 450 12px/1.3 var(--font-ui); color: var(--text); background: var(--bg); border: 1px solid var(--accent); border-radius: var(--r-sm); padding: 2px 6px; box-shadow: 0 0 0 3px var(--accent-soft); }
 .outline-title-input:focus { outline: none; }
 
-.outline-status { font: 500 8px/1 var(--font-mono); letter-spacing: .06em; text-transform: uppercase; padding: 2px 6px; border-radius: var(--r-pill); border: 1px solid var(--border-soft); color: var(--muted); flex: none; }
-.outline-status-draft   { color: #a9742a; border-color: color-mix(in oklab, #a9742a 40%, transparent); }
-.outline-status-revise  { color: var(--accent); border-color: color-mix(in oklab, var(--accent) 40%, transparent); }
-.outline-status-done    { color: var(--ok); border-color: color-mix(in oklab, var(--ok) 40%, transparent); }
+.outline-status-trigger { font: 500 8px/1 var(--font-mono); letter-spacing: .06em; text-transform: uppercase; padding: 2px 6px; border-radius: var(--r-pill); border: 1px solid var(--border-soft); color: var(--muted); background: none; flex: none; cursor: pointer; }
+.outline-status-trigger.is-empty { width: 14px; padding: 0; border-style: dashed; opacity: .7; }
+.outline-status-trigger.is-empty::before { content: '+'; }
+.outline-status-trigger.is-active { border-color: var(--accent); }
+.outline-status-todo     { color: var(--muted); }
+.outline-status-drafting { color: #a9742a; border-color: color-mix(in oklab, #a9742a 40%, transparent); }
+.outline-status-revised  { color: var(--accent); border-color: color-mix(in oklab, var(--accent) 40%, transparent); }
+.outline-status-done     { color: var(--ok); border-color: color-mix(in oklab, var(--ok) 40%, transparent); }
 
-.outline-row-actions { display: inline-flex; align-items: center; gap: 2px; margin-left: auto; }
+/* Actions pinned to the row's reserved right gutter — always fully visible +
+   clickable at any nesting depth (the row's content clips before reaching it). */
+.outline-row-actions { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); display: inline-flex; align-items: center; gap: 2px; }
+.outline-row-actions .wb-tool { width: 22px; height: 22px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
 .outline-act { width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: var(--r-sm); background: none; color: var(--muted); }
 .outline-act:hover { background: var(--hover); color: var(--text); }
+
+/* batch-action bar (shown when ≥2 rows are multi-selected) */
+.outline-batchbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 11px 6px; padding: 5px 9px; background: var(--accent-soft); border-radius: var(--r-sm); }
+.outline-batch-count { font: 500 10px/1 var(--font-mono); letter-spacing: .04em; color: var(--text); margin-right: 2px; }
+.outline-tool-danger { color: var(--error); }
+.outline-tool-danger:hover { background: color-mix(in oklab, var(--error) 14%, transparent); color: var(--error); }
 
 .outline-tags { display: flex; flex-wrap: wrap; gap: 4px; padding: 2px 6px 4px 26px; }
 .outline-tag-chip { font: 500 9px/1 var(--font-mono); color: var(--syn-tag); background: color-mix(in oklab, var(--syn-tag) 14%, transparent); border-radius: var(--r-pill); padding: 2px 7px; border: 0; }
 .outline-tag-edit { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 
 .outline-details { margin: 2px 6px 8px 26px; padding: 10px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-md); display: flex; flex-direction: column; gap: 8px; }
-.outline-notes { width: 100%; min-height: 54px; resize: vertical; background: var(--paper); border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--ink); padding: 6px 8px; font: 400 11px/1.5 var(--font-ui); }
-.outline-notes:focus { outline: none; border-color: var(--accent); }
+.outline-details-grid { display: flex; flex-direction: column; gap: 7px; }
+.outline-field-block { display: flex; flex-direction: column; gap: 5px; font: 500 10px/1 var(--font-mono); letter-spacing: .04em; color: var(--muted); }
+.outline-details-actions { display: flex; justify-content: flex-end; }
+.outline-details-done { font: 500 10px/1 var(--font-mono); letter-spacing: .04em; text-transform: uppercase; color: var(--muted); background: none; border: 1px solid var(--border); border-radius: var(--r-sm); padding: 4px 10px; cursor: pointer; }
+.outline-details-done:hover { color: var(--text); background: var(--hover); }
 
 .outline-hint { padding: 14px 13px; font: 400 11px/1.6 var(--font-ui); color: var(--muted); }
 .outline-error { color: var(--error); }
@@ -925,6 +975,13 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .wb-sm-scene { width: 8px;  height: 8px;  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); opacity: .85; }
 .wb-sm-arrow { width: 7px;  height: 9px;  clip-path: polygon(0 0, 100% 50%, 0 100%); opacity: .9; }
 .wb-sm-beat  { width: 3px;  height: 3px;  border-radius: 50%; opacity: .55; }
+/* Tint: node reflects the colour of the outline item it matches (by title).
+   Same palette as the outline dots; hover/active still override to --accent. */
+.wb-sm-color-red { background: #c0473b; } .wb-sm-color-orange { background: #c0883a; } .wb-sm-color-yellow { background: #c9a227; }
+.wb-sm-color-green { background: #4fa07a; } .wb-sm-color-blue { background: #5181a8; } .wb-sm-color-purple { background: #8a6cb8; }
+.wb-sm-color-gray { background: #9b988f; }
+.wb-sm-color-red, .wb-sm-color-orange, .wb-sm-color-yellow, .wb-sm-color-green,
+.wb-sm-color-blue, .wb-sm-color-purple, .wb-sm-color-gray { opacity: 1; }
 .wb-sm-node:hover .wb-sm-shape,
 .wb-sm-node.is-active .wb-sm-shape { background: var(--accent); opacity: 1; }
 .wb-sm-node:hover .wb-sm-shape { transform: scale(1.18); }

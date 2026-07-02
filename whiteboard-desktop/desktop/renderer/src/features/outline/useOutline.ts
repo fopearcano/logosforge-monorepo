@@ -13,11 +13,13 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { registerDocFlusher, registerUnloadFlush, withDoc } from '../../state/currentDocument';
+import { registerDocFlusher, registerUnloadFlush, useCurrentDocId, withDoc } from '../../state/currentDocument';
 import { getOutlineItems, onOutlineRefresh, saveOutlineItems } from './outlineApi';
+import { publishOutlineColors } from './outlineColorStore';
 import * as M from './outlineModel';
 import {
   EMPTY_FILTER,
+  type DropPosition,
   type OutlineColor,
   type OutlineFilter,
   type OutlineItemType,
@@ -62,6 +64,8 @@ export interface OutlineStore {
   saveState: SaveState;
   selectedId: string | null;
   setSelectedId: (id: string | null) => void;
+  /** Multi-selection for batch actions (empty unless ≥1 rows are multi-selected). */
+  selectedIds: string[];
   detailsOpenId: string | null;
   setDetailsOpenId: (id: string | null) => void;
   // view: zoom (hoist) + search/filter
@@ -78,7 +82,6 @@ export interface OutlineStore {
   addSibling: (afterId: string) => void;
   rename: (id: string, title: string) => void;
   setType: (id: string, type: OutlineItemType) => void;
-  setNotes: (id: string, notes: string) => void;
   setStatus: (id: string, status: OutlineStatus) => void;
   setColorLabel: (id: string, color: OutlineColor) => void;
   toggleCompleted: (id: string) => void;
@@ -90,10 +93,20 @@ export interface OutlineStore {
   outdent: (id: string) => void;
   moveUp: (id: string) => void;
   moveDown: (id: string) => void;
+  move: (dragId: string, targetId: string, position: DropPosition) => void;
   toggleCollapse: (id: string) => void;
   collapseBranch: (id: string, collapsed: boolean) => void;
   collapseAll: () => void;
   expandAll: () => void;
+  // multi-select + batch actions
+  selectOnly: (id: string) => void;
+  toggleMulti: (id: string) => void;
+  selectRange: (id: string) => void;
+  clearMulti: () => void;
+  removeSelected: () => void;
+  setStatusSelected: (status: OutlineStatus) => void;
+  setColorSelected: (color: OutlineColor) => void;
+  setCompletedSelected: (completed: boolean) => void;
 }
 
 interface Options {
@@ -108,14 +121,26 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
   const [error, setError] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<SaveState>('idle');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [detailsOpenId, setDetailsOpenId] = useState<string | null>(null);
   const [zoomRootId, setZoomState] = useState<string | null>(loadZoom);
   const [filter, setFilterState] = useState<OutlineFilter>(EMPTY_FILTER);
+  // Reactive active-document id: the outline is doc-scoped, so a reload must
+  // re-run when the id resolves/changes (mirrors useComments). Without this the
+  // initial load races ahead of the doc pick and reads the wrong (default) scope.
+  const docId = useCurrentDocId();
 
   // Live refs so callbacks stay stable but always see current values.
   const itemsRef = useRef<OutlineNode[]>(items);
   const zoomRef = useRef<string | null>(zoomRootId);
   zoomRef.current = zoomRootId;
+  const filterRef = useRef<OutlineFilter>(filter);
+  filterRef.current = filter;
+  const selectedIdRef = useRef<string | null>(selectedId);
+  selectedIdRef.current = selectedId;
+  const selectedIdsRef = useRef<string[]>(selectedIds);
+  selectedIdsRef.current = selectedIds;
+  const anchorRef = useRef<string | null>(null);
   const modeRef = useRef(mode);
   modeRef.current = mode;
   const baseUrlRef = useRef(baseUrl);
@@ -177,7 +202,7 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
         setLoading(false);
       });
     return () => controller.abort();
-  }, [ready, baseUrl]);
+  }, [ready, baseUrl, docId]);
 
   // Reload when the persisted list is rewritten out-of-band (e.g. a LogosForge
   // import). Keeps the panel in sync without a manual refresh.
@@ -232,6 +257,26 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
     }
   }, [items, zoomRootId]);
 
+  // Keep the selection valid — an out-of-band reload (import / doc switch) or a
+  // delete can drop the selected/multi-selected/anchor nodes; stale ids would
+  // make batch ops silently no-op, so prune them whenever the list changes.
+  useEffect(() => {
+    const has = (id: string) => M.getNode(items, id) !== undefined;
+    if (selectedId && !has(selectedId)) setSelectedId(null);
+    setSelectedIds((prev) => {
+      if (prev.length === 0) return prev;
+      const valid = prev.filter(has);
+      return valid.length === prev.length ? prev : valid;
+    });
+    if (anchorRef.current && !has(anchorRef.current)) anchorRef.current = null;
+  }, [items, selectedId]);
+
+  // Publish colour labels (keyed by title) so the bottom Story Map can tint its
+  // nodes to match the outline items they correspond to.
+  useEffect(() => {
+    publishOutlineColors(items);
+  }, [items]);
+
   const setZoomRootId = useCallback((id: string | null) => {
     setZoomState(id);
     saveZoom(id);
@@ -254,6 +299,8 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
     const node = M.createNode(id, M.rootType(modeRef.current), null, now());
     mutate((list) => M.insertRoot(list, node));
     setSelectedId(id);
+    setSelectedIds([]);
+    anchorRef.current = id;
     setDetailsOpenId(null);
   }, [mutate]);
 
@@ -267,6 +314,8 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
       const node = M.createNode(id, type, parentId, now());
       mutate((list) => M.insertChild(list, parentId, node));
       setSelectedId(id);
+      setSelectedIds([]);
+      anchorRef.current = id;
       setDetailsOpenId(null);
     },
     [mutate],
@@ -283,6 +332,8 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
       const node = M.createNode(id, after.type, after.parentId, now());
       mutate((list) => M.insertSibling(list, afterId, node));
       setSelectedId(id);
+      setSelectedIds([]);
+      anchorRef.current = id;
       setDetailsOpenId(null);
     },
     [mutate, addRoot],
@@ -294,10 +345,6 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
   );
   const setType = useCallback(
     (id: string, type: OutlineItemType) => mutate((list) => M.setNodeType(list, id, type, now())),
-    [mutate],
-  );
-  const setNotes = useCallback(
-    (id: string, notes: string) => mutate((list) => M.setNotes(list, id, notes, now())),
     [mutate],
   );
   const setStatus = useCallback(
@@ -338,7 +385,11 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
       const map = new Map(ids.map((sid) => [sid, newId()] as const));
       mutate((list) => M.cloneSubtreeWithMap(list, id, map, now()));
       const newRoot = map.get(id);
-      if (newRoot) setSelectedId(newRoot);
+      if (newRoot) {
+        setSelectedId(newRoot);
+        setSelectedIds([]);
+        anchorRef.current = newRoot;
+      }
     },
     [mutate],
   );
@@ -348,6 +399,8 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
       const fallback = M.prevVisibleId(itemsRef.current, id) ?? M.nextVisibleId(itemsRef.current, id);
       mutate((list) => M.removeItem(list, id));
       setSelectedId(fallback);
+      setSelectedIds([]);
+      anchorRef.current = fallback;
       setDetailsOpenId((open) => (open === id ? null : open));
     },
     [mutate],
@@ -357,6 +410,83 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
   const outdent = useCallback((id: string) => mutate((list) => M.outdentItem(list, id)), [mutate]);
   const moveUp = useCallback((id: string) => mutate((list) => M.moveUp(list, id)), [mutate]);
   const moveDown = useCallback((id: string) => mutate((list) => M.moveDown(list, id)), [mutate]);
+  const move = useCallback(
+    (dragId: string, targetId: string, position: DropPosition) => {
+      mutate((list) => M.moveNode(list, dragId, targetId, position, now()));
+      setSelectedIds([]); // a drag replaces any multi-selection
+      anchorRef.current = null;
+    },
+    [mutate],
+  );
+
+  // --- multi-select ---------------------------------------------------------
+  const selectOnly = useCallback((id: string) => {
+    setSelectedId(id);
+    setSelectedIds([]);
+    anchorRef.current = id;
+  }, []);
+  const toggleMulti = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const base = prev.length ? prev : selectedIdRef.current ? [selectedIdRef.current] : [];
+      return base.includes(id) ? base.filter((x) => x !== id) : [...base, id];
+    });
+    setSelectedId(id);
+    anchorRef.current = id;
+  }, []);
+  const selectRange = useCallback((id: string) => {
+    const anchor = anchorRef.current ?? selectedIdRef.current ?? id;
+    const order = M.buildRows(itemsRef.current, zoomRef.current, filterRef.current).map((r) => r.node.id);
+    const range = M.rangeSlice(order, anchor, id);
+    setSelectedId(id);
+    setSelectedIds(range.length > 1 ? range : []);
+    if (range.length <= 1) anchorRef.current = id;
+  }, []);
+  const clearMulti = useCallback(() => setSelectedIds([]), []);
+
+  // --- batch actions (operate on the multi-selection, else the active row) ---
+  const batchTargets = (): string[] => {
+    const m = selectedIdsRef.current;
+    if (m.length) return m;
+    return selectedIdRef.current ? [selectedIdRef.current] : [];
+  };
+  const removeSelected = useCallback(() => {
+    const targets = batchTargets();
+    if (!targets.length) return;
+    const fallback =
+      M.prevVisibleId(itemsRef.current, targets[0]) ?? M.nextVisibleId(itemsRef.current, targets[0]);
+    mutate((list) => targets.reduce((acc, id) => M.removeItem(acc, id), list));
+    setSelectedId(fallback && !targets.includes(fallback) ? fallback : null);
+    setSelectedIds([]);
+    anchorRef.current = null;
+    setDetailsOpenId((open) => (open && targets.includes(open) ? null : open));
+  }, [mutate]);
+  const setStatusSelected = useCallback(
+    (status: OutlineStatus) => {
+      const targets = batchTargets();
+      if (!targets.length) return;
+      const ts = now();
+      mutate((list) => targets.reduce((acc, id) => M.setStatus(acc, id, status, ts), list));
+    },
+    [mutate],
+  );
+  const setColorSelected = useCallback(
+    (color: OutlineColor) => {
+      const targets = batchTargets();
+      if (!targets.length) return;
+      const ts = now();
+      mutate((list) => targets.reduce((acc, id) => M.setColorLabel(acc, id, color, ts), list));
+    },
+    [mutate],
+  );
+  const setCompletedSelected = useCallback(
+    (completed: boolean) => {
+      const targets = batchTargets();
+      if (!targets.length) return;
+      const ts = now();
+      mutate((list) => targets.reduce((acc, id) => M.setCompleted(acc, id, completed, ts), list));
+    },
+    [mutate],
+  );
   const toggleCollapse = useCallback(
     (id: string) => mutate((list) => M.toggleCollapsed(list, id)),
     [mutate],
@@ -375,6 +505,7 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
     saveState,
     selectedId,
     setSelectedId,
+    selectedIds,
     detailsOpenId,
     setDetailsOpenId,
     zoomRootId,
@@ -389,7 +520,6 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
     addSibling,
     rename,
     setType,
-    setNotes,
     setStatus,
     setColorLabel,
     toggleCompleted,
@@ -401,9 +531,18 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
     outdent,
     moveUp,
     moveDown,
+    move,
     toggleCollapse,
     collapseBranch,
     collapseAll,
     expandAll,
+    selectOnly,
+    toggleMulti,
+    selectRange,
+    clearMulti,
+    removeSelected,
+    setStatusSelected,
+    setColorSelected,
+    setCompletedSelected,
   };
 }

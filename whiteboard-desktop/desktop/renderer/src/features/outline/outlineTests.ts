@@ -11,6 +11,7 @@ import {
   cloneSubtreeWithMap,
   createNode,
   descendantIds,
+  dropZone,
   EMPTY_FILTER,
   extractHashtags,
   firstChildId,
@@ -20,14 +21,17 @@ import {
   insertChild,
   insertRoot,
   insertSibling,
+  isSelfOrAncestor,
   matchesFilter,
   moveDown,
+  moveNode,
   moveUp,
   nextVisibleId,
   nodeTags,
   normalizeTag,
   outdentItem,
   prevVisibleId,
+  rangeSlice,
   removeItem,
   rename,
   rootType,
@@ -36,7 +40,6 @@ import {
   setCollapsed,
   setColorLabel,
   setNodeType,
-  setNotes,
   setStatus,
   setTags,
   toggleCompleted,
@@ -45,6 +48,12 @@ import {
   type OutlineItemType,
   type OutlineNode,
 } from './outlineModel';
+import {
+  getOutlineColorSnapshot,
+  normalizeOutlineTitle,
+  publishOutlineColors,
+  subscribeOutlineColors,
+} from './outlineColorStore';
 import { storyMapNode } from '../whiteboard/StoryMap';
 import type { OutlineItem } from './types';
 
@@ -66,7 +75,7 @@ check('rootType novel', rootType('novel') === 'chapter');
 // series is no longer a Whiteboard mode → falls back to the default (chapter)
 check('rootType series -> default', rootType('series') === 'chapter');
 check('rootType scene', rootType('scene') === 'scene');
-check('rootType notes', rootType('notes') === 'note');
+check('rootType notes mode -> default', rootType('notes') === 'chapter');
 check('rootType default', rootType('graphic_novel') === 'chapter');
 check('childType screenplay act→sequence', childType('screenplay', 'act') === 'sequence');
 check('childType screenplay sequence→scene', childType('screenplay', 'sequence') === 'scene');
@@ -74,7 +83,7 @@ check('childType screenplay scene→beat', childType('screenplay', 'scene') === 
 check('childType novel part→chapter', childType('novel', 'part') === 'chapter');
 check('childType novel chapter→scene', childType('novel', 'chapter') === 'scene');
 check('childType scene scene→beat', childType('scene', 'scene') === 'beat');
-check('childType notes fallback', childType('notes', 'note') === 'note');
+check('childType beat -> custom fallback', childType('screenplay', 'beat') === 'custom');
 
 // 2. createNode defaults
 {
@@ -82,7 +91,6 @@ check('childType notes fallback', childType('notes', 'note') === 'note');
   check(
     'createNode defaults',
     c.title === '' &&
-      c.notes === '' &&
       c.order === 0 &&
       c.collapsed === false &&
       c.parentId === null &&
@@ -141,8 +149,6 @@ check('childType notes fallback', childType('notes', 'note') === 'note');
   check('rename bumps updatedAt', getNode(items, id)?.updatedAt === '2026-02-02T00:00:00.000Z');
   items = setNodeType(items, id, 'beat', NOW);
   check('setNodeType', getNode(items, id)?.type === 'beat');
-  items = setNotes(items, id, 'note text', NOW);
-  check('setNotes', getNode(items, id)?.notes === 'note text');
 }
 
 // 7. collapse toggles + collapse/expand all (parents only)
@@ -290,7 +296,7 @@ check('childType notes fallback', childType('notes', 'note') === 'note');
 
 // 14. New fields default + setters (status / color / completed / tags)
 {
-  const c = createNode('x', 'note', null, NOW);
+  const c = createNode('x', 'beat', null, NOW);
   check('createNode new defaults', c.completed === false && c.status === 'none' && c.colorLabel === 'none' && c.tags.length === 0);
   let items = insertRoot([], mk('scene'));
   const id = items[0].id;
@@ -311,7 +317,7 @@ check('normalizeTag strips # + lowercases', normalizeTag('#Revision') === 'revis
 check('normalizeTag spaces → dash', normalizeTag('To Do') === 'to-do');
 check('extractHashtags from title', JSON.stringify(extractHashtags('fix #motivation and #Arc')) === JSON.stringify(['motivation', 'arc']));
 {
-  const n = { ...createNode('x', 'note', null, NOW), title: 'beat #climax', tags: ['theme'] };
+  const n = { ...createNode('x', 'beat', null, NOW), title: 'beat #climax', tags: ['theme'] };
   check('nodeTags merges title + structured', JSON.stringify(nodeTags(n).sort()) === JSON.stringify(['climax', 'theme']));
 }
 
@@ -320,13 +326,11 @@ check('extractHashtags from title', JSON.stringify(extractHashtags('fix #motivat
   const n: OutlineNode = {
     ...createNode('x', 'scene', null, NOW),
     title: 'Opening on the beach',
-    notes: 'protagonist refuses the call',
     status: 'todo',
     colorLabel: 'blue',
     tags: ['revision'],
   };
   check('match query title', matchesFilter(n, { ...EMPTY_FILTER, query: 'beach' }));
-  check('match query notes', matchesFilter(n, { ...EMPTY_FILTER, query: 'protagonist' }));
   check('match query tag', matchesFilter(n, { ...EMPTY_FILTER, query: 'revision' }));
   check('no match query', !matchesFilter(n, { ...EMPTY_FILTER, query: 'spaceship' }));
   check('match type', matchesFilter(n, { ...EMPTY_FILTER, type: 'scene' }));
@@ -367,7 +371,7 @@ check('extractHashtags from title', JSON.stringify(extractHashtags('fix #motivat
   items = insertRoot(items, act);
   items = insertChild(items, act.id, seq);
   items = insertChild(items, seq.id, sc);
-  items = setNotes(items, sc.id, 'the protagonist arrives', NOW);
+  items = rename(items, sc.id, 'the protagonist arrives', NOW);
   items = setAllCollapsed(items, true); // everything collapsed
   const rows = buildRows(items, null, { ...EMPTY_FILTER, query: 'protagonist' });
   // The matching scene + its ancestors are revealed despite being collapsed.
@@ -402,6 +406,86 @@ check('extractHashtags from title', JSON.stringify(extractHashtags('fix #motivat
   items = setBranchCollapsed(items, act.id, true);
   check('branch collapse sets parents', getNode(items, act.id)?.collapsed === true && getNode(items, seq.id)?.collapsed === true);
   check('branch collapse skips leaves', getNode(items, sc.id)?.collapsed === false);
+}
+
+// 21. moveNode (drag-and-drop) — before/after siblings, nest as child, guards
+{
+  let items: OutlineNode[] = [];
+  const a = mk('act');
+  const b = mk('act');
+  const c = mk('act');
+  items = insertRoot(items, a);
+  items = insertRoot(items, b);
+  items = insertRoot(items, c); // roots: a, b, c
+  items = moveNode(items, c.id, a.id, 'before', NOW);
+  check('moveNode before', ids(childrenOf(items, null)) === ids([c, a, b]));
+  items = moveNode(items, c.id, b.id, 'after', NOW);
+  check('moveNode after', ids(childrenOf(items, null)) === ids([a, b, c]));
+  items = moveNode(items, a.id, b.id, 'child', NOW);
+  check('moveNode child reparents', getNode(items, a.id)?.parentId === b.id);
+  check('moveNode child roots', ids(childrenOf(items, null)) === ids([b, c]));
+
+  const before = JSON.stringify(items);
+  items = moveNode(items, b.id, a.id, 'child', NOW); // a is a child of b → cycle
+  check('moveNode guards against self-descendant', JSON.stringify(items) === before);
+  items = moveNode(items, b.id, b.id, 'after', NOW);
+  check('moveNode no-op on self', JSON.stringify(items) === before);
+
+  items = setCollapsed(items, c.id, true);
+  items = moveNode(items, b.id, c.id, 'child', NOW);
+  check('moveNode child expands target', getNode(items, c.id)?.collapsed === false);
+}
+
+// 22. isSelfOrAncestor
+{
+  let items: OutlineNode[] = [];
+  const a = mk('act');
+  const b = mk('scene');
+  items = insertRoot(items, a);
+  items = insertChild(items, a.id, b);
+  check('isSelfOrAncestor self', isSelfOrAncestor(items, a.id, a.id) === true);
+  check('isSelfOrAncestor ancestor', isSelfOrAncestor(items, a.id, b.id) === true);
+  check('isSelfOrAncestor unrelated', isSelfOrAncestor(items, b.id, a.id) === false);
+}
+
+// 23. dropZone (drag drop-zone from pointer position within a row)
+check('dropZone top third -> before', dropZone(2, 40) === 'before');
+check('dropZone middle -> child', dropZone(20, 40) === 'child');
+check('dropZone bottom third -> after', dropZone(38, 40) === 'after');
+check('dropZone just under 0.3 -> before', dropZone(11, 40) === 'before');
+check('dropZone at 0.3 -> child', dropZone(12, 40) === 'child');
+check('dropZone zero height -> child', dropZone(0, 0) === 'child');
+
+// 24. rangeSlice (shift-select inclusive range over the visible order)
+{
+  const order = ['a', 'b', 'c', 'd', 'e'];
+  check('rangeSlice forward', rangeSlice(order, 'b', 'd').join(',') === 'b,c,d');
+  check('rangeSlice backward', rangeSlice(order, 'd', 'b').join(',') === 'b,c,d');
+  check('rangeSlice single', rangeSlice(order, 'c', 'c').join(',') === 'c');
+  check('rangeSlice missing anchor -> [target]', rangeSlice(order, 'zz', 'c').join(',') === 'c');
+  check('rangeSlice missing target -> [target]', rangeSlice(order, 'a', 'zz').join(',') === 'zz');
+}
+
+// 25. outlineColorStore (Story Map tint source: publish / snapshot / subscribe)
+{
+  publishOutlineColors([
+    { title: 'The Sounding', colorLabel: 'green' },
+    { title: 'Below', colorLabel: 'none' },
+    { title: '  Three   Beats ', colorLabel: 'yellow' },
+  ]);
+  const snap = getOutlineColorSnapshot();
+  check('colorStore keeps coloured item (normalized key)', snap.get('the sounding') === 'green');
+  check('colorStore normalizes whitespace in keys', snap.get('three beats') === 'yellow');
+  check('colorStore drops none', !snap.has('below'));
+
+  let fired = 0;
+  const unsub = subscribeOutlineColors(() => { fired += 1; });
+  publishOutlineColors([{ title: 'X', colorLabel: 'red' }]);
+  check('colorStore notifies on change', fired === 1);
+  publishOutlineColors([{ title: 'X', colorLabel: 'red' }]);
+  check('colorStore skips notify when unchanged', fired === 1);
+  unsub();
+  check('normalizeOutlineTitle collapses/lowercases', normalizeOutlineTitle('  A  B ') === 'a b');
 }
 
 // --- Story Map node mapping (derived-outline → shape) ---

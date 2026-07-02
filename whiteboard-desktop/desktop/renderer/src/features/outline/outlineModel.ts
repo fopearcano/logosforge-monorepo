@@ -13,7 +13,6 @@ export type OutlineItemType =
   | 'sequence'
   | 'scene'
   | 'beat'
-  | 'note'
   | 'custom';
 
 export const OUTLINE_TYPES: OutlineItemType[] = [
@@ -23,7 +22,6 @@ export const OUTLINE_TYPES: OutlineItemType[] = [
   'sequence',
   'scene',
   'beat',
-  'note',
   'custom',
 ];
 
@@ -34,7 +32,6 @@ export const TYPE_LABELS: Record<OutlineItemType, string> = {
   sequence: 'Sequence',
   scene: 'Scene',
   beat: 'Beat',
-  note: 'Note', // a LogosForge Note (title + body); maps to Notes later
   custom: 'Custom',
 };
 
@@ -100,8 +97,6 @@ export interface OutlineNode {
   parentId: string | null;
   type: OutlineItemType;
   title: string;
-  /** Longer body — for type 'note' this is the LogosForge Note content. */
-  notes: string;
   order: number;
   collapsed: boolean;
   completed: boolean;
@@ -124,7 +119,6 @@ export function createNode(
     parentId,
     type,
     title: '',
-    notes: '',
     order: 0,
     collapsed: false,
     completed: false,
@@ -147,8 +141,6 @@ export function rootType(mode: string): OutlineItemType {
       return 'chapter';
     case 'scene':
       return 'scene';
-    case 'notes':
-      return 'note';
     default:
       return 'chapter';
   }
@@ -156,12 +148,11 @@ export function rootType(mode: string): OutlineItemType {
 
 export function childType(mode: string, parentType: OutlineItemType): OutlineItemType {
   const chains: Record<string, Partial<Record<OutlineItemType, OutlineItemType>>> = {
-    screenplay: { act: 'sequence', sequence: 'scene', scene: 'beat', beat: 'note' },
-    novel: { part: 'chapter', chapter: 'scene', scene: 'beat', beat: 'note' },
-    scene: { scene: 'beat', beat: 'note' },
+    screenplay: { act: 'sequence', sequence: 'scene', scene: 'beat' },
+    novel: { part: 'chapter', chapter: 'scene', scene: 'beat' },
+    scene: { scene: 'beat' },
   };
-  const fallback = mode === 'notes' ? 'note' : mode === 'scene' ? 'beat' : 'note';
-  return chains[mode]?.[parentType] ?? fallback;
+  return chains[mode]?.[parentType] ?? 'custom';
 }
 
 // --- queries ----------------------------------------------------------------
@@ -265,9 +256,6 @@ export function rename(items: OutlineNode[], id: string, title: string, now: str
 export function setNodeType(items: OutlineNode[], id: string, type: OutlineItemType, now: string): OutlineNode[] {
   return items.map((i) => (i.id === id ? { ...i, type, updatedAt: now } : i));
 }
-export function setNotes(items: OutlineNode[], id: string, notes: string, now: string): OutlineNode[] {
-  return items.map((i) => (i.id === id ? { ...i, notes, updatedAt: now } : i));
-}
 
 export function toggleCollapsed(items: OutlineNode[], id: string): OutlineNode[] {
   return items.map((i) => (i.id === id ? { ...i, collapsed: !i.collapsed } : i));
@@ -348,6 +336,78 @@ export function moveDown(items: OutlineNode[], id: string): OutlineNode[] {
       return i;
     }),
   );
+}
+
+// --- drag-to-reorder --------------------------------------------------------
+
+export type DropPosition = 'before' | 'after' | 'child';
+
+/** True if `candidateId` is `id` itself or an ancestor of `id`. */
+export function isSelfOrAncestor(items: OutlineNode[], candidateId: string, id: string): boolean {
+  let cur: OutlineNode | undefined = getNode(items, id);
+  while (cur) {
+    if (cur.id === candidateId) return true;
+    cur = cur.parentId ? getNode(items, cur.parentId) : undefined;
+  }
+  return false;
+}
+
+/**
+ * Move `dragId` relative to `targetId` (drag-and-drop). `before`/`after` make it
+ * a sibling of the target; `child` nests it as the target's last child (and
+ * expands the target). Reparents + reorders, then reindexes. No-op when the drop
+ * would place a branch inside itself (target is the dragged node or a descendant).
+ */
+export function moveNode(
+  items: OutlineNode[],
+  dragId: string,
+  targetId: string,
+  position: DropPosition,
+  now: string,
+): OutlineNode[] {
+  if (dragId === targetId) return items;
+  const drag = getNode(items, dragId);
+  const target = getNode(items, targetId);
+  if (!drag || !target) return items;
+  if (isSelfOrAncestor(items, dragId, targetId)) return items; // can't nest into own subtree
+
+  let parentId: string | null;
+  let order: number;
+  if (position === 'child') {
+    parentId = target.id;
+    order = maxOrder(items, target.id) + 1;
+  } else {
+    parentId = target.parentId;
+    order = position === 'before' ? target.order - 0.5 : target.order + 0.5;
+  }
+
+  const withExpand =
+    position === 'child'
+      ? items.map((i) => (i.id === target.id && i.collapsed ? { ...i, collapsed: false } : i))
+      : items;
+  return reindex(
+    withExpand.map((i) => (i.id === dragId ? { ...i, parentId, order, updatedAt: now } : i)),
+  );
+}
+
+/** Which drop zone a pointer at `offsetY` (from the row top) of a row `height`
+ *  tall lands in: top third = before, bottom third = after, middle = child. */
+export function dropZone(offsetY: number, height: number): DropPosition {
+  if (height <= 0) return 'child';
+  const r = offsetY / height;
+  if (r < 0.3) return 'before';
+  if (r > 0.7) return 'after';
+  return 'child';
+}
+
+/** Inclusive id range between `anchor` and `target` within the ordered visible
+ *  ids (shift-select). Falls back to just `[target]` if either isn't present. */
+export function rangeSlice(order: string[], anchor: string, target: string): string[] {
+  const ai = order.indexOf(anchor);
+  const bi = order.indexOf(target);
+  if (ai === -1 || bi === -1) return [target];
+  const [lo, hi] = ai <= bi ? [ai, bi] : [bi, ai];
+  return order.slice(lo, hi + 1);
 }
 
 // --- status / color / checkbox / tags --------------------------------------
@@ -451,7 +511,7 @@ export function matchesFilter(node: OutlineNode, f: OutlineFilter): boolean {
   if (f.tag && !tags.includes(f.tag)) return false;
   const q = f.query.trim().toLowerCase();
   if (q) {
-    const hay = `${node.title}\n${node.notes}\n${tags.map((t) => '#' + t).join(' ')}`.toLowerCase();
+    const hay = `${node.title}\n${tags.map((t) => '#' + t).join(' ')}`.toLowerCase();
     if (!hay.includes(q)) return false;
   }
   return true;

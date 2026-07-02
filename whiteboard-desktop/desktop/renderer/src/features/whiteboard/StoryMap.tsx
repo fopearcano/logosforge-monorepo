@@ -11,6 +11,13 @@
  *   synopsis / note     → wb-sm-beat  (dot)
  */
 
+import { useSyncExternalStore } from 'react';
+
+import {
+  getOutlineColorSnapshot,
+  normalizeOutlineTitle,
+  subscribeOutlineColors,
+} from '../outline/outlineColorStore';
 import type { OutlineItem } from '../outline/types';
 
 export interface StoryMapNode {
@@ -36,6 +43,8 @@ interface Props {
 }
 
 export function StoryMap({ items, activeIndex, onNavigate }: Props) {
+  // Live map of outline title → colour label, published by the Outline store.
+  const outlineColors = useSyncExternalStore(subscribeOutlineColors, getOutlineColorSnapshot);
   if (items.length === 0) return null;
   return (
     <div className="wb-storymap" data-screen-label="story-map">
@@ -43,6 +52,8 @@ export function StoryMap({ items, activeIndex, onNavigate }: Props) {
         {items.map((it) => {
           const { shape, anchor } = storyMapNode(it);
           const active = activeIndex != null && it.blockIndex === activeIndex;
+          const tint = outlineColors.get(normalizeOutlineTitle(it.label));
+          const shapeClass = `wb-sm-shape ${shape}${tint ? ` wb-sm-color-${tint}` : ''}`;
           return (
             <button
               key={it.id}
@@ -52,7 +63,7 @@ export function StoryMap({ items, activeIndex, onNavigate }: Props) {
               aria-label={it.label}
               onClick={() => onNavigate(it.blockIndex)}
             >
-              <span className={`wb-sm-shape ${shape}`} />
+              <span className={shapeClass} />
             </button>
           );
         })}
