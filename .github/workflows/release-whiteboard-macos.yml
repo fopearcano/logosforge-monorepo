@@ -11,8 +11,11 @@ name: Release — LogosForge Whiteboard (macOS, Intel)
 # (PyInstaller can't cross-compile the backend) — so the build runs on your own
 # Intel Mac, which is also the test target. Set the runner up once via repo
 # Settings -> Actions -> Runners -> New self-hosted runner (macOS / x64); it
-# needs Xcode Command Line Tools + enough disk (~a few GB). The setup-python /
-# setup-node steps below download their toolchains into the runner's tool cache.
+# needs Xcode Command Line Tools + a Python 3.11+ (any of 3.11/3.12/3.13 works)
+# installed via Homebrew or python.org + enough disk (~a few GB). setup-node
+# downloads Node into the runner tool cache; Python is discovered on the Mac
+# (setup-python can't download onto a self-hosted Mac — it assumes the hosted
+# /Users/runner home and fails with "mkdir: /Users/runner: Permission denied").
 #
 # NOTE: builds are UNSIGNED (no Apple Developer ID configured). macOS Gatekeeper
 # will block the app until it is signed + notarized — testers must clear the
@@ -34,6 +37,10 @@ on:
         description: "Attach the build to a GitHub Release"
         type: boolean
         default: false
+      release_tag:
+        description: "Release tag to attach the DMG to (when publishing a manual run)"
+        type: string
+        default: "whiteboard-v0.1.0"
 
 permissions:
   contents: write
@@ -71,15 +78,30 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+      # actions/setup-python@v5 does NOT work on a self-hosted macOS runner when
+      # it has to download a version — it assumes the hosted `/Users/runner`
+      # home and fails with "mkdir: /Users/runner: Permission denied". Use a
+      # Python already installed on the Mac instead (3.11 preferred, else 3.12/13;
+      # any is fine for the freeze). PATH is augmented because the runner service
+      # runs with a minimal PATH that may omit Homebrew / python.org locations.
+      - name: Locate Python (3.11+)
+        id: py
+        run: |
+          export PATH="/usr/local/bin:/opt/homebrew/bin:/Library/Frameworks/Python.framework/Versions/3.11/bin:/Library/Frameworks/Python.framework/Versions/3.12/bin:/Library/Frameworks/Python.framework/Versions/3.13/bin:$PATH"
+          for c in python3.11 python3.12 python3.13 python3; do
+            p=$(command -v "$c" 2>/dev/null) || continue
+            v=$("$p" -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null) || continue
+            case "$v" in
+              3.11|3.12|3.13) echo "python=$p" >> "$GITHUB_OUTPUT"; echo "Using $p (Python $v)"; exit 0;;
+            esac
+          done
+          echo "::error::No Python 3.11+ on the runner. Install one (e.g. 'brew install python@3.11') and re-run."
+          exit 1
 
       # --- 1. Bundle the Whiteboard backend (it embeds the core), x64 ------
       - name: Build the backend bundle (PyInstaller)
         run: |
-          python -m venv build-venv
+          "${{ steps.py.outputs.python }}" -m venv build-venv
           ./build-venv/bin/python -m pip install --upgrade pip
           ./build-venv/bin/python -m pip install "./logosforge[export]" fastapi "uvicorn[standard]" httpx pyinstaller
           cd whiteboard-desktop/backend
@@ -123,6 +145,10 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/whiteboard-v') || inputs.publish_release
         uses: softprops/action-gh-release@v2
         with:
+          # On a tag push, tag_name is empty and the action falls back to the tag
+          # ref. On a manual run (dispatched from a branch) it targets the chosen
+          # existing release instead of trying to create one named after the branch.
+          tag_name: ${{ inputs.release_tag }}
           files: whiteboard-desktop/desktop/release/*.dmg
           draft: false
           generate_release_notes: true
