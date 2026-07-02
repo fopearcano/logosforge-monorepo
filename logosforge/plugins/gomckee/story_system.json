@@ -1,0 +1,409 @@
+{
+  "domain": "story",
+  "principles": [
+    {
+      "id": "P1",
+      "name": "Event Must Change a Value",
+      "description": "Every unit of story (beat, scene, sequence, act) must turn at least one story value from positive to negative or negative to positive. No value change = no event = cut.",
+      "priority": 1.0
+    },
+    {
+      "id": "P2",
+      "name": "Change Through Conflict, Never Coincidence",
+      "description": "Value change must be produced by action meeting a force of antagonism. Coincidence may enter a story but can never resolve it; if used, it must be set up early and pay off meaningfully.",
+      "priority": 0.97
+    },
+    {
+      "id": "P3",
+      "name": "The Gap Is the Engine",
+      "description": "Story is generated in the gap between the protagonist's subjective expectation of his action and the objective result. Widen this gap to deepen meaning; close it too easily and drama collapses.",
+      "priority": 0.95
+    },
+    {
+      "id": "P4",
+      "name": "Progression Through Escalation",
+      "description": "Each event must demand more of the protagonist than the one before — greater risk, greater capacity, stronger antagonism. Lateral or repeated stakes are regression.",
+      "priority": 0.93
+    },
+    {
+      "id": "P5",
+      "name": "Irreversibility at the Climax",
+      "description": "The story climax must deliver absolute, irreversible change; every prior element is engineered to make that final reversal feel both inevitable and surprising.",
+      "priority": 0.9
+    }
+  ],
+  "methods": [
+    {
+      "id": "M1",
+      "name": "Five-Part Spine",
+      "goal": "Impose the load-bearing skeleton of any story.",
+      "rules": [
+        "Define an Inciting Incident that visibly upsets the protagonist's life balance, placed within the first 25% of runtime.",
+        "From that incident derive a conscious Object of Desire and, when possible, a contradicting unconscious desire.",
+        "Build Progressive Complications that raise forces of antagonism after each action.",
+        "Force a Crisis: a binary irreducible choice (good vs. good or lesser of two evils) placed immediately before the Climax.",
+        "Execute a Climax that delivers absolute, irreversible value change, then a Resolution that releases pressure and shows the new world."
+      ],
+      "applies_to": ["outline", "scene"],
+      "priority": 1.0
+    },
+    {
+      "id": "M2",
+      "name": "Value-Turn Scene Builder",
+      "goal": "Ensure every scene is a story event, not a transition.",
+      "rules": [
+        "Name the value at stake at scene open and mark its charge (+, -, mixed).",
+        "Give the viewpoint character a concrete Scene-Objective tied to the story Spine.",
+        "Introduce a force of antagonism that opens a gap between expectation and result.",
+        "Turn the value charge by scene close; if unchanged, cut or rewrite.",
+        "Locate the Turning Point precisely on the beat the charge flips — not before, not after.",
+        "Build the scene out of beats: exchanges of action/reaction behaviour that accumulate toward the turn."
+      ],
+      "applies_to": ["scene"],
+      "priority": 0.97
+    },
+    {
+      "id": "M3",
+      "name": "Progressive Complication Engine",
+      "goal": "Escalate by forcing the protagonist past points of no return.",
+      "rules": [
+        "Begin with the protagonist's minimum conservative action that could plausibly succeed.",
+        "Answer each action with a reaction stronger or different than expected, opening the gap.",
+        "After each reversal, close off the easiest prior option so retreat is impossible.",
+        "Engage at least two of three Levels of Conflict (inner, personal, extra-personal); ideally all three.",
+        "Drive the final act toward the Negation of the Negation — not the mere opposite of the positive value but a qualitatively worse compound (e.g. justice → unfairness → injustice → tyranny; love → indifference → hate → self-hate masquerading as love).",
+        "Never stop at the Contradictory when the Negation of the Negation is reachable."
+      ],
+      "applies_to": ["outline", "scene"],
+      "priority": 0.95
+    },
+    {
+      "id": "M4",
+      "name": "Antagonism Calibration",
+      "goal": "Make the forces against the protagonist at least equal to, ideally greater than, his capacities.",
+      "rules": [
+        "Inventory every positive value the protagonist holds; build antagonist forces that embody the Contrary, Contradictory, and Negation of the Negation of each.",
+        "Never allow the protagonist to succeed through forces weaker than himself.",
+        "Distribute antagonism across inner, personal, and extra-personal levels; never resolve all conflict on one plane.",
+        "If the protagonist feels too capable for the obstacle, raise the obstacle, not the hero.",
+        "If tempted to lower the stakes to preserve outline beats, rewrite the beats instead."
+      ],
+      "applies_to": ["outline", "scene"],
+      "priority": 0.93
+    },
+    {
+      "id": "M5",
+      "name": "Setup / Payoff Ledger",
+      "goal": "Make every payoff feel inevitable by planting its setup earlier.",
+      "rules": [
+        "For every reveal, reversal, or climactic action, locate or plant at least one prior setup.",
+        "Setups must be memorable enough to be retrievable, oblique enough not to telegraph.",
+        "Never pay off what was not set up; never set up what is not paid off.",
+        "Revise backward from the Climax — trace each climactic element to its earliest necessary plant.",
+        "When a plot hole must be closed, prefer a revised setup over a new explanatory scene."
+      ],
+      "applies_to": ["outline", "scene"],
+      "priority": 0.88
+    },
+    {
+      "id": "M6",
+      "name": "Invisible Exposition",
+      "goal": "Deliver required information without stopping the story.",
+      "rules": [
+        "Dramatize facts as weapons in conflict; never speak information purely for the audience.",
+        "Release exposition on a need-to-know basis at the latest possible moment.",
+        "Open with curiosity — put a question in the viewer's mind — before supplying backstory.",
+        "Choose deliberately per sequence between Mystery (audience knows less than protagonist), Suspense (audience and protagonist know the same), and Dramatic Irony (audience knows more than protagonist).",
+        "Test every flashback, dream, montage, and voice-over by removing it: if the story still holds, delete it.",
+        "Never let the Inciting Incident of the Central Plot live in backstory — it must happen onscreen."
+      ],
+      "applies_to": ["scene", "outline"],
+      "priority": 0.88
+    },
+    {
+      "id": "M7",
+      "name": "Crisis Dilemma Forge",
+      "goal": "Make the climactic decision genuinely hard.",
+      "rules": [
+        "Refuse any choice between a clear good and a clear evil — the audience will predict it.",
+        "Construct either an irreconcilable good-vs-good or lesser-of-two-evils dilemma.",
+        "Ensure both options cost the protagonist something essential he carried into the story.",
+        "Place the Crisis immediately before the Climax; do not let time or scenes dilute pressure.",
+        "Stage the Crisis in a location and moment that give the decision maximum visibility."
+      ],
+      "applies_to": ["outline", "scene"],
+      "priority": 0.9
+    },
+    {
+      "id": "M8",
+      "name": "Composition and Pacing",
+      "goal": "Order scenes so tension accumulates and monotony is broken.",
+      "rules": [
+        "Alternate rising action with compressed reflection or relief to avoid emotional monotony.",
+        "Escalate the magnitude of each act climax beyond the previous one.",
+        "Keep the final act the shortest and fastest; shorten scenes as the Climax approaches.",
+        "Vary scene length aggressively — for every short scene a long one, never a flat average.",
+        "Make every tier (beat → scene → sequence → act → story) end on a stronger value reversal than the tier below it.",
+        "Emotions do not double; once a negative value is reached, the next turn must introduce a new, contrasting charge or a deeper negative, not more of the same."
+      ],
+      "applies_to": ["outline"],
+      "priority": 0.85
+    },
+    {
+      "id": "M9",
+      "name": "Plot-Shape Selection",
+      "goal": "Choose consciously among Archplot, Miniplot, and Antiplot and respect the chosen form.",
+      "rules": [
+        "Default to Archplot when the goal is maximal audience engagement: active protagonist, external conflict primary, closed ending, linear time, consistent reality, causality.",
+        "Choose Miniplot only by deliberate reduction: passive/internal protagonist, open ending, multi-protagonist structure, or muted closure — and only if the reduced form can still deliver value change.",
+        "Choose Antiplot only as conscious revolt: coincidence-driven, nonlinear, inconsistent realities — and commit fully; half-measures read as incompetence.",
+        "Never mix reality rules mid-story (e.g., causal for two acts then coincidental) without a signalled break.",
+        "Every deviation from Archplot must be a chosen reduction, not a default from weakness."
+      ],
+      "applies_to": ["outline"],
+      "priority": 0.85
+    },
+    {
+      "id": "M10",
+      "name": "Setting and the War on Cliché",
+      "goal": "Lock setting hard, then dig deep to generate uncliché material.",
+      "rules": [
+        "Fix four dimensions of setting: period, duration, location, and level of conflict.",
+        "Treat setting as a creative limitation: the smaller and more specific, the greater the originality.",
+        "Research via memory, imagination, and fact — all three, never only one.",
+        "A setting's laws of probability constrain what can and cannot happen; every event must be possible within them.",
+        "If an event could occur in many settings it is probably a cliché; force events that can happen only in this setting."
+      ],
+      "applies_to": ["outline"],
+      "priority": 0.8
+    },
+    {
+      "id": "M11",
+      "name": "Genre Obedience and Reinvention",
+      "goal": "Satisfy genre conventions before bending them.",
+      "rules": [
+        "Identify primary genre(s) and any subgenres; list their mandatory conventions (settings, roles, events, values).",
+        "Deliver every mandatory convention — audiences enter with genre expectations and will feel cheated otherwise.",
+        "Reinvent inside the conventions: find a fresh variation on the obligatory scene, do not skip it.",
+        "When mixing genres, keep one primary and let others modulate it; avoid equal-weight blends that confuse expectation.",
+        "Study the genre's canon deeply enough to recognize its clichés, then refuse them."
+      ],
+      "applies_to": ["outline"],
+      "priority": 0.8
+    },
+    {
+      "id": "M12",
+      "name": "Controlling Idea Lock",
+      "goal": "Anchor every structural choice to a single thematic sentence.",
+      "rules": [
+        "State the Controlling Idea as one sentence: Value + Cause (e.g., 'Justice triumphs because the protagonist outwits the corrupt').",
+        "Choose consciously whether the charge is Idealist (up-ending), Pessimist (down-ending), or Ironist (both).",
+        "Build the Counter-Idea with equal force; the final Climax is the moment the Idea defeats the Counter-Idea.",
+        "Reject didacticism: never let a character lecture the Idea; prove it through event.",
+        "If a scene does not dramatize either the Idea or the Counter-Idea, it is cargo — cut it."
+      ],
+      "applies_to": ["outline", "scene"],
+      "priority": 0.88
+    },
+    {
+      "id": "M13",
+      "name": "Subplot and Multiplot Discipline",
+      "goal": "Use secondary plotlines to reinforce, contradict, or complicate the theme.",
+      "rules": [
+        "Every subplot must do one of: (a) contradict the Controlling Idea to create irony, (b) resonate the Idea with variation, (c) complicate the Central Plot by creating obstacles, or (d) set up a Central-Plot Inciting Incident that could not be placed onscreen.",
+        "A subplot without one of these functions is cargo — cut it.",
+        "Each subplot gets its own Inciting Incident, Progressive Complications, Crisis, Climax, Resolution — though compressed.",
+        "When there is no Central Plot (Multiplot), bind the pieces by a single thematic idea visible in every strand.",
+        "Never let a subplot climax overshadow the Central Plot climax unless the story is explicitly Multiplot."
+      ],
+      "applies_to": ["outline"],
+      "priority": 0.82
+    },
+    {
+      "id": "M14",
+      "name": "Inciting Incident Design",
+      "goal": "Engineer the first major event so it compels everything that follows.",
+      "rules": [
+        "Generate it by one of exactly two means: decision (by protagonist or by someone with power over the protagonist) or coincidence (tragic or serendipitous).",
+        "Radically upset the balance of the protagonist's life — for better or for worse.",
+        "Arouse a conscious desire (restore balance) and, ideally, a contradictory unconscious desire.",
+        "Stage it onscreen for the Central Plot, never in backstory.",
+        "Place it as early as the story allows after the minimum exposition needed to make its impact felt.",
+        "End it by raising the Major Dramatic Question ('How will this end?') that the Climax will answer."
+      ],
+      "applies_to": ["outline"],
+      "priority": 0.92
+    },
+    {
+      "id": "M15",
+      "name": "Surprise and Credibility Control",
+      "goal": "Reverse expectation without breaking belief.",
+      "rules": [
+        "Pursue True Surprise: the revelation of the gap between expectation and result followed by insight, never Cheap Surprise (shock without meaning).",
+        "Every surprise must, in retrospect, have been setup — the audience should think 'I should have seen that.'",
+        "Diagnose melodrama as under-motivation, never as over-expression; to fix, increase the weight of causes, do not shrink the event.",
+        "When logic holes remain, either forge a closing link (via new setup) or accelerate past the hole so the audience lacks time to register it.",
+        "Never rely on contrivance: unmotivated convenience that serves the writer's outline but not the characters' stakes."
+      ],
+      "applies_to": ["scene", "outline"],
+      "priority": 0.82
+    },
+    {
+      "id": "M16",
+      "name": "Image System and Symbolic Ascension",
+      "goal": "Raise the story's symbolic charge without announcing it.",
+      "rules": [
+        "Begin with actions, locations, and objects that represent only themselves.",
+        "Return to them, accumulating association, so by late story they carry universal/archetypal weight.",
+        "Never label imagery as symbolic in text; the moment the symbol is named, its power dies.",
+        "Build two or three image motifs maximum — more dilute each other.",
+        "Pair each symbolic motif with a charged value so it gains meaning as values turn."
+      ],
+      "applies_to": ["outline", "scene"],
+      "priority": 0.7
+    },
+    {
+      "id": "M17",
+      "name": "Adaptation Triage",
+      "goal": "Decide what from the source survives the shift to screen.",
+      "rules": [
+        "Identify where the source's power lives: inner (prose), personal (theatre), or extra-personal (screen) conflict.",
+        "If the source's power is primarily inner, externalize it into action or cut it.",
+        "Preserve the source's Inciting Incident, Crisis, and Climax; everything else is negotiable.",
+        "Collapse characters and subplots aggressively; the screen cannot hold a novel's population.",
+        "Betray the source's literal content to preserve its essential Controlling Idea."
+      ],
+      "applies_to": ["outline"],
+      "priority": 0.7
+    },
+    {
+      "id": "M18",
+      "name": "Progression Patterns",
+      "goal": "Choose how the story expands from its starting point.",
+      "rules": [
+        "Social Progression: widen the impact of actions outward from a private matter to society.",
+        "Personal Progression: drive actions inward into intimate relationships and inner life.",
+        "Symbolic Ascension: escalate imagery from particular to universal.",
+        "Ironic Ascension: turn progression so result inverts expectation with increasing depth.",
+        "Select one dominant pattern; using more than two makes the story diffuse.",
+        "Match the chosen pattern to the setting's scale — social for epics, personal for chamber stories."
+      ],
+      "applies_to": ["outline"],
+      "priority": 0.75
+    },
+    {
+      "id": "M19",
+      "name": "Unity Through Causal Chain",
+      "goal": "Bind Inciting Incident to Climax so inevitability emerges.",
+      "rules": [
+        "Test: the sentence 'Because of [Inciting Incident], the [Climax] had to happen' must read as logically true.",
+        "If that sentence feels forced, the Spine is broken — the story lacks unity.",
+        "Every major event between Inciting Incident and Climax must be causally reachable from what precedes it; coincidence may accelerate but never cause the Climax.",
+        "Within this causal unity, vary locations, tempos, emotional charges, and levels of conflict as aggressively as possible."
+      ],
+      "applies_to": ["outline"],
+      "priority": 0.92
+    }
+  ],
+  "triggers": [
+    { "id": "T1", "condition": "outline_generation", "apply_methods": ["M9","M10","M11","M12","M14","M1","M3","M4","M13","M18","M19","M8"] },
+    { "id": "T2", "condition": "scene_generation", "apply_methods": ["M2","M3","M5","M6","M12"] },
+    { "id": "T3", "condition": "climax_design", "apply_methods": ["M1","M7","M5","M12","M19"] },
+    { "id": "T4", "condition": "inciting_incident_design", "apply_methods": ["M14","M6","M19"] },
+    { "id": "T5", "condition": "stakes_feel_low", "apply_methods": ["M4","M3","M15"] },
+    { "id": "T6", "condition": "information_delivery", "apply_methods": ["M6","M5"] },
+    { "id": "T7", "condition": "setting_definition", "apply_methods": ["M10","M11"] },
+    { "id": "T8", "condition": "theme_definition", "apply_methods": ["M12","M13"] },
+    { "id": "T9", "condition": "subplot_design", "apply_methods": ["M13","M12"] },
+    { "id": "T10", "condition": "adaptation", "apply_methods": ["M17","M1","M12"] },
+    { "id": "T11", "condition": "story_feels_flat_or_clichéd", "apply_methods": ["M10","M11","M18","M16"] },
+    { "id": "T12", "condition": "logic_hole_detected", "apply_methods": ["M15","M5"] },
+    { "id": "T13", "condition": "melodrama_accusation", "apply_methods": ["M15","M4"] },
+    { "id": "T14", "condition": "revision", "apply_methods": ["M2","M5","M6","M8","M12","M19"] }
+  ],
+  "checks": [
+    {
+      "id": "C1",
+      "applies_to": "scene",
+      "questions": [
+        "What value is at stake, and what is its charge at the open?",
+        "What is the charge at the close? If identical, why does the scene exist?",
+        "Where is the Turning Point — the exact beat the charge flips?",
+        "What force of antagonism opened the gap between expectation and result?",
+        "Is every piece of information delivered here the minimum required, or is there unpaid exposition?",
+        "Does the viewpoint character have a Scene-Objective that connects to the Spine?",
+        "Do the beats inside the scene escalate in action/reaction, or do they plateau?"
+      ]
+    },
+    {
+      "id": "C2",
+      "applies_to": "outline",
+      "questions": [
+        "Is the Inciting Incident within the first quarter and does it visibly upset life balance?",
+        "Can the Spine be named in one sentence of protagonist desire?",
+        "Can the Controlling Idea be named in one sentence of value + cause?",
+        "Do the act climaxes escalate in magnitude, each stronger than the last?",
+        "Does the story reach the Negation of the Negation or stop at mere opposition?",
+        "Is the final Climax absolute and irreversible, or could things simply go back?",
+        "Has every climactic element been set up earlier in the text?",
+        "Does 'Because of [Inciting Incident], the [Climax] had to happen' read as true?",
+        "Which plot shape (Archplot, Miniplot, Antiplot) has been chosen, and is it obeyed consistently?"
+      ]
+    },
+    {
+      "id": "C3",
+      "applies_to": "scene",
+      "questions": [
+        "Does any event here resolve by coincidence or by help arriving from outside the story?",
+        "Is the protagonist's action the minimum conservative effort appropriate to this stage?",
+        "Does the world's reaction exceed or diverge from the protagonist's expectation?",
+        "Has a previously-used option been closed off, increasing pressure for the next scene?"
+      ]
+    },
+    {
+      "id": "C4",
+      "applies_to": "outline",
+      "questions": [
+        "Is the Crisis a real dilemma (good vs. good or evil vs. evil), or a rigged choice?",
+        "Which Levels of Conflict (inner, personal, extra-personal) are engaged, and is any left unused?",
+        "Are the forces of antagonism at least as strong as the protagonist's capacities on every front?",
+        "Does every subplot either contradict, resonate, complicate, or enable the Central Plot? If none of these, cut it.",
+        "Is the Controlling Idea proved by event, or merely spoken by a character?",
+        "Are all genre mandatory conventions present, and are any reinvented rather than skipped?"
+      ]
+    },
+    {
+      "id": "C5",
+      "applies_to": "scene",
+      "questions": [
+        "If this is a surprise moment, is it True Surprise (earned by gap + insight) or Cheap Surprise (shock only)?",
+        "If retrospect were possible, could the audience say 'I should have seen that coming'?",
+        "Does contrivance resolve anything here — a character conveniently present, a fact conveniently known?"
+      ]
+    },
+    {
+      "id": "C6",
+      "applies_to": "outline",
+      "questions": [
+        "Is the setting locked in period, duration, location, and level of conflict?",
+        "Could these events occur in many settings, or only in this one?",
+        "Has the research been done across memory, imagination, and fact?",
+        "What progression pattern (Social, Personal, Symbolic, Ironic) dominates, and is a second pattern quietly supporting it?"
+      ]
+    }
+  ],
+  "conflicts": [
+    { "method_a": "M6", "method_b": "M5", "resolution": "M5 wins: if a setup must be planted to make a later payoff land, plant it even at the cost of slightly more visible exposition — but dramatize the plant per M6." },
+    { "method_a": "M4", "method_b": "M1", "resolution": "M1 wins on structural position (the five-part spine is non-negotiable); M4 governs the magnitude of forces within that spine. Never soften antagonism to preserve an outline beat — rewrite the beat." },
+    { "method_a": "M8", "method_b": "M3", "resolution": "M3 wins: if escalation demands it, break pacing symmetry. Progression of conflict outranks tidy rhythm." },
+    { "method_a": "M7", "method_b": "M2", "resolution": "M7 wins at the story-level Crisis: the climactic scene may violate normal scene-value economy because its job is the final irreversible turn, not a routine value flip." },
+    { "method_a": "M11", "method_b": "M9", "resolution": "M9 wins: plot shape is a deeper structural choice than genre. If Miniplot/Antiplot are chosen, some genre conventions may legitimately be muted or broken — but consciously, not by accident." },
+    { "method_a": "M12", "method_b": "M15", "resolution": "M12 wins: surprise must never contradict the Controlling Idea. A twist that sells a tonal reversal foreign to the thematic argument is Cheap Surprise regardless of how shocking it feels." },
+    { "method_a": "M13", "method_b": "M19", "resolution": "M19 wins: causal unity of the Central Plot is load-bearing. A subplot that strengthens theme but breaks causal reach to the Central Climax must be restructured or cut." },
+    { "method_a": "M17", "method_b": "M12", "resolution": "M12 wins: when adapting, betray any literal detail of the source before betraying the Controlling Idea the source earned." }
+  ],
+  "meta": {
+    "philosophy": "Story is the progressive, causally linked change of human values under pressure, driven by the gap between expectation and reality, culminating in an irreversible climax that proves a single controlling idea.",
+    "style_bias": "classical and dramatic, defaulting to Archplot (closed, causal, linear, consistent, active-protagonist) while remaining capable of deliberate reduction to Miniplot or deliberate revolt via Antiplot; anti-episodic, anti-coincidental, anti-didactic, anti-sentimental, and uncompromising about the equal weight of antagonism and the reach of the Negation of the Negation."
+  }
+}

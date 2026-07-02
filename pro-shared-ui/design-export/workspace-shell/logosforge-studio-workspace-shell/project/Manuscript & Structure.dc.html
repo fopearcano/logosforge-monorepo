@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:ital,wght@0,400;0,500;0,600;0,700;1,500;1,600&family=JetBrains+Mono:ital,wght@0,400;0,500;0,700;1,400&family=Courier+Prime:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;}
+  ::selection{background:rgba(76,194,255,.28);color:#fff;}
+  ::-webkit-scrollbar{width:7px;height:7px;}
+  ::-webkit-scrollbar-thumb{background:rgba(232,68,58,.32);}
+  ::-webkit-scrollbar-track{background:transparent;}
+  @keyframes lf-blink{0%,48%{opacity:1;}49%,100%{opacity:0;}}
+  @keyframes lf-pulse{0%,100%{opacity:.4;}50%{opacity:1;}}
+  @keyframes lf-sweep{to{transform:rotate(360deg);}}
+</style>
+</helmet>
+
+<!-- ============================= FRAME A · MANUSCRIPT EDITOR ============================= -->
+<div style="position:absolute;left:80px;top:130px;width:1520px;font-family:'JetBrains Mono',monospace;--void:#000;--base:#04060a;--panel:#080a0f;--raised:#11151e;--line:rgba(232,68,58,.28);--line2:rgba(150,162,180,.10);--line-cy:rgba(76,194,255,.3);--crimson:#e8443a;--amber:#f5b133;--amber-b:#ffcf4a;--cyan:#4cc2ff;--green:#62d99a;--violet:#b07cff;--blocking:#ff5260;--warning:#ffb454;--suggestion:#4cc2ff;--opportunity:#62d99a;--txt:#e4e8ef;--txt2:#8b95a5;--txt3:#525c6b;--accent:{{ accent }};">
+  <div data-drags-parent="1" style="display:inline-flex;align-items:center;gap:9px;margin-bottom:11px;padding:6px 12px;background:rgba(6,8,12,.92);border:1px solid var(--line);color:var(--accent,#4cc2ff);font-size:10px;letter-spacing:.2em;">
+    <span style="display:grid;place-items:center;width:16px;height:16px;background:var(--accent,#4cc2ff);color:#04060a;font-weight:700;">A</span>MANUSCRIPT EDITOR · LIVE WRITING INTELLIGENCE
+  </div>
+  <div data-screen-label="Manuscript Editor" style="position:relative;width:100%;height:980px;background:radial-gradient(120% 70% at 50% 0%,#080b11,#040609);border:1px solid var(--line);box-shadow:0 16px 60px rgba(0,0,0,.6);overflow:hidden;">
+    <div style="position:absolute;top:-1px;left:-1px;width:14px;height:14px;border-top:1px solid var(--crimson);border-left:1px solid var(--crimson);"></div>
+    <div style="position:absolute;top:3px;left:3px;width:5px;height:5px;background:var(--crimson);box-shadow:0 0 6px var(--crimson);"></div>
+    <div style="position:absolute;bottom:-1px;right:-1px;width:14px;height:14px;border-bottom:1px solid var(--crimson);border-right:1px solid var(--crimson);"></div>
+
+    <!-- editor toolbar -->
+    <div style="height:44px;display:flex;align-items:center;gap:14px;padding:0 18px;border-bottom:1px solid var(--line);background:rgba(6,8,12,.6);">
+      <span style="font-family:'Chakra Petch';font-weight:600;font-size:14px;letter-spacing:.14em;color:#fff;">MANUSCRIPT</span>
+      <div style="display:flex;align-items:center;gap:6px;height:20px;padding:0 9px;border:1px solid var(--accent,#4cc2ff);background:rgba(76,194,255,.08);color:var(--accent,#4cc2ff);font-size:9px;letter-spacing:.16em;"><span style="width:5px;height:5px;background:var(--accent,#4cc2ff);"></span>SCREENPLAY · FEATURE</div>
+      <span style="font-size:10px;color:var(--txt2);">3,214 <span style="color:var(--txt3);">WORDS</span> · SC.12 / 24</span>
+      <div style="display:flex;align-items:center;gap:7px;height:22px;padding:0 9px;border:1px solid var(--line2);font-size:9px;letter-spacing:.1em;color:var(--txt2);">ELEMENT <span style="color:var(--accent,#4cc2ff);font-weight:600;">DIALOGUE</span> ▾</div>
+      <div style="flex:1;"></div>
+      <span style="font-size:9.5px;letter-spacing:.14em;color:var(--txt2);">A▾</span>
+      <span style="font-size:9.5px;letter-spacing:.14em;color:var(--txt2);">REVIEW ▾</span>
+      <span style="font-size:9.5px;letter-spacing:.14em;color:var(--accent,#4cc2ff);">⊹ FOCUS</span>
+      <span style="font-size:9.5px;letter-spacing:.14em;color:var(--txt2);">TEXT/BG ▾</span>
+    </div>
+
+    <div style="display:flex;height:936px;">
+      <!-- EDITOR CANVAS -->
+      <div style="flex:1;min-width:0;display:flex;gap:16px;padding:26px 26px 26px 22px;overflow-y:auto;position:relative;">
+        <!-- energy heatline gutter -->
+        <div style="flex:none;width:30px;display:flex;flex-direction:column;align-items:center;position:relative;">
+          <div style="font-size:7px;letter-spacing:.12em;color:var(--txt3);writing-mode:vertical-rl;transform:rotate(180deg);margin-bottom:8px;">ENERGY ¶</div>
+          <div style="flex:1;width:3px;background:linear-gradient(180deg,var(--green) 0%,var(--green) 20%,var(--amber) 48%,var(--blocking) 78%,var(--amber) 100%);border-radius:2px;opacity:.7;"></div>
+          <div style="position:absolute;top:64px;width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green);"></div>
+          <div style="position:absolute;top:150px;width:9px;height:9px;transform:rotate(45deg);background:var(--amber);box-shadow:0 0 7px var(--amber);"></div>
+          <div style="position:absolute;top:250px;width:8px;height:8px;border-radius:50%;background:var(--amber);"></div>
+          <div style="position:absolute;top:360px;width:10px;height:10px;border-radius:50%;background:var(--blocking);box-shadow:0 0 9px var(--blocking);"></div>
+          <!-- gutter hover tooltip is hover-only; omitted in this frame to keep the prose clear -->
+        </div>
+
+        <!-- manuscript column -->
+        <div style="flex:1;max-width:660px;font-family:'Courier Prime',monospace;font-size:15px;line-height:1.62;color:#c6ccd6;position:relative;">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:18px;">
+            <span style="font-family:'Chakra Petch';font-weight:600;font-size:10px;letter-spacing:.3em;color:var(--accent,#4cc2ff);">ACT II · SEQUENCE D</span>
+            <span style="flex:1;height:1px;background:var(--line2);"></span>
+          </div>
+
+          <div style="display:flex;gap:12px;align-items:baseline;margin-bottom:16px;">
+            <span style="font-family:'Chakra Petch';color:var(--txt3);font-size:13px;">12</span>
+            <span style="font-weight:700;color:#fff;letter-spacing:.02em;">INT. <span style="display:inline-flex;align-items:center;gap:3px;padding:0 5px;border:1px solid rgba(245,177,51,.45);background:rgba(245,177,51,.08);color:var(--amber-b);font-family:'JetBrains Mono';font-size:11px;">▲ HELIOS-9</span> — OBSERVATION RING — NIGHT CYCLE</span>
+          </div>
+
+          <p style="margin:0 0 15px;opacity:.82;position:relative;">The corridor breathes. Somewhere below, the reactor drops a half-step and holds. <span style="display:inline-flex;align-items:center;gap:3px;padding:0 5px;border:1px solid var(--line-cy);background:rgba(76,194,255,.1);color:var(--cyan);font-family:'JetBrains Mono';font-size:11px;cursor:pointer;">◆ MARLOW
+            <!-- PSYKE hover card -->
+            <span style="position:absolute;right:-300px;top:88px;width:264px;background:#0a0d14;border:1px solid var(--line-cy);box-shadow:0 14px 40px rgba(0,0,0,.75);padding:11px 12px;z-index:20;text-align:left;font-family:'JetBrains Mono';cursor:default;">
+              <span style="display:flex;align-items:center;gap:7px;border-bottom:1px solid var(--line2);padding-bottom:7px;margin-bottom:7px;">
+                <span style="width:18px;height:18px;display:grid;place-items:center;border:1px solid var(--cyan);color:var(--cyan);font-size:10px;">◆</span>
+                <span style="font-size:12px;color:#fff;letter-spacing:.05em;">MARLOW</span>
+                <span style="font-size:8px;letter-spacing:.16em;color:var(--txt3);margin-left:auto;">CHARACTER</span>
+              </span>
+              <span style="display:block;font-size:9px;color:var(--cyan);letter-spacing:.06em;margin-bottom:5px;">@ SC.12 → guarded · grief-state · seeking absolution</span>
+              <span style="display:block;font-size:10px;color:var(--txt2);line-height:1.45;margin-bottom:8px;">Ex-flight engineer. Carries the weight of the Kessler burn. Will not say the Warden's name aloud.</span>
+              <span style="display:flex;gap:5px;flex-wrap:wrap;">
+                <span style="font-size:8.5px;color:var(--txt2);border:1px solid var(--line2);padding:2px 6px;">↔ VESPER</span>
+                <span style="font-size:8.5px;color:var(--blocking);border:1px solid rgba(255,82,96,.3);padding:2px 6px;">⚔ THE WARDEN</span>
+                <span style="font-size:8.5px;color:var(--accent,#4cc2ff);margin-left:auto;padding:2px 4px;">OPEN IN PSYKE ▸</span>
+              </span>
+            </span>
+          </span> floats at the viewport, watching a dead planet turn.</p>
+
+          <div style="text-align:center;margin-top:6px;font-weight:700;letter-spacing:.05em;opacity:.85;">MARLOW</div>
+          <div style="text-align:center;font-style:italic;color:var(--txt2);">(not turning)</div>
+          <p style="margin:2px auto 15px;width:62%;text-align:center;opacity:.85;">You shouldn't be up here.</p>
+
+          <p style="margin:0 0 6px;opacity:.8;">A hatch cycles. <span style="display:inline-flex;align-items:center;gap:3px;padding:0 5px;border:1px solid var(--line-cy);background:rgba(76,194,255,.1);color:var(--cyan);font-family:'JetBrains Mono';font-size:11px;">◆ VESPER</span> lets it seal behind her. The static between them is <span style="text-decoration:underline wavy var(--amber);text-decoration-skip-ink:none;cursor:help;">really very quite old</span> now.</p>
+
+          <!-- style suggestion popup -->
+          <div style="width:300px;margin:4px 0 16px;background:#0a0d14;border:1px solid rgba(245,177,51,.4);box-shadow:0 10px 30px rgba(0,0,0,.7);padding:10px 11px;font-family:'JetBrains Mono';">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+              <span style="font-size:8.5px;letter-spacing:.16em;color:var(--amber);">⚑ STYLE · CONCISION</span>
+              <span style="font-size:8px;color:var(--txt3);">SENSITIVITY: MED</span>
+            </div>
+            <div style="font-size:10px;color:var(--txt2);line-height:1.45;margin-bottom:9px;">Three stacked intensifiers blunt the line. Trim to one for a colder beat.</div>
+            <div style="display:flex;gap:7px;">
+              <span style="font-size:8.5px;letter-spacing:.1em;color:#04060a;background:var(--amber);padding:4px 9px;font-weight:600;">APPLY REWRITE</span>
+              <span style="font-size:8.5px;letter-spacing:.1em;color:var(--txt2);border:1px solid var(--line2);padding:4px 9px;">IGNORE</span>
+            </div>
+          </div>
+
+          <!-- ACTIVE / selected block -->
+          <div style="position:relative;background:linear-gradient(90deg,rgba(76,194,255,.08),transparent 85%);box-shadow:inset 2px 0 0 var(--accent,#4cc2ff);padding:8px 0 8px 6px;margin:44px 0 8px;">
+            <!-- floating format toolbar -->
+            <div style="position:absolute;top:-34px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:1px;height:28px;padding:0 6px;background:#0a0d14;border:1px solid var(--line);box-shadow:0 6px 22px rgba(0,0,0,.7);font-family:'JetBrains Mono';z-index:8;white-space:nowrap;">
+              <span style="padding:0 6px;font-weight:700;font-size:11px;color:var(--txt);">B</span>
+              <span style="padding:0 6px;font-style:italic;font-size:11px;color:var(--txt2);">I</span>
+              <span style="padding:0 6px;font-size:11px;color:var(--txt2);">H</span>
+              <span style="padding:0 6px;font-size:11px;color:var(--txt2);">❝</span>
+              <span style="width:1px;height:15px;background:var(--line2);margin:0 3px;"></span>
+              <span style="padding:0 7px;color:var(--accent,#4cc2ff);font-size:9px;letter-spacing:.08em;">REWRITE</span>
+              <span style="padding:0 7px;color:var(--txt2);font-size:9px;letter-spacing:.08em;">EXPAND</span>
+              <span style="padding:0 7px;color:var(--amber);font-size:9px;letter-spacing:.08em;">TENSION</span>
+            </div>
+            <div style="text-align:center;font-weight:700;letter-spacing:.05em;color:#fff;">VESPER</div>
+            <p style="margin:2px auto 0;width:66%;text-align:center;color:#eef1f6;">Neither should you. The Warden is counting heartbeats tonight.</p>
+          </div>
+
+          <!-- INLINE AI EDIT BAR (Ctrl+K) with diff -->
+          <div style="border:1px solid var(--line-cy);background:linear-gradient(180deg,rgba(76,194,255,.05),rgba(8,11,17,.9));box-shadow:0 12px 40px rgba(0,0,0,.6);font-family:'JetBrains Mono';margin:10px 0 18px;">
+            <div style="display:flex;align-items:center;gap:9px;padding:9px 11px;border-bottom:1px solid var(--line2);">
+              <span style="display:grid;place-items:center;width:18px;height:16px;border:1px solid var(--line-cy);color:var(--accent,#4cc2ff);font-size:8px;">⌘K</span>
+              <span style="color:var(--accent,#4cc2ff);">❯</span>
+              <span style="flex:1;font-size:11px;color:var(--txt);letter-spacing:.02em;">Tighten the exchange — keep the threat in subtext<span style="display:inline-block;width:2px;height:13px;background:var(--accent,#4cc2ff);vertical-align:-2px;margin-left:1px;animation:lf-blink 1.1s step-end infinite;"></span></span>
+              <span style="font-size:8px;color:var(--txt3);">INLINE ASSISTANT · LOGOS</span>
+            </div>
+            <div style="display:flex;gap:7px;padding:8px 11px;border-bottom:1px solid var(--line2);flex-wrap:wrap;">
+              <span style="font-size:8.5px;letter-spacing:.1em;color:var(--accent,#4cc2ff);border:1px solid var(--line-cy);padding:3px 9px;background:rgba(76,194,255,.08);">REWRITE</span>
+              <span style="font-size:8.5px;letter-spacing:.1em;color:var(--txt2);border:1px solid var(--line2);padding:3px 9px;">EXPAND</span>
+              <span style="font-size:8.5px;letter-spacing:.1em;color:var(--txt2);border:1px solid var(--line2);padding:3px 9px;">TIGHTEN</span>
+              <span style="font-size:8.5px;letter-spacing:.1em;color:var(--txt2);border:1px solid var(--line2);padding:3px 9px;">DIALOGUE</span>
+              <span style="font-size:8.5px;letter-spacing:.1em;color:var(--txt2);border:1px solid var(--line2);padding:3px 9px;">TENSION</span>
+              <span style="font-size:8px;letter-spacing:.06em;color:var(--txt3);margin-left:auto;align-self:center;">/rewrite /expand /tighten /dialogue /tension /summarize</span>
+            </div>
+            <!-- diff -->
+            <div style="padding:10px 11px;">
+              <div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:8px;">
+                <span style="flex:none;font-size:8px;letter-spacing:.14em;color:var(--blocking);border:1px solid rgba(255,82,96,.3);padding:1px 6px;margin-top:1px;">ORIG</span>
+                <span style="font-family:'Courier Prime';font-size:12.5px;color:var(--txt3);text-decoration:line-through;text-decoration-color:rgba(255,82,96,.5);line-height:1.4;">Neither should you. The Warden is counting heartbeats tonight.</span>
+              </div>
+              <div style="display:flex;gap:8px;align-items:flex-start;">
+                <span style="flex:none;font-size:8px;letter-spacing:.14em;color:var(--green);border:1px solid rgba(98,217,154,.35);padding:1px 6px;margin-top:1px;">NEW</span>
+                <span style="font-family:'Courier Prime';font-size:12.5px;color:#eef1f6;line-height:1.4;">Neither should you. He's counting heartbeats tonight. <span style="background:rgba(98,217,154,.16);">Yours are loud.</span></span>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;padding:9px 11px;border-top:1px solid var(--line2);background:rgba(6,8,12,.5);">
+              <span style="font-size:9px;letter-spacing:.1em;color:#04060a;background:var(--accent,#4cc2ff);padding:5px 12px;font-weight:600;">REPLACE</span>
+              <span style="font-size:9px;letter-spacing:.1em;color:var(--txt);border:1px solid var(--line2);padding:5px 11px;">INSERT</span>
+              <span style="font-size:9px;letter-spacing:.1em;color:var(--txt2);border:1px solid var(--line2);padding:5px 11px;">COMPARE</span>
+              <span style="display:flex;align-items:center;gap:4px;font-size:8px;color:var(--txt3);margin-left:6px;"><span style="display:flex;gap:1px;"><span style="width:3px;height:8px;background:var(--green);"></span><span style="width:3px;height:8px;background:var(--green);"></span><span style="width:3px;height:8px;background:var(--green);"></span></span>CONF HIGH</span>
+              <span style="font-size:8.5px;color:var(--accent,#4cc2ff);margin-left:auto;">Show context sent to model ▸</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;padding:6px 11px;border-top:1px solid var(--line2);font-size:8px;color:var(--txt3);letter-spacing:.04em;">
+              <span style="color:var(--green);">✓ selection verified · no drift</span>
+              <span style="margin-left:auto;color:var(--amber);">↳ routes through Controlled Apply · STAGE checkpoint</span>
+            </div>
+          </div>
+
+          <p style="margin:0 0 14px;opacity:.78;">She means <span style="display:inline-flex;align-items:center;gap:3px;padding:0 5px;border:1px solid var(--line-cy);background:rgba(76,194,255,.1);color:var(--cyan);font-family:'JetBrains Mono';font-size:11px;">◆ THE WARDEN</span> — the thing they no longer call a person.</p>
+          <div style="text-align:right;font-weight:700;letter-spacing:.06em;color:var(--txt2);opacity:.7;">SMASH CUT TO:</div>
+        </div>
+      </div>
+
+      <!-- EDITING-INTELLIGENCE HUD -->
+      <div style="width:432px;flex:none;border-left:1px solid var(--line);background:linear-gradient(180deg,#07090e,#05070b);display:flex;flex-direction:column;overflow-y:auto;">
+        <div style="height:30px;display:flex;align-items:center;justify-content:space-between;padding:0 13px;border-bottom:1px solid var(--line);background:rgba(232,68,58,.04);">
+          <span style="font-size:8.5px;letter-spacing:.24em;color:var(--crimson);">EDITING INTELLIGENCE</span>
+          <span style="font-size:8px;color:var(--txt3);letter-spacing:.1em;">⠿ LIVE · DEBOUNCED</span>
+        </div>
+
+        <!-- STYLE METER -->
+        <div style="padding:13px;border-bottom:1px solid var(--line2);">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:11px;">
+            <span style="font-family:'Chakra Petch';font-weight:600;font-size:12px;letter-spacing:.1em;color:#fff;">STYLE METER</span>
+            <div style="display:flex;border:1px solid var(--line2);font-size:7.5px;letter-spacing:.1em;">
+              <span style="padding:2px 6px;color:var(--txt3);">LOW</span><span style="padding:2px 6px;background:var(--accent,#4cc2ff);color:#04060a;font-weight:600;">MED</span><span style="padding:2px 6px;color:var(--txt3);">HIGH</span>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px;">
+            <div><div style="display:flex;justify-content:space-between;font-size:9px;color:var(--txt2);margin-bottom:3px;"><span>Clarity</span><span style="color:var(--green);">0.78</span></div><div style="height:5px;background:rgba(255,255,255,.06);"><div style="width:78%;height:100%;background:var(--green);box-shadow:0 0 6px rgba(98,217,154,.5);"></div></div></div>
+            <div><div style="display:flex;justify-content:space-between;font-size:9px;color:var(--txt2);margin-bottom:3px;"><span>Concision</span><span style="color:var(--amber);">0.54</span></div><div style="height:5px;background:rgba(255,255,255,.06);"><div style="width:54%;height:100%;background:var(--amber);"></div></div></div>
+            <div><div style="display:flex;justify-content:space-between;font-size:9px;color:var(--txt2);margin-bottom:3px;"><span>Rhythm</span><span style="color:var(--green);">0.71</span></div><div style="height:5px;background:rgba(255,255,255,.06);"><div style="width:71%;height:100%;background:var(--green);"></div></div></div>
+            <div><div style="display:flex;justify-content:space-between;font-size:9px;color:var(--txt2);margin-bottom:3px;"><span>Tone consistency</span><span style="color:var(--green);">0.83</span></div><div style="height:5px;background:rgba(255,255,255,.06);"><div style="width:83%;height:100%;background:var(--green);"></div></div></div>
+            <div><div style="display:flex;justify-content:space-between;font-size:9px;color:var(--txt2);margin-bottom:3px;"><span>Dialogue naturalness</span><span style="color:var(--amber);">0.62</span></div><div style="height:5px;background:rgba(255,255,255,.06);"><div style="width:62%;height:100%;background:var(--amber);"></div></div></div>
+          </div>
+          <div style="font-size:9px;color:var(--txt3);margin-top:9px;line-height:1.4;">⚑ Concision dips in ¶7 — adverb stacking. Tone holds across the scene.</div>
+        </div>
+
+        <!-- ENERGY -->
+        <div style="padding:13px;border-bottom:1px solid var(--line2);">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+            <span style="font-family:'Chakra Petch';font-weight:600;font-size:12px;letter-spacing:.1em;color:#fff;">SCENE ENERGY</span>
+            <span style="font-size:8px;color:var(--txt3);letter-spacing:.08em;">¶ × 4 METRICS</span>
+          </div>
+          <svg viewBox="0 0 400 84" style="width:100%;height:84px;display:block;">
+            <line x1="0" y1="21" x2="400" y2="21" stroke="rgba(255,255,255,.05)"/><line x1="0" y1="42" x2="400" y2="42" stroke="rgba(255,255,255,.05)"/><line x1="0" y1="63" x2="400" y2="63" stroke="rgba(255,255,255,.05)"/>
+            <polyline points="0,60 57,52 114,40 171,46 228,20 285,14 342,30 400,22" fill="none" stroke="var(--amber)" stroke-width="1.6" style="filter:drop-shadow(0 0 3px rgba(245,177,51,.7));"/>
+            <polyline points="0,66 57,60 114,58 171,52 228,46 285,40 342,48 400,44" fill="none" stroke="var(--cyan)" stroke-width="1.3" opacity=".8"/>
+            <polyline points="0,70 57,68 114,55 171,62 228,40 285,28 342,46 400,52" fill="none" stroke="var(--blocking)" stroke-width="1.3" opacity=".75"/>
+            <polygon points="285,14 281,22 289,22" fill="var(--blocking)"/>
+            <circle cx="228" cy="20" r="2.5" fill="var(--amber-b)"/>
+          </svg>
+          <div style="display:flex;height:6px;gap:2px;margin-top:5px;">
+            <div style="flex:1;background:rgba(76,194,255,.3);"></div><div style="flex:1.3;background:rgba(245,177,51,.35);"></div><div style="flex:.7;background:rgba(255,82,96,.4);"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:7.5px;color:var(--txt3);margin-top:4px;letter-spacing:.08em;">
+            <span><span style="color:var(--amber);">●</span> tension</span><span><span style="color:var(--cyan);">●</span> pacing</span><span><span style="color:var(--blocking);">●</span> conflict</span><span style="color:var(--blocking);">▲ ¶7 spike</span>
+          </div>
+        </div>
+
+        <!-- VOICE CONSOLE -->
+        <div style="padding:13px;border-bottom:1px solid var(--line2);">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:11px;">
+            <span style="font-family:'Chakra Petch';font-weight:600;font-size:12px;letter-spacing:.1em;color:#fff;">VOICE CONSOLE</span>
+            <span style="font-size:8px;color:var(--txt3);letter-spacing:.08em;">vs VOICEPROFILE</span>
+          </div>
+          <div style="border:1px solid rgba(255,82,96,.35);background:rgba(255,82,96,.05);padding:9px 10px;margin-bottom:8px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;">
+              <span style="display:flex;align-items:center;gap:6px;font-size:10px;color:#fff;"><span style="width:14px;height:14px;display:grid;place-items:center;border:1px solid var(--cyan);color:var(--cyan);font-size:8px;">◆</span>MARLOW</span>
+              <span style="font-size:9px;color:var(--blocking);letter-spacing:.06em;">DEVIATION 0.31 · HIGH</span>
+            </div>
+            <div style="font-size:9px;color:var(--txt2);line-height:1.4;margin-bottom:8px;">↳ formal register breaks clipped cadence · uncharacteristic question</div>
+            <span style="font-size:8.5px;letter-spacing:.1em;color:var(--accent,#4cc2ff);border:1px solid var(--line-cy);padding:3px 9px;background:rgba(76,194,255,.07);">REWRITE IN VOICE</span>
+          </div>
+          <div style="border:1px solid var(--line2);background:rgba(11,14,21,.4);padding:8px 10px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;font-size:9px;">
+              <span style="display:flex;align-items:center;gap:6px;color:var(--txt);"><span style="width:14px;height:14px;display:grid;place-items:center;border:1px solid var(--cyan);color:var(--cyan);font-size:8px;">◆</span>VESPER</span>
+              <span style="color:var(--green);letter-spacing:.06em;">0.66 · IN VOICE</span>
+            </div>
+          </div>
+          <div style="margin-top:10px;border-top:1px dashed var(--line2);padding-top:9px;">
+            <div style="font-size:8px;letter-spacing:.14em;color:var(--txt3);margin-bottom:6px;">PROFILE · MARLOW — RESOLVED @ SC.12</div>
+            <div style="display:flex;align-items:center;gap:8px;font-size:8.5px;">
+              <span style="color:var(--txt3);border:1px solid var(--line2);padding:3px 7px;">baseline</span>
+              <span style="color:var(--accent,#4cc2ff);">→</span>
+              <span style="color:var(--amber-b);border:1px solid rgba(245,177,51,.4);padding:3px 7px;background:rgba(245,177,51,.06);">+ grief-state · terser</span>
+            </div>
+            <div style="font-size:8px;color:var(--txt3);margin-top:6px;line-height:1.4;">Profile shifted by PSYKE character-state before checking — fewer words, longer pauses expected.</div>
+          </div>
+        </div>
+
+        <!-- ISSUES -->
+        <div style="padding:13px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+            <span style="font-family:'Chakra Petch';font-weight:600;font-size:12px;letter-spacing:.1em;color:#fff;">ISSUES</span>
+            <span style="font-size:8px;color:var(--txt3);letter-spacing:.08em;">6 STYLE · FILTER ▾</span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:6px;">
+            <div style="display:flex;align-items:center;gap:8px;font-size:9px;color:var(--txt2);padding:5px 8px;border-left:2px solid var(--amber);background:rgba(11,14,21,.4);"><span style="color:var(--amber);letter-spacing:.1em;">CONCISION</span><span style="opacity:.7;">¶7 · adverb stacking</span><span style="margin-left:auto;color:var(--accent,#4cc2ff);">JUMP ▸</span></div>
+            <div style="display:flex;align-items:center;gap:8px;font-size:9px;color:var(--txt2);padding:5px 8px;border-left:2px solid var(--cyan);background:rgba(11,14,21,.4);"><span style="color:var(--cyan);letter-spacing:.1em;">RHYTHM</span><span style="opacity:.7;">¶3 · monotone length</span><span style="margin-left:auto;color:var(--accent,#4cc2ff);">JUMP ▸</span></div>
+            <div style="display:flex;align-items:center;gap:8px;font-size:9px;color:var(--txt3);padding:5px 8px;border-left:2px solid var(--txt3);background:rgba(11,14,21,.25);opacity:.65;"><span style="letter-spacing:.1em;">GRAMMAR</span><span>deferred after Alpha</span><span style="margin-left:auto;border:1px solid var(--line2);padding:1px 6px;font-size:7.5px;">OFF</span></div>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:10px;font-size:8.5px;letter-spacing:.1em;">
+            <span style="color:var(--txt2);border:1px solid var(--line2);padding:3px 9px;">IGNORE ALL</span>
+            <span style="color:var(--txt3);align-self:center;">ADVISORY ONLY · NON-BLOCKING</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================= FRAME B · STORY GRID ============================= -->
+<div style="position:absolute;left:1680px;top:130px;width:1280px;font-family:'JetBrains Mono',monospace;--line:rgba(232,68,58,.28);--line2:rgba(150,162,180,.10);--line-cy:rgba(76,194,255,.3);--crimson:#e8443a;--amber:#f5b133;--amber-b:#ffcf4a;--cyan:#4cc2ff;--green:#62d99a;--violet:#b07cff;--blocking:#ff5260;--warning:#ffb454;--txt:#e4e8ef;--txt2:#8b95a5;--txt3:#525c6b;--accent:{{ accent }};">
+  <div data-drags-parent="1" style="display:inline-flex;align-items:center;gap:9px;margin-bottom:11px;padding:6px 12px;background:rgba(6,8,12,.92);border:1px solid var(--line);color:var(--accent,#4cc2ff);font-size:10px;letter-spacing:.2em;">
+    <span style="display:grid;place-items:center;width:16px;height:16px;background:var(--accent,#4cc2ff);color:#04060a;font-weight:700;">B</span>STORY GRID · CORKBOARD
+  </div>
+  <div data-screen-label="Story Grid" style="position:relative;width:100%;height:640px;background:linear-gradient(180deg,#080a0f,#05070b);border:1px solid var(--line);box-shadow:0 16px 60px rgba(0,0,0,.6);overflow:hidden;">
+    <div style="position:absolute;top:-1px;left:-1px;width:14px;height:14px;border-top:1px solid var(--crimson);border-left:1px solid var(--crimson);"></div>
+    <div style="position:absolute;top:3px;left:3px;width:5px;height:5px;background:var(--crimson);"></div>
+    <!-- toolbar -->
+    <div style="height:40px;display:flex;align-items:center;gap:13px;padding:0 16px;border-bottom:1px solid var(--line);">
+      <span style="font-family:'Chakra Petch';font-weight:600;font-size:13px;letter-spacing:.12em;color:#fff;">STORY GRID</span>
+      <span style="font-size:9px;color:var(--txt2);letter-spacing:.1em;">GROUP <span style="color:var(--accent,#4cc2ff);">ACT</span> ▾</span>
+      <span style="font-size:9px;color:var(--txt2);letter-spacing:.1em;">COLOR <span style="color:var(--accent,#4cc2ff);">BEAT</span> ▾</span>
+      <span style="font-size:9px;color:var(--txt2);letter-spacing:.1em;">⊹ FLOW OVERLAY</span>
+      <div style="flex:1;"></div>
+      <span style="font-size:8px;color:var(--txt3);letter-spacing:.06em;">❝ dialogue · ↯ action · ▦ exposition · ✦ mixed</span>
+      <span style="font-size:9px;color:var(--txt2);">ZOOM ⊟ ▢ ⊞</span>
+    </div>
+    <!-- columns -->
+    <div style="display:flex;gap:14px;padding:14px 16px;height:600px;">
+      <!-- ACT I -->
+      <div style="flex:1;display:flex;flex-direction:column;">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;border-bottom:1px solid var(--line2);padding-bottom:7px;margin-bottom:10px;"><span style="font-family:'Chakra Petch';font-weight:600;font-size:12px;letter-spacing:.16em;color:var(--accent,#4cc2ff);">ACT I</span><span style="font-size:8px;color:var(--txt3);">6 SC · 4,120w</span></div>
+        <div style="display:flex;flex-direction:column;gap:9px;overflow-y:auto;">
+          <div style="border:1px solid var(--line2);border-left:3px solid var(--green);background:rgba(11,14,21,.55);padding:9px 10px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;"><span style="font-size:8px;color:var(--txt3);">❝ 1.1.1</span><span style="font-size:7.5px;letter-spacing:.1em;color:var(--green);border:1px solid rgba(98,217,154,.35);padding:1px 5px;">COMPLETE</span></div>
+            <div style="font-size:11px;color:#fff;font-family:'Chakra Petch';letter-spacing:.03em;margin-bottom:3px;">Cold Open</div>
+            <div style="font-size:9px;color:var(--txt2);line-height:1.4;margin-bottom:7px;">Marlow wakes the station. The planet is already wrong.</div>
+            <div style="display:flex;align-items:center;gap:5px;"><span style="display:flex;gap:3px;"><span style="width:6px;height:6px;border-radius:50%;background:var(--cyan);"></span></span><span style="font-size:7.5px;color:var(--txt3);margin-left:auto;">312w · 3m · INT · DAWN</span></div>
+            <div style="height:3px;margin-top:6px;background:linear-gradient(90deg,var(--green),var(--amber) 70%);opacity:.7;"></div>
+          </div>
+          <div style="border:1px solid var(--line2);border-left:3px solid var(--cyan);background:rgba(11,14,21,.55);padding:9px 10px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;"><span style="font-size:8px;color:var(--txt3);">↯ 1.2.1</span><span style="font-size:7.5px;letter-spacing:.1em;color:var(--cyan);border:1px solid var(--line-cy);padding:1px 5px;">EDITED</span></div>
+            <div style="font-size:11px;color:#fff;font-family:'Chakra Petch';margin-bottom:3px;">Distress Loop</div>
+            <div style="font-size:9px;color:var(--txt2);line-height:1.4;margin-bottom:7px;">A 9-year-old signal repeats. Vesper recognizes the voice.</div>
+            <div style="display:flex;align-items:center;gap:5px;"><span style="display:flex;gap:3px;"><span style="width:6px;height:6px;border-radius:50%;background:var(--cyan);"></span><span style="width:6px;height:6px;border-radius:50%;background:var(--green);"></span></span><span style="font-size:7.5px;color:var(--txt3);margin-left:auto;">288w · ⚓</span></div>
+            <div style="height:3px;margin-top:6px;background:linear-gradient(90deg,var(--cyan),var(--amber));opacity:.6;"></div>
+          </div>
+          <div style="border:1px solid var(--line2);border-left:3px solid var(--amber);background:rgba(11,14,21,.55);padding:9px 10px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;"><span style="font-size:8px;color:var(--txt3);">▦ 1.3.1</span><span style="font-size:7.5px;letter-spacing:.1em;color:var(--amber);border:1px solid rgba(245,177,51,.35);padding:1px 5px;">NEEDS WORK</span></div>
+            <div style="font-size:11px;color:#fff;font-family:'Chakra Petch';margin-bottom:3px;">The Black Box</div>
+            <div style="font-size:9px;color:var(--txt2);line-height:1.4;">A sealed unit is logged, then never opened. <span style="color:var(--violet);">◇ setup</span></div>
+          </div>
+        </div>
+      </div>
+      <!-- ACT II -->
+      <div style="flex:1;display:flex;flex-direction:column;">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;border-bottom:1px solid var(--line2);padding-bottom:7px;margin-bottom:10px;"><span style="font-family:'Chakra Petch';font-weight:600;font-size:12px;letter-spacing:.16em;color:var(--accent,#4cc2ff);">ACT II</span><span style="font-size:8px;color:var(--txt3);">11 SC · 9,540w</span></div>
+        <div style="display:flex;flex-direction:column;gap:9px;overflow-y:auto;">
+          <div style="position:relative;border:1px solid var(--accent,#4cc2ff);border-left:3px solid var(--accent,#4cc2ff);background:rgba(76,194,255,.1);padding:9px 10px;box-shadow:0 0 16px rgba(76,194,255,.18);">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;"><span style="font-size:8px;color:var(--accent,#4cc2ff);">❝ 2.4.12 ●</span><span style="font-size:7.5px;letter-spacing:.1em;color:var(--cyan);border:1px solid var(--line-cy);padding:1px 5px;">EDITED</span></div>
+            <div style="font-size:11px;color:#fff;font-family:'Chakra Petch';margin-bottom:3px;">Observation Ring</div>
+            <div style="font-size:9px;color:var(--txt2);line-height:1.4;margin-bottom:7px;">Marlow and Vesper, the static, the Warden's count.</div>
+            <div style="display:flex;align-items:center;gap:5px;"><span style="display:flex;gap:3px;"><span style="width:6px;height:6px;border-radius:50%;background:var(--cyan);"></span><span style="width:6px;height:6px;border-radius:50%;background:var(--cyan);"></span></span><span style="font-size:7.5px;color:var(--txt3);margin-left:auto;">812w · 5m · INT · NIGHT · ↻</span></div>
+            <div style="height:3px;margin-top:6px;background:linear-gradient(90deg,var(--amber),var(--blocking));opacity:.8;"></div>
+          </div>
+          <div style="position:relative;border:1px solid rgba(255,82,96,.4);border-left:3px solid var(--warning);background:rgba(255,82,96,.05);padding:9px 10px;">
+            <div style="position:absolute;top:7px;right:9px;font-size:7px;color:var(--blocking);letter-spacing:.1em;">⚑ PACING</div>
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:5px;"><span style="font-size:8px;color:var(--txt3);">▦ 2.5.13</span></div>
+            <div style="font-size:11px;color:#fff;font-family:'Chakra Petch';margin-bottom:3px;">Midpoint · The Confession</div>
+            <div style="font-size:9px;color:var(--txt2);line-height:1.4;margin-bottom:6px;">Three exposition scenes in a row — tension flattens.</div>
+            <div style="height:3px;background:linear-gradient(90deg,var(--amber),var(--amber));opacity:.55;"></div>
+          </div>
+          <div style="border:1px solid var(--line2);border-left:3px solid var(--blocking);background:rgba(11,14,21,.55);padding:9px 10px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;"><span style="font-size:8px;color:var(--txt3);">↯ 2.7.21</span><span style="font-size:7.5px;letter-spacing:.1em;color:var(--txt3);border:1px solid var(--line2);padding:1px 5px;">DRAFT</span></div>
+            <div style="font-size:11px;color:#fff;font-family:'Chakra Petch';margin-bottom:3px;">All Is Lost</div>
+            <div style="font-size:9px;color:var(--txt2);line-height:1.4;">The reactor goes quiet. So does Vesper. <span style="color:var(--blocking);">◆ climax peak</span></div>
+          </div>
+        </div>
+      </div>
+      <!-- ACT III -->
+      <div style="flex:1;display:flex;flex-direction:column;">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;border-bottom:1px solid var(--line2);padding-bottom:7px;margin-bottom:10px;"><span style="font-family:'Chakra Petch';font-weight:600;font-size:12px;letter-spacing:.16em;color:var(--accent,#4cc2ff);">ACT III</span><span style="font-size:8px;color:var(--txt3);">7 SC · 4,772w</span></div>
+        <div style="display:flex;flex-direction:column;gap:9px;overflow-y:auto;">
+          <div style="border:1px solid var(--line2);border-left:3px solid var(--txt3);background:rgba(11,14,21,.45);padding:9px 10px;border-style:dashed;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;"><span style="font-size:8px;color:var(--txt3);">✦ 3.1.22</span><span style="font-size:7.5px;letter-spacing:.1em;color:var(--txt3);border:1px solid var(--line2);padding:1px 5px;">DRAFT</span></div>
+            <div style="font-size:11px;color:var(--txt);font-family:'Chakra Petch';margin-bottom:3px;">Break Into Three</div>
+            <div style="font-size:9px;color:var(--txt2);line-height:1.4;">Marlow opens the box. <span style="color:var(--blocking);">⚑ unpaid setup</span></div>
+          </div>
+          <div style="border:1px dashed var(--line2);background:transparent;padding:11px 10px;display:flex;align-items:center;justify-content:center;gap:7px;color:var(--txt3);font-size:9px;letter-spacing:.1em;">＋ NEW SCENE CARD</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================= FRAME C · OUTLINE PANEL ============================= -->
+<div style="position:absolute;left:1680px;top:840px;width:600px;font-family:'JetBrains Mono',monospace;--line:rgba(232,68,58,.28);--line2:rgba(150,162,180,.10);--line-cy:rgba(76,194,255,.3);--crimson:#e8443a;--amber:#f5b133;--amber-b:#ffcf4a;--cyan:#4cc2ff;--green:#62d99a;--violet:#b07cff;--warning:#ffb454;--txt:#e4e8ef;--txt2:#8b95a5;--txt3:#525c6b;--accent:{{ accent }};">
+  <div data-drags-parent="1" style="display:inline-flex;align-items:center;gap:9px;margin-bottom:11px;padding:6px 12px;background:rgba(6,8,12,.92);border:1px solid var(--line);color:var(--accent,#4cc2ff);font-size:10px;letter-spacing:.2em;">
+    <span style="display:grid;place-items:center;width:16px;height:16px;background:var(--accent,#4cc2ff);color:#04060a;font-weight:700;">C</span>OUTLINE PANEL
+  </div>
+  <div data-screen-label="Outline Panel" style="position:relative;width:100%;height:900px;background:linear-gradient(180deg,#080a0f,#05070b);border:1px solid var(--line);box-shadow:0 16px 60px rgba(0,0,0,.6);overflow:hidden;display:flex;flex-direction:column;">
+    <div style="position:absolute;top:-1px;left:-1px;width:14px;height:14px;border-top:1px solid var(--crimson);border-left:1px solid var(--crimson);"></div>
+    <div style="position:absolute;top:3px;left:3px;width:5px;height:5px;background:var(--crimson);"></div>
+    <!-- toolbar -->
+    <div style="height:42px;flex:none;display:flex;align-items:center;gap:10px;padding:0 14px;border-bottom:1px solid var(--line);">
+      <span style="font-family:'Chakra Petch';font-weight:600;font-size:13px;letter-spacing:.12em;color:#fff;">OUTLINE</span>
+      <span style="font-size:8px;color:var(--violet);border:1px solid rgba(176,124,255,.4);padding:2px 6px;letter-spacing:.14em;">λ CLASSICAL</span>
+      <div style="flex:1;"></div>
+      <span style="font-size:9px;color:var(--txt2);letter-spacing:.08em;">SAVE THE CAT ▾</span>
+      <span style="font-size:9px;color:#04060a;background:var(--accent,#4cc2ff);padding:4px 9px;letter-spacing:.08em;font-weight:600;">AI GENERATE ▾</span>
+    </div>
+    <!-- AI generate hint -->
+    <div style="flex:none;display:flex;align-items:center;gap:8px;padding:7px 14px;background:rgba(76,194,255,.05);border-bottom:1px solid var(--line2);font-size:8.5px;color:var(--txt2);letter-spacing:.04em;">
+      <span style="color:var(--accent,#4cc2ff);">▾ FULL · ACT · CHAPTER · SCENE</span><span style="margin-left:auto;color:var(--amber);">↳ lands via Diff / Impact Confirm → preview before apply</span>
+    </div>
+    <!-- accordion -->
+    <div style="flex:1;overflow-y:auto;padding:12px;">
+      <!-- ACT I expanded -->
+      <div style="border:1px solid var(--line-cy);margin-bottom:11px;">
+        <div style="display:flex;align-items:center;gap:9px;padding:9px 11px;background:rgba(76,194,255,.07);border-bottom:1px solid var(--line2);">
+          <span style="color:var(--accent,#4cc2ff);font-size:9px;">▾</span>
+          <span style="font-family:'Chakra Petch';font-weight:600;font-size:13px;letter-spacing:.08em;color:#fff;">ACT I</span>
+          <span style="font-size:9px;color:var(--accent,#4cc2ff);font-family:'Chakra Petch';">[1]</span>
+          <span style="font-size:8.5px;color:var(--txt3);margin-left:auto;">3 ch · 6 sc · 4,120w</span>
+          <span style="color:var(--txt3);font-size:11px;">⋯</span>
+        </div>
+        <div style="padding:9px 11px;">
+          <div style="font-size:8px;letter-spacing:.16em;color:var(--txt3);margin-bottom:7px;">CHAPTER 1.1 · ARRIVAL</div>
+          <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:11px;">
+            <div style="display:flex;align-items:center;gap:8px;border-left:3px solid var(--green);background:rgba(11,14,21,.5);padding:6px 9px;">
+              <span style="font-size:8px;color:var(--txt3);font-family:'Chakra Petch';">1.1.1</span>
+              <span style="font-size:10px;color:var(--txt);flex:1;">Cold Open</span>
+              <span style="font-size:7px;color:var(--green);border:1px solid rgba(98,217,154,.3);padding:1px 4px;">COMPLETE</span>
+              <span style="font-size:8px;color:var(--txt3);">312w</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;border-left:3px solid var(--cyan);background:rgba(11,14,21,.5);padding:6px 9px;">
+              <span style="font-size:8px;color:var(--txt3);font-family:'Chakra Petch';">1.1.2</span>
+              <span style="font-size:10px;color:var(--txt);flex:1;">Boot Sequence</span>
+              <span style="font-size:8px;color:var(--accent,#4cc2ff);">📝 2</span>
+              <span style="font-size:8px;color:var(--txt3);">204w</span>
+            </div>
+          </div>
+          <div style="font-size:8px;letter-spacing:.16em;color:var(--txt3);margin-bottom:7px;">CHAPTER 1.2 · THE SIGNAL</div>
+          <div style="display:flex;align-items:center;gap:8px;border-left:3px solid var(--amber);background:rgba(11,14,21,.5);padding:6px 9px;">
+            <span style="font-size:8px;color:var(--txt3);font-family:'Chakra Petch';">1.2.1</span>
+            <span style="font-size:10px;color:var(--txt);flex:1;">Distress Loop</span>
+            <span style="font-size:7px;color:var(--amber);border:1px solid rgba(245,177,51,.3);padding:1px 4px;">EDITED</span>
+            <span style="font-size:8px;color:var(--txt3);">288w</span>
+          </div>
+        </div>
+      </div>
+      <!-- ACT II collapsed -->
+      <div style="border:1px solid var(--line2);margin-bottom:11px;">
+        <div style="display:flex;align-items:center;gap:9px;padding:9px 11px;">
+          <span style="color:var(--txt3);font-size:9px;">▸</span>
+          <span style="font-family:'Chakra Petch';font-weight:600;font-size:13px;letter-spacing:.08em;color:var(--txt);">ACT II</span>
+          <span style="font-size:9px;color:var(--txt2);font-family:'Chakra Petch';">[2]</span>
+          <span style="font-size:8px;color:var(--warning);margin-left:auto;">⚑ 34% long</span>
+          <span style="font-size:8.5px;color:var(--txt3);">5 ch · 11 sc</span>
+        </div>
+      </div>
+      <!-- ACT III collapsed -->
+      <div style="border:1px solid var(--line2);margin-bottom:11px;">
+        <div style="display:flex;align-items:center;gap:9px;padding:9px 11px;">
+          <span style="color:var(--txt3);font-size:9px;">▸</span>
+          <span style="font-family:'Chakra Petch';font-weight:600;font-size:13px;letter-spacing:.08em;color:var(--txt);">ACT III</span>
+          <span style="font-size:9px;color:var(--txt2);font-family:'Chakra Petch';">[3]</span>
+          <span style="font-size:8.5px;color:var(--txt3);margin-left:auto;">4 ch · 7 sc</span>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <span style="font-size:9px;color:var(--txt2);border:1px dashed var(--line2);padding:6px 12px;letter-spacing:.08em;">＋ ADD ACT</span>
+        <span style="font-size:9px;color:var(--txt3);border:1px dashed var(--line2);padding:6px 12px;letter-spacing:.08em;">⌫ CLEAR OUTLINE</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================= FRAME D · STRUCTURE PANEL ============================= -->
+<div style="position:absolute;left:2340px;top:840px;width:600px;font-family:'JetBrains Mono',monospace;--line:rgba(232,68,58,.28);--line2:rgba(150,162,180,.10);--line-cy:rgba(76,194,255,.3);--crimson:#e8443a;--amber:#f5b133;--amber-b:#ffcf4a;--cyan:#4cc2ff;--green:#62d99a;--blocking:#ff5260;--warning:#ffb454;--txt:#e4e8ef;--txt2:#8b95a5;--txt3:#525c6b;--accent:{{ accent }};">
+  <div data-drags-parent="1" style="display:inline-flex;align-items:center;gap:9px;margin-bottom:11px;padding:6px 12px;background:rgba(6,8,12,.92);border:1px solid var(--line);color:var(--accent,#4cc2ff);font-size:10px;letter-spacing:.2em;">
+    <span style="display:grid;place-items:center;width:16px;height:16px;background:var(--accent,#4cc2ff);color:#04060a;font-weight:700;">D</span>STRUCTURE PANEL · SCENE-DERIVED SPINE
+  </div>
+  <div data-screen-label="Structure Panel" style="position:relative;width:100%;height:900px;background:linear-gradient(180deg,#080a0f,#05070b);border:1px solid var(--line);box-shadow:0 16px 60px rgba(0,0,0,.6);overflow:hidden;display:flex;flex-direction:column;">
+    <div style="position:absolute;top:-1px;left:-1px;width:14px;height:14px;border-top:1px solid var(--crimson);border-left:1px solid var(--crimson);"></div>
+    <div style="position:absolute;top:3px;left:3px;width:5px;height:5px;background:var(--crimson);"></div>
+    <div style="height:42px;flex:none;display:flex;align-items:center;gap:10px;padding:0 14px;border-bottom:1px solid var(--line);">
+      <span style="font-family:'Chakra Petch';font-weight:600;font-size:13px;letter-spacing:.12em;color:#fff;">STRUCTURE</span>
+      <div style="flex:1;"></div>
+      <span style="font-size:7.5px;color:var(--txt3);border:1px solid var(--line2);padding:2px 7px;letter-spacing:.12em;">NO ACT / CHAPTER TABLES · DERIVED</span>
+    </div>
+    <!-- repair banner -->
+    <div style="flex:none;display:flex;align-items:center;gap:9px;padding:8px 14px;background:rgba(245,177,51,.08);border-bottom:1px solid rgba(245,177,51,.3);">
+      <span style="width:8px;height:8px;transform:rotate(45deg);background:var(--warning);"></span>
+      <span style="font-size:9.5px;color:var(--amber-b);flex:1;letter-spacing:.03em;">2 orphan scenes detected by validate_structure</span>
+      <span style="font-size:8.5px;color:#04060a;background:var(--amber);padding:4px 10px;letter-spacing:.08em;font-weight:600;">REPAIR STRUCTURE</span>
+    </div>
+    <!-- spine -->
+    <div style="flex:1;overflow-y:auto;padding:13px;">
+      <!-- ACT 1 -->
+      <div style="margin-bottom:5px;display:flex;align-items:center;gap:9px;padding:7px 6px;border-bottom:1px solid var(--line2);">
+        <span style="font-family:'Chakra Petch';font-size:12px;color:var(--accent,#4cc2ff);min-width:30px;">[1]</span>
+        <span style="font-family:'Chakra Petch';font-weight:600;font-size:13px;letter-spacing:.08em;color:#fff;flex:1;">ACT I</span>
+        <span style="font-size:8px;color:var(--txt3);">4,120w</span>
+        <svg viewBox="0 0 50 14" style="width:50px;height:14px;"><polyline points="0,10 12,8 25,5 38,9 50,4" fill="none" stroke="var(--green)" stroke-width="1.3"/></svg>
+      </div>
+      <div style="padding-left:20px;">
+        <div style="display:flex;align-items:center;gap:8px;padding:5px 6px;color:var(--txt2);"><span style="font-family:'Chakra Petch';font-size:10px;color:var(--txt3);min-width:34px;">1.1</span><span style="font-size:11px;flex:1;">Arrival</span><span style="font-size:8px;color:var(--txt3);">2 sc</span></div>
+        <div style="padding-left:18px;display:flex;flex-direction:column;gap:3px;">
+          <div style="display:flex;align-items:center;gap:8px;padding:4px 6px;font-size:10px;color:var(--txt2);cursor:pointer;" style-hover="color:#fff;background:rgba(76,194,255,.05);"><span style="font-family:'Chakra Petch';font-size:9px;color:var(--txt3);min-width:38px;">1.1.1</span><span style="flex:1;">Cold Open</span><span style="font-size:7px;color:var(--green);border:1px solid rgba(98,217,154,.3);padding:0 4px;">B-STORY</span></div>
+          <div style="display:flex;align-items:center;gap:8px;padding:4px 6px;font-size:10px;color:var(--txt2);cursor:pointer;" style-hover="color:#fff;background:rgba(76,194,255,.05);"><span style="font-family:'Chakra Petch';font-size:9px;color:var(--txt3);min-width:38px;">1.1.2</span><span style="flex:1;">Boot Sequence</span></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;padding:5px 6px;color:var(--txt2);margin-top:3px;"><span style="font-family:'Chakra Petch';font-size:10px;color:var(--txt3);min-width:34px;">1.2</span><span style="font-size:11px;flex:1;">The Signal</span><span style="font-size:8px;color:var(--txt3);">1 sc</span></div>
+        <div style="padding-left:18px;"><div style="display:flex;align-items:center;gap:8px;padding:4px 6px;font-size:10px;color:var(--txt2);cursor:pointer;" style-hover="color:#fff;background:rgba(76,194,255,.05);"><span style="font-family:'Chakra Petch';font-size:9px;color:var(--txt3);min-width:38px;">1.2.1</span><span style="flex:1;">Distress Loop</span><span style="font-size:7px;color:var(--amber);border:1px solid rgba(245,177,51,.3);padding:0 4px;">SETUP</span></div></div>
+      </div>
+      <!-- ACT 2 -->
+      <div style="margin:10px 0 5px;display:flex;align-items:center;gap:9px;padding:7px 6px;border-bottom:1px solid var(--line2);">
+        <span style="font-family:'Chakra Petch';font-size:12px;color:var(--accent,#4cc2ff);min-width:30px;">[2]</span>
+        <span style="font-family:'Chakra Petch';font-weight:600;font-size:13px;letter-spacing:.08em;color:#fff;flex:1;">ACT II</span>
+        <span style="font-size:7px;color:var(--warning);">⚑</span>
+        <span style="font-size:8px;color:var(--txt3);">9,540w</span>
+        <svg viewBox="0 0 50 14" style="width:50px;height:14px;"><polyline points="0,8 12,6 25,3 38,2 50,9" fill="none" stroke="var(--amber)" stroke-width="1.3"/></svg>
+      </div>
+      <div style="padding-left:20px;">
+        <div style="display:flex;align-items:center;gap:8px;padding:5px 6px;color:var(--txt2);"><span style="font-family:'Chakra Petch';font-size:10px;color:var(--txt3);min-width:34px;">2.4</span><span style="font-size:11px;flex:1;">Convergence</span><span style="font-size:8px;color:var(--txt3);">3 sc</span></div>
+        <div style="padding-left:18px;"><div style="display:flex;align-items:center;gap:8px;padding:4px 6px;font-size:10px;color:#fff;background:rgba(76,194,255,.07);box-shadow:inset 2px 0 0 var(--accent,#4cc2ff);"><span style="font-family:'Chakra Petch';font-size:9px;color:var(--accent,#4cc2ff);min-width:38px;">2.4.12</span><span style="flex:1;">Observation Ring ●</span><span style="font-size:7px;color:var(--blocking);border:1px solid rgba(255,82,96,.3);padding:0 4px;">MIDPOINT</span></div></div>
+      </div>
+      <!-- UNASSIGNED bucket -->
+      <div style="margin-top:14px;border:1px dashed rgba(245,177,51,.4);background:rgba(245,177,51,.04);">
+        <div style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-bottom:1px dashed rgba(245,177,51,.25);">
+          <span style="font-size:9px;color:var(--amber);letter-spacing:.16em;">⚑ UNASSIGNED</span>
+          <span style="font-size:8px;color:var(--txt3);">· 2 scenes · sorts last · unnumbered</span>
+        </div>
+        <div style="padding:7px 10px;display:flex;flex-direction:column;gap:5px;">
+          <div style="display:flex;align-items:center;gap:8px;font-size:10px;color:var(--txt2);"><span style="color:var(--amber);">◇</span><span style="flex:1;">Untitled fragment (drafted)</span><span style="font-size:7px;color:var(--amber);">ORPHAN</span></div>
+          <div style="display:flex;align-items:center;gap:8px;font-size:10px;color:var(--txt2);"><span style="color:var(--amber);">◇</span><span style="flex:1;">Recovered scene</span><span style="font-size:7px;color:var(--amber);">ORPHAN</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================= FRAME E · NOTES PANEL ============================= -->
+<div style="position:absolute;left:80px;top:1180px;width:1280px;font-family:'JetBrains Mono',monospace;--line:rgba(232,68,58,.28);--line2:rgba(150,162,180,.10);--line-cy:rgba(76,194,255,.3);--crimson:#e8443a;--amber:#f5b133;--amber-b:#ffcf4a;--cyan:#4cc2ff;--green:#62d99a;--violet:#b07cff;--txt:#e4e8ef;--txt2:#8b95a5;--txt3:#525c6b;--accent:{{ accent }};">
+  <div data-drags-parent="1" style="display:inline-flex;align-items:center;gap:9px;margin-bottom:11px;padding:6px 12px;background:rgba(6,8,12,.92);border:1px solid var(--line);color:var(--accent,#4cc2ff);font-size:10px;letter-spacing:.2em;">
+    <span style="display:grid;place-items:center;width:16px;height:16px;background:var(--accent,#4cc2ff);color:#04060a;font-weight:700;">E</span>NOTES PANEL · PSYKE + SCENE LINKS
+  </div>
+  <div data-screen-label="Notes Panel" style="position:relative;width:100%;height:460px;background:linear-gradient(180deg,#080a0f,#05070b);border:1px solid var(--line);box-shadow:0 16px 60px rgba(0,0,0,.6);overflow:hidden;display:flex;flex-direction:column;">
+    <div style="position:absolute;top:-1px;left:-1px;width:14px;height:14px;border-top:1px solid var(--crimson);border-left:1px solid var(--crimson);"></div>
+    <div style="position:absolute;top:3px;left:3px;width:5px;height:5px;background:var(--crimson);"></div>
+    <div style="height:40px;flex:none;display:flex;align-items:center;gap:12px;padding:0 16px;border-bottom:1px solid var(--line);">
+      <span style="font-family:'Chakra Petch';font-weight:600;font-size:13px;letter-spacing:.12em;color:#fff;">NOTES</span>
+      <span style="font-size:8px;color:var(--txt3);">9 · 1 PINNED</span>
+      <div style="flex:1;display:flex;justify-content:center;"><div style="display:flex;align-items:center;gap:7px;width:300px;height:24px;padding:0 10px;border:1px solid var(--line2);color:var(--txt3);font-size:10px;">⌕ Search notes…</div></div>
+      <span style="font-size:9px;color:var(--txt2);letter-spacing:.08em;">FILTER ▾</span>
+      <span style="font-size:9px;color:#04060a;background:var(--accent,#4cc2ff);padding:4px 9px;font-weight:600;letter-spacing:.08em;">＋ NEW NOTE</span>
+    </div>
+    <div style="flex:1;overflow-y:auto;padding:13px;display:grid;grid-template-columns:repeat(3,1fr);gap:11px;align-content:start;">
+      <!-- pinned -->
+      <div style="border:1px solid var(--accent,#4cc2ff);border-top:2px solid var(--accent,#4cc2ff);background:rgba(76,194,255,.05);padding:11px;box-shadow:0 0 14px rgba(76,194,255,.1);">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:7px;"><span style="font-family:'Chakra Petch';font-size:12px;color:#fff;letter-spacing:.03em;">The Warden Rules</span><span style="font-size:8px;color:var(--accent,#4cc2ff);">⊙ PINNED</span></div>
+        <div style="font-size:10px;color:var(--txt2);line-height:1.5;margin-bottom:10px;">No one says its name. It speaks only in counts. Never show its face before Act III.</div>
+        <div style="display:flex;gap:5px;flex-wrap:wrap;"><span style="font-size:8px;color:var(--cyan);border:1px solid var(--line-cy);padding:1px 6px;">◆ THE WARDEN</span><span style="font-size:8px;color:var(--txt2);border:1px solid var(--line2);padding:1px 6px;">scene:21</span></div>
+      </div>
+      <div style="border:1px solid var(--line2);background:rgba(11,14,21,.4);padding:11px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:7px;"><span style="font-family:'Chakra Petch';font-size:12px;color:#fff;">Static = grief motif</span><span style="font-size:8px;color:var(--txt3);">⊙</span></div>
+        <div style="font-size:10px;color:var(--txt2);line-height:1.5;margin-bottom:10px;">The interference grows louder near loss. Pay it off when Vesper goes quiet.</div>
+        <div style="display:flex;gap:5px;flex-wrap:wrap;"><span style="font-size:8px;color:var(--green);border:1px solid rgba(98,217,154,.3);padding:1px 6px;">❋ static</span><span style="font-size:8px;color:var(--txt2);border:1px solid var(--line2);padding:1px 6px;">theme</span></div>
+      </div>
+      <div style="border:1px solid var(--line2);background:rgba(11,14,21,.4);padding:11px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:7px;"><span style="font-family:'Chakra Petch';font-size:12px;color:#fff;">Kessler burn — backstory</span><span style="font-size:8px;color:var(--txt3);">⊙</span></div>
+        <div style="font-size:10px;color:var(--txt2);line-height:1.5;margin-bottom:10px;">What Marlow did at the relay. Drip it; never a full flashback.</div>
+        <div style="display:flex;gap:5px;flex-wrap:wrap;"><span style="font-size:8px;color:var(--cyan);border:1px solid var(--line-cy);padding:1px 6px;">◆ MARLOW</span><span style="font-size:8px;color:var(--amber-b);border:1px solid rgba(245,177,51,.3);padding:1px 6px;">▲ HELIOS-9</span></div>
+      </div>
+      <div style="border:1px solid var(--line2);background:rgba(11,14,21,.4);padding:11px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:7px;"><span style="font-family:'Chakra Petch';font-size:12px;color:#fff;">Open the box?</span><span style="font-size:8px;color:var(--txt3);">⊙</span></div>
+        <div style="font-size:10px;color:var(--txt2);line-height:1.5;margin-bottom:10px;">Decide before draft 2: does the black box pay off as device or as choice?</div>
+        <div style="display:flex;gap:5px;flex-wrap:wrap;"><span style="font-size:8px;color:var(--violet);border:1px solid rgba(176,124,255,.3);padding:1px 6px;">◇ black box</span><span style="font-size:8px;color:var(--txt2);border:1px solid var(--line2);padding:1px 6px;">scene:04</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;writingMode&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;novel&quot;,&quot;screenplay&quot;,&quot;graphic_novel&quot;,&quot;stage_script&quot;,&quot;series&quot;],&quot;default&quot;:&quot;screenplay&quot;,&quot;tsType&quot;:&quot;string&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    const mode = this.props.writingMode ?? "screenplay";
+    const accents = { novel: "#c8a96a", screenplay: "#4cc2ff", graphic_novel: "#ff7ac6", stage_script: "#ffb454", series: "#62d99a" };
+    return { accent: accents[mode] || "#4cc2ff" };
+  }
+}
+</script>
+</body>
+</html>

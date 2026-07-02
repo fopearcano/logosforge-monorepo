@@ -1,0 +1,7 @@
+{
+  "id": "gomckee_plugin",
+  "name": "Go McKee",
+  "version": "1.0.0",
+  "author": "OpenAI / PSYKE Coder",
+  "description": "Go McKee writing-intelligence layer for Logosforge. Loads canonical McKee JSON systems, validates them, and exposes menu-driven checks and mode controls."
+}

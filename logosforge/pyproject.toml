@@ -1,0 +1,46 @@
+# Packaging for the LogosForge Python core.
+#
+# This makes the core pip-installable so frontends (e.g. whiteboard-desktop)
+# can depend on it as a real package and consume it ONLY through its API layer
+# (logosforge.api), per CLAUDE.md. The heavy GUI / voice / export stacks are
+# OPTIONAL extras, so a headless API consumer installs a lean dependency set
+# (no PySide6): `pip install -e .` for the API, `pip install -e .[gui]` for the
+# desktop Qt app.
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "logosforge"
+version = "0.9.0a0"
+description = "LogosForge — local-first writing-intelligence core and HTTP API."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    # Headless core + HTTP API only. The API layer imports no GUI code.
+    "sqlmodel>=0.0.16,<1.0",
+    "certifi",
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+]
+
+[project.optional-dependencies]
+# The PyQt desktop app.
+gui = [
+    "PySide6>=6.6,<6.9",
+    "pyobjc-framework-Cocoa; sys_platform == 'darwin'",
+]
+# Local voice (Dexter's Room).
+voice = [
+    "faster-whisper>=1.0",
+    "sounddevice>=0.4",
+]
+# Optional export formats (PDF/DOCX); the app degrades gracefully without them.
+export = [
+    "reportlab>=4.0",
+    "python-docx>=1.1",
+]
+
+[tool.setuptools.packages.find]
+include = ["logosforge", "logosforge.*"]

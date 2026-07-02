@@ -1,0 +1,69 @@
+{
+  "id": "psyke_outline_templates",
+  "name": "PSYKE Outline Templates",
+  "version": "0.1.0",
+  "description": "PSYKE-aware outline structuring plugin using narrative templates from classical, modern, alternative, and genre-specific writing methods.",
+  "entrypoint": "plugin.py",
+  "author": "OpenAI",
+  "capabilities": [
+    "read_context",
+    "emit_suggestions",
+    "emit_actions"
+  ],
+  "tags": [
+    "psyke",
+    "outlining",
+    "story-structure",
+    "templates",
+    "writing"
+  ],
+  "config": {
+    "default_method": {
+      "type": "string",
+      "required": false,
+      "default": "three_act",
+      "description": "Fallback outline method when none is requested."
+    },
+    "selection_mode": {
+      "type": "string",
+      "required": false,
+      "default": "explicit_or_infer",
+      "enum": [
+        "explicit_only",
+        "explicit_or_infer",
+        "infer_only"
+      ],
+      "description": "How the plugin chooses a narrative structure template."
+    },
+    "emit_actions": {
+      "type": "boolean",
+      "required": false,
+      "default": true,
+      "description": "Emit connector-friendly actions for outline persistence."
+    },
+    "max_candidates": {
+      "type": "integer",
+      "required": false,
+      "default": 3,
+      "description": "Maximum number of recommended alternative methods."
+    },
+    "include_psyke_annotations": {
+      "type": "boolean",
+      "required": false,
+      "default": true,
+      "description": "Attach PSYKE entities, arcs, goals, themes, and tensions to beats."
+    },
+    "include_guidance": {
+      "type": "boolean",
+      "required": false,
+      "default": true,
+      "description": "Include method-specific guidance text for each beat."
+    },
+    "chapter_expansion": {
+      "type": "boolean",
+      "required": false,
+      "default": false,
+      "description": "Expand beat structures into chapter-sized outline nodes where supported."
+    }
+  }
+}

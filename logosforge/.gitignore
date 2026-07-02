@@ -1,0 +1,24 @@
+__pycache__/
+*.pyc
+*.pyo
+*.db
+*.sqlite
+*.sqlite3
+logosforge_memory.sqlite3
+.venv/
+venv/
+build_venv/
+dist/
+build/
+*.egg-info/
+*.spec.bak
+*.icns
+*.ico
+# Writer QA generated reports (the directory is kept via .gitkeep)
+reports/writer_qa/*.json
+reports/writer_qa/*.md
+# Local Writer QA agent mode — generated logs / reports / screenshots (never committed)
+logs/writer_qa/
+reports/writer_qa/local_*.json
+reports/writer_qa/local_*.md
+reports/writer_qa/screenshots/

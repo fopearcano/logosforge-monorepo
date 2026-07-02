@@ -1,0 +1,405 @@
+{
+  "domain": "character",
+  "principles": [
+    {
+      "id": "P1",
+      "name": "Characterization Masks True Character",
+      "description": "Every character carries two layers: characterization (the outer surface of traits, behaviour, and speech) and true character (the essential self beneath). True character is revealed only when pressure forces a choice. The gap between the two — who the character seems to be versus who he actually is — is the engine of every scene in which he appears.",
+      "priority": 1.0
+    },
+    {
+      "id": "P2",
+      "name": "Choice Under Pressure Reveals Identity",
+      "description": "A character is the sum of the choices he makes under escalating pressure. Neither self-description, others' opinions, nor outward behaviour in easy moments express true character; only risk-laden decisions that cost something essential do. The greater the pressure and the freer the choice, the deeper the truth exposed.",
+      "priority": 0.98
+    },
+    {
+      "id": "P3",
+      "name": "Dimension Emerges from Contradiction",
+      "description": "A dimension is a consistent contradiction between two qualities inside a character (e.g., generous/cruel, brave/cowardly, tender/violent). The more true, visible, and irreconcilable the contradictions, the more multidimensional the character. A character without contradiction is flat by definition.",
+      "priority": 0.95
+    },
+    {
+      "id": "P4",
+      "name": "A Character Exists Only Within a Cast",
+      "description": "No character stands alone. Each role is defined by the contrasts, alignments, and pressures created by the other characters around it. Design the cast as a single system whose members illuminate, oppose, and complete one another; change one role and the rest must be re-tuned.",
+      "priority": 0.9
+    },
+    {
+      "id": "P5",
+      "name": "Role Is a Slot; Character Is What Fills It",
+      "description": "A role is a generic social position (Mother, Boss, Detective). A character is a unique, contradictory, singular self who fills that slot in a one-of-a-kind way. Writing roles produces types; writing characters produces people. Always refuse the role's default and push through to the specific self who subverts or transforms it.",
+      "priority": 0.9
+    }
+  ],
+  "methods": [
+    {
+      "id": "M1",
+      "name": "Characterization / True-Character Split",
+      "goal": "Keep the outer mask and the inner self distinct at all times.",
+      "rules": [
+        "For every character, write two separate profiles: characterization (what others see — appearance, manner, speech habits, profession, reputation) and true character (values, motivations, contradictions visible only under pressure).",
+        "Engineer a gap between them — the wider the gap, the more potential for revelation.",
+        "Never let the characterization fully tell the audience what the true character is; reveal true character only through choice in pressure.",
+        "If the two profiles are identical, the character is flat — introduce at least one contradiction."
+      ],
+      "applies_to": ["character"],
+      "priority": 0.98
+    },
+    {
+      "id": "M2",
+      "name": "Three-Layer Self Construction",
+      "goal": "Build each major character across public, private, and hidden layers.",
+      "rules": [
+        "Public self: how the character performs in social roles (work, strangers, acquaintances).",
+        "Private self: how the character behaves with intimates (family, lovers, close friends) where masks drop partially.",
+        "Hidden self: the subconscious drives the character himself cannot fully see — desires, fears, contradictions that govern choice under extreme pressure.",
+        "Plant contradictions across at least two of the three layers; a single-layer character reads as a type.",
+        "Reveal the layers in sequence — public first, private under stress, hidden at the climax."
+      ],
+      "applies_to": ["character"],
+      "priority": 0.95
+    },
+    {
+      "id": "M3",
+      "name": "Outside-In Construction",
+      "goal": "Derive a character by working inward from world, genre, and research.",
+      "rules": [
+        "Start from the outermost sphere: actuality — a real place, era, profession, subculture; then move inward to fictional medium, genre, backstory, and finally the character's interior.",
+        "Run all four researches: personal (memory), imagined (free association), factual (library / web), actual (field observation).",
+        "Let the setting's laws of probability constrain who the character can plausibly be — the more specific the world, the less generic the role.",
+        "Use this approach when the world or situation arrived first in inspiration and the character must grow out of it."
+      ],
+      "applies_to": ["character"],
+      "priority": 0.82
+    },
+    {
+      "id": "M4",
+      "name": "Inside-Out Construction",
+      "goal": "Derive a character by inhabiting consciousness and deriving world outward.",
+      "rules": [
+        "Project yourself into the character's point of view: see with his eyes, feel with his body, choose with his values — improvise his responses to imagined pressures.",
+        "Refuse to write any scene until you can answer, from inside him: what does he want here, what does he fear here, what does he notice that no one else would?",
+        "Let world, cast, and plot elements be derived from what this specific consciousness would encounter and react to.",
+        "Use this approach when the character arrived first in inspiration and the world must be tuned to him."
+      ],
+      "applies_to": ["character"],
+      "priority": 0.82
+    },
+    {
+      "id": "M5",
+      "name": "Dimension Engineering",
+      "goal": "Install deliberate, durable contradictions that make the character unresolvable.",
+      "rules": [
+        "Identify the character's dominant quality (e.g., compassionate, brave, rational); then install its opposite (cruel, cowardly, irrational) as an equally true trait surfacing in specific conditions.",
+        "Install dimensions at three sites: outer (characterization vs. visible behaviour), inner (conscious desire vs. contradictory conscious desire), hidden (conscious desire vs. subconscious drive).",
+        "Ensure at least one dimension is irreconcilable — the character cannot choose one side without betraying the other.",
+        "Protagonists need the most dimensions; secondary characters fewer; walk-ons may legitimately have none.",
+        "Count dimensions by counting genuine contradictions — not personality quirks."
+      ],
+      "applies_to": ["character"],
+      "priority": 0.95
+    },
+    {
+      "id": "M6",
+      "name": "Motivation Mapping",
+      "goal": "Anchor every major character in a specific subconscious hunger.",
+      "rules": [
+        "Select from the hierarchy of motivations: immortality, survival, balance, pleasure, sex, power, empathy (belonging), more (greed/avarice), interest/curiosity, fulfillment, transcendence.",
+        "Assign each major character one primary and at most one secondary motivation; more than two motivations at once produces incoherence.",
+        "Distinguish motivation (unfocused appetite) from desire (the specific object it fixates on after the inciting incident).",
+        "Refuse cheap trauma shortcuts — 'childhood abuse' is an excuse, not a motivation. The motivation must be a living hunger, not a past wound."
+      ],
+      "applies_to": ["character"],
+      "priority": 0.88
+    },
+    {
+      "id": "M7",
+      "name": "Desire / Need Separation",
+      "goal": "Distinguish what the character chases from what the character lacks.",
+      "rules": [
+        "Desire: the conscious object the character pursues to restore life's balance after the inciting incident.",
+        "Need: an empty space in the character's humanity — a potential unrealized at story open — whose fulfilment (or failure) the story exists to dramatize.",
+        "Desire and need may align (character gets what he wants and what he lacks) or conflict (character gets what he wants at the cost of what he needs).",
+        "For complex protagonists, make desire and need pull in different directions — the Crisis forces a choice between them.",
+        "Name both in one sentence each before writing the story."
+      ],
+      "applies_to": ["character"],
+      "priority": 0.92
+    },
+    {
+      "id": "M8",
+      "name": "Self-Story Elicitation",
+      "goal": "Uncover how the character narrates her own life across past, present, future.",
+      "rules": [
+        "Interview the character: let her tell her past story (how she became who she is), present story (who she thinks she is now), future story (who she believes she will become).",
+        "Treat every self-statement as self-serving; the narrator is unreliable by default.",
+        "The future story matters most — it governs her MO (modus operandi), her habitual tactics for getting what she wants and avoiding what she fears.",
+        "Mark the gaps between her self-story and the reader's objective view; those gaps drive dimension.",
+        "Redesign the story's pressures to collide specifically with her future story so she is forced to revise it."
+      ],
+      "applies_to": ["character"],
+      "priority": 0.85
+    },
+    {
+      "id": "M9",
+      "name": "Choice-Under-Pressure Scene Design",
+      "goal": "Force the character to reveal identity through irreversible choices.",
+      "rules": [
+        "Refuse choices between clear good and clear evil — they reveal nothing the audience could not predict.",
+        "Construct choices between two positives (good vs. good) or two negatives (lesser of two evils) the character cannot simultaneously honour.",
+        "Escalate the cost of each successive choice so earlier tactics no longer work and the character must reach deeper into the hidden self.",
+        "Ensure each major choice strips one layer off the mask; the climactic choice exposes the hidden self entirely.",
+        "Never let coincidence, rescue, or help from outside substitute for the character's own decision."
+      ],
+      "applies_to": ["character", "scene"],
+      "priority": 0.95
+    },
+    {
+      "id": "M10",
+      "name": "Character Arc Type Selection",
+      "goal": "Choose consciously how (or whether) the character changes.",
+      "rules": [
+        "No Arc: the character's core self remains constant; he tests the world but is not reshaped (fits Action, Myth, some Crime plots).",
+        "Evolution Arc: the character grows toward fuller humanity — Maturation, Education, Redemption (moves from a lesser to a greater self).",
+        "Devolution Arc: the character erodes — Disillusionment, Degeneration, Corruption (moves from a greater to a lesser self).",
+        "Reveal Arc: the character's core is fixed but progressively exposed to the audience without internal change.",
+        "Match the arc to the genre's promise; never mix evolution and devolution in the central plot without deliberate ironic purpose.",
+        "Whichever arc is chosen, ensure the inciting incident targets the character's specific need, and the climax completes or denies it."
+      ],
+      "applies_to": ["character"],
+      "priority": 0.9
+    },
+    {
+      "id": "M11",
+      "name": "Completed-Character Ideal",
+      "goal": "Drive the protagonist to the limits of her human experience.",
+      "rules": [
+        "At the inciting incident, conceive of the protagonist as incomplete: unfulfilled capacities for thought, feeling, and action she has never been forced to reach.",
+        "Design progressive complications so each one demands a capacity closer to her limit than the last.",
+        "At the climax, place her in the single situation that demands every latent capacity simultaneously — nothing left untested, nothing left concealed.",
+        "After climax, ask: has anything about her humanity gone unexplored that the story promised to explore? If yes, the character is incomplete.",
+        "Reserve this standard for the protagonist; secondary roles should remain deliberately partial to keep focus on the lead."
+      ],
+      "applies_to": ["character"],
+      "priority": 0.88
+    },
+    {
+      "id": "M12",
+      "name": "Cast as Solar System",
+      "goal": "Design relationships so every role illuminates the protagonist.",
+      "rules": [
+        "Place the protagonist at the centre; orbit major characters close, minor characters mid-range, bit parts at the periphery.",
+        "Each orbital role exists to refract one specific facet of the protagonist — no redundant roles.",
+        "If two characters perform the same function (same contrast, same pressure, same reveal), merge them.",
+        "If a character cannot be linked by function to the protagonist's inner conflict or outer desire, cut or repurpose.",
+        "Walk-ons and bit parts may be flat by design — do not spend dimension budget on characters the audience will see once."
+      ],
+      "applies_to": ["character", "outline"],
+      "priority": 0.9
+    },
+    {
+      "id": "M13",
+      "name": "Foil Construction",
+      "goal": "Create counterpoints that sharpen the protagonist's contours.",
+      "rules": [
+        "For each major dimension of the protagonist, build a foil character who carries its opposite visibly.",
+        "A foil is never a mere sidekick — its job is to highlight something specific in the protagonist that only contrast can reveal.",
+        "Give foils their own dimensions and desires; a one-trait foil reads as a prop.",
+        "Distribute foils so different foils illuminate different traits — do not stack all contrasts onto one character."
+      ],
+      "applies_to": ["character"],
+      "priority": 0.85
+    },
+    {
+      "id": "M14",
+      "name": "Protagonist Quality Check",
+      "goal": "Ensure the lead role can carry a story.",
+      "rules": [
+        "Willpower: sufficient to generate action, not merely react to events.",
+        "Multiple capacities: intelligence, empathy, cunning, courage, or other resources adequate to the pressures the story imposes.",
+        "A conscious object of desire strong enough to drive the story to its climax.",
+        "Ideally a contradicting unconscious desire that complicates the conscious one.",
+        "Empathetic access: at least one trait, value, or vulnerability the reader/audience can identify with — not to like him, but to recognise themselves in him.",
+        "Realistic chance to achieve the desire; impossible goals drain suspense.",
+        "If any of these is missing, either rewrite the protagonist or choose a different character to carry the story."
+      ],
+      "applies_to": ["character"],
+      "priority": 0.9
+    },
+    {
+      "id": "M15",
+      "name": "Protagonist-Type Selection",
+      "goal": "Choose the structural form of the lead.",
+      "rules": [
+        "Single protagonist: default; concentrates identification and maximises dimension depth.",
+        "Dual protagonist: two characters sharing one desire and one fate; used for stress-sameness, not complexity.",
+        "Multi-protagonist (plural): several characters, each with an independent desire, in parallel plots — requires strong thematic unity to cohere.",
+        "Group protagonist: a collection of roles bound by a single shared desire where each member's gain or loss affects all; used for epics, ensembles, movements.",
+        "Passive protagonist: outwardly inactive while pursuing desire inwardly; viable only when inner conflict is sufficiently visible to the reader.",
+        "Select the type before designing the cast; switching type mid-draft corrupts structure."
+      ],
+      "applies_to": ["character", "outline"],
+      "priority": 0.82
+    },
+    {
+      "id": "M16",
+      "name": "Antagonist Engineering",
+      "goal": "Build forces of opposition strong enough to force the protagonist to her limit.",
+      "rules": [
+        "The chief antagonist's capacities must equal or exceed the protagonist's; a weaker opposition produces a weaker protagonist.",
+        "Distribute antagonism across physical, social, personal, and inner levels; never concentrate it on a single villain unless genre demands it.",
+        "Give the chief antagonist his own desire, dimensions, and coherent worldview — not merely an obstacle set.",
+        "The antagonist's strongest argument against the protagonist's values must be genuinely persuasive — if the audience cannot momentarily sympathise, the contest is rigged.",
+        "Never soften the antagonist to preserve a beat — raise the protagonist instead."
+      ],
+      "applies_to": ["character"],
+      "priority": 0.9
+    },
+    {
+      "id": "M17",
+      "name": "Service-Role and Bit-Part Economy",
+      "goal": "Populate the world without spending dimension budget unnecessarily.",
+      "rules": [
+        "Service roles: recurring minor characters with fixed personalities who colour the world but do not arc — keep them crisp and non-dimensional.",
+        "Walk-ons and bit parts: one vivid trait each, delivered in a single gesture, line, or image — nothing more.",
+        "Resist dimension creep into minor roles; every minute spent deepening a bit-part steals attention from the protagonist.",
+        "If a minor role keeps 'wanting' to grow, either promote it deliberately (restructuring the cast) or cut scenes where it threatens to."
+      ],
+      "applies_to": ["character"],
+      "priority": 0.72
+    },
+    {
+      "id": "M18",
+      "name": "Realism / Nonrealism / Radicalism Calibration",
+      "goal": "Choose consciously how much the character's powers exceed ordinary life.",
+      "rules": [
+        "Realism: characters with the powers of daily life; believable behaviour, finite abilities, ordinary psychology.",
+        "Nonrealism: characters with powers beyond ordinary (heroic, mythic, superhuman, magical) but still internally coherent.",
+        "Radicalism: characters that warp the rules of selfhood — fragmented, allegorical, symbolic, or absurd.",
+        "Match the calibration to the genre and to the other cast members — mixing realisms inside one story without deliberate purpose reads as inconsistency.",
+        "Radical or nonrealist characters still require dimension (contradiction) — exotic surface does not substitute for inner complexity."
+      ],
+      "applies_to": ["character"],
+      "priority": 0.75
+    },
+    {
+      "id": "M19",
+      "name": "Genre-Specific Character Duties",
+      "goal": "Deliver the character type each genre requires while reinventing inside it.",
+      "rules": [
+        "Identify the genre's core character duties: e.g., Action → active protagonist + active antagonist; Love Story → lovers with an obstacle; Education → protagonist + teacher; Redemption → fallen protagonist + means of grace.",
+        "Deliver the mandatory role — audiences feel cheated when genre roles are skipped.",
+        "Reinvent through specificity: the default is cliché; the variation is character. Give the mandatory role a one-of-a-kind inner life.",
+        "When mixing genres, keep one genre primary for character-type duties; do not split the protagonist's identity across competing genre demands."
+      ],
+      "applies_to": ["character"],
+      "priority": 0.78
+    },
+    {
+      "id": "M20",
+      "name": "Symbolic-Weight Management",
+      "goal": "Let characters mean more than themselves without flattening into allegory.",
+      "rules": [
+        "Every character inevitably symbolises something — a social role, a value, an archetype; choose what yours symbolises or it will choose itself.",
+        "Layer symbolism in the design but never in the dialogue: the audience should feel the meaning, not be told it.",
+        "Let the symbol grow out of the specific — a specific flawed person who also happens to embody courage, not Courage Personified.",
+        "If two characters symbolise the same thing, one is redundant."
+      ],
+      "applies_to": ["character"],
+      "priority": 0.7
+    }
+  ],
+  "triggers": [
+    { "id": "T1", "condition": "character_creation", "apply_methods": ["M1","M2","M3","M4","M5","M6","M7","M8"] },
+    { "id": "T2", "condition": "protagonist_design", "apply_methods": ["M14","M15","M5","M7","M11","M10"] },
+    { "id": "T3", "condition": "antagonist_design", "apply_methods": ["M16","M5","M6"] },
+    { "id": "T4", "condition": "cast_design", "apply_methods": ["M12","M13","M15","M16","M17","M4"] },
+    { "id": "T5", "condition": "character_feels_flat", "apply_methods": ["M5","M2","M8","M9"] },
+    { "id": "T6", "condition": "character_feels_like_type", "apply_methods": ["M1","M5","M3","M8"] },
+    { "id": "T7", "condition": "arc_design", "apply_methods": ["M10","M7","M11","M9"] },
+    { "id": "T8", "condition": "scene_with_major_character_choice", "apply_methods": ["M9","M5","M2"] },
+    { "id": "T9", "condition": "minor_role_threatens_to_grow", "apply_methods": ["M17","M12"] },
+    { "id": "T10", "condition": "genre_constraints_active", "apply_methods": ["M19","M18","M14"] },
+    { "id": "T11", "condition": "symbolic_or_mythic_register", "apply_methods": ["M20","M18"] },
+    { "id": "T12", "condition": "character_motivation_unclear", "apply_methods": ["M6","M7","M8"] },
+    { "id": "T13", "condition": "revision", "apply_methods": ["M1","M5","M9","M11","M12","M14"] }
+  ],
+  "checks": [
+    {
+      "id": "C1",
+      "applies_to": "character",
+      "questions": [
+        "Can I state the character's characterization and true character in two different sentences?",
+        "Where is the gap between the two, and when in the story does it become visible?",
+        "How many genuine contradictions (not quirks) does this character carry? If fewer than two for a major role, add more.",
+        "Can I name one primary motivation from the hierarchy (immortality, survival, balance, pleasure, sex, power, empathy, more, interest, fulfillment, transcendence)?",
+        "Can I state the character's desire and need in separate one-sentence forms, and do they pull in different directions?"
+      ]
+    },
+    {
+      "id": "C2",
+      "applies_to": "character",
+      "questions": [
+        "Have I worked out the character across public, private, and hidden layers?",
+        "Does each layer contain at least one contradiction with another layer?",
+        "Does the story's climax force the hidden self into visible action?",
+        "What is the character's future self-story, and where does the plot collide with it?"
+      ]
+    },
+    {
+      "id": "C3",
+      "applies_to": "scene",
+      "questions": [
+        "What choice is this character forced to make in this scene, and between what two incompatible goods or evils?",
+        "What does this choice cost him that earlier choices did not?",
+        "Which layer of self (public, private, hidden) does this choice expose?",
+        "Could any other character in the cast make this same choice in the same way? If yes, the scene reveals nothing specific about him."
+      ]
+    },
+    {
+      "id": "C4",
+      "applies_to": "character",
+      "questions": [
+        "Is the protagonist complete by the climax — has every latent capacity been tested?",
+        "Does the chosen arc type (No Arc, Evolution, Devolution, Reveal) match the genre's promise?",
+        "Does the inciting incident specifically target this character's need, or merely land on a generic person?"
+      ]
+    },
+    {
+      "id": "C5",
+      "applies_to": "outline",
+      "questions": [
+        "Is every major character linked to the protagonist by a specific function of contrast, pressure, or reveal?",
+        "Are two characters performing the same function? If yes, merge.",
+        "Does every foil illuminate a specific trait of the protagonist, or are they decorative?",
+        "Is the chief antagonist at least as capable as the protagonist?",
+        "Have minor roles accumulated dimensions they do not earn?"
+      ]
+    },
+    {
+      "id": "C6",
+      "applies_to": "character",
+      "questions": [
+        "Which realism register (Realism, Nonrealism, Radicalism) has been chosen, and is it consistent with the cast?",
+        "What does this character symbolise, and is the symbolism expressed through design rather than dialogue?",
+        "If another character symbolises the same thing, is one of them redundant?"
+      ]
+    }
+  ],
+  "conflicts": [
+    { "method_a": "M3", "method_b": "M4", "resolution": "Neither wins categorically: use Outside-In when inspiration arrived as world/setting, Inside-Out when inspiration arrived as a voice or consciousness. Mixing both simultaneously on the same character is valid, but never let either method abort before it yields at least one genuine contradiction (M5)." },
+    { "method_a": "M11", "method_b": "M17", "resolution": "M11 applies only to protagonists; M17 applies to everyone else. Pushing a minor role toward completeness is always a design error — either keep it minor or restructure the cast to promote it deliberately (M12, M15)." },
+    { "method_a": "M5", "method_b": "M19", "resolution": "M5 wins. A genre role's mandatory traits do not exempt the character from dimension — the genre demands the slot be filled, not that it be filled generically. If genre convention pushes toward a flat type, reinvent the type by adding at least one irreconcilable contradiction." },
+    { "method_a": "M6", "method_b": "M7", "resolution": "They must co-exist: motivation is the subconscious appetite, desire is its focused target. Sort them before writing — confusing them produces characters who want something without hungering for it, which reads as hollow." },
+    { "method_a": "M10", "method_b": "M14", "resolution": "M14 wins on access: if the chosen arc requires a protagonist the reader cannot empathise with at any level, the arc fails regardless of its elegance. Rework the protagonist (M14) before committing to an arc (M10) that the role cannot carry." },
+    { "method_a": "M12", "method_b": "M13", "resolution": "M12 wins: the solar-system logic (every role functional to the protagonist) overrides the urge to multiply foils for richness. If a foil cannot earn its orbit through a specific function, it becomes decorative weight." },
+    { "method_a": "M16", "method_b": "M9", "resolution": "M16 enables M9: a weak antagonist produces low-pressure choices that reveal nothing. Fix antagonism first; the choice scenes then become automatically sharper." },
+    { "method_a": "M8", "method_b": "M2", "resolution": "M2 wins on structure: the three-layer model governs what is true about the character; the self-story (M8) is what the character believes is true. When they conflict, the hidden layer is the fact and the self-story is the lie — that gap is precisely what the story must dramatize." },
+    { "method_a": "M20", "method_b": "M1", "resolution": "M1 wins: never let symbolic weight collapse characterization onto true character. A character who walks on stage already-meaning-something is allegory, not character. Symbolism must arrive through accumulated action, not through pre-loaded labels." }
+  ],
+  "meta": {
+    "philosophy": "A character is a dramatized unity of contradictions — a mask of characterization concealing a true self whose identity is revealed only through choices made under escalating pressure, and whose meaning only fully emerges in relation to the cast that surrounds her.",
+    "style_bias": "dimensional and psychologically layered, biased toward realism but compatible with nonrealist and radical registers when chosen deliberately; protagonist-centric, cast-as-system, uncompromising about the separation between characterization and true character, between desire and need, between what a character says about herself and what her choices prove."
+  }
+}

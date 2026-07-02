@@ -1,0 +1,24 @@
+{
+  "name": "@logosforge/whiteboard-shared-ui",
+  "version": "0.1.0",
+  "private": true,
+  "description": "LogosForge Whiteboard (Free) shared design layer — themes, tokens, the syntax palette, persistence + React theme glue, and the Claude Design stylesheet (styles/app.css). Platform-neutral; consumed by whiteboard-desktop (Electron) and whiteboard-web (browser). Single source of truth for the Whiteboard visual identity; never shares UI with the Pro line.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "module": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    },
+    "./styles/app.css": "./src/styles/app.css"
+  },
+  "files": [
+    "src"
+  ],
+  "peerDependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2021",
+    "lib": ["ES2021", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true,
+    "baseUrl": ".",
+    "types": ["node"],
+    "paths": {
+      "@logosforge/pro-shared-ui": ["../../pro-shared-ui/src/index.ts"],
+      "@logosforge/ui-contracts": ["../../logosforge-ui-contracts/src/index.ts"]
+    }
+  },
+  "include": ["src"]
+}

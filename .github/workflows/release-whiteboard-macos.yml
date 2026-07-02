@@ -1,0 +1,123 @@
+name: Release — LogosForge Whiteboard (macOS, Intel)
+
+# Builds the macOS Intel (x64) DMG for LogosForge Whiteboard desktop on macos-13.
+# Fully self-contained: the Electron shell + the renderer + a PyInstaller-frozen
+# copy of the Whiteboard backend (which embeds the Python core) — no Python needed
+# on the user's machine.
+#
+# Triggers: the SAME `whiteboard-v*` tag as the Windows workflow, so one tag
+# releases both platforms into a single GitHub Release. Manual dispatch builds +
+# uploads artifacts only.
+#
+# NOTE: builds are UNSIGNED (no Apple Developer ID configured). macOS Gatekeeper
+# will block the app until it is signed + notarized — testers must clear the
+# quarantine attribute: right-click → Open, or
+#   xattr -cr "/Applications/LogosForge Whiteboard.app"
+# Apple Silicon (arm64) / universal builds are a later milestone.
+#
+# Assumes a single monorepo checkout containing: logosforge/ (core) and
+# whiteboard-desktop/. The whiteboard renderer is self-contained (no shared-ui
+# file: deps), so only those two siblings are required.
+
+on:
+  push:
+    tags:
+      - "whiteboard-v*"
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Attach the build to a GitHub Release"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-whiteboard-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-macos-intel:
+    runs-on: macos-13 # Intel (x64) runner
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout monorepo
+        uses: actions/checkout@v4
+
+      - name: Verify monorepo layout
+        run: |
+          missing=""
+          for d in logosforge whiteboard-desktop; do
+            [ -d "$d" ] || missing="$missing $d"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required sibling dir(s):$missing — this workflow expects a single monorepo checkout containing the core (logosforge/) and whiteboard-desktop/."
+            exit 1
+          fi
+          echo "monorepo layout OK"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # --- 1. Bundle the Whiteboard backend (it embeds the core), x64 ------
+      - name: Build the backend bundle (PyInstaller)
+        run: |
+          python -m venv build-venv
+          ./build-venv/bin/python -m pip install --upgrade pip
+          ./build-venv/bin/python -m pip install "./logosforge[export]" fastapi "uvicorn[standard]" httpx pyinstaller
+          cd whiteboard-desktop/backend
+          ../../build-venv/bin/python -m PyInstaller logosforge-whiteboard-backend.spec --noconfirm --clean --log-level WARN
+
+      - name: Smoke-test the bundled backend
+        run: |
+          ./whiteboard-desktop/backend/dist/logosforge-whiteboard-backend/logosforge-whiteboard-backend --host 127.0.0.1 --port 8799 &
+          BPID=$!
+          ok=""
+          for i in $(seq 1 30); do
+            sleep 1
+            code=$(curl -s --max-time 2 -o /dev/null -w "%{http_code}" http://127.0.0.1:8799/health || true)
+            if [ "$code" = "200" ]; then ok="yes"; echo "backend healthy after ${i}s"; break; fi
+          done
+          kill "$BPID" 2>/dev/null || true
+          if [ -z "$ok" ]; then echo "::error::bundled backend failed /health"; exit 1; fi
+
+      # --- 2. Build + package the Electron app (DMG) -----------------------
+      - name: Install whiteboard-desktop deps
+        working-directory: whiteboard-desktop/desktop
+        run: npm ci
+
+      - name: Build renderer + main, then package (DMG)
+        working-directory: whiteboard-desktop/desktop
+        run: npm run dist:mac
+        env:
+          # Unsigned (no Apple Developer ID configured). Skips code signing so the
+          # build doesn't fail looking for a cert; the DMG is un-notarized.
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      # --- 3. Publish ------------------------------------------------------
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: logosforge-whiteboard-macos-x64
+          path: whiteboard-desktop/desktop/release/*.dmg
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/whiteboard-v') || inputs.publish_release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: whiteboard-desktop/desktop/release/*.dmg
+          draft: false
+          generate_release_notes: true

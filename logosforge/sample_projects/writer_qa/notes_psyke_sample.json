@@ -1,0 +1,127 @@
+{
+  "project": {
+    "title": "Writer QA Sample — Notes & PSYKE",
+    "description": "",
+    "format_mode": "novel",
+    "writing_mode": "novel",
+    "narrative_engine": "novel",
+    "default_writing_format": "novel"
+  },
+  "characters": [
+    {
+      "name": "Ada North",
+      "description": "Archivist; methodical, first through the door."
+    },
+    {
+      "name": "Milo Voss",
+      "description": "Nervous insider who arrives suspiciously early."
+    }
+  ],
+  "places": [
+    {
+      "name": "The Archive",
+      "description": "A converted bank vault holding the city's oldest ledgers."
+    }
+  ],
+  "notes": [
+    {
+      "title": "Planning note for Notes QA",
+      "content": "Raw ideas to organize: the blind spot in the archive cameras; who benefits from the missing ledger; whether Milo is a plant. Use the Assistant Notes actions (summarize / organize / extract / convert) on this note.",
+      "tags": "qa,notes",
+      "pinned": true,
+      "psyke_links": [],
+      "scene_links": [],
+      "structure_links": []
+    },
+    {
+      "title": "PSYKE QA seed",
+      "content": "Seed for codex work: develop Ada's wound, Milo's hidden allegiance, and the Threshold theme. Use the Assistant PSYKE actions to expand these into story-bible entries.",
+      "tags": "qa,psyke",
+      "pinned": false,
+      "psyke_links": [],
+      "scene_links": [],
+      "structure_links": []
+    },
+    {
+      "title": "Unicode stress",
+      "content": "Unicode stress (QA): \"Curly quotes\", em dash — ellipsis … emoji 🐕, accented: Zampanò, città, perché.",
+      "tags": "",
+      "pinned": false,
+      "psyke_links": [],
+      "scene_links": [],
+      "structure_links": []
+    }
+  ],
+  "scenes": [
+    {
+      "title": "The Archive Before Sunrise",
+      "summary": "",
+      "synopsis": "",
+      "goal": "",
+      "conflict": "",
+      "outcome": "",
+      "content": "Ada North enters the old archive before sunrise. Milo Voss waits by the locked cabinet, pretending not to be nervous.",
+      "beat": "",
+      "tags": [],
+      "order_index": 1,
+      "act": "Act 1",
+      "chapter": "Chapter 1",
+      "plotline": "",
+      "color_label": "",
+      "slugline": "",
+      "location": "",
+      "interior_exterior": "",
+      "time_of_day": "",
+      "estimated_duration_minutes": 0,
+      "visual_objective": "",
+      "dramatic_turn": "",
+      "blocking_notes": "",
+      "subtext_notes": "",
+      "setup_payoff_links": "",
+      "montage_group": "",
+      "cinematic_pacing": "",
+      "continuity_notes": "",
+      "visible_conflict": "",
+      "hidden_conflict": "",
+      "emotional_turn": "",
+      "who_knows_what": "",
+      "physical_action": "",
+      "visual_symbolism": "",
+      "characters": [],
+      "places": [],
+      "character_states": []
+    }
+  ],
+  "chapters": [],
+  "psyke_entries": [
+    {
+      "name": "Threshold",
+      "entry_type": "theme",
+      "aliases": "",
+      "notes": "A recurring motif about crossing from preparation into irreversible action.",
+      "is_global": false,
+      "details": {},
+      "related_entries": [],
+      "typed_relations": [],
+      "progressions": []
+    },
+    {
+      "name": "The Missing Ledger",
+      "entry_type": "object",
+      "aliases": "the book",
+      "notes": "The volume that should be in the locked cabinet and is not. Its absence drives the first act.",
+      "is_global": false,
+      "details": {},
+      "related_entries": [],
+      "typed_relations": [],
+      "progressions": []
+    }
+  ],
+  "outline": [],
+  "continuity": [],
+  "plot_timeline": {
+    "lanes": [],
+    "links": [],
+    "structure_links": []
+  }
+}

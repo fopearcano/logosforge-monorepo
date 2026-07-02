@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:ital,wght@0,400;0,500;0,600;0,700;1,500;1,600&family=JetBrains+Mono:ital,wght@0,400;0,500;0,700;1,400&family=Courier+Prime:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+  html,body{margin:0;padding:0;background:#000;}
+  *{box-sizing:border-box;}
+  ::selection{background:rgba(76,194,255,.28);color:#fff;}
+  ::-webkit-scrollbar{width:7px;height:7px;}
+  ::-webkit-scrollbar-thumb{background:rgba(232,68,58,.32);}
+  ::-webkit-scrollbar-thumb:hover{background:rgba(232,68,58,.55);}
+  ::-webkit-scrollbar-track{background:transparent;}
+  @keyframes lf-sweep{to{transform:rotate(360deg);}}
+  @keyframes lf-blink{0%,48%{opacity:1;}49%,100%{opacity:0;}}
+  @keyframes lf-pulse{0%,100%{opacity:.45;}50%{opacity:1;}}
+  @keyframes lf-scan{from{transform:translateY(-12%);}to{transform:translateY(112%);}}
+  @keyframes lf-glow{0%,100%{box-shadow:0 0 0 0 rgba(255,82,96,.0);}50%{box-shadow:0 0 14px 1px rgba(255,82,96,.45);}}
+  @keyframes lf-flick{0%,93%,100%{opacity:1;}94%{opacity:.55;}96%{opacity:1;}97%{opacity:.7;}}
+  @keyframes lf-bars{0%,100%{transform:scaleY(.35);}50%{transform:scaleY(1);}}
+</style>
+</helmet>
+
+<div data-screen-label="Workspace Shell — Cockpit" style="position:relative;width:1920px;height:1080px;overflow:hidden;background:var(--void);color:var(--txt);font-family:'JetBrains Mono','SFMono-Regular',monospace;font-size:12px;line-height:1.45;letter-spacing:.02em;
+  --void:#000000;--base:#04060a;--panel:#080a0f;--panel2:#0b0e15;--raised:#11151e;
+  --line:rgba(232,68,58,.28);--line2:rgba(150,162,180,.10);--line-cy:rgba(76,194,255,.30);
+  --crimson:#e8443a;--crimson-d:#7c211c;--amber:#f5b133;--amber-b:#ffcf4a;--cyan:#4cc2ff;--green:#62d99a;--violet:#b07cff;
+  --blocking:#ff5260;--warning:#ffb454;--suggestion:#4cc2ff;--opportunity:#62d99a;--info:#7a8694;
+  --txt:#e4e8ef;--txt2:#8b95a5;--txt3:#525c6b;
+  --accent:{{ accent }};--accent-soft:{{ accentSoft }};">
+
+  <!-- ===== ambient background layers ===== -->
+  <sc-if value="{{ gridOn }}" hint-placeholder-val="{{ true }}">
+    <div style="position:absolute;inset:0;background-image:radial-gradient(circle,rgba(128,140,158,.07) 1px,transparent 1.4px);background-size:30px 30px;pointer-events:none;z-index:0;"></div>
+  </sc-if>
+  <div style="position:absolute;inset:0;background:radial-gradient(120% 90% at 50% -10%,rgba(232,68,58,.10),transparent 55%),radial-gradient(90% 70% at 80% 120%,rgba(76,194,255,.05),transparent 60%);pointer-events:none;z-index:0;"></div>
+  <div style="position:absolute;inset:0;background:radial-gradient(130% 120% at 50% 50%,transparent 62%,rgba(0,0,0,.72));pointer-events:none;z-index:1;"></div>
+  <sc-if value="{{ scanOn }}" hint-placeholder-val="{{ true }}">
+    <div style="position:absolute;inset:0;background:repeating-linear-gradient(0deg,transparent 0 2px,rgba(255,255,255,.013) 2px 3px);pointer-events:none;z-index:60;"></div>
+    <div style="position:absolute;left:0;right:0;height:140px;top:0;background:linear-gradient(180deg,transparent,rgba(76,194,255,.05),transparent);pointer-events:none;z-index:60;animation:lf-scan 9s linear infinite;"></div>
+  </sc-if>
+  <!-- perimeter tick rulers -->
+  <div style="position:absolute;top:3px;left:120px;right:120px;height:5px;background-image:repeating-linear-gradient(90deg,rgba(245,177,51,.5) 0 1px,transparent 1px 26px);pointer-events:none;z-index:55;"></div>
+  <div style="position:absolute;bottom:2px;left:120px;right:120px;height:5px;background-image:repeating-linear-gradient(90deg,rgba(245,177,51,.32) 0 1px,transparent 1px 26px);pointer-events:none;z-index:55;"></div>
+  <!-- screen-corner frame brackets -->
+  <div style="position:absolute;top:6px;left:6px;width:17px;height:17px;border-top:1px solid var(--crimson);border-left:1px solid var(--crimson);pointer-events:none;z-index:58;box-shadow:-1px -1px 8px rgba(232,68,58,.3);"></div>
+  <div style="position:absolute;top:6px;right:6px;width:17px;height:17px;border-top:1px solid var(--crimson);border-right:1px solid var(--crimson);pointer-events:none;z-index:58;box-shadow:1px -1px 8px rgba(232,68,58,.3);"></div>
+  <div style="position:absolute;bottom:6px;left:6px;width:17px;height:17px;border-bottom:1px solid var(--crimson);border-left:1px solid var(--crimson);pointer-events:none;z-index:58;box-shadow:-1px 1px 8px rgba(232,68,58,.3);"></div>
+  <div style="position:absolute;bottom:6px;right:6px;width:17px;height:17px;border-bottom:1px solid var(--crimson);border-right:1px solid var(--crimson);pointer-events:none;z-index:58;box-shadow:1px 1px 8px rgba(232,68,58,.3);"></div>
+
+  <!-- ===================== TOP BAR ===================== -->
+  <div style="position:relative;z-index:30;height:46px;display:flex;align-items:center;gap:14px;padding:0 14px;background:linear-gradient(180deg,#0a0d13,#06080c);border-bottom:1px solid var(--line);">
+    <!-- brand -->
+    <div style="display:flex;align-items:center;gap:9px;padding-right:14px;border-right:1px solid var(--line2);">
+      <div style="position:relative;width:22px;height:22px;display:grid;place-items:center;border:1px solid var(--crimson);box-shadow:0 0 10px rgba(232,68,58,.5) inset,0 0 8px rgba(232,68,58,.35);">
+        <div style="width:8px;height:8px;background:var(--crimson);box-shadow:0 0 8px var(--crimson);"></div>
+        <div style="position:absolute;top:-1px;left:-1px;width:5px;height:5px;border-top:1px solid var(--crimson);border-left:1px solid var(--crimson);"></div>
+        <div style="position:absolute;bottom:-1px;right:-1px;width:5px;height:5px;border-bottom:1px solid var(--crimson);border-right:1px solid var(--crimson);"></div>
+      </div>
+      <div style="line-height:1;">
+        <div style="font-family:'Chakra Petch',sans-serif;font-weight:700;font-size:15px;letter-spacing:.16em;color:#fff;">LOGOSFORGE</div>
+        <div style="font-family:'JetBrains Mono';font-size:8px;letter-spacing:.5em;color:var(--crimson);margin-top:2px;">STUDIO · PRO</div>
+      </div>
+    </div>
+    <!-- active writing format -->
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div style="display:flex;align-items:center;gap:6px;height:20px;padding:0 9px;border:1px solid var(--accent,#4cc2ff);background:linear-gradient(180deg,rgba(76,194,255,.10),transparent);color:var(--accent,#4cc2ff);font-size:9.5px;letter-spacing:.18em;box-shadow:0 0 10px rgba(76,194,255,.18);">
+        <span style="width:5px;height:5px;background:var(--accent,#4cc2ff);box-shadow:0 0 6px var(--accent,#4cc2ff);"></span>{{ formatBadge }}
+      </div>
+    </div>
+
+    <!-- command palette omnibox (surface 1) -->
+    <div style="flex:1;display:flex;justify-content:center;">
+      <div style="display:flex;align-items:center;gap:10px;width:560px;height:30px;padding:0 12px;background:rgba(8,11,17,.9);border:1px solid var(--line2);border-radius:2px;color:var(--txt3);transition:.15s;" style-hover="border-color:rgba(76,194,255,.4);box-shadow:0 0 16px rgba(76,194,255,.12);">
+        <span style="display:grid;place-items:center;width:18px;height:16px;border:1px solid var(--line2);font-size:9px;color:var(--txt2);">⌘K</span>
+        <span style="color:var(--accent,#4cc2ff);">❯</span>
+        <span style="font-size:11px;letter-spacing:.04em;flex:1;">Run a command · jump to a scene · ask Billy…</span>
+        <span style="font-size:8px;letter-spacing:.2em;color:var(--txt3);border:1px solid var(--line2);padding:1px 5px;">PALETTE</span>
+      </div>
+    </div>
+
+    <!-- mode strip (adaptive AI) -->
+    <div style="display:flex;align-items:center;gap:8px;height:26px;padding:0 10px;border:1px solid var(--line2);background:rgba(11,14,21,.7);">
+      <span style="font-size:8px;letter-spacing:.22em;color:var(--txt3);">ADAPTIVE</span>
+      <span style="width:7px;height:7px;border-radius:50%;background:var(--amber);box-shadow:0 0 8px var(--amber);animation:lf-pulse 2.6s ease-in-out infinite;"></span>
+      <span style="font-family:'Chakra Petch';font-weight:600;font-size:11px;letter-spacing:.12em;color:var(--amber-b);">BALANCE</span>
+      <span style="color:var(--txt3);font-size:9px;">▾</span>
+      <span style="width:1px;height:14px;background:var(--line2);"></span>
+      <span style="font-size:8px;letter-spacing:.14em;color:var(--txt3);">RESET</span>
+    </div>
+
+    <!-- focus / cockpit toggle -->
+    <div style="display:flex;height:26px;border:1px solid var(--line2);font-size:9px;letter-spacing:.16em;">
+      <div style="display:grid;place-items:center;padding:0 11px;color:var(--txt2);">FOCUS</div>
+      <div style="display:grid;place-items:center;padding:0 11px;background:var(--accent,#4cc2ff);color:#04060a;font-weight:700;box-shadow:0 0 12px rgba(76,194,255,.4);">COCKPIT</div>
+    </div>
+
+    <!-- save / sync HUD -->
+    <div style="display:flex;align-items:center;gap:9px;height:26px;padding:0 11px;border:1px solid rgba(98,217,154,.35);background:rgba(98,217,154,.06);">
+      <span style="width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);"></span>
+      <span style="font-size:9px;letter-spacing:.16em;color:var(--green);">SYNCED</span>
+      <span style="width:1px;height:13px;background:var(--line2);"></span>
+      <span style="font-size:9px;color:var(--txt2);letter-spacing:.08em;">⟲ AUTOSAVE {{ countdown }}</span>
+      <span style="width:1px;height:13px;background:var(--line2);"></span>
+      <span style="font-size:9px;color:var(--txt3);letter-spacing:.12em;">LOCAL</span>
+    </div>
+  </div>
+
+  <!-- ===================== BODY ROW ===================== -->
+  <div style="position:relative;z-index:20;display:flex;height:806px;">
+
+    <!-- ---------- LEFT NAVIGATOR RAIL ---------- -->
+    <sc-if value="{{ showDocks }}" hint-placeholder-val="{{ true }}">
+    <div style="width:232px;flex:none;display:flex;flex-direction:column;background:linear-gradient(180deg,#07090e,#05070b);border-right:1px solid var(--line);">
+      <div style="display:flex;align-items:center;justify-content:space-between;height:30px;padding:0 12px;border-bottom:1px solid var(--line2);">
+        <span style="font-size:8.5px;letter-spacing:.28em;color:var(--txt3);">NAVIGATOR</span>
+        <span style="font-size:11px;color:var(--txt3);">◧</span>
+      </div>
+      <!-- project switcher → opens the Launchpad -->
+      <div style="margin:10px 10px 8px;padding:8px 10px;border:1px solid var(--line2);background:rgba(11,14,21,.55);cursor:pointer;display:flex;align-items:center;gap:8px;">
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:7.5px;letter-spacing:.3em;color:var(--txt3);">PROJECT</div>
+          <div style="font-family:'Chakra Petch';font-weight:600;font-size:14px;letter-spacing:.04em;color:var(--txt);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">NULL HORIZON</div>
+        </div>
+        <span style="font-size:10px;color:var(--txt3);">▾</span>
+      </div>
+      <!-- mode chip -->
+      <div style="margin:0 10px 4px;padding:9px 10px;border:1px solid var(--accent,#4cc2ff);background:linear-gradient(135deg,rgba(76,194,255,.10),transparent);position:relative;box-shadow:0 0 14px rgba(76,194,255,.10);">
+        <div style="position:absolute;top:-1px;left:-1px;width:7px;height:7px;border-top:1px solid var(--accent,#4cc2ff);border-left:1px solid var(--accent,#4cc2ff);"></div>
+        <div style="font-size:7.5px;letter-spacing:.3em;color:var(--txt3);">WRITING MODE</div>
+        <div style="font-family:'Chakra Petch';font-weight:700;font-size:15px;letter-spacing:.08em;color:var(--accent,#4cc2ff);margin-top:3px;text-shadow:0 0 12px rgba(76,194,255,.4);">{{ modeName }}</div>
+        <div style="font-size:8px;letter-spacing:.12em;color:var(--txt2);margin-top:3px;">{{ spineLabel }}</div>
+        <div style="position:absolute;top:8px;right:9px;font-size:8px;color:var(--txt3);border:1px solid var(--line2);padding:1px 4px;">◍ LOCK</div>
+      </div>
+
+      <!-- section tree -->
+      <div style="flex:1;overflow-y:auto;padding:6px 8px 10px;">
+        <div style="font-size:7.5px;letter-spacing:.3em;color:var(--txt3);padding:8px 6px 5px;">PLAN</div>
+        <div style="display:flex;flex-direction:column;gap:1px;">
+          <div style="display:flex;align-items:center;gap:10px;height:28px;padding:0 9px;color:var(--txt2);cursor:pointer;" style-hover="background:rgba(76,194,255,.05);color:var(--txt);"><span style="width:15px;text-align:center;color:var(--txt3);">⊞</span><span style="flex:1;font-size:11px;letter-spacing:.04em;">Dashboard</span></div>
+          <!-- active: Write -->
+          <div style="position:relative;display:flex;align-items:center;gap:10px;height:30px;padding:0 9px;background:linear-gradient(90deg,rgba(76,194,255,.14),rgba(76,194,255,.02));color:#fff;">
+            <div style="position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--accent,#4cc2ff);box-shadow:0 0 10px var(--accent,#4cc2ff);"></div>
+            <span style="width:15px;text-align:center;color:var(--accent,#4cc2ff);">▤</span><span style="flex:1;font-size:11px;letter-spacing:.04em;font-weight:500;">Write</span><span style="font-size:8px;color:var(--accent,#4cc2ff);letter-spacing:.1em;">●</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;height:28px;padding:0 9px;color:var(--txt2);cursor:pointer;" style-hover="background:rgba(76,194,255,.05);color:var(--txt);"><span style="width:15px;text-align:center;color:var(--txt3);">⧉</span><span style="flex:1;font-size:11px;">Structure</span><span style="font-size:8.5px;color:var(--warning);">!2</span></div>
+          <div style="display:flex;align-items:center;gap:10px;height:28px;padding:0 9px;color:var(--txt2);cursor:pointer;" style-hover="background:rgba(76,194,255,.05);color:var(--txt);"><span style="width:15px;text-align:center;color:var(--txt3);">▦</span><span style="flex:1;font-size:11px;">Scenes</span><span style="font-size:8.5px;color:var(--txt3);">24</span></div>
+          <div style="display:flex;align-items:center;gap:10px;height:28px;padding:0 9px;color:var(--txt2);cursor:pointer;" style-hover="background:rgba(76,194,255,.05);color:var(--txt);"><span style="width:15px;text-align:center;color:var(--txt3);">⊟</span><span style="flex:1;font-size:11px;">Notes</span><span style="font-size:8.5px;color:var(--txt3);">9</span></div>
+        </div>
+
+        <div style="font-size:7.5px;letter-spacing:.3em;color:var(--txt3);padding:12px 6px 5px;">NARRATIVE</div>
+        <div style="display:flex;flex-direction:column;gap:1px;">
+          <div style="display:flex;align-items:center;gap:10px;height:28px;padding:0 9px;color:var(--txt2);cursor:pointer;" style-hover="background:rgba(76,194,255,.05);color:var(--txt);"><span style="width:15px;text-align:center;color:var(--txt3);">☰</span><span style="flex:1;font-size:11px;">Plot · Timeline</span></div>
+          <div style="display:flex;align-items:center;gap:10px;height:28px;padding:0 9px;color:var(--txt2);cursor:pointer;" style-hover="background:rgba(76,194,255,.05);color:var(--txt);"><span style="width:15px;text-align:center;color:var(--txt3);">◈</span><span style="flex:1;font-size:11px;">PSYKE</span><span style="font-size:8.5px;color:var(--txt3);">37</span></div>
+          <div style="display:flex;align-items:center;gap:10px;height:28px;padding:0 9px;color:var(--txt2);cursor:pointer;" style-hover="background:rgba(76,194,255,.05);color:var(--txt);"><span style="width:15px;text-align:center;color:var(--txt3);">⬡</span><span style="flex:1;font-size:11px;">Graph</span></div>
+          <div style="display:flex;align-items:center;gap:10px;height:28px;padding:0 9px;color:var(--txt2);cursor:pointer;" style-hover="background:rgba(176,124,255,.07);color:var(--txt);"><span style="width:15px;text-align:center;color:var(--violet);">✦</span><span style="flex:1;font-size:11px;">Quantum</span><span style="font-size:8px;color:var(--violet);border:1px solid rgba(176,124,255,.4);padding:0 3px;">λ</span></div>
+        </div>
+
+        <div style="font-size:7.5px;letter-spacing:.3em;color:var(--txt3);padding:12px 6px 5px;">ANALYZE</div>
+        <div style="display:flex;flex-direction:column;gap:1px;">
+          <div style="display:flex;align-items:center;gap:10px;height:28px;padding:0 9px;color:var(--txt2);cursor:pointer;" style-hover="background:rgba(76,194,255,.05);color:var(--txt);"><span style="width:15px;text-align:center;color:var(--txt3);">◉</span><span style="flex:1;font-size:11px;">Reviews</span><span style="font-size:8.5px;color:var(--blocking);">1</span></div>
+          <div style="display:flex;align-items:center;gap:10px;height:28px;padding:0 9px;color:var(--txt2);cursor:pointer;" style-hover="background:rgba(76,194,255,.05);color:var(--txt);"><span style="width:15px;text-align:center;color:var(--txt3);">⎇</span><span style="flex:1;font-size:11px;">Stages</span></div>
+          <div style="display:flex;align-items:center;gap:10px;height:28px;padding:0 9px;color:var(--txt2);cursor:pointer;" style-hover="background:rgba(76,194,255,.05);color:var(--txt);"><span style="width:15px;text-align:center;color:var(--txt3);">⌕</span><span style="flex:1;font-size:11px;">Search</span></div>
+        </div>
+
+        <div style="font-size:7.5px;letter-spacing:.3em;color:var(--txt3);padding:12px 6px 5px;">SYSTEM</div>
+        <div style="display:flex;flex-direction:column;gap:1px;">
+          <div style="display:flex;align-items:center;gap:10px;height:28px;padding:0 9px;color:var(--txt2);cursor:pointer;" style-hover="background:rgba(76,194,255,.05);color:var(--txt);"><span style="width:15px;text-align:center;color:var(--txt3);">◍</span><span style="flex:1;font-size:11px;">Voice · Dexter</span></div>
+          <div style="display:flex;align-items:center;gap:10px;height:28px;padding:0 9px;color:var(--txt2);cursor:pointer;" style-hover="background:rgba(76,194,255,.05);color:var(--txt);"><span style="width:15px;text-align:center;color:var(--txt3);">⊕</span><span style="flex:1;font-size:11px;">Plugins</span></div>
+          <div style="display:flex;align-items:center;gap:10px;height:28px;padding:0 9px;color:var(--txt2);cursor:pointer;" style-hover="background:rgba(76,194,255,.05);color:var(--txt);"><span style="width:15px;text-align:center;color:var(--txt3);">⊙</span><span style="flex:1;font-size:11px;">Settings</span></div>
+        </div>
+      </div>
+
+      <!-- rail footer: project intel mini -->
+      <div style="border-top:1px solid var(--line2);padding:9px 11px;display:flex;align-items:center;gap:9px;">
+        <div style="position:relative;width:26px;height:26px;border-radius:50%;background:conic-gradient(var(--green) 0 72%,rgba(255,255,255,.08) 72% 100%);display:grid;place-items:center;">
+          <div style="width:18px;height:18px;border-radius:50%;background:var(--base);display:grid;place-items:center;font-size:8px;color:var(--green);">72</div>
+        </div>
+        <div style="line-height:1.3;">
+          <div style="font-size:8px;letter-spacing:.16em;color:var(--txt3);">PROJECT HEALTH</div>
+          <div style="font-size:10px;color:var(--txt2);">18,432 words · 24 scenes</div>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ---------- CENTER EDITOR REGION ---------- -->
+    <div data-screen-label="Manuscript editor (center)" style="flex:1;min-width:0;display:flex;flex-direction:column;background:radial-gradient(120% 80% at 50% 0%,#080a10,#040609);position:relative;">
+      <!-- editor toolbar -->
+      <div style="height:36px;flex:none;display:flex;align-items:center;gap:12px;padding:0 16px;border-bottom:1px solid var(--line2);background:rgba(6,8,12,.6);">
+        <span style="font-size:10px;color:var(--txt2);letter-spacing:.05em;">3,214 <span style="color:var(--txt3);">WORDS</span></span>
+        <span style="width:1px;height:14px;background:var(--line2);"></span>
+        <div style="display:flex;align-items:center;gap:7px;height:22px;padding:0 9px;border:1px solid var(--line2);font-size:9px;letter-spacing:.12em;color:var(--txt2);">ELEMENT <span style="color:var(--accent,#4cc2ff);font-weight:600;">DIALOGUE</span> <span style="color:var(--txt3);">▾</span></div>
+        <span style="font-size:9px;color:var(--txt3);letter-spacing:.08em;">TAB → PARENTHETICAL</span>
+        <div style="flex:1;"></div>
+        <span style="font-size:9.5px;letter-spacing:.14em;color:var(--txt2);cursor:pointer;" style-hover="color:var(--txt);">A▾</span>
+        <span style="font-size:9.5px;letter-spacing:.14em;color:var(--txt2);cursor:pointer;" style-hover="color:var(--txt);">REVIEW ▾</span>
+        <span style="font-size:9.5px;letter-spacing:.14em;color:var(--txt2);cursor:pointer;" style-hover="color:var(--txt);">⊹ FOCUS</span>
+        <span style="font-size:9.5px;letter-spacing:.14em;color:var(--txt2);cursor:pointer;" style-hover="color:var(--txt);">TEXT/BG ▾</span>
+      </div>
+
+      <!-- manuscript scroll -->
+      <div style="flex:1;overflow-y:auto;position:relative;display:flex;justify-content:center;padding:30px 0 40px;">
+        <!-- energy gutter -->
+        <div style="position:absolute;left:calc(50% - 430px);top:34px;bottom:30px;width:10px;display:flex;flex-direction:column;align-items:center;gap:0;">
+          <div style="font-size:7px;color:var(--txt3);letter-spacing:.1em;writing-mode:vertical-rl;transform:rotate(180deg);height:64px;">TENSION</div>
+          <div style="flex:1;width:2px;background:linear-gradient(180deg,var(--green),var(--amber) 55%,var(--blocking));opacity:.55;margin:6px 0;"></div>
+          <div style="position:absolute;top:84px;width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green);"></div>
+          <div style="position:absolute;top:150px;width:7px;height:7px;border-radius:50%;background:var(--green);"></div>
+          <div style="position:absolute;top:220px;width:8px;height:8px;transform:rotate(45deg);background:var(--amber);box-shadow:0 0 7px var(--amber);"></div>
+          <div style="position:absolute;top:300px;width:7px;height:7px;border-radius:50%;background:var(--amber);"></div>
+          <div style="position:absolute;top:372px;width:9px;height:9px;border-radius:50%;background:var(--blocking);box-shadow:0 0 9px var(--blocking);"></div>
+          <div style="position:absolute;top:452px;width:8px;height:8px;transform:rotate(45deg);background:var(--blocking);"></div>
+        </div>
+
+        <!-- review metrics overlay -->
+        <div style="position:absolute;top:18px;right:26px;width:236px;background:rgba(8,11,17,.94);border:1px solid var(--line);padding:11px 12px;z-index:5;box-shadow:0 8px 30px rgba(0,0,0,.6);">
+          <div style="position:absolute;top:-1px;right:-1px;width:8px;height:8px;border-top:1px solid var(--crimson);border-right:1px solid var(--crimson);"></div>
+          <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line2);padding-bottom:6px;margin-bottom:8px;">
+            <span style="font-size:8.5px;letter-spacing:.24em;color:var(--crimson);">REVIEW METRICS</span>
+            <span style="font-size:8px;color:var(--txt3);">⊹ ✕</span>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px 12px;font-size:9px;">
+            <div><div style="color:var(--txt3);font-size:7.5px;letter-spacing:.1em;">SHORTEST</div><div style="color:var(--txt);font-family:'Chakra Petch';font-size:13px;">96<span style="font-size:8px;color:var(--txt3);">w</span></div></div>
+            <div><div style="color:var(--txt3);font-size:7.5px;letter-spacing:.1em;">LONGEST</div><div style="color:var(--txt);font-family:'Chakra Petch';font-size:13px;">812<span style="font-size:8px;color:var(--txt3);">w</span></div></div>
+          </div>
+          <div style="font-size:7.5px;letter-spacing:.14em;color:var(--txt3);margin:9px 0 4px;">PACING BALANCE S / M / L</div>
+          <div style="display:flex;height:7px;gap:2px;">
+            <div style="width:34%;background:var(--green);"></div><div style="width:46%;background:var(--amber);"></div><div style="width:20%;background:var(--blocking);"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-top:9px;font-size:9px;">
+            <span style="color:var(--txt2);">FLAGGED SCENES</span><span style="color:var(--warning);font-weight:600;">3</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-top:4px;font-size:9px;">
+            <span style="color:var(--txt2);">STRUCTURAL ISSUES</span><span style="color:var(--blocking);font-weight:600;">2</span>
+          </div>
+        </div>
+
+        <!-- screenplay column -->
+        <div style="width:660px;font-family:'Courier Prime',monospace;font-size:15px;line-height:1.55;color:#cfd4dc;">
+          <!-- act / scene header -->
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
+            <span style="font-family:'Chakra Petch';font-weight:600;font-size:10px;letter-spacing:.3em;color:var(--accent,#4cc2ff);">ACT II · SEQUENCE D</span>
+            <span style="flex:1;height:1px;background:var(--line2);"></span>
+          </div>
+          <div style="display:flex;gap:12px;align-items:baseline;margin:14px 0 16px;opacity:.92;">
+            <span style="font-family:'Chakra Petch';color:var(--txt3);font-size:13px;">12</span>
+            <span style="font-weight:700;letter-spacing:.04em;color:#fff;">INT. <span style="color:var(--accent,#4cc2ff);border-bottom:1px dotted var(--accent,#4cc2ff);">HELIOS-9</span> — OBSERVATION RING — NIGHT CYCLE</span>
+          </div>
+
+          <p style="margin:0 0 14px;opacity:.72;">The corridor breathes. Somewhere below, the reactor drops a half-step and holds. <span style="color:var(--accent,#4cc2ff);border-bottom:1px dotted rgba(76,194,255,.6);">MARLOW</span> floats at the viewport, watching a dead planet turn through the glass.</p>
+
+          <div style="text-align:center;margin:18px 0 0;font-weight:700;letter-spacing:.06em;opacity:.78;">MARLOW</div>
+          <div style="text-align:center;font-style:italic;color:var(--txt2);opacity:.8;">(not turning)</div>
+          <p style="margin:2px auto 14px;width:62%;text-align:center;opacity:.8;">You shouldn't be up here.</p>
+
+          <p style="margin:0 0 14px;opacity:.72;">A hatch cycles. <span style="color:var(--green);border-bottom:1px dotted rgba(98,217,154,.6);">VESPER</span> lets it seal behind her. The static between them is older than the station.</p>
+
+          <!-- ACTIVE block + floating format toolbar -->
+          <div style="position:relative;background:linear-gradient(90deg,rgba(76,194,255,.07),transparent 80%);box-shadow:inset 2px 0 0 var(--accent,#4cc2ff);padding:6px 0 6px 4px;margin:46px 0 10px;">
+            <!-- floating format toolbar -->
+            <div style="position:absolute;top:-34px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:2px;height:28px;padding:0 6px;background:#0a0d14;border:1px solid var(--line);box-shadow:0 6px 22px rgba(0,0,0,.7);font-family:'JetBrains Mono';z-index:6;">
+              <span style="padding:0 7px;font-weight:700;color:var(--txt);font-size:11px;">B</span>
+              <span style="padding:0 7px;font-style:italic;color:var(--txt2);font-size:11px;">I</span>
+              <span style="padding:0 7px;color:var(--txt2);font-size:11px;">H</span>
+              <span style="padding:0 7px;color:var(--txt2);font-size:11px;">❝</span>
+              <span style="width:1px;height:15px;background:var(--line2);margin:0 3px;"></span>
+              <span style="padding:0 8px;color:var(--accent,#4cc2ff);font-size:9px;letter-spacing:.1em;">REWRITE</span>
+              <span style="padding:0 8px;color:var(--txt2);font-size:9px;letter-spacing:.1em;">EXPAND</span>
+              <span style="padding:0 8px;color:var(--txt2);font-size:9px;letter-spacing:.1em;">DIALOGUE</span>
+              <span style="padding:0 8px;color:var(--amber);font-size:9px;letter-spacing:.1em;">TENSION</span>
+            </div>
+            <div style="text-align:center;font-weight:700;letter-spacing:.06em;color:#fff;">VESPER</div>
+            <p style="margin:2px auto 0;width:64%;text-align:center;color:#eef1f6;">Neither should you. The Warden is counting heartbeats tonight<span style="display:inline-block;width:2px;height:16px;background:var(--accent,#4cc2ff);vertical-align:-3px;margin-left:1px;animation:lf-blink 1.1s step-end infinite;box-shadow:0 0 6px var(--accent,#4cc2ff);"></span></p>
+          </div>
+
+          <p style="margin:6px 0 14px;opacity:.7;">She means <span style="color:var(--crimson);border-bottom:1px dotted rgba(232,68,58,.6);">THE WARDEN</span> — the thing they no longer call a person.</p>
+          <div style="text-align:right;font-weight:700;letter-spacing:.08em;color:var(--txt2);opacity:.7;margin-top:18px;">SMASH CUT TO:</div>
+
+          <!-- inline + new affordances -->
+          <div style="display:flex;gap:8px;margin-top:26px;opacity:.6;">
+            <span style="font-size:11px;color:var(--txt2);border:1px dashed var(--line2);padding:5px 12px;">+ NEW SCENE</span>
+            <span style="font-size:11px;color:var(--txt2);border:1px dashed var(--line2);padding:5px 12px;">+ NEW SEQUENCE</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- PSYKE console slim bar (surface 2) -->
+      <div style="height:30px;flex:none;display:flex;align-items:center;gap:10px;padding:0 14px;background:#06080c;border-top:1px solid var(--line);position:relative;">
+        <div style="position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--accent,#4cc2ff);box-shadow:0 0 10px var(--accent,#4cc2ff);"></div>
+        <span style="font-family:'Chakra Petch';font-weight:700;color:var(--accent,#4cc2ff);font-size:12px;">ψ</span>
+        <span style="color:var(--accent,#4cc2ff);">❯</span>
+        <span style="flex:1;font-size:11px;color:var(--txt3);letter-spacing:.03em;">Search the bible or type <span style="color:var(--txt2);">/</span> for commands — <span style="color:var(--txt2);">/create  /open  /go  /ai  /idea</span></span>
+        <span style="font-size:8px;letter-spacing:.22em;color:var(--txt3);border:1px solid var(--line2);padding:2px 6px;">PSYKE CONSOLE</span>
+        <span style="font-size:8px;letter-spacing:.2em;color:var(--txt3);">⌘⏎</span>
+      </div>
+    </div>
+
+    <!-- ---------- RIGHT INTELLIGENCE DOCK ---------- -->
+    <sc-if value="{{ showDocks }}" hint-placeholder-val="{{ true }}">
+    <div data-screen-label="Intelligence dock (right)" style="width:372px;flex:none;display:flex;flex-direction:column;background:linear-gradient(180deg,#07090e,#05070b);border-left:1px solid var(--line);">
+      <!-- dock tabs -->
+      <div style="height:34px;flex:none;display:flex;align-items:stretch;border-bottom:1px solid var(--line);">
+        <div style="display:flex;align-items:center;gap:6px;padding:0 12px;color:var(--txt3);font-size:9px;letter-spacing:.14em;cursor:pointer;border-right:1px solid var(--line2);" style-hover="color:var(--txt);">⠿ ASSISTANT</div>
+        <div style="position:relative;display:flex;align-items:center;gap:6px;padding:0 13px;color:var(--crimson);font-size:9px;letter-spacing:.14em;background:rgba(232,68,58,.06);border-right:1px solid var(--line2);">
+          <div style="position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--crimson);box-shadow:0 0 8px var(--crimson);"></div>RADAR <span style="background:var(--blocking);color:#fff;font-size:7.5px;padding:0 4px;border-radius:6px;animation:lf-glow 2.2s ease-in-out infinite;">1</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;padding:0 12px;color:var(--txt3);font-size:9px;letter-spacing:.14em;cursor:pointer;border-right:1px solid var(--line2);" style-hover="color:var(--txt);">HEALTH</div>
+        <div style="display:flex;align-items:center;gap:6px;padding:0 12px;color:var(--txt3);font-size:9px;letter-spacing:.14em;cursor:pointer;" style-hover="color:var(--txt);">CONTINUITY</div>
+        <div style="flex:1;"></div>
+        <div style="display:flex;align-items:center;gap:9px;padding:0 11px;color:var(--txt3);font-size:11px;"><span style="cursor:pointer;" style-hover="color:var(--txt);">⤢</span><span style="cursor:pointer;" style-hover="color:var(--txt);">⊟</span><span style="cursor:pointer;" style-hover="color:var(--txt);">✕</span></div>
+      </div>
+
+      <div style="flex:1;overflow-y:auto;padding:12px;">
+        <!-- decision radar header -->
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:11px;">
+          <div style="display:flex;align-items:center;gap:9px;">
+            <div style="position:relative;width:24px;height:24px;border-radius:50%;border:1px solid var(--line);overflow:hidden;">
+              <div style="position:absolute;inset:0;background:conic-gradient(from 0deg,rgba(232,68,58,.55),transparent 28%);animation:lf-sweep 3.4s linear infinite;"></div>
+              <div style="position:absolute;inset:0;display:grid;place-items:center;color:var(--crimson);font-size:9px;">◎</div>
+            </div>
+            <div>
+              <div style="font-family:'Chakra Petch';font-weight:600;font-size:13px;letter-spacing:.1em;color:#fff;">DECISION RADAR</div>
+              <div style="font-size:8px;letter-spacing:.1em;color:var(--txt3);">10 SIGNALS · RANKED · ADVISORY ONLY</div>
+            </div>
+          </div>
+          <div style="display:flex;gap:5px;align-items:center;font-size:8px;">
+            <span style="color:var(--blocking);">●1</span><span style="color:var(--warning);">●1</span><span style="color:var(--suggestion);">●1</span><span style="color:var(--opportunity);">●1</span>
+          </div>
+        </div>
+
+        <!-- radar cards -->
+        <!-- blocking -->
+        <div style="position:relative;border:1px solid rgba(255,82,96,.4);background:linear-gradient(180deg,rgba(255,82,96,.07),transparent);padding:10px 11px 11px;margin-bottom:8px;box-shadow:0 0 16px rgba(255,82,96,.07);">
+          <div style="position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--blocking);box-shadow:0 0 8px var(--blocking);"></div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+            <span style="display:flex;align-items:center;gap:6px;font-size:8px;letter-spacing:.18em;color:var(--blocking);"><span style="width:10px;height:10px;background:var(--blocking);display:inline-grid;place-items:center;color:#fff;font-size:7px;">!</span>BLOCKING</span>
+            <span style="display:flex;align-items:center;gap:4px;font-size:7.5px;color:var(--txt3);letter-spacing:.1em;"><span style="display:flex;gap:1px;"><span style="width:3px;height:8px;background:var(--green);"></span><span style="width:3px;height:8px;background:var(--green);"></span><span style="width:3px;height:8px;background:var(--green);"></span></span>HIGH</span>
+          </div>
+          <div style="font-size:11.5px;color:#fff;line-height:1.4;margin-bottom:5px;">Unpaid setup — the “black box” planted in Scene 04 has no payoff.</div>
+          <div style="font-size:9.5px;color:var(--txt2);line-height:1.4;margin-bottom:8px;">A promise this strong left open reads as a plot hole by the climax.</div>
+          <div style="display:flex;gap:6px;">
+            <span style="font-size:8.5px;letter-spacing:.1em;color:var(--blocking);border:1px solid rgba(255,82,96,.45);padding:3px 8px;cursor:pointer;" style-hover="background:rgba(255,82,96,.12);">→ SETUP / PAYOFF</span>
+            <span style="font-size:8.5px;letter-spacing:.1em;color:var(--txt2);border:1px solid var(--line2);padding:3px 8px;cursor:pointer;" style-hover="color:var(--txt);">START WORKFLOW</span>
+          </div>
+        </div>
+        <!-- warning -->
+        <div style="position:relative;border:1px solid var(--line2);background:rgba(11,14,21,.5);padding:10px 11px 11px;margin-bottom:8px;">
+          <div style="position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--warning);"></div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+            <span style="display:flex;align-items:center;gap:6px;font-size:8px;letter-spacing:.18em;color:var(--warning);"><span style="width:8px;height:8px;transform:rotate(45deg);background:var(--warning);"></span>WARNING</span>
+            <span style="display:flex;align-items:center;gap:4px;font-size:7.5px;color:var(--txt3);letter-spacing:.1em;"><span style="display:flex;gap:1px;"><span style="width:3px;height:8px;background:var(--amber);"></span><span style="width:3px;height:8px;background:var(--amber);"></span><span style="width:3px;height:8px;background:rgba(255,255,255,.12);"></span></span>MED</span>
+          </div>
+          <div style="font-size:11.5px;color:var(--txt);line-height:1.4;margin-bottom:5px;">Act II runs 34% longer than Act I — the midpoint drifts late.</div>
+          <div style="display:flex;gap:6px;">
+            <span style="font-size:8.5px;letter-spacing:.1em;color:var(--warning);border:1px solid rgba(255,180,84,.4);padding:3px 8px;cursor:pointer;" style-hover="background:rgba(255,180,84,.12);">→ STRUCTURE</span>
+          </div>
+        </div>
+        <!-- suggestion -->
+        <div style="position:relative;border:1px solid var(--line2);background:rgba(11,14,21,.5);padding:10px 11px 11px;margin-bottom:8px;">
+          <div style="position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--suggestion);"></div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+            <span style="display:flex;align-items:center;gap:6px;font-size:8px;letter-spacing:.18em;color:var(--suggestion);"><span style="width:8px;height:8px;border-radius:50%;border:2px solid var(--suggestion);"></span>SUGGESTION</span>
+            <span style="display:flex;align-items:center;gap:4px;font-size:7.5px;color:var(--txt3);letter-spacing:.1em;"><span style="display:flex;gap:1px;"><span style="width:3px;height:8px;background:var(--green);"></span><span style="width:3px;height:8px;background:var(--green);"></span><span style="width:3px;height:8px;background:var(--green);"></span></span>HIGH</span>
+          </div>
+          <div style="font-size:11.5px;color:var(--txt);line-height:1.4;margin-bottom:5px;">MARLOW is absent for 5 consecutive scenes (14–18).</div>
+          <div style="display:flex;gap:6px;">
+            <span style="font-size:8.5px;letter-spacing:.1em;color:var(--suggestion);border:1px solid var(--line-cy);padding:3px 8px;cursor:pointer;" style-hover="background:rgba(76,194,255,.12);">→ CONTINUITY</span>
+          </div>
+        </div>
+        <!-- opportunity -->
+        <div style="position:relative;border:1px solid var(--line2);background:rgba(11,14,21,.5);padding:10px 11px 11px;margin-bottom:14px;">
+          <div style="position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--opportunity);"></div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+            <span style="display:flex;align-items:center;gap:6px;font-size:8px;letter-spacing:.18em;color:var(--opportunity);"><span style="width:8px;height:8px;background:var(--opportunity);clip-path:polygon(50% 0,100% 100%,0 100%);"></span>OPPORTUNITY</span>
+            <span style="display:flex;align-items:center;gap:4px;font-size:7.5px;color:var(--txt3);letter-spacing:.1em;"><span style="display:flex;gap:1px;"><span style="width:3px;height:8px;background:var(--amber);"></span><span style="width:3px;height:8px;background:var(--amber);"></span><span style="width:3px;height:8px;background:rgba(255,255,255,.12);"></span></span>MED</span>
+          </div>
+          <div style="font-size:11.5px;color:var(--txt);line-height:1.4;margin-bottom:5px;">The motif “static” recurs across 6 scenes — promote it to a theme?</div>
+          <div style="display:flex;gap:6px;">
+            <span style="font-size:8.5px;letter-spacing:.1em;color:var(--opportunity);border:1px solid rgba(98,217,154,.4);padding:3px 8px;cursor:pointer;" style-hover="background:rgba(98,217,154,.12);">→ PSYKE</span>
+          </div>
+        </div>
+
+        <!-- stacked: STORY HEALTH -->
+        <div style="display:flex;align-items:center;justify-content:space-between;border-top:1px solid var(--line);padding-top:11px;margin-bottom:11px;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span style="color:var(--txt3);">⠿</span>
+            <span style="font-family:'Chakra Petch';font-weight:600;font-size:13px;letter-spacing:.1em;color:#fff;">STORY HEALTH</span>
+          </div>
+          <span style="font-size:8px;letter-spacing:.1em;color:var(--txt3);">DETERMINISTIC ▾</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;">
+          <div style="border:1px solid var(--line2);padding:9px;display:flex;align-items:center;gap:10px;background:rgba(11,14,21,.4);">
+            <div style="position:relative;width:34px;height:34px;border-radius:50%;background:conic-gradient(var(--green) 0 72%,rgba(255,255,255,.07) 72%);display:grid;place-items:center;"><div style="width:24px;height:24px;border-radius:50%;background:var(--base);display:grid;place-items:center;font-family:'Chakra Petch';font-size:11px;color:var(--green);">72</div></div>
+            <div><div style="font-size:9px;color:var(--txt);">Structure</div><div style="font-size:7.5px;letter-spacing:.1em;color:var(--green);">BALANCED</div></div>
+          </div>
+          <div style="border:1px solid var(--line2);padding:9px;display:flex;align-items:center;gap:10px;background:rgba(11,14,21,.4);">
+            <div style="position:relative;width:34px;height:34px;border-radius:50%;background:conic-gradient(var(--amber) 0 48%,rgba(255,255,255,.07) 48%);display:grid;place-items:center;"><div style="width:24px;height:24px;border-radius:50%;background:var(--base);display:grid;place-items:center;font-family:'Chakra Petch';font-size:11px;color:var(--amber);">48</div></div>
+            <div><div style="font-size:9px;color:var(--txt);">Characters</div><div style="font-size:7.5px;letter-spacing:.1em;color:var(--amber);">SPARSE</div></div>
+          </div>
+          <div style="border:1px solid var(--line2);padding:9px;display:flex;align-items:center;gap:10px;background:rgba(11,14,21,.4);">
+            <div style="position:relative;width:34px;height:34px;border-radius:50%;background:conic-gradient(var(--green) 0 61%,rgba(255,255,255,.07) 61%);display:grid;place-items:center;"><div style="width:24px;height:24px;border-radius:50%;background:var(--base);display:grid;place-items:center;font-family:'Chakra Petch';font-size:11px;color:var(--green);">61</div></div>
+            <div><div style="font-size:9px;color:var(--txt);">Arc Cover</div><div style="font-size:7.5px;letter-spacing:.1em;color:var(--green);">BALANCED</div></div>
+          </div>
+          <div style="border:1px solid rgba(255,82,96,.3);padding:9px;display:flex;align-items:center;gap:10px;background:rgba(255,82,96,.04);">
+            <div style="position:relative;width:34px;height:34px;border-radius:50%;background:conic-gradient(var(--blocking) 0 33%,rgba(255,255,255,.07) 33%);display:grid;place-items:center;"><div style="width:24px;height:24px;border-radius:50%;background:var(--base);display:grid;place-items:center;font-family:'Chakra Petch';font-size:11px;color:var(--blocking);">33</div></div>
+            <div><div style="font-size:9px;color:var(--txt);">Density</div><div style="font-size:7.5px;letter-spacing:.1em;color:var(--blocking);">PROBLEM</div></div>
+          </div>
+        </div>
+
+        <!-- collapsed assistant -->
+        <div style="display:flex;align-items:center;justify-content:space-between;border-top:1px solid var(--line);margin-top:13px;padding-top:11px;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span style="color:var(--txt3);">⠿</span>
+            <span style="font-family:'Chakra Petch';font-weight:600;font-size:13px;letter-spacing:.1em;color:var(--txt2);">ASSISTANT · BILLY</span>
+          </div>
+          <span style="font-size:11px;color:var(--txt3);">▸</span>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+  </div>
+
+  <!-- ===================== BOTTOM ANALYSIS DOCK ===================== -->
+  <sc-if value="{{ showDocks }}" hint-placeholder-val="{{ true }}">
+  <div data-screen-label="Analysis dock (bottom)" style="position:relative;z-index:20;height:200px;display:flex;flex-direction:column;background:linear-gradient(180deg,#07090e,#040609);border-top:1px solid var(--line);">
+    <!-- corner brackets -->
+    <div style="position:absolute;top:-1px;left:232px;width:10px;height:10px;border-top:1px solid var(--crimson);border-left:1px solid var(--crimson);"></div>
+    <!-- dock tabs -->
+    <div style="height:30px;flex:none;display:flex;align-items:stretch;border-bottom:1px solid var(--line2);">
+      <div style="position:relative;display:flex;align-items:center;gap:7px;padding:0 14px;color:var(--accent,#4cc2ff);font-size:9px;letter-spacing:.14em;background:rgba(76,194,255,.05);">
+        <div style="position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--accent,#4cc2ff);box-shadow:0 0 8px var(--accent,#4cc2ff);"></div>☰ PLOT · TIMELINE
+      </div>
+      <div style="display:flex;align-items:center;gap:7px;padding:0 14px;color:var(--txt3);font-size:9px;letter-spacing:.14em;cursor:pointer;" style-hover="color:var(--txt);">∿ PACING / TENSION</div>
+      <div style="display:flex;align-items:center;gap:7px;padding:0 14px;color:var(--txt3);font-size:9px;letter-spacing:.14em;cursor:pointer;" style-hover="color:var(--txt);">◇ BEATS</div>
+      <div style="display:flex;align-items:center;gap:7px;padding:0 14px;color:var(--txt3);font-size:9px;letter-spacing:.14em;cursor:pointer;" style-hover="color:var(--txt);"># TAGS</div>
+      <div style="display:flex;align-items:center;gap:7px;padding:0 14px;color:var(--txt3);font-size:9px;letter-spacing:.14em;cursor:pointer;" style-hover="color:var(--txt);">◍ VOICE</div>
+      <div style="flex:1;"></div>
+      <div style="display:flex;align-items:center;gap:8px;padding:0 12px;color:var(--txt3);font-size:8px;letter-spacing:.14em;">STRUCTURAL <span style="color:var(--accent,#4cc2ff);">⇄</span> CUSTOM ORDER · ⠿ ⊟</div>
+    </div>
+
+    <!-- tension EKG ribbon -->
+    <div style="height:42px;flex:none;position:relative;border-bottom:1px solid var(--line2);overflow:hidden;">
+      <svg viewBox="0 0 1688 42" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;">
+        <defs>
+          <linearGradient id="lf-ten" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="rgba(245,177,51,.35)"/><stop offset="1" stop-color="rgba(245,177,51,0)"/>
+          </linearGradient>
+        </defs>
+        <polyline points="0,30 120,28 240,22 360,26 480,16 600,20 720,12 840,18 960,8 1080,22 1200,14 1320,6 1440,18 1560,30 1688,24" fill="none" stroke="#f5b133" stroke-width="1.5" style="filter:drop-shadow(0 0 4px rgba(245,177,51,.7));"/>
+        <polygon points="0,30 120,28 240,22 360,26 480,16 600,20 720,12 840,18 960,8 1080,22 1200,14 1320,6 1440,18 1560,30 1688,24 1688,42 0,42" fill="url(#lf-ten)"/>
+        <circle cx="1320" cy="6" r="3" fill="#ff5260" style="filter:drop-shadow(0 0 5px #ff5260);"/>
+      </svg>
+      <span style="position:absolute;left:12px;top:5px;font-size:7.5px;letter-spacing:.18em;color:var(--txt3);">TENSION 0–10 · STORY EKG</span>
+      <span style="position:absolute;left:1190px;top:5px;font-size:7.5px;letter-spacing:.14em;color:var(--blocking);">▲ CLIMAX PEAK · SC.21</span>
+    </div>
+
+    <!-- swimlanes -->
+    <div style="flex:1;overflow:hidden;position:relative;padding:7px 0 0;">
+      <!-- A story -->
+      <div style="display:flex;align-items:center;height:30px;">
+        <div style="width:118px;flex:none;padding:0 10px;font-size:8.5px;letter-spacing:.1em;color:var(--accent,#4cc2ff);border-right:1px solid var(--line2);display:flex;align-items:center;gap:6px;"><span style="width:6px;height:6px;background:var(--accent,#4cc2ff);"></span>A · MARLOW</div>
+        <div style="flex:1;display:flex;align-items:center;gap:7px;padding:0 14px;overflow:hidden;">
+          <div style="flex:none;width:78px;height:20px;border:1px solid var(--line-cy);background:rgba(76,194,255,.07);font-size:8px;color:var(--txt2);display:flex;align-items:center;padding:0 6px;">08 · Drift</div>
+          <div style="flex:none;width:78px;height:20px;border:1px solid var(--line-cy);background:rgba(76,194,255,.07);font-size:8px;color:var(--txt2);display:flex;align-items:center;padding:0 6px;">10 · Signal</div>
+          <div style="flex:none;width:88px;height:20px;border:1px solid var(--accent,#4cc2ff);background:rgba(76,194,255,.16);font-size:8px;color:#fff;display:flex;align-items:center;padding:0 6px;box-shadow:0 0 10px rgba(76,194,255,.2);">12 · Obs. Ring ●</div>
+          <div style="flex:none;width:78px;height:20px;border:1px solid var(--line2);background:rgba(255,255,255,.02);font-size:8px;color:var(--txt3);display:flex;align-items:center;padding:0 6px;">15 · Descent</div>
+          <div style="flex:none;height:20px;border:1px dashed var(--line2);background:transparent;font-size:8px;color:var(--txt3);display:flex;align-items:center;padding:0 11px;letter-spacing:.08em;cursor:pointer;" style-hover="border-color:var(--accent,#4cc2ff);color:var(--txt2);">＋ 9 SCENES OFF TIMELINE</div>
+        </div>
+      </div>
+      <!-- B story -->
+      <div style="display:flex;align-items:center;height:30px;">
+        <div style="width:118px;flex:none;padding:0 10px;font-size:8.5px;letter-spacing:.1em;color:var(--green);border-right:1px solid var(--line2);display:flex;align-items:center;gap:6px;"><span style="width:6px;height:6px;background:var(--green);"></span>B · VESPER</div>
+        <div style="flex:1;display:flex;align-items:center;gap:7px;padding:0 14px;overflow:hidden;">
+          <div style="flex:none;width:78px;height:20px;border:1px solid rgba(98,217,154,.3);background:rgba(98,217,154,.06);font-size:8px;color:var(--txt2);display:flex;align-items:center;padding:0 6px;margin-left:90px;">11 · Hatch</div>
+          <div style="flex:none;width:96px;height:20px;border:1px solid var(--warning);background:rgba(255,180,84,.1);font-size:8px;color:var(--amber-b);display:flex;align-items:center;padding:0 6px;">13 · Midpoint ◆</div>
+          <div style="flex:none;width:78px;height:20px;border:1px solid rgba(98,217,154,.3);background:rgba(98,217,154,.06);font-size:8px;color:var(--txt2);display:flex;align-items:center;padding:0 6px;">17 · Confide</div>
+        </div>
+      </div>
+      <!-- C story -->
+      <div style="display:flex;align-items:center;height:30px;">
+        <div style="width:118px;flex:none;padding:0 10px;font-size:8.5px;letter-spacing:.1em;color:var(--crimson);border-right:1px solid var(--line2);display:flex;align-items:center;gap:6px;"><span style="width:6px;height:6px;background:var(--crimson);"></span>C · WARDEN</div>
+        <div style="flex:1;display:flex;align-items:center;gap:7px;padding:0 14px;overflow:hidden;">
+          <div style="flex:none;width:78px;height:20px;border:1px solid rgba(232,68,58,.3);background:rgba(232,68,58,.06);font-size:8px;color:var(--txt2);display:flex;align-items:center;padding:0 6px;margin-left:300px;">16 · Watch</div>
+          <div style="flex:none;width:104px;height:20px;border:1px solid var(--blocking);background:rgba(255,82,96,.12);font-size:8px;color:#fff;display:flex;align-items:center;padding:0 6px;">21 · All Is Lost ◆</div>
+        </div>
+      </div>
+      <!-- amber numbered ruler -->
+      <div style="position:absolute;left:118px;right:0;bottom:0;height:18px;border-top:1px solid var(--line2);background-image:repeating-linear-gradient(90deg,rgba(245,177,51,.45) 0 1px,transparent 1px 4px);">
+        <div style="position:absolute;inset:0;display:flex;justify-content:space-between;padding:3px 22px 0;font-size:7px;letter-spacing:.1em;color:rgba(245,177,51,.7);">
+          <span>08</span><span>09</span><span>10</span><span>11</span><span>12</span><span>13</span><span>14</span><span>15</span><span>16</span><span>17</span><span>18</span><span>19</span><span>20</span><span>21</span><span>22</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ===================== STATUS BAR ===================== -->
+  <div style="position:relative;z-index:30;height:26px;display:flex;align-items:center;gap:14px;padding:0 14px;background:#05070b;border-top:1px solid var(--line);font-size:9px;letter-spacing:.06em;color:var(--txt3);">
+    <span style="display:flex;align-items:center;gap:6px;color:var(--txt2);"><span style="width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green);animation:lf-pulse 2.4s ease-in-out infinite;"></span>EVENT · scene_changed → Scene 12 · 0.3s</span>
+    <span style="display:flex;align-items:center;gap:6px;color:var(--green);border:1px solid rgba(98,217,154,.28);padding:1px 8px;letter-spacing:.14em;">DETERMINISTIC · NO AI · REBUILT LIVE</span>
+    <div style="flex:1;text-align:center;color:var(--txt2);letter-spacing:.12em;">ACT II · SEQUENCE D · SCENE 12 · “OBSERVATION RING”</div>
+    <span>LN 14 · COL 32</span>
+    <span style="color:var(--txt2);">UTF-8</span>
+    <span style="color:var(--txt2);">⟲ {{ countdown }}</span>
+    <span style="color:var(--txt2);">LOCAL · NO LOCK</span>
+    <span style="color:var(--accent,#4cc2ff);">SYNC {{ sync }}%</span>
+    <span style="color:var(--txt2);">100%</span>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;$preview&quot;: { &quot;width&quot;: 1920, &quot;height&quot;: 1080 },
+  &quot;writingMode&quot;: { &quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;novel&quot;, &quot;screenplay&quot;, &quot;graphic_novel&quot;, &quot;stage_script&quot;, &quot;series&quot;], &quot;default&quot;: &quot;screenplay&quot;, &quot;tsType&quot;: &quot;string&quot; },
+  &quot;layout&quot;: { &quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;cockpit&quot;, &quot;focus&quot;], &quot;default&quot;: &quot;cockpit&quot;, &quot;tsType&quot;: &quot;string&quot; },
+  &quot;cinematicLevel&quot;: { &quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;restrained&quot;, &quot;cinematic&quot;, &quot;full_hud&quot;], &quot;default&quot;: &quot;full_hud&quot;, &quot;tsType&quot;: &quot;string&quot; },
+  &quot;railExpanded&quot;: { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot; }
+}">
+class Component extends DCLogic {
+  state = { sec: 161, clock: "", sync: "99.412" };
+
+  componentDidMount() {
+    const tick = () => {
+      this.setState((s) => {
+        const sec = s.sec > 0 ? s.sec - 1 : 300;
+        const sync = (99 + Math.random() * 0.9).toFixed(3);
+        return { sec, sync };
+      });
+    };
+    this._t = setInterval(tick, 1000);
+  }
+  componentWillUnmount() { clearInterval(this._t); }
+
+  renderVals() {
+    const mode = this.props.writingMode ?? "screenplay";
+    const layout = this.props.layout ?? "cockpit";
+    const cine = this.props.cinematicLevel ?? "full_hud";
+    const railExpanded = this.props.railExpanded ?? true;
+
+    const accents = {
+      novel: "#c8a96a", screenplay: "#4cc2ff", graphic_novel: "#ff7ac6",
+      stage_script: "#ffb454", series: "#62d99a",
+    };
+    const names = {
+      novel: "NOVEL", screenplay: "SCREENPLAY", graphic_novel: "GRAPHIC NOVEL",
+      stage_script: "STAGE SCRIPT", series: "SERIES",
+    };
+    const spines = {
+      novel: "ACT · CHAPTER · SCENE",
+      screenplay: "ACT · SEQUENCE · SCENE · BEAT",
+      graphic_novel: "ACT · PAGE · SCENE · PANEL",
+      stage_script: "ACT · SCENE · BEAT",
+      series: "SEASON · EPISODE · ACT · SCENE",
+    };
+    const formats = {
+      novel: "NOVEL · PROSE", screenplay: "SCREENPLAY · FEATURE",
+      graphic_novel: "GRAPHIC NOVEL · SCRIPT", stage_script: "STAGE · TWO-ACT",
+      series: "SERIES · TELEPLAY",
+    };
+    const accent = accents[mode] || "#4cc2ff";
+
+    const mm = String(Math.floor(this.state.sec / 60)).padStart(2, "0");
+    const ss = String(this.state.sec % 60).padStart(2, "0");
+
+    return {
+      accent,
+      accentSoft: accent + "22",
+      modeName: names[mode] || "SCREENPLAY",
+      spineLabel: spines[mode] || spines.screenplay,
+      formatBadge: formats[mode] || formats.screenplay,
+      showDocks: layout !== "focus",
+      railExpanded,
+      gridOn: cine !== "restrained",
+      scanOn: cine === "full_hud",
+      glowOn: cine !== "restrained",
+      countdown: mm + ":" + ss,
+      sync: this.state.sync,
+    };
+  }
+}
+</script>
+</body>
+</html>

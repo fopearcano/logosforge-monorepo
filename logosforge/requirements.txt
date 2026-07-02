@@ -1,0 +1,26 @@
+PySide6>=6.6,<6.9
+sqlmodel>=0.0.16,<1.0
+certifi
+pyobjc-framework-Cocoa; sys_platform == "darwin"
+
+# -- HTTP API (logosforge.api) — needed for the shared React UI / Electron /
+# Web-PWA backend.  The desktop PyQt app runs without these.
+fastapi>=0.110
+uvicorn>=0.27
+
+# -- Optional export formats.  PDF export uses reportlab; DOCX export uses
+# python-docx.  The app degrades gracefully (a clear "install …" message) when
+# these are absent, but a normal install should support every export format.
+reportlab>=4.0
+python-docx>=1.1
+
+# -- Local voice (Dexter's Room).  The app starts and runs fine without these
+# (voice is OFF by default and degrades to clear setup messages), but a normal
+# install should support the supported Alpha voice workflows out of the box:
+# faster-whisper powers the Local-PC backend (a LOCAL model path must still be
+# configured manually — models are never downloaded automatically) and
+# sounddevice provides microphone capture (it may need the system PortAudio
+# library on Linux: e.g. `apt install libportaudio2`).  whisper.cpp is a local
+# EXECUTABLE configured in Voice Setup, not a pip package.
+faster-whisper>=1.0
+sounddevice>=0.4

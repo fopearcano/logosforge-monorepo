@@ -1,0 +1,33 @@
+# Normalize line endings: this monorepo is authored on Windows but built on
+# Linux/macOS CI runners. Git stores text as LF and checks out native on Windows.
+* text=auto
+
+# Shell scripts + CI/config MUST be LF (they run on Linux/macOS runners + git-bash);
+# CRLF here breaks the release workflows and validate-macos.sh.
+*.sh   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.py   text eol=lf
+*.spec text eol=lf
+
+# Windows-only scripts keep CRLF.
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary assets — no EOL munging, no diffs.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.icns binary
+*.woff  binary
+*.woff2 binary
+*.ttf  binary
+*.otf  binary
+*.pdf  binary
+*.7z   binary
+*.zip  binary
+*.exe  binary
+*.dll  binary
+*.dmg  binary

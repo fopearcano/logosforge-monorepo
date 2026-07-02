@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:ital,wght@0,400;0,500;0,600;0,700;1,500&family=JetBrains+Mono:wght@400;500;700&family=Courier+Prime:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;}
+  ::selection{background:rgba(76,194,255,.28);color:#fff;}
+  ::-webkit-scrollbar{width:7px;height:7px;}
+  ::-webkit-scrollbar-thumb{background:rgba(232,68,58,.32);}
+  ::-webkit-scrollbar-track{background:transparent;}
+  @keyframes lf-pulse{0%,100%{opacity:.4;}50%{opacity:1;}}
+  @keyframes lf-bars{0%,100%{transform:scaleY(.3);}50%{transform:scaleY(1);}}
+  @keyframes lf-ring{0%,100%{opacity:.4;transform:scale(1);}50%{opacity:.85;transform:scale(1.06);}}
+</style>
+</helmet>
+
+<!-- ===================== FRAME A · MODE RE-SKIN (HERO) ===================== -->
+<div style="position:absolute;left:80px;top:130px;width:2400px;font-family:'JetBrains Mono',monospace;--line:rgba(232,68,58,.28);--line2:rgba(150,162,180,.10);--crimson:#e8443a;--txt:#e4e8ef;--txt2:#8b95a5;--txt3:#525c6b;
+  --novel:#c8a96a;--screen:#4cc2ff;--gn:#ff7ac6;--stage:#ffb454;--series:#62d99a;">
+  <div data-drags-parent="1" style="display:inline-flex;align-items:center;gap:9px;margin-bottom:11px;padding:6px 12px;background:rgba(6,8,12,.92);border:1px solid var(--crimson);color:var(--crimson);font-size:10px;letter-spacing:.2em;">
+    <span style="display:grid;place-items:center;width:16px;height:16px;background:var(--crimson);color:#04060a;font-weight:700;">A</span>THE FIVE WRITING MODES · ONE PARAMETRIC SHELL · §6 RE-SKIN
+  </div>
+  <div data-screen-label="Mode Re-skin" style="position:relative;width:100%;height:700px;background:linear-gradient(180deg,#080a0f,#05070b);border:1px solid var(--line);box-shadow:0 16px 60px rgba(0,0,0,.6);overflow:hidden;display:flex;flex-direction:column;">
+    <div style="position:absolute;top:-1px;left:-1px;width:14px;height:14px;border-top:1px solid var(--crimson);border-left:1px solid var(--crimson);z-index:3;"></div>
+    <div style="position:absolute;top:3px;left:3px;width:5px;height:5px;background:var(--crimson);z-index:3;"></div>
+    <div style="height:42px;flex:none;display:flex;align-items:center;gap:13px;padding:0 18px;border-bottom:1px solid var(--line);">
+      <span style="font-family:'Chakra Petch';font-weight:600;font-size:14px;letter-spacing:.1em;color:#fff;">WRITING-MODE RE-SKIN</span>
+      <span style="font-size:9px;color:var(--txt3);">same shell · vocabulary · scene-body · structure labels · accent band change per mode</span>
+      <div style="flex:1;"></div>
+      <span style="font-size:8px;color:var(--stage);border:1px solid rgba(255,180,84,.35);padding:3px 9px;letter-spacing:.1em;">⊘ ONE-WAY LOCK · set on empty scaffold</span>
+    </div>
+    <div style="flex:1;display:flex;">
+      <!-- NOVEL -->
+      <div style="flex:1;border-right:1px solid var(--line2);display:flex;flex-direction:column;">
+        <div style="height:4px;background:var(--novel);box-shadow:0 0 12px var(--novel);"></div>
+        <div style="padding:13px 14px;border-bottom:1px solid var(--line2);"><div style="font-family:'Chakra Petch';font-weight:700;font-size:17px;color:var(--novel);letter-spacing:.04em;">NOVEL</div><div style="font-size:8px;color:var(--txt3);letter-spacing:.12em;margin-top:3px;">ACT · CHAPTER · SCENE</div></div>
+        <div style="flex:1;padding:13px 14px;font-family:'Courier Prime';font-size:11.5px;color:var(--txt2);line-height:1.6;">
+          <div style="font-size:7px;letter-spacing:.16em;color:var(--txt3);font-family:'JetBrains Mono';margin-bottom:9px;">PROSE</div>
+          The corridor breathed. Marlow had stopped counting the days, but the station counted for him — a low hum, dropping a half-step each night.
+        </div>
+        <div style="padding:11px 14px;border-top:1px solid var(--line2);font-size:8px;color:var(--txt3);line-height:1.7;">SIGNATURE<br><span style="color:var(--txt2);">chapter rhythm · story grid</span></div>
+      </div>
+      <!-- SCREENPLAY (current) -->
+      <div style="flex:1;border-right:1px solid var(--line2);display:flex;flex-direction:column;background:rgba(76,194,255,.03);">
+        <div style="height:4px;background:var(--screen);box-shadow:0 0 14px var(--screen);"></div>
+        <div style="padding:13px 14px;border-bottom:1px solid var(--line2);"><div style="display:flex;align-items:center;gap:7px;"><div style="font-family:'Chakra Petch';font-weight:700;font-size:17px;color:var(--screen);letter-spacing:.04em;">SCREENPLAY</div><span style="font-size:7px;color:var(--screen);">● ACTIVE</span></div><div style="font-size:8px;color:var(--txt3);letter-spacing:.12em;margin-top:3px;">ACT · SEQUENCE · SCENE · BEAT</div></div>
+        <div style="flex:1;padding:13px 14px;font-family:'Courier Prime';font-size:11px;color:var(--txt2);line-height:1.5;">
+          <div style="font-size:7px;letter-spacing:.16em;color:var(--txt3);font-family:'JetBrains Mono';margin-bottom:9px;">8-ELEMENT TAXONOMY</div>
+          <div style="color:#fff;font-weight:700;">INT. HELIOS-9 — NIGHT</div>
+          <div style="margin:5px 0;opacity:.8;">Marlow floats at the viewport.</div>
+          <div style="text-align:center;font-weight:700;color:#fff;">VESPER</div>
+          <div style="text-align:center;opacity:.85;">He's counting heartbeats.</div>
+        </div>
+        <div style="padding:11px 14px;border-top:1px solid var(--line2);font-size:8px;color:var(--txt3);line-height:1.7;">SIGNATURE<br><span style="color:var(--txt2);">beat plan · subtext · Fountain / FDX</span></div>
+      </div>
+      <!-- GRAPHIC NOVEL -->
+      <div style="flex:1;border-right:1px solid var(--line2);display:flex;flex-direction:column;">
+        <div style="height:4px;background:var(--gn);box-shadow:0 0 12px var(--gn);"></div>
+        <div style="padding:13px 14px;border-bottom:1px solid var(--line2);"><div style="font-family:'Chakra Petch';font-weight:700;font-size:17px;color:var(--gn);letter-spacing:.04em;">GRAPHIC NOVEL</div><div style="font-size:8px;color:var(--txt3);letter-spacing:.12em;margin-top:3px;">ACT · PAGE · SCENE · PANEL</div></div>
+        <div style="flex:1;padding:13px 14px;font-family:'JetBrains Mono';font-size:10px;color:var(--txt2);line-height:1.55;">
+          <div style="font-size:7px;letter-spacing:.16em;color:var(--txt3);margin-bottom:9px;">PAGE / PANEL SCRIPT</div>
+          <div style="color:var(--gn);">PAGE 4 · PANEL 1</div>
+          <div style="margin:3px 0;"><span style="color:var(--txt3);">VISUAL:</span> Wide. The dead planet fills the glass.</div>
+          <div><span style="color:var(--txt3);">CAPTION:</span> Nine years of silence.</div>
+          <div><span style="color:var(--txt3);">SFX:</span> hmmmmm</div>
+        </div>
+        <div style="padding:11px 14px;border-top:1px solid var(--line2);font-size:8px;color:var(--txt3);line-height:1.7;">SIGNATURE<br><span style="color:var(--txt2);">page canvas · image-prompt export</span></div>
+      </div>
+      <!-- STAGE SCRIPT -->
+      <div style="flex:1;border-right:1px solid var(--line2);display:flex;flex-direction:column;">
+        <div style="height:4px;background:var(--stage);box-shadow:0 0 12px var(--stage);"></div>
+        <div style="padding:13px 14px;border-bottom:1px solid var(--line2);"><div style="font-family:'Chakra Petch';font-weight:700;font-size:17px;color:var(--stage);letter-spacing:.04em;">STAGE SCRIPT</div><div style="font-size:8px;color:var(--txt3);letter-spacing:.12em;margin-top:3px;">ACT · SCENE · BEAT</div></div>
+        <div style="flex:1;padding:13px 14px;font-family:'Courier Prime';font-size:10.5px;color:var(--txt2);line-height:1.55;">
+          <div style="font-size:7px;letter-spacing:.16em;color:var(--txt3);font-family:'JetBrains Mono';margin-bottom:9px;">13 TYPED BLOCKS</div>
+          <div style="font-style:italic;opacity:.8;">(Marlow at the port. Vesper enters.)</div>
+          <div style="text-align:center;font-weight:700;color:#fff;margin-top:5px;">VESPER</div>
+          <div style="text-align:center;opacity:.85;">You shouldn't be up here.</div>
+          <div style="color:var(--stage);margin-top:5px;">[LIGHT CUE 12 — fade amber]</div>
+        </div>
+        <div style="padding:11px 14px;border-top:1px solid var(--line2);font-size:8px;color:var(--txt3);line-height:1.7;">SIGNATURE<br><span style="color:var(--txt2);">blocking / cue board</span></div>
+      </div>
+      <!-- SERIES -->
+      <div style="flex:1;display:flex;flex-direction:column;">
+        <div style="height:4px;background:var(--series);box-shadow:0 0 12px var(--series);"></div>
+        <div style="padding:13px 14px;border-bottom:1px solid var(--line2);"><div style="font-family:'Chakra Petch';font-weight:700;font-size:17px;color:var(--series);letter-spacing:.04em;">SERIES</div><div style="font-size:8px;color:var(--txt3);letter-spacing:.1em;margin-top:3px;">SEASON · EPISODE · ACT · SCENE</div></div>
+        <div style="flex:1;padding:13px 14px;font-family:'Courier Prime';font-size:10.5px;color:var(--txt2);line-height:1.55;">
+          <div style="font-size:7px;letter-spacing:.16em;color:var(--txt3);font-family:'JetBrains Mono';margin-bottom:9px;">TELEPLAY + SERIAL MARKERS</div>
+          <div style="color:var(--series);">EP.103 · TEASER</div>
+          <div style="color:#fff;font-weight:700;margin-top:4px;">INT. HELIOS-9 — NIGHT</div>
+          <div style="margin:4px 0;opacity:.8;">The signal repeats. Vesper freezes.</div>
+          <div style="font-family:'JetBrains Mono';font-size:8px;color:var(--series);">[A-STORY] [CLIFFHANGER]</div>
+        </div>
+        <div style="padding:11px 14px;border-top:1px solid var(--line2);font-size:8px;color:var(--txt3);line-height:1.7;">SIGNATURE<br><span style="color:var(--txt2);">Series Navigator · A/B/C lanes</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== FRAME B · STAGES ===================== -->
+<div style="position:absolute;left:80px;top:910px;width:1180px;font-family:'JetBrains Mono',monospace;--line:rgba(232,68,58,.28);--line2:rgba(150,162,180,.10);--line-cy:rgba(76,194,255,.3);--crimson:#e8443a;--amber:#f5b133;--cyan:#4cc2ff;--green:#62d99a;--violet:#b07cff;--blue:#5a78ff;--txt:#e4e8ef;--txt2:#8b95a5;--txt3:#525c6b;--accent:#4cc2ff;">
+  <div data-drags-parent="1" style="display:inline-flex;align-items:center;gap:9px;margin-bottom:11px;padding:6px 12px;background:rgba(6,8,12,.92);border:1px solid var(--line);color:var(--accent);font-size:10px;letter-spacing:.2em;">
+    <span style="display:grid;place-items:center;width:16px;height:16px;background:var(--accent);color:#04060a;font-weight:700;">B</span>STAGES · VERSIONS + BRANCHES
+  </div>
+  <div data-screen-label="Stages" style="position:relative;width:100%;height:560px;background:linear-gradient(180deg,#080a0f,#05070b);border:1px solid var(--line);box-shadow:0 16px 60px rgba(0,0,0,.6);overflow:hidden;display:flex;flex-direction:column;">
+    <div style="position:absolute;top:-1px;left:-1px;width:14px;height:14px;border-top:1px solid var(--crimson);border-left:1px solid var(--crimson);z-index:3;"></div>
+    <div style="position:absolute;top:3px;left:3px;width:5px;height:5px;background:var(--crimson);z-index:3;"></div>
+    <div style="height:40px;flex:none;display:flex;align-items:center;gap:11px;padding:0 16px;border-bottom:1px solid var(--line);">
+      <span style="font-family:'Chakra Petch';font-weight:600;font-size:13px;letter-spacing:.1em;color:#fff;">STAGES</span>
+      <span style="font-size:9px;color:var(--txt2);">⟲ next autosave 2:41</span>
+      <div style="flex:1;"></div>
+      <span style="font-size:8px;color:var(--amber);">↳ restore → NEW PROJECT · non-destructive</span>
+    </div>
+    <!-- git-graph timeline -->
+    <div style="height:150px;flex:none;position:relative;border-bottom:1px solid var(--line2);padding:0 20px;">
+      <svg viewBox="0 0 1140 150" style="position:absolute;inset:0;width:100%;height:100%;">
+        <!-- canon line -->
+        <line x1="40" y1="60" x2="1100" y2="60" stroke="#2a3340" stroke-width="2"/>
+        <!-- branch -->
+        <path d="M620,60 C 680,60 700,110 760,110 L 1000,110" fill="none" stroke="#3a2a40" stroke-width="2"/>
+        <!-- merge-ish dashed return -->
+        <path d="M1000,110 C 1050,110 1060,60 1090,60" fill="none" stroke="#2a3340" stroke-width="1" stroke-dasharray="3 4"/>
+      </svg>
+      <!-- commit ticks -->
+      <div style="position:absolute;left:34px;top:54px;width:13px;height:13px;border-radius:50%;background:var(--txt3);border:2px solid #05070b;"></div>
+      <div style="position:absolute;left:150px;top:54px;width:13px;height:13px;border-radius:50%;background:var(--blue);border:2px solid #05070b;"></div>
+      <div style="position:absolute;left:290px;top:52px;width:16px;height:16px;border-radius:50%;background:var(--cyan);border:2px solid #05070b;box-shadow:0 0 10px var(--cyan);"></div>
+      <div style="position:absolute;left:440px;top:55px;width:11px;height:11px;border-radius:50%;background:var(--txt3);border:2px solid #05070b;"></div>
+      <div style="position:absolute;left:570px;top:54px;width:13px;height:13px;border-radius:50%;background:var(--amber);border:2px solid #05070b;"></div>
+      <div style="position:absolute;left:740px;top:104px;width:13px;height:13px;border-radius:50%;background:var(--violet);border:2px solid #05070b;box-shadow:0 0 8px var(--violet);"></div>
+      <div style="position:absolute;left:880px;top:105px;width:11px;height:11px;border-radius:50%;background:var(--violet);border:2px solid #05070b;"></div>
+      <!-- labels -->
+      <div style="position:absolute;left:270px;top:18px;font-size:8px;color:var(--cyan);text-align:center;">manual<br><span style="color:var(--txt3);">“Act II locked”</span></div>
+      <div style="position:absolute;left:548px;top:18px;font-size:8px;color:var(--amber);text-align:center;">pre-restore<br><span style="color:var(--txt3);">safety</span></div>
+      <div style="position:absolute;left:710px;top:124px;font-size:8px;color:var(--violet);">branch · Quantum collapse</div>
+      <div style="position:absolute;left:34px;top:80px;font-size:7px;color:var(--txt3);">CANON</div>
+    </div>
+    <!-- legend + selected diff -->
+    <div style="flex:1;display:flex;min-height:0;">
+      <div style="width:300px;flex:none;border-right:1px solid var(--line2);padding:12px 14px;overflow-y:auto;">
+        <div style="font-size:7.5px;letter-spacing:.18em;color:var(--txt3);margin-bottom:8px;">REASON</div>
+        <div style="display:flex;flex-direction:column;gap:5px;font-size:9px;color:var(--txt2);margin-bottom:13px;">
+          <div style="display:flex;align-items:center;gap:8px;"><span style="width:8px;height:8px;border-radius:50%;background:var(--txt3);"></span>autosave</div>
+          <div style="display:flex;align-items:center;gap:8px;"><span style="width:8px;height:8px;border-radius:50%;background:var(--blue);"></span>periodic (5 min)</div>
+          <div style="display:flex;align-items:center;gap:8px;"><span style="width:8px;height:8px;border-radius:50%;background:var(--cyan);"></span>manual · labeled</div>
+          <div style="display:flex;align-items:center;gap:8px;"><span style="width:8px;height:8px;border-radius:50%;background:var(--amber);"></span>pre-restore safety</div>
+          <div style="display:flex;align-items:center;gap:8px;"><span style="width:8px;height:8px;border-radius:50%;background:var(--violet);"></span>branch</div>
+        </div>
+        <div style="font-size:7.5px;letter-spacing:.18em;color:var(--txt3);margin-bottom:8px;">APPLY HISTORY</div>
+        <div style="display:flex;flex-direction:column;gap:4px;font-size:8.5px;color:var(--txt2);">
+          <div>09:21 · rewrite SC.12 <span style="color:var(--green);">applied</span></div>
+          <div>09:05 · outline gen <span style="color:var(--green);">applied</span></div>
+          <div>08:47 · collapse B1 <span style="color:var(--green);">applied</span></div>
+        </div>
+      </div>
+      <div style="flex:1;padding:12px 14px;overflow-y:auto;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:9px;"><span style="font-size:8px;letter-spacing:.16em;color:var(--cyan);">SELECTED · “Act II locked” → vs current</span><span style="font-size:7.5px;color:var(--txt3);">142 KB · 09:14</span></div>
+        <div style="font-family:'Courier Prime';font-size:11px;line-height:1.6;margin-bottom:12px;">
+          <div style="background:rgba(255,82,96,.1);border-left:2px solid var(--blocking,#ff5260);padding:1px 8px;color:var(--txt3);">− 6 scenes in Act II</div>
+          <div style="background:rgba(98,217,154,.1);border-left:2px solid var(--green);padding:1px 8px;color:#eef1f6;">+ 8 scenes · +2,140 words</div>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <span style="font-size:9px;color:#04060a;background:var(--accent);padding:6px 13px;font-weight:600;letter-spacing:.06em;">RESTORE → NEW PROJECT</span>
+          <span style="font-size:9px;color:var(--txt2);border:1px solid var(--line2);padding:6px 13px;">DIFF</span>
+          <span style="font-size:9px;color:var(--txt3);border:1px solid var(--line2);padding:6px 13px;">DELETE</span>
+        </div>
+        <div style="font-size:7.5px;color:var(--txt3);margin-top:8px;">↳ a safety snapshot is taken first · the original is never overwritten</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== FRAME C · DEXTER'S ROOM (VOICE) ===================== -->
+<div style="position:absolute;left:1340px;top:910px;width:1140px;font-family:'JetBrains Mono',monospace;--line:rgba(232,68,58,.28);--line2:rgba(150,162,180,.10);--line-cy:rgba(76,194,255,.3);--crimson:#e8443a;--amber:#f5b133;--cyan:#4cc2ff;--green:#62d99a;--violet:#b07cff;--txt:#e4e8ef;--txt2:#8b95a5;--txt3:#525c6b;--accent:#4cc2ff;">
+  <div data-drags-parent="1" style="display:inline-flex;align-items:center;gap:9px;margin-bottom:11px;padding:6px 12px;background:rgba(6,8,12,.92);border:1px solid var(--line);color:var(--accent);font-size:10px;letter-spacing:.2em;">
+    <span style="display:grid;place-items:center;width:16px;height:16px;background:var(--accent);color:#04060a;font-weight:700;">C</span>DEXTER'S ROOM · VOICE HUD
+  </div>
+  <div data-screen-label="Dexters Room Voice" style="position:relative;width:100%;height:560px;background:radial-gradient(70% 80% at 50% 0%,#0a0e16,#040609);border:1px solid var(--line);box-shadow:0 16px 60px rgba(0,0,0,.6);overflow:hidden;display:flex;flex-direction:column;">
+    <div style="position:absolute;top:-1px;left:-1px;width:14px;height:14px;border-top:1px solid var(--crimson);border-left:1px solid var(--crimson);z-index:3;"></div>
+    <div style="position:absolute;top:3px;left:3px;width:5px;height:5px;background:var(--crimson);z-index:3;"></div>
+    <div style="height:40px;flex:none;display:flex;align-items:center;gap:11px;padding:0 16px;border-bottom:1px solid var(--line);">
+      <span style="font-family:'Chakra Petch';font-weight:600;font-size:13px;letter-spacing:.1em;color:#fff;">DEXTER'S ROOM</span>
+      <span style="font-size:8px;color:var(--txt3);border:1px solid var(--line2);padding:2px 7px;letter-spacing:.1em;">DESKTOP ONLY</span>
+      <div style="flex:1;"></div>
+      <span style="display:flex;align-items:center;gap:6px;font-size:8px;color:var(--green);"><span style="width:5px;height:5px;border-radius:50%;background:var(--green);"></span>LOCAL · audio never leaves device</span>
+    </div>
+    <!-- waveform + state -->
+    <div style="height:108px;flex:none;display:flex;align-items:center;gap:16px;padding:0 18px;border-bottom:1px solid var(--line2);">
+      <div style="position:relative;width:56px;height:56px;flex:none;">
+        <div style="position:absolute;inset:0;border-radius:50%;border:1px solid var(--cyan);animation:lf-ring 2s ease-in-out infinite;"></div>
+        <div style="position:absolute;inset:7px;border-radius:50%;border:2px solid var(--cyan);display:grid;place-items:center;color:var(--cyan);font-size:8px;letter-spacing:.1em;box-shadow:0 0 18px rgba(76,194,255,.3) inset;">REC</div>
+      </div>
+      <div style="flex:1;display:flex;align-items:center;gap:2px;height:56px;">
+        <!-- waveform bars -->
+        <div style="flex:1;height:60%;background:linear-gradient(180deg,var(--cyan),rgba(76,194,255,.2));animation:lf-bars 0.9s ease-in-out infinite;"></div>
+        <div style="flex:1;height:85%;background:linear-gradient(180deg,var(--cyan),rgba(76,194,255,.2));animation:lf-bars 0.7s ease-in-out infinite;"></div>
+        <div style="flex:1;height:40%;background:linear-gradient(180deg,var(--cyan),rgba(76,194,255,.2));animation:lf-bars 1.1s ease-in-out infinite;"></div>
+        <div style="flex:1;height:95%;background:linear-gradient(180deg,var(--cyan),rgba(76,194,255,.2));animation:lf-bars 0.6s ease-in-out infinite;"></div>
+        <div style="flex:1;height:55%;background:linear-gradient(180deg,var(--cyan),rgba(76,194,255,.2));animation:lf-bars 0.85s ease-in-out infinite;"></div>
+        <div style="flex:1;height:75%;background:linear-gradient(180deg,var(--cyan),rgba(76,194,255,.2));animation:lf-bars 0.95s ease-in-out infinite;"></div>
+        <div style="flex:1;height:35%;background:linear-gradient(180deg,var(--cyan),rgba(76,194,255,.2));animation:lf-bars 1.2s ease-in-out infinite;"></div>
+        <div style="flex:1;height:88%;background:linear-gradient(180deg,var(--cyan),rgba(76,194,255,.2));animation:lf-bars 0.75s ease-in-out infinite;"></div>
+        <div style="flex:1;height:50%;background:linear-gradient(180deg,var(--cyan),rgba(76,194,255,.2));animation:lf-bars 1.05s ease-in-out infinite;"></div>
+        <div style="flex:1;height:70%;background:linear-gradient(180deg,var(--cyan),rgba(76,194,255,.2));animation:lf-bars 0.8s ease-in-out infinite;"></div>
+        <div style="flex:1;height:45%;background:linear-gradient(180deg,var(--cyan),rgba(76,194,255,.2));animation:lf-bars 1.15s ease-in-out infinite;"></div>
+        <div style="flex:1;height:80%;background:linear-gradient(180deg,var(--cyan),rgba(76,194,255,.2));animation:lf-bars 0.65s ease-in-out infinite;"></div>
+      </div>
+      <div style="flex:none;text-align:right;"><div style="font-family:'Chakra Petch';font-size:13px;color:var(--cyan);">LISTENING</div><div style="font-size:8px;color:var(--txt3);">state 4 / 14</div></div>
+    </div>
+    <!-- mode rail + context -->
+    <div style="flex:none;display:flex;align-items:center;gap:9px;padding:9px 16px;border-bottom:1px solid var(--line2);">
+      <div style="display:flex;border:1px solid var(--line2);font-size:8px;letter-spacing:.08em;">
+        <span style="padding:4px 9px;color:#04060a;background:var(--cyan);font-weight:600;">DICTATION</span><span style="padding:4px 9px;color:var(--txt3);border-left:1px solid var(--line2);">INTENT</span><span style="padding:4px 9px;color:var(--txt3);border-left:1px solid var(--line2);">ASK BILLY</span><span style="padding:4px 9px;color:var(--txt3);border-left:1px solid var(--line2);">EDIT W/ BILLY</span>
+      </div>
+      <span style="font-size:8px;color:var(--txt3);margin-left:auto;">project · screenplay · cursor @ SC.12 · text selected</span>
+    </div>
+    <!-- transcript + commit -->
+    <div style="flex:1;display:flex;min-height:0;">
+      <div style="flex:1;border-right:1px solid var(--line2);padding:11px 14px;overflow-y:auto;">
+        <div style="font-size:7.5px;letter-spacing:.18em;color:var(--txt3);margin-bottom:8px;">TRANSCRIPT · session-only</div>
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          <div style="display:flex;align-items:center;gap:8px;border-left:2px solid var(--green);padding:5px 9px;background:rgba(11,14,21,.4);"><span style="font-size:7px;color:var(--green);">COMMITTED</span><span style="font-size:9.5px;color:var(--txt2);flex:1;">She lets the hatch seal behind her.</span><span style="font-size:7px;color:var(--txt3);">2.1s</span></div>
+          <div style="display:flex;align-items:center;gap:8px;border-left:2px solid var(--cyan);padding:5px 9px;background:rgba(76,194,255,.06);"><span style="font-size:7px;color:var(--cyan);">PENDING</span><span style="font-size:9.5px;color:#fff;flex:1;">The static between them is older than the station.</span><span style="font-size:7px;color:var(--amber);">0.91</span></div>
+        </div>
+        <div style="margin-top:11px;border:1px solid var(--line-cy);background:rgba(76,194,255,.04);padding:9px 10px;">
+          <div style="font-size:7.5px;letter-spacing:.14em;color:var(--cyan);margin-bottom:5px;">INTENT PREVIEW · cleanup (no mutation)</div>
+          <div style="font-size:9px;color:var(--txt2);"><span style="color:var(--txt3);">before:</span> the static between them is older than the station</div>
+          <div style="font-size:9px;color:#eef1f6;"><span style="color:var(--txt3);">after:</span> The static between them is older than the station.</div>
+        </div>
+      </div>
+      <div style="width:300px;flex:none;padding:11px 14px;background:#06080c;">
+        <div style="font-size:7.5px;letter-spacing:.18em;color:var(--txt3);margin-bottom:8px;">COMMIT TARGET · explicit only</div>
+        <div style="display:flex;flex-direction:column;gap:5px;">
+          <div style="display:flex;align-items:center;gap:8px;border:1px solid var(--line-cy);background:rgba(76,194,255,.07);padding:6px 9px;font-size:9px;color:#fff;"><span style="color:var(--cyan);">●</span>Active cursor @ SC.12</div>
+          <div style="display:flex;align-items:center;gap:8px;border:1px solid var(--line2);padding:6px 9px;font-size:9px;color:var(--txt2);">Note</div>
+          <div style="display:flex;align-items:center;gap:8px;border:1px solid var(--line2);padding:6px 9px;font-size:9px;color:var(--txt2);">PSYKE draft entry</div>
+          <div style="display:flex;align-items:center;gap:8px;border:1px solid var(--line2);padding:6px 9px;font-size:9px;color:var(--txt3);opacity:.55;">Manuscript append <span style="margin-left:auto;font-size:7px;">disabled · safety</span></div>
+        </div>
+        <div style="display:flex;gap:7px;margin-top:11px;">
+          <span style="font-size:9px;color:#04060a;background:var(--green);padding:6px 11px;font-weight:600;">COMMIT</span>
+          <span style="font-size:9px;color:var(--txt2);border:1px solid var(--line2);padding:6px 11px;">⟲ UNDO LAST</span>
+        </div>
+        <div style="display:flex;gap:9px;margin-top:12px;align-items:center;justify-content:center;font-size:9px;color:var(--txt2);">
+          <span style="width:30px;height:30px;border-radius:50%;border:1px solid var(--blocking,#ff5260);display:grid;place-items:center;color:var(--blocking,#ff5260);">■</span>
+          <span style="width:30px;height:30px;border-radius:50%;border:1px solid var(--cyan);display:grid;place-items:center;color:var(--cyan);">▮▮</span>
+          <span style="font-size:8px;color:var(--txt3);">stop · pause</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== FRAME D · GN PAGE CANVAS ===================== -->
+<div style="position:absolute;left:80px;top:1550px;width:1180px;font-family:'JetBrains Mono',monospace;--line:rgba(232,68,58,.28);--line2:rgba(150,162,180,.10);--gn:#ff7ac6;--gn-line:rgba(255,122,198,.3);--crimson:#e8443a;--amber:#f5b133;--cyan:#4cc2ff;--green:#62d99a;--txt:#e4e8ef;--txt2:#8b95a5;--txt3:#525c6b;--accent:#ff7ac6;">
+  <div data-drags-parent="1" style="display:inline-flex;align-items:center;gap:9px;margin-bottom:11px;padding:6px 12px;background:rgba(6,8,12,.92);border:1px solid var(--gn-line);color:var(--gn);font-size:10px;letter-spacing:.2em;">
+    <span style="display:grid;place-items:center;width:16px;height:16px;background:var(--gn);color:#04060a;font-weight:700;">D</span>GRAPHIC NOVEL · PAGE CANVAS
+  </div>
+  <div data-screen-label="GN Page Canvas" style="position:relative;width:100%;height:680px;background:linear-gradient(180deg,#0c0810,#06050a);border:1px solid var(--gn-line);box-shadow:0 16px 60px rgba(0,0,0,.6);overflow:hidden;display:flex;">
+    <div style="position:absolute;top:-1px;left:-1px;width:14px;height:14px;border-top:1px solid var(--gn);border-left:1px solid var(--gn);z-index:3;"></div>
+    <div style="position:absolute;top:3px;left:3px;width:5px;height:5px;background:var(--gn);z-index:3;"></div>
+    <!-- page preview -->
+    <div style="flex:1;display:flex;flex-direction:column;border-right:1px solid var(--line2);min-width:0;">
+      <div style="height:40px;flex:none;display:flex;align-items:center;gap:11px;padding:0 16px;border-bottom:1px solid var(--gn-line);"><span style="font-family:'Chakra Petch';font-weight:600;font-size:13px;letter-spacing:.1em;color:#fff;">PAGE CANVAS</span><span style="font-size:9px;color:var(--gn);">PAGE 4 / 32</span><div style="flex:1;"></div><span style="font-size:8px;color:var(--txt3);">◂ ▸ · density: medium</span></div>
+      <div style="flex:1;display:grid;place-items:center;padding:18px;">
+        <div style="width:280px;height:100%;background:#0a0a10;border:1px solid var(--gn-line);padding:9px;display:flex;flex-direction:column;gap:8px;box-shadow:0 0 24px rgba(255,122,198,.1);">
+          <!-- splash panel -->
+          <div style="flex:2;border:1px solid var(--gn);background:rgba(255,122,198,.05);position:relative;display:grid;place-items:center;">
+            <div style="position:absolute;top:5px;left:6px;font-size:7px;color:var(--gn);">P1 · SPLASH · wide</div>
+            <div style="font-size:8px;color:var(--txt3);text-align:center;line-height:1.4;">▦<br>dead planet<br>fills the glass</div>
+            <div style="position:absolute;bottom:5px;left:6px;right:6px;font-size:7px;color:var(--txt2);background:rgba(0,0,0,.5);padding:2px 4px;">CAP: Nine years of silence.</div>
+          </div>
+          <!-- row of 2 -->
+          <div style="flex:1;display:flex;gap:8px;">
+            <div style="flex:1;border:1px solid var(--line2);background:rgba(255,255,255,.02);position:relative;display:grid;place-items:center;"><div style="position:absolute;top:4px;left:5px;font-size:7px;color:var(--txt3);">P2</div><div style="font-size:7px;color:var(--txt3);">▦</div></div>
+            <div style="flex:1;border:1px solid var(--gn);background:rgba(255,122,198,.05);position:relative;display:grid;place-items:center;"><div style="position:absolute;top:4px;left:5px;font-size:7px;color:var(--gn);">P3 ◉</div><div style="font-size:7px;color:var(--txt3);">▦</div></div>
+          </div>
+          <!-- reveal panel -->
+          <div style="flex:1;border:1px solid var(--line2);background:rgba(255,255,255,.02);position:relative;display:grid;place-items:center;"><div style="position:absolute;top:4px;left:5px;font-size:7px;color:var(--amber);">P4 · ⟳ page-turn reveal</div><div style="font-size:7px;color:var(--txt3);">▦</div></div>
+        </div>
+      </div>
+    </div>
+    <!-- panel inspector -->
+    <div style="width:380px;flex:none;background:#06080c;display:flex;flex-direction:column;overflow-y:auto;">
+      <div style="height:40px;flex:none;display:flex;align-items:center;gap:8px;padding:0 14px;border-bottom:1px solid var(--line2);"><span style="font-size:9px;letter-spacing:.16em;color:var(--gn);">PANEL 3 INSPECTOR</span><span style="margin-left:auto;font-size:8px;color:var(--txt3);">shot: CU · cam: low</span></div>
+      <div style="padding:13px 14px;">
+        <div style="font-size:7.5px;letter-spacing:.16em;color:var(--txt3);margin-bottom:4px;">VISUAL</div>
+        <div style="font-size:10px;color:var(--txt2);line-height:1.4;border:1px solid var(--line2);padding:7px 9px;margin-bottom:9px;">Vesper's reflection in the dark glass — only her eyes lit.</div>
+        <div style="font-size:7.5px;letter-spacing:.16em;color:var(--txt3);margin-bottom:4px;">DIALOGUE</div>
+        <div style="font-size:10px;color:var(--txt);border:1px solid var(--line2);padding:7px 9px;margin-bottom:9px;"><span style="color:var(--cyan);">VESPER:</span> He's counting heartbeats.</div>
+        <div style="display:flex;gap:9px;margin-bottom:11px;">
+          <div style="flex:1;"><div style="font-size:7.5px;color:var(--txt3);margin-bottom:3px;">SFX</div><div style="font-size:9px;color:var(--txt2);border:1px solid var(--line2);padding:5px 8px;">hmmmm</div></div>
+          <div style="flex:1;"><div style="font-size:7.5px;color:var(--txt3);margin-bottom:3px;">TRANSITION</div><div style="font-size:9px;color:var(--txt2);border:1px solid var(--line2);padding:5px 8px;">cut</div></div>
+        </div>
+        <div style="border:1px solid var(--gn-line);background:rgba(255,122,198,.04);padding:10px 11px;">
+          <div style="display:flex;align-items:center;gap:7px;margin-bottom:7px;"><span style="font-size:8px;letter-spacing:.14em;color:var(--gn);">AI IMAGE-PROMPT EXPORT</span><span style="margin-left:auto;font-size:7px;color:var(--amber);">ComfyUI unavailable</span></div>
+          <div style="font-size:8.5px;color:var(--txt2);line-height:1.5;margin-bottom:7px;">+ positive: CU reflection, single key light, cold palette, graphic-novel ink…<br>+ from PSYKE visual memory: VESPER silhouette, cool color-identity</div>
+          <span style="font-size:8px;color:var(--gn);border:1px solid var(--gn-line);padding:4px 9px;">COPY PROMPT PACKAGE</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== FRAME E · EXPORT STUDIO ===================== -->
+<div style="position:absolute;left:1340px;top:1550px;width:1140px;font-family:'JetBrains Mono',monospace;--line:rgba(232,68,58,.28);--line2:rgba(150,162,180,.10);--line-cy:rgba(76,194,255,.3);--crimson:#e8443a;--amber:#f5b133;--cyan:#4cc2ff;--green:#62d99a;--blocking:#ff5260;--warning:#ffb454;--txt:#e4e8ef;--txt2:#8b95a5;--txt3:#525c6b;--accent:#4cc2ff;">
+  <div data-drags-parent="1" style="display:inline-flex;align-items:center;gap:9px;margin-bottom:11px;padding:6px 12px;background:rgba(6,8,12,.92);border:1px solid var(--line);color:var(--accent);font-size:10px;letter-spacing:.2em;">
+    <span style="display:grid;place-items:center;width:16px;height:16px;background:var(--accent);color:#04060a;font-weight:700;">E</span>EXPORT STUDIO · PRE-FLIGHT
+  </div>
+  <div data-screen-label="Export Studio" style="position:relative;width:100%;height:680px;background:linear-gradient(180deg,#080a0f,#05070b);border:1px solid var(--line);box-shadow:0 16px 60px rgba(0,0,0,.6);overflow:hidden;display:flex;flex-direction:column;">
+    <div style="position:absolute;top:-1px;left:-1px;width:14px;height:14px;border-top:1px solid var(--crimson);border-left:1px solid var(--crimson);z-index:3;"></div>
+    <div style="position:absolute;top:3px;left:3px;width:5px;height:5px;background:var(--crimson);z-index:3;"></div>
+    <div style="height:40px;flex:none;display:flex;align-items:center;gap:11px;padding:0 16px;border-bottom:1px solid var(--line);"><span style="font-family:'Chakra Petch';font-weight:600;font-size:13px;letter-spacing:.1em;color:#fff;">EXPORT STUDIO</span><div style="flex:1;"></div><span style="font-size:9px;color:var(--txt2);">est. <span style="color:#fff;">112</span> pages</span></div>
+    <div style="flex:1;display:flex;min-height:0;">
+      <!-- target picker -->
+      <div style="width:220px;flex:none;border-right:1px solid var(--line2);padding:12px 13px;overflow-y:auto;">
+        <div style="font-size:7.5px;letter-spacing:.18em;color:var(--txt3);margin-bottom:7px;">MANUSCRIPT</div>
+        <div style="display:flex;flex-direction:column;gap:4px;margin-bottom:13px;font-size:9.5px;">
+          <div style="padding:5px 9px;border:1px solid var(--line2);color:var(--txt2);">PDF</div>
+          <div style="padding:5px 9px;border:1px solid var(--line2);color:var(--txt2);">DOCX</div>
+          <div style="padding:5px 9px;border:1px solid var(--line-cy);background:rgba(76,194,255,.08);color:#fff;">Fountain ●</div>
+          <div style="padding:5px 9px;border:1px solid var(--line2);color:var(--txt2);">FDX</div>
+          <div style="padding:5px 9px;border:1px solid var(--line2);color:var(--txt2);">HTML · TXT</div>
+        </div>
+        <div style="font-size:7.5px;letter-spacing:.18em;color:var(--txt3);margin-bottom:7px;">DATA</div>
+        <div style="display:flex;flex-direction:column;gap:4px;font-size:9.5px;">
+          <div style="padding:5px 9px;border:1px solid var(--line2);color:var(--txt2);">JSON</div>
+          <div style="padding:5px 9px;border:1px solid var(--line2);color:var(--txt2);">Markdown</div>
+          <div style="padding:5px 9px;border:1px solid var(--line2);color:var(--txt2);">CSV</div>
+        </div>
+      </div>
+      <!-- preview -->
+      <div style="flex:1;border-right:1px solid var(--line2);padding:14px 16px;overflow-y:auto;font-family:'Courier Prime';font-size:11px;color:var(--txt2);line-height:1.6;min-width:0;">
+        <div style="font-size:7.5px;letter-spacing:.16em;color:var(--txt3);font-family:'JetBrains Mono';margin-bottom:10px;">LIVE PREVIEW · FOUNTAIN</div>
+        <div style="color:var(--txt3);">.</div>
+        <div style="color:#fff;">INT. HELIOS-9 — OBSERVATION RING — NIGHT #12#</div>
+        <div style="margin:6px 0;">The corridor breathes. MARLOW floats at the viewport.</div>
+        <div style="text-align:center;color:#fff;">VESPER</div>
+        <div style="text-align:center;">He's counting heartbeats tonight.</div>
+        <div style="text-align:center;">Yours are loud.</div>
+        <div style="margin-top:8px;text-align:right;color:var(--txt3);">SMASH CUT TO:</div>
+      </div>
+      <!-- controls -->
+      <div style="width:240px;flex:none;padding:12px 13px;background:#06080c;overflow-y:auto;">
+        <div style="font-size:7.5px;letter-spacing:.18em;color:var(--txt3);margin-bottom:8px;">SECTIONS</div>
+        <div style="display:flex;flex-direction:column;gap:5px;font-size:9px;color:var(--txt2);margin-bottom:12px;">
+          <label style="display:flex;align-items:center;gap:7px;"><span style="width:10px;height:10px;border:1px solid var(--line-cy);background:var(--accent);"></span>Scenes</label>
+          <label style="display:flex;align-items:center;gap:7px;"><span style="width:10px;height:10px;border:1px solid var(--line-cy);background:var(--accent);"></span>Outline</label>
+          <label style="display:flex;align-items:center;gap:7px;"><span style="width:10px;height:10px;border:1px solid var(--line2);"></span>PSYKE entries</label>
+          <label style="display:flex;align-items:center;gap:7px;"><span style="width:10px;height:10px;border:1px solid var(--line2);"></span>Timeline</label>
+        </div>
+        <div style="font-size:7.5px;letter-spacing:.18em;color:var(--txt3);margin-bottom:8px;">PRODUCTION</div>
+        <label style="display:flex;align-items:center;gap:7px;font-size:9px;color:var(--txt2);margin-bottom:11px;"><span style="width:10px;height:10px;border:1px solid var(--line-cy);background:var(--accent);"></span>scene numbers + OMITTED</label>
+        <div style="font-size:7.5px;letter-spacing:.18em;color:var(--txt3);margin-bottom:8px;">STYLE PROFILE</div>
+        <div style="font-size:9px;color:var(--txt2);border:1px solid var(--line2);padding:5px 9px;">Industry · US Letter ▾</div>
+      </div>
+    </div>
+    <!-- validation pre-flight -->
+    <div style="flex:none;border-top:1px solid var(--line);padding:9px 16px;display:flex;align-items:center;gap:16px;background:rgba(6,8,12,.6);">
+      <span style="font-size:8px;letter-spacing:.16em;color:var(--amber);">PRE-FLIGHT</span>
+      <span style="display:flex;align-items:center;gap:6px;font-size:9px;color:var(--green);">✓ Fountain valid</span>
+      <span style="display:flex;align-items:center;gap:6px;font-size:9px;color:var(--warning);">△ 2 scenes missing slug</span>
+      <span style="display:flex;align-items:center;gap:6px;font-size:9px;color:var(--green);">✓ output validation</span>
+      <div style="flex:1;"></div>
+      <span style="font-size:10px;color:#04060a;background:var(--green);padding:7px 18px;font-weight:700;letter-spacing:.06em;">EXPORT</span>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== FRAME F · MODE REVIEW + PIPELINE CONFIRM ===================== -->
+<div style="position:absolute;left:80px;top:2310px;width:1180px;font-family:'JetBrains Mono',monospace;--line:rgba(232,68,58,.28);--line2:rgba(150,162,180,.10);--line-cy:rgba(76,194,255,.3);--crimson:#e8443a;--amber:#f5b133;--cyan:#4cc2ff;--green:#62d99a;--blocking:#ff5260;--warning:#ffb454;--txt:#e4e8ef;--txt2:#8b95a5;--txt3:#525c6b;--accent:#4cc2ff;">
+  <div data-drags-parent="1" style="display:inline-flex;align-items:center;gap:9px;margin-bottom:11px;padding:6px 12px;background:rgba(6,8,12,.92);border:1px solid var(--line);color:var(--accent);font-size:10px;letter-spacing:.2em;">
+    <span style="display:grid;place-items:center;width:16px;height:16px;background:var(--accent);color:#04060a;font-weight:700;">F</span>MODE REVIEW DASHBOARD + PLANNING PIPELINE CONFIRM
+  </div>
+  <div data-screen-label="Mode Review + Pipeline Confirm" style="position:relative;width:100%;height:640px;background:linear-gradient(180deg,#080a0f,#05070b);border:1px solid var(--line);box-shadow:0 16px 60px rgba(0,0,0,.6);overflow:hidden;display:flex;">
+    <div style="position:absolute;top:-1px;left:-1px;width:14px;height:14px;border-top:1px solid var(--crimson);border-left:1px solid var(--crimson);z-index:3;"></div>
+    <div style="position:absolute;top:3px;left:3px;width:5px;height:5px;background:var(--crimson);z-index:3;"></div>
+    <!-- review dashboard -->
+    <div style="flex:1;border-right:1px solid var(--line);display:flex;flex-direction:column;min-width:0;">
+      <div style="height:40px;flex:none;display:flex;align-items:center;gap:10px;padding:0 16px;border-bottom:1px solid var(--line);"><span style="font-family:'Chakra Petch';font-weight:600;font-size:13px;letter-spacing:.1em;color:#fff;">MODE REVIEW</span><span style="font-size:8px;color:var(--cyan);border:1px solid var(--line-cy);padding:2px 7px;">SCREENPLAY</span></div>
+      <div style="flex:1;overflow-y:auto;padding:13px 16px;">
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-bottom:13px;">
+          <div style="border:1px solid var(--line2);padding:9px;text-align:center;"><div style="font-family:'Chakra Petch';font-size:20px;color:#fff;">24</div><div style="font-size:7px;color:var(--txt3);letter-spacing:.1em;">SCENES</div></div>
+          <div style="border:1px solid var(--line2);padding:9px;text-align:center;"><div style="font-family:'Chakra Petch';font-size:20px;color:#fff;">112</div><div style="font-size:7px;color:var(--txt3);letter-spacing:.1em;">EST PAGES</div></div>
+          <div style="border:1px solid rgba(255,180,84,.3);padding:9px;text-align:center;"><div style="font-family:'Chakra Petch';font-size:20px;color:var(--warning);">9</div><div style="font-size:7px;color:var(--txt3);letter-spacing:.1em;">DIAGNOSTICS</div></div>
+        </div>
+        <div style="font-size:7.5px;letter-spacing:.18em;color:var(--txt3);margin-bottom:7px;">PER-SCENE STATUS</div>
+        <div style="display:flex;flex-direction:column;gap:4px;margin-bottom:13px;">
+          <div style="display:flex;align-items:center;gap:8px;font-size:9px;color:var(--txt2);padding:4px 8px;border-left:2px solid var(--green);background:rgba(11,14,21,.4);"><span style="color:var(--cyan);">SC.12</span><span style="flex:1;">Observation Ring</span><span style="color:var(--green);">strong</span></div>
+          <div style="display:flex;align-items:center;gap:8px;font-size:9px;color:var(--txt2);padding:4px 8px;border-left:2px solid var(--warning);background:rgba(11,14,21,.4);"><span style="color:var(--cyan);">SC.14</span><span style="flex:1;">The Confession</span><span style="color:var(--warning);">weak</span></div>
+          <div style="display:flex;align-items:center;gap:8px;font-size:9px;color:var(--txt2);padding:4px 8px;border-left:2px solid var(--blocking);background:rgba(11,14,21,.4);"><span style="color:var(--cyan);">SC.18</span><span style="flex:1;">Long monologue</span><span style="color:var(--blocking);">critical</span></div>
+        </div>
+        <div style="font-size:7.5px;letter-spacing:.18em;color:var(--txt3);margin-bottom:7px;">REVIEW CHECKS · mode lint</div>
+        <div style="display:flex;flex-direction:column;gap:4px;font-size:9px;color:var(--txt2);">
+          <div style="display:flex;gap:8px;"><span style="color:var(--green);">✓</span>every scene has a turn</div>
+          <div style="display:flex;gap:8px;"><span style="color:var(--warning);">△</span>parenthetical overuse · SC.14</div>
+          <div style="display:flex;gap:8px;"><span style="color:var(--blocking);">✕</span>SC.18 single-voice monologue</div>
+        </div>
+      </div>
+    </div>
+    <!-- pipeline confirm -->
+    <div style="width:430px;flex:none;display:flex;flex-direction:column;background:#06080c;">
+      <div style="height:40px;flex:none;display:flex;align-items:center;gap:8px;padding:0 14px;border-bottom:1px solid var(--line2);"><span style="font-size:9px;letter-spacing:.14em;color:var(--amber);">PLANNING PIPELINE · CONFIRM</span></div>
+      <div style="flex:1;overflow-y:auto;padding:13px 14px;">
+        <div style="font-size:9px;color:var(--txt2);line-height:1.5;margin-bottom:11px;">Generate <span style="color:#fff;">Beat Plan</span> → preview → per-beat accept → <span style="color:var(--amber);">additive apply (separate artifact, never the body)</span></div>
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          <div style="display:flex;align-items:center;gap:8px;border:1px solid var(--line2);padding:7px 9px;"><span style="font-size:8px;color:var(--green);">✓</span><span style="font-size:9.5px;color:var(--txt);flex:1;">B1 · Catalyst — the signal returns</span></div>
+          <div style="display:flex;align-items:center;gap:8px;border:1px solid var(--line2);padding:7px 9px;"><span style="font-size:8px;color:var(--green);">✓</span><span style="font-size:9.5px;color:var(--txt);flex:1;">B2 · Debate — should they answer?</span></div>
+          <div style="display:flex;align-items:center;gap:8px;border:1px solid var(--line2);padding:7px 9px;opacity:.5;"><span style="font-size:8px;color:var(--txt3);">○</span><span style="font-size:9.5px;color:var(--txt2);flex:1;">B3 · Break Into Two — open the box</span><span style="font-size:7px;color:var(--txt3);">reject</span></div>
+        </div>
+        <div style="border:1px solid rgba(98,217,154,.25);background:rgba(98,217,154,.04);padding:8px 10px;margin-top:11px;font-size:8px;color:var(--green);line-height:1.5;">✓ STAGE checkpoint · additive · 2 of 3 beats · stored in screenplay_beat_plans</div>
+        <div style="display:flex;gap:8px;margin-top:11px;">
+          <span style="font-size:9px;color:#04060a;background:var(--green);padding:7px 13px;font-weight:600;">APPLY 2 BEATS</span>
+          <span style="font-size:9px;color:var(--txt2);border:1px solid var(--line2);padding:7px 13px;">CANCEL</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== FRAME G · CROSS-CUTTING ===================== -->
+<div style="position:absolute;left:1340px;top:2310px;width:1140px;font-family:'JetBrains Mono',monospace;--line:rgba(232,68,58,.28);--line2:rgba(150,162,180,.10);--line-cy:rgba(76,194,255,.3);--crimson:#e8443a;--amber:#f5b133;--cyan:#4cc2ff;--green:#62d99a;--violet:#b07cff;--txt:#e4e8ef;--txt2:#8b95a5;--txt3:#525c6b;--accent:#4cc2ff;">
+  <div data-drags-parent="1" style="display:inline-flex;align-items:center;gap:9px;margin-bottom:11px;padding:6px 12px;background:rgba(6,8,12,.92);border:1px solid var(--line);color:var(--accent);font-size:10px;letter-spacing:.2em;">
+    <span style="display:grid;place-items:center;width:16px;height:16px;background:var(--accent);color:#04060a;font-weight:700;">G</span>CROSS-CUTTING · LAUNCHPAD + SETTINGS
+  </div>
+  <div data-screen-label="Cross-cutting" style="position:relative;width:100%;height:640px;background:linear-gradient(180deg,#080a0f,#05070b);border:1px solid var(--line);box-shadow:0 16px 60px rgba(0,0,0,.6);overflow:hidden;display:flex;flex-direction:column;">
+    <div style="position:absolute;top:-1px;left:-1px;width:14px;height:14px;border-top:1px solid var(--crimson);border-left:1px solid var(--crimson);z-index:3;"></div>
+    <div style="position:absolute;top:3px;left:3px;width:5px;height:5px;background:var(--crimson);z-index:3;"></div>
+    <!-- launchpad -->
+    <div style="flex:none;padding:13px 16px;border-bottom:1px solid var(--line);">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:11px;"><span style="font-family:'Chakra Petch';font-weight:600;font-size:13px;letter-spacing:.1em;color:#fff;">PROJECT LAUNCHPAD</span><div style="flex:1;"></div><span style="font-size:8px;color:#04060a;background:var(--accent);padding:3px 9px;font-weight:600;">＋ NEW PROJECT</span></div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;">
+        <div style="border:1px solid var(--line-cy);background:rgba(76,194,255,.05);padding:11px;position:relative;">
+          <div style="height:3px;background:var(--cyan);margin:-11px -11px 9px;"></div>
+          <div style="font-family:'Chakra Petch';font-size:14px;color:#fff;">NULL HORIZON</div>
+          <div style="font-size:8px;color:var(--txt3);margin:3px 0 8px;">Screenplay · Feature · 18,432w</div>
+          <svg viewBox="0 0 120 18" style="width:100%;height:18px;"><polyline points="0,14 20,10 40,12 60,6 80,9 100,4 120,8" fill="none" stroke="var(--cyan)" stroke-width="1.2"/></svg>
+          <div style="display:flex;align-items:center;gap:6px;margin-top:7px;"><span style="font-size:7px;color:var(--green);border:1px solid rgba(98,217,154,.3);padding:1px 5px;">DROPBOX</span><span style="font-size:7px;color:var(--txt3);">2h ago</span></div>
+        </div>
+        <div style="border:1px solid var(--line2);background:rgba(11,14,21,.4);padding:11px;">
+          <div style="height:3px;background:var(--violet);margin:-11px -11px 9px;"></div>
+          <div style="font-family:'Chakra Petch';font-size:14px;color:var(--txt);">SALT FLATS</div>
+          <div style="font-size:8px;color:var(--txt3);margin:3px 0 8px;">Novel · Prose · 64,210w</div>
+          <svg viewBox="0 0 120 18" style="width:100%;height:18px;"><polyline points="0,8 20,6 40,10 60,5 80,12 100,7 120,4" fill="none" stroke="var(--violet)" stroke-width="1.2"/></svg>
+          <div style="display:flex;align-items:center;gap:6px;margin-top:7px;"><span style="font-size:7px;color:var(--txt3);border:1px solid var(--line2);padding:1px 5px;">LOCAL</span><span style="font-size:7px;color:var(--amber);">⊘ open on STUDIO-2</span></div>
+        </div>
+        <div style="border:1px dashed var(--line2);background:transparent;padding:11px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;color:var(--txt3);">
+          <span style="font-size:18px;">＋</span><span style="font-size:8px;letter-spacing:.1em;">OPEN · IMPORT</span>
+        </div>
+      </div>
+    </div>
+    <!-- settings -->
+    <div style="flex:1;display:flex;min-height:0;">
+      <div style="flex:1;border-right:1px solid var(--line2);padding:12px 16px;overflow-y:auto;">
+        <div style="font-size:9px;letter-spacing:.14em;color:var(--txt2);margin-bottom:10px;font-family:'Chakra Petch';">SETTINGS</div>
+        <div style="font-size:7.5px;letter-spacing:.16em;color:var(--txt3);margin-bottom:7px;">APPEARANCE · 3 PALETTES</div>
+        <div style="display:flex;gap:8px;margin-bottom:13px;">
+          <div style="flex:1;border:1px solid var(--line-cy);padding:7px;text-align:center;background:#05070b;"><div style="display:flex;gap:3px;justify-content:center;margin-bottom:5px;"><span style="width:9px;height:9px;background:#04060a;border:1px solid #333;"></span><span style="width:9px;height:9px;background:var(--cyan);"></span><span style="width:9px;height:9px;background:var(--crimson);"></span></div><span style="font-size:7px;color:#fff;">DARK ●</span></div>
+          <div style="flex:1;border:1px solid var(--line2);padding:7px;text-align:center;"><div style="display:flex;gap:3px;justify-content:center;margin-bottom:5px;"><span style="width:9px;height:9px;background:#eef2ec;"></span><span style="width:9px;height:9px;background:#3a7d44;"></span></div><span style="font-size:7px;color:var(--txt3);">LIGHT GREEN</span></div>
+          <div style="flex:1;border:1px solid var(--line2);padding:7px;text-align:center;"><div style="display:flex;gap:3px;justify-content:center;margin-bottom:5px;"><span style="width:9px;height:9px;background:#f4efe6;"></span><span style="width:9px;height:9px;background:#b06a3a;"></span></div><span style="font-size:7px;color:var(--txt3);">LIGHT WARM</span></div>
+        </div>
+        <div style="font-size:7.5px;letter-spacing:.16em;color:var(--txt3);margin-bottom:7px;">AI PROVIDER</div>
+        <div style="display:flex;gap:8px;font-size:9px;">
+          <div style="flex:1;border:1px solid var(--line-cy);background:rgba(76,194,255,.06);padding:7px 9px;color:#fff;">● Local · desktop<div style="font-size:7px;color:var(--txt3);margin-top:2px;">qwen-2.5-32b</div></div>
+          <div style="flex:1;border:1px solid var(--line2);padding:7px 9px;color:var(--txt2);">Remote · web<div style="font-size:7px;color:var(--txt3);margin-top:2px;">configured host</div></div>
+        </div>
+      </div>
+      <div style="width:380px;flex:none;padding:12px 14px;background:#06080c;overflow-y:auto;">
+        <div style="font-size:7.5px;letter-spacing:.16em;color:var(--txt3);margin-bottom:8px;">WHAT THE AI SEES · context board</div>
+        <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:11px;">
+          <span style="font-size:8px;color:var(--green);border:1px solid rgba(98,217,154,.3);padding:2px 7px;">✓ Outline</span>
+          <span style="font-size:8px;color:var(--green);border:1px solid rgba(98,217,154,.3);padding:2px 7px;">✓ Story Bible</span>
+          <span style="font-size:8px;color:var(--green);border:1px solid rgba(98,217,154,.3);padding:2px 7px;">✓ Graph</span>
+          <span style="font-size:8px;color:var(--green);border:1px solid rgba(98,217,154,.3);padding:2px 7px;">✓ Memory ×20</span>
+          <span style="font-size:8px;color:var(--txt3);border:1px solid var(--line2);padding:2px 7px;">✕ Health</span>
+        </div>
+        <div style="font-size:7.5px;letter-spacing:.16em;color:var(--txt3);margin-bottom:8px;">CONNECTOR PERMISSIONS</div>
+        <div style="display:flex;flex-direction:column;gap:5px;font-size:9px;color:var(--txt2);">
+          <label style="display:flex;align-items:center;gap:7px;"><span style="width:10px;height:10px;border:1px solid var(--line-cy);background:var(--accent);"></span>connector enabled</label>
+          <label style="display:flex;align-items:center;gap:7px;"><span style="width:10px;height:10px;border:1px solid var(--line2);"></span>allow writes <span style="font-size:7px;color:var(--amber);">· confirm each</span></label>
+        </div>
+        <div style="font-size:7px;color:var(--txt3);margin-top:10px;line-height:1.5;letter-spacing:.04em;">17 actions · 13 reads · 4 writes · every write previews → confirms → undo</div>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

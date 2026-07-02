@@ -1,0 +1,50 @@
+appId: com.logosforge.whiteboard
+productName: LogosForge Whiteboard
+copyright: Copyright © LogosForge
+directories:
+  output: release
+asar: true
+# Pack only the Electron shell + renderer. The renderer is a self-contained Vite
+# bundle and the main process has no third-party runtime deps, so no node_modules
+# need packing.
+files:
+  - dist-electron/**/*
+  - renderer/dist/**/*
+  - package.json
+# The PyInstaller-frozen Python backend (it wraps the core in-process) ships as an
+# unpacked sidecar tree under resources/backend and is spawned on startup — no
+# Python needed on the user's machine. Built by
+# ../backend/logosforge-whiteboard-backend.spec (see the release-whiteboard-windows
+# GitHub Actions workflow). The dir must exist before `electron-builder` runs.
+extraResources:
+  - from: ../backend/dist/logosforge-whiteboard-backend
+    to: backend
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+  artifactName: ${productName}-${version}-${arch}.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: LogosForge Whiteboard
+portable:
+  artifactName: ${productName}-${version}-${arch}-portable.${ext}
+# macOS Intel (x64) DMG. The same extraResources/files apply — on a macOS runner
+# the PyInstaller step produces a native (x64) backend at the same path. UNSIGNED
+# (identity: null): Gatekeeper will warn until an Apple Developer ID + notarization
+# are configured. Apple Silicon / universal are a later milestone.
+mac:
+  category: public.app-category.productivity
+  identity: null
+  target:
+    - target: dmg
+      arch: [x64]
+  artifactName: ${productName}-${version}-${arch}.${ext}
+dmg:
+  artifactName: ${productName}-${version}-${arch}.${ext}

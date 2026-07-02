@@ -1,0 +1,8 @@
+{
+  "id": "idea_di_controllo",
+  "name": "Idea di Controllo",
+  "version": "1.0.0",
+  "author": "Logosforge",
+  "description": "PSYKE-aware narrative compass. Uses McKee's Controlling Idea (VALUE + CAUSE) to guide PSYKE links and drive Assistant responses. Adds /idea commands and an Assistant toggle.",
+  "enabled_by_default": true
+}

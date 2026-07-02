@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:ital,wght@0,400;0,500;0,600;0,700;1,500;1,600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;}
+  ::selection{background:rgba(76,194,255,.28);color:#fff;}
+  ::-webkit-scrollbar{width:7px;height:7px;}
+  ::-webkit-scrollbar-thumb{background:rgba(232,68,58,.32);}
+  ::-webkit-scrollbar-track{background:transparent;}
+  @keyframes lf-pulse{0%,100%{opacity:.4;}50%{opacity:1;}}
+  @keyframes lf-halo{0%,100%{opacity:.3;transform:scale(1);}50%{opacity:.65;transform:scale(1.12);}}
+  @keyframes lf-dash{to{stroke-dashoffset:-30;}}
+  @keyframes lf-flow{to{stroke-dashoffset:-60;}}
+</style>
+</helmet>
+
+<!-- ===================== FRAME A · KNOWLEDGE GRAPH ===================== -->
+<div style="position:absolute;left:80px;top:130px;width:1760px;font-family:'JetBrains Mono',monospace;--line:rgba(232,68,58,.28);--line2:rgba(150,162,180,.10);--line-cy:rgba(76,194,255,.3);--crimson:#e8443a;--amber:#f5b133;--amber-b:#ffcf4a;--cyan:#4cc2ff;--green:#62d99a;--violet:#b07cff;--pink:#ff7ac6;--blocking:#ff5260;--warning:#ffb454;--txt:#e4e8ef;--txt2:#8b95a5;--txt3:#525c6b;--accent:{{ accent }};">
+  <div data-drags-parent="1" style="display:inline-flex;align-items:center;gap:9px;margin-bottom:11px;padding:6px 12px;background:rgba(6,8,12,.92);border:1px solid var(--line);color:var(--accent,#4cc2ff);font-size:10px;letter-spacing:.2em;">
+    <span style="display:grid;place-items:center;width:16px;height:16px;background:var(--accent,#4cc2ff);color:#04060a;font-weight:700;">A</span>KNOWLEDGE GRAPH · STORY HUD
+  </div>
+  <div data-screen-label="Knowledge Graph" style="position:relative;width:100%;height:1000px;background:radial-gradient(70% 60% at 40% 45%,#0a0e16,#040609 78%);border:1px solid var(--line);box-shadow:0 16px 60px rgba(0,0,0,.6);overflow:hidden;display:flex;flex-direction:column;">
+    <div style="position:absolute;top:-1px;left:-1px;width:14px;height:14px;border-top:1px solid var(--crimson);border-left:1px solid var(--crimson);z-index:9;"></div>
+    <div style="position:absolute;top:3px;left:3px;width:5px;height:5px;background:var(--crimson);z-index:9;"></div>
+
+    <!-- toolbar -->
+    <div style="height:44px;flex:none;display:flex;align-items:center;gap:13px;padding:0 16px;border-bottom:1px solid var(--line);background:rgba(6,8,12,.7);z-index:5;">
+      <span style="font-family:'Chakra Petch';font-weight:600;font-size:14px;letter-spacing:.12em;color:#fff;">KNOWLEDGE GRAPH</span>
+      <div style="display:flex;align-items:center;gap:7px;width:200px;height:24px;padding:0 9px;border:1px solid var(--line2);color:var(--txt3);font-size:10px;"><span style="color:var(--accent,#4cc2ff);">⌕</span>focus a node…</div>
+      <span style="font-size:9px;color:var(--txt2);letter-spacing:.08em;">MODE <span style="color:var(--accent,#4cc2ff);">CHARACTER WEB</span> ▾</span>
+      <span style="font-size:9px;color:var(--txt2);letter-spacing:.08em;">LAYOUT <span style="color:var(--txt);">FORCE</span> ▾</span>
+      <span style="font-size:9px;color:var(--txt2);letter-spacing:.08em;">LABELS <span style="color:var(--txt);">FOCUS</span> ▾</span>
+      <div style="flex:1;"></div>
+      <span style="font-size:9px;color:var(--accent,#4cc2ff);letter-spacing:.1em;">⊹ GRAVITY</span>
+      <span style="font-size:9px;color:var(--txt2);letter-spacing:.1em;">FIT</span>
+      <span style="font-size:9px;color:var(--txt2);letter-spacing:.1em;">RESET</span>
+    </div>
+
+    <div style="flex:1;display:flex;min-height:0;">
+      <!-- LAYERS / FILTERS -->
+      <div style="width:198px;flex:none;border-right:1px solid var(--line);background:#06080c;overflow-y:auto;padding:12px 11px;">
+        <div style="font-size:7.5px;letter-spacing:.22em;color:var(--txt3);margin-bottom:8px;">LAYERS · NODE TYPES</div>
+        <div style="display:flex;flex-direction:column;gap:5px;font-size:9.5px;">
+          <label style="display:flex;align-items:center;gap:8px;color:var(--txt);"><span style="width:10px;height:10px;background:var(--cyan);"></span><span style="color:var(--cyan);">◆</span>Character <span style="margin-left:auto;color:var(--txt3);">19</span></label>
+          <label style="display:flex;align-items:center;gap:8px;color:var(--txt);"><span style="width:10px;height:10px;background:var(--amber);"></span><span style="color:var(--amber);">▲</span>Place <span style="margin-left:auto;color:var(--txt3);">8</span></label>
+          <label style="display:flex;align-items:center;gap:8px;color:var(--txt);"><span style="width:10px;height:10px;background:var(--violet);"></span><span style="color:var(--violet);">◇</span>Object <span style="margin-left:auto;color:var(--txt3);">6</span></label>
+          <label style="display:flex;align-items:center;gap:8px;color:var(--txt);"><span style="width:10px;height:10px;background:var(--pink);"></span><span style="color:var(--pink);">✦</span>Theme <span style="margin-left:auto;color:var(--txt3);">4</span></label>
+          <label style="display:flex;align-items:center;gap:8px;color:var(--txt);"><span style="width:10px;height:10px;background:#5a78ff;"></span><span style="color:#5a78ff;">●</span>Scene <span style="margin-left:auto;color:var(--txt3);">24</span></label>
+          <label style="display:flex;align-items:center;gap:8px;color:var(--txt3);"><span style="width:10px;height:10px;border:1px solid var(--txt3);"></span><span>▭</span>Act <span style="margin-left:auto;color:var(--txt3);">OFF</span></label>
+        </div>
+        <div style="font-size:7.5px;letter-spacing:.22em;color:var(--txt3);margin:14px 0 8px;">VIEW</div>
+        <div style="display:flex;flex-direction:column;gap:6px;font-size:9px;color:var(--txt2);">
+          <label style="display:flex;align-items:center;gap:7px;"><span style="width:10px;height:10px;border:1px solid var(--line2);"></span>skeleton only</label>
+          <label style="display:flex;align-items:center;gap:7px;"><span style="width:10px;height:10px;border:1px solid var(--line-cy);background:var(--accent,#4cc2ff);"></span>hide isolated</label>
+          <label style="display:flex;align-items:center;gap:7px;"><span style="width:10px;height:10px;border:1px solid var(--line2);"></span>mention edges</label>
+          <label style="display:flex;align-items:center;gap:7px;"><span style="width:10px;height:10px;border:1px solid var(--line-cy);background:var(--accent,#4cc2ff);"></span>2-hop expand</label>
+        </div>
+        <div style="font-size:7.5px;letter-spacing:.22em;color:var(--txt3);margin:14px 0 8px;">PHASE-10P</div>
+        <div style="font-size:8.5px;color:var(--txt2);margin-bottom:5px;">confidence_min</div>
+        <div style="height:5px;background:rgba(255,255,255,.06);margin-bottom:4px;position:relative;"><div style="width:55%;height:100%;background:var(--green);"></div><div style="position:absolute;left:55%;top:-3px;width:3px;height:11px;background:#fff;"></div></div>
+        <div style="display:flex;justify-content:space-between;font-size:7px;color:var(--txt3);margin-bottom:9px;"><span>possible</span><span style="color:var(--green);">likely</span><span>confirmed</span></div>
+        <label style="display:flex;align-items:center;gap:7px;font-size:9px;color:var(--txt2);"><span style="width:10px;height:10px;border:1px solid var(--line-cy);background:var(--accent,#4cc2ff);"></span>include inferred</label>
+        <div style="font-size:7.5px;letter-spacing:.22em;color:var(--txt3);margin:14px 0 7px;">TEMPORAL</div>
+        <div style="height:5px;background:rgba(255,255,255,.06);position:relative;"><div style="width:50%;height:100%;background:var(--amber);"></div><div style="position:absolute;left:50%;top:-3px;width:3px;height:11px;background:var(--amber-b);"></div></div>
+        <div style="display:flex;justify-content:space-between;font-size:7px;color:var(--txt3);margin-top:3px;"><span>SC.1</span><span style="color:var(--amber);">≤ SC.12</span><span>SC.24</span></div>
+      </div>
+
+      <!-- GRAPH CANVAS -->
+      <div style="flex:1;min-width:0;position:relative;overflow:hidden;display:grid;place-items:center;">
+        <div style="position:relative;width:1130px;height:600px;">
+          <!-- act bands -->
+          <div style="position:absolute;left:0;top:0;bottom:0;width:33%;background:linear-gradient(90deg,rgba(76,194,255,.04),transparent);border-right:1px dashed rgba(150,162,180,.08);"></div>
+          <div style="position:absolute;left:33%;top:0;bottom:0;width:34%;background:linear-gradient(90deg,rgba(245,177,51,.03),transparent);border-right:1px dashed rgba(150,162,180,.08);"></div>
+          <div style="position:absolute;left:14px;top:8px;font-size:8px;letter-spacing:.2em;color:rgba(150,162,180,.4);">ACT I</div>
+          <div style="position:absolute;left:39%;top:8px;font-size:8px;letter-spacing:.2em;color:rgba(150,162,180,.4);">ACT II</div>
+          <div style="position:absolute;left:72%;top:8px;font-size:8px;letter-spacing:.2em;color:rgba(150,162,180,.4);">ACT III</div>
+
+          <!-- edges -->
+          <svg viewBox="0 0 1130 600" style="position:absolute;inset:0;width:100%;height:100%;z-index:1;">
+            <defs>
+              <linearGradient id="flowg" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#62d99a"/><stop offset="0.5" stop-color="#f5b133"/><stop offset="1" stop-color="#b07cff"/>
+              </linearGradient>
+              <marker id="g-cr" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6" fill="none" stroke="#e8443a" stroke-width="1.1"/></marker>
+              <marker id="g-am" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6" fill="none" stroke="#f5b133" stroke-width="1.1"/></marker>
+            </defs>
+            <!-- flow arc (story order, green→gold→violet) -->
+            <path d="M205,335 C 320,250 410,250 475,330 S 700,500 825,495" fill="none" stroke="url(#flowg)" stroke-width="3" opacity=".55" stroke-dasharray="2 9" stroke-linecap="round" style="animation:lf-flow 2.6s linear infinite;"/>
+            <!-- relations / participation -->
+            <line x1="385" y1="305" x2="560" y2="205" stroke="#4cc2ff" stroke-width="2" opacity=".8"/>
+            <line x1="385" y1="305" x2="760" y2="360" stroke="#e8443a" stroke-width="1.7" marker-end="url(#g-cr)" opacity=".75"/>
+            <line x1="475" y1="330" x2="385" y2="305" stroke="#4cc2ff" stroke-width="1.3" opacity=".6"/>
+            <line x1="475" y1="330" x2="560" y2="205" stroke="#4cc2ff" stroke-width="1.3" opacity=".6"/>
+            <line x1="385" y1="305" x2="300" y2="440" stroke="#8b95a5" stroke-width="1.1" opacity=".4"/>
+            <line x1="250" y1="185" x2="385" y2="305" stroke="#4cc2ff" stroke-width="1.2" opacity=".5"/>
+            <line x1="640" y1="470" x2="560" y2="205" stroke="#f5b133" stroke-width="1.5" marker-end="url(#g-am)" opacity=".7"/>
+            <!-- inferred (dashed translucent) -->
+            <line x1="660" y1="120" x2="820" y2="490" stroke="#62d99a" stroke-width="1.3" stroke-dasharray="6 5" opacity=".5" style="animation:lf-dash 1.8s linear infinite;"/>
+            <line x1="850" y1="220" x2="560" y2="205" stroke="#ff7ac6" stroke-width="1.2" stroke-dasharray="3 5" opacity=".45"/>
+            <line x1="850" y1="220" x2="385" y2="305" stroke="#ff7ac6" stroke-width="1.2" stroke-dasharray="3 5" opacity=".4"/>
+            <line x1="900" y1="420" x2="760" y2="360" stroke="#ff7ac6" stroke-width="1.1" stroke-dasharray="3 5" opacity=".35"/>
+          </svg>
+
+          <!-- nodes -->
+          <div style="position:absolute;left:385px;top:305px;transform:translate(-50%,-50%);z-index:3;text-align:center;">
+            <div style="position:absolute;left:50%;top:38px;transform:translate(-50%,-50%);width:108px;height:108px;border-radius:50%;border:1px solid var(--cyan);animation:lf-halo 3s ease-in-out infinite;"></div>
+            <div style="width:76px;height:76px;border-radius:50%;border:2px solid var(--cyan);background:radial-gradient(circle,rgba(76,194,255,.35),rgba(76,194,255,.05));display:grid;place-items:center;color:#fff;font-size:23px;box-shadow:0 0 34px rgba(76,194,255,.55);">◆</div>
+            <div style="font-family:'Chakra Petch';font-size:13px;color:#fff;margin-top:5px;letter-spacing:.04em;">MARLOW</div>
+            <div style="font-size:7px;color:var(--accent,#4cc2ff);letter-spacing:.16em;">◉ FOCUS · g .91</div>
+          </div>
+          <div style="position:absolute;left:560px;top:205px;transform:translate(-50%,-50%);z-index:3;text-align:center;">
+            <div style="width:58px;height:58px;border-radius:50%;border:2px solid var(--cyan);background:radial-gradient(circle,rgba(76,194,255,.28),rgba(76,194,255,.04));display:grid;place-items:center;color:#fff;font-size:18px;box-shadow:0 0 24px rgba(76,194,255,.4);">◆</div>
+            <div style="font-family:'Chakra Petch';font-size:11px;color:#fff;margin-top:4px;">VESPER</div>
+          </div>
+          <div style="position:absolute;left:760px;top:360px;transform:translate(-50%,-50%);z-index:3;text-align:center;">
+            <div style="width:50px;height:50px;border-radius:50%;border:2px solid var(--crimson);background:radial-gradient(circle,rgba(232,68,58,.3),transparent);display:grid;place-items:center;color:var(--crimson);font-size:16px;box-shadow:0 0 20px rgba(232,68,58,.4);">◆</div>
+            <div style="font-family:'Chakra Petch';font-size:10px;color:#fff;margin-top:3px;">THE WARDEN</div>
+          </div>
+          <div style="position:absolute;left:250px;top:185px;transform:translate(-50%,-50%);z-index:3;text-align:center;opacity:.55;">
+            <div style="width:34px;height:34px;border-radius:50%;border:1px solid var(--cyan);background:rgba(76,194,255,.06);display:grid;place-items:center;color:var(--cyan);font-size:11px;">◆</div>
+            <div style="font-family:'Chakra Petch';font-size:9px;color:var(--txt2);margin-top:3px;">ARI</div>
+          </div>
+          <div style="position:absolute;left:300px;top:440px;transform:translate(-50%,-50%);z-index:3;text-align:center;">
+            <div style="width:44px;height:44px;border-radius:50%;border:2px solid var(--amber);background:radial-gradient(circle,rgba(245,177,51,.22),transparent);display:grid;place-items:center;color:var(--amber);font-size:14px;box-shadow:0 0 16px rgba(245,177,51,.3);">▲</div>
+            <div style="font-family:'Chakra Petch';font-size:10px;color:var(--txt);margin-top:3px;">HELIOS-9</div>
+          </div>
+          <div style="position:absolute;left:660px;top:120px;transform:translate(-50%,-50%);z-index:3;text-align:center;opacity:.85;">
+            <div style="width:40px;height:40px;border-radius:50%;border:2px solid var(--violet);background:radial-gradient(circle,rgba(176,124,255,.2),transparent);display:grid;place-items:center;color:var(--violet);font-size:13px;">◇</div>
+            <div style="font-family:'Chakra Petch';font-size:9px;color:var(--txt);margin-top:3px;">BLACK BOX</div>
+          </div>
+          <div style="position:absolute;left:850px;top:220px;transform:translate(-50%,-50%);z-index:3;text-align:center;opacity:.8;">
+            <div style="width:46px;height:46px;border-radius:50%;border:2px solid var(--pink);background:radial-gradient(circle,rgba(255,122,198,.2),transparent);display:grid;place-items:center;color:var(--pink);font-size:14px;box-shadow:0 0 16px rgba(255,122,198,.25);">✦</div>
+            <div style="font-family:'Chakra Petch';font-size:10px;color:var(--txt);margin-top:3px;">STATIC</div>
+          </div>
+          <div style="position:absolute;left:900px;top:420px;transform:translate(-50%,-50%);z-index:3;text-align:center;opacity:.5;">
+            <div style="width:32px;height:32px;border-radius:50%;border:1px solid var(--pink);background:rgba(255,122,198,.06);display:grid;place-items:center;color:var(--pink);font-size:11px;">✦</div>
+            <div style="font-family:'Chakra Petch';font-size:8px;color:var(--txt2);margin-top:3px;">SILENCE</div>
+          </div>
+          <div style="position:absolute;left:640px;top:470px;transform:translate(-50%,-50%);z-index:3;text-align:center;opacity:.85;">
+            <div style="width:38px;height:38px;border-radius:50%;border:2px solid var(--green);background:radial-gradient(circle,rgba(98,217,154,.18),transparent);display:grid;place-items:center;color:var(--green);font-size:11px;">⬢</div>
+            <div style="font-family:'Chakra Petch';font-size:9px;color:var(--txt);margin-top:3px;">KESSLER</div>
+          </div>
+          <!-- scene nodes -->
+          <div style="position:absolute;left:205px;top:335px;transform:translate(-50%,-50%);z-index:2;text-align:center;opacity:.5;"><div style="width:22px;height:22px;border-radius:50%;border:1px solid #5a78ff;background:rgba(90,120,255,.1);display:grid;place-items:center;color:#5a78ff;font-size:8px;">●</div><div style="font-size:7px;color:var(--txt3);margin-top:2px;">SC.04</div></div>
+          <div style="position:absolute;left:475px;top:330px;transform:translate(-50%,-50%);z-index:2;text-align:center;"><div style="width:28px;height:28px;border-radius:50%;border:1.5px solid #5a78ff;background:rgba(90,120,255,.18);display:grid;place-items:center;color:#8fa6ff;font-size:9px;box-shadow:0 0 12px rgba(90,120,255,.4);">●</div><div style="font-size:7px;color:var(--accent,#4cc2ff);margin-top:2px;">SC.12 ◉</div></div>
+          <div style="position:absolute;left:825px;top:495px;transform:translate(-50%,-50%);z-index:2;text-align:center;opacity:.55;"><div style="width:22px;height:22px;border-radius:50%;border:1px solid #5a78ff;background:rgba(90,120,255,.1);display:grid;place-items:center;color:#5a78ff;font-size:8px;">●</div><div style="font-size:7px;color:var(--txt3);margin-top:2px;">SC.21</div></div>
+
+          <!-- minimap -->
+          <div style="position:absolute;right:8px;bottom:8px;width:130px;height:78px;border:1px solid var(--line2);background:rgba(4,6,9,.7);z-index:4;">
+            <div style="position:absolute;left:18px;top:30px;width:5px;height:5px;border-radius:50%;background:var(--cyan);"></div>
+            <div style="position:absolute;left:46px;top:18px;width:4px;height:4px;border-radius:50%;background:var(--cyan);"></div>
+            <div style="position:absolute;left:70px;top:36px;width:3px;height:3px;border-radius:50%;background:var(--crimson);"></div>
+            <div style="position:absolute;left:85px;top:22px;width:3px;height:3px;border-radius:50%;background:var(--pink);"></div>
+            <div style="position:absolute;left:14px;top:14px;width:60px;height:42px;border:1px solid var(--accent,#4cc2ff);background:rgba(76,194,255,.06);"></div>
+            <div style="position:absolute;left:5px;top:3px;font-size:6px;letter-spacing:.1em;color:var(--txt3);">GRAVITY MAP</div>
+          </div>
+          <!-- legend -->
+          <div style="position:absolute;left:8px;bottom:8px;background:rgba(4,6,9,.8);border:1px solid var(--line2);padding:7px 10px;z-index:4;font-size:8px;color:var(--txt2);">
+            <div style="display:flex;gap:11px;"><span><span style="color:#fff;">━</span> confirmed</span><span><span style="color:var(--txt2);">┅</span> inferred</span></div>
+            <div style="display:flex;gap:11px;margin-top:3px;"><span style="color:var(--green);">flow ●</span><span style="color:var(--amber);">●</span><span style="color:var(--violet);">● begin→end</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- INSPECTOR + INSIGHTS -->
+      <div style="width:372px;flex:none;border-left:1px solid var(--line);background:#06080c;display:flex;flex-direction:column;overflow:hidden;">
+        <div style="flex:none;height:30px;display:flex;align-items:center;justify-content:space-between;padding:0 13px;border-bottom:1px solid var(--line);background:rgba(76,194,255,.04);">
+          <span style="font-size:8.5px;letter-spacing:.22em;color:var(--accent,#4cc2ff);">INSPECTOR · explain_node</span>
+          <span style="font-size:8px;color:var(--txt3);">⠿</span>
+        </div>
+        <div style="flex:none;padding:13px;border-bottom:1px solid var(--line2);">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+            <span style="width:30px;height:30px;display:grid;place-items:center;border:1px solid var(--cyan);color:var(--cyan);font-size:14px;">◆</span>
+            <div><div style="font-family:'Chakra Petch';font-size:15px;color:#fff;">MARLOW</div><div style="font-size:8px;color:var(--txt3);letter-spacing:.1em;">CHARACTER · 14 SCENES</div></div>
+            <span style="margin-left:auto;font-size:7px;color:var(--green);border:1px solid rgba(98,217,154,.35);padding:2px 6px;letter-spacing:.06em;">USER-CONFIRMED</span>
+          </div>
+          <div style="font-size:7.5px;letter-spacing:.18em;color:var(--txt3);margin-bottom:6px;">STORY GRAVITY · 0.91</div>
+          <div style="display:flex;flex-direction:column;gap:5px;margin-bottom:11px;">
+            <div style="display:flex;align-items:center;gap:7px;font-size:8.5px;color:var(--txt2);"><span style="width:62px;">narrative</span><div style="flex:1;height:4px;background:rgba(255,255,255,.06);"><div style="width:94%;height:100%;background:var(--cyan);"></div></div></div>
+            <div style="display:flex;align-items:center;gap:7px;font-size:8.5px;color:var(--txt2);"><span style="width:62px;">thematic</span><div style="flex:1;height:4px;background:rgba(255,255,255,.06);"><div style="width:78%;height:100%;background:var(--pink);"></div></div></div>
+            <div style="display:flex;align-items:center;gap:7px;font-size:8.5px;color:var(--txt2);"><span style="width:62px;">structural</span><div style="flex:1;height:4px;background:rgba(255,255,255,.06);"><div style="width:88%;height:100%;background:var(--amber);"></div></div></div>
+          </div>
+          <div style="font-size:8.5px;color:var(--txt2);line-height:1.5;margin-bottom:10px;">PROVENANCE · derived from PSYKE entry, structure participation, 14 scene refs. <span style="color:var(--green);">CI: supports JUSTICE.</span></div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            <span style="font-size:8px;color:#04060a;background:var(--green);padding:4px 9px;font-weight:600;letter-spacing:.06em;">✓ CONFIRM</span>
+            <span style="font-size:8px;color:var(--txt2);border:1px solid var(--line2);padding:4px 9px;letter-spacing:.06em;">HIDE</span>
+            <span style="font-size:8px;color:var(--violet);border:1px solid rgba(176,124,255,.35);padding:4px 9px;letter-spacing:.06em;">→ PSYKE RELATION</span>
+            <span style="font-size:8px;color:var(--accent,#4cc2ff);border:1px solid var(--line-cy);padding:4px 9px;letter-spacing:.06em;">SEND TO BILLY</span>
+          </div>
+        </div>
+        <div style="flex:1;overflow-y:auto;padding:13px;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+            <div style="position:relative;width:20px;height:20px;border-radius:50%;border:1px solid var(--line);overflow:hidden;"><div style="position:absolute;inset:0;background:conic-gradient(from 0deg,rgba(232,68,58,.5),transparent 30%);animation:lf-pulse 2.6s infinite;"></div></div>
+            <span style="font-family:'Chakra Petch';font-weight:600;font-size:12px;letter-spacing:.1em;color:#fff;">INSIGHTS</span>
+            <span style="margin-left:auto;font-size:8px;color:var(--txt3);">DECISION CARDS</span>
+          </div>
+          <div style="border:1px solid var(--line-cy);background:rgba(76,194,255,.05);padding:9px 10px;margin-bottom:7px;">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;"><span style="width:7px;height:7px;border-radius:50%;border:2px solid var(--suggestion,#4cc2ff);"></span><span style="font-size:7.5px;letter-spacing:.14em;color:var(--cyan);">SUGGESTION</span></div>
+            <div style="font-size:10px;color:#fff;line-height:1.4;margin-bottom:6px;">12 inferred edges need review.</div>
+            <span style="font-size:8px;color:var(--cyan);border:1px solid var(--line-cy);padding:3px 8px;">OPEN CONFIRMATION QUEUE ▸</span>
+          </div>
+          <div style="border:1px solid rgba(255,82,96,.4);background:rgba(255,82,96,.05);padding:9px 10px;margin-bottom:7px;">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;"><span style="width:9px;height:9px;background:var(--blocking);display:inline-grid;place-items:center;color:#fff;font-size:7px;">!</span><span style="font-size:7.5px;letter-spacing:.14em;color:var(--blocking);">BLOCKING</span></div>
+            <div style="font-size:10px;color:#fff;line-height:1.4;margin-bottom:6px;">BLACK BOX has no payoff scene.</div>
+            <span style="font-size:8px;color:var(--blocking);border:1px solid rgba(255,82,96,.4);padding:3px 8px;">JUMP → SETUP/PAYOFF</span>
+          </div>
+          <div style="border:1px solid var(--line2);background:rgba(11,14,21,.5);padding:9px 10px;margin-bottom:7px;">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;"><span style="width:8px;height:8px;transform:rotate(45deg);background:var(--warning);"></span><span style="font-size:7.5px;letter-spacing:.14em;color:var(--warning);">ORPHAN</span></div>
+            <div style="font-size:10px;color:var(--txt);line-height:1.4;">ARI is isolated — 1 connection.</div>
+          </div>
+          <div style="border:1px solid var(--line2);background:rgba(11,14,21,.5);padding:9px 10px;">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;"><span style="width:7px;height:7px;border-radius:50%;background:var(--info,#7a8694);"></span><span style="font-size:7.5px;letter-spacing:.14em;color:var(--txt2);">INFO</span></div>
+            <div style="font-size:10px;color:var(--txt);line-height:1.4;">MARLOW is highly central — rewrites carry risk.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- flow timeline strip -->
+    <div style="height:52px;flex:none;border-top:1px solid var(--line);display:flex;align-items:center;gap:14px;padding:0 16px;background:rgba(6,8,12,.6);">
+      <span style="font-size:8px;letter-spacing:.16em;color:var(--txt3);">FLOW</span>
+      <div style="display:flex;gap:0;border:1px solid var(--line2);font-size:8px;letter-spacing:.1em;">
+        <span style="padding:4px 9px;color:var(--txt3);">TIMELINE</span><span style="padding:4px 9px;color:var(--txt3);border-left:1px solid var(--line2);">ACTS</span><span style="padding:4px 9px;color:#04060a;background:var(--accent,#4cc2ff);font-weight:600;border-left:1px solid var(--line2);">ARC</span><span style="padding:4px 9px;color:var(--txt3);border-left:1px solid var(--line2);">CAUSAL</span>
+      </div>
+      <svg viewBox="0 0 520 30" style="height:30px;width:520px;"><polyline points="0,26 80,22 160,15 240,8 300,4 360,9 440,18 520,26" fill="none" stroke="var(--amber)" stroke-width="1.4" opacity=".8"/><circle cx="300" cy="4" r="2.5" fill="var(--blocking)"/></svg>
+      <span style="font-size:7.5px;color:var(--txt3);">FREYTAG · climax SC.21</span>
+      <div style="flex:1;"></div>
+      <span style="font-size:8px;color:var(--txt3);">PRESETS:</span>
+      <span style="font-size:8px;color:var(--accent,#4cc2ff);border:1px solid var(--line-cy);padding:2px 7px;">Character web</span>
+      <span style="font-size:8px;color:var(--txt2);border:1px solid var(--line2);padding:2px 7px;">Theme audit</span>
+      <span style="font-size:8px;color:var(--txt2);border:1px solid var(--line2);padding:2px 7px;">Continuity</span>
+    </div>
+    <!-- provenance status -->
+    <div style="height:24px;flex:none;border-top:1px solid var(--line2);display:flex;align-items:center;gap:14px;padding:0 16px;background:#05070b;font-size:8px;letter-spacing:.1em;color:var(--txt3);">
+      <span style="display:flex;align-items:center;gap:6px;color:var(--green);"><span style="width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green);"></span>DETERMINISTIC · NO AI · REBUILT LIVE</span>
+      <span>61 NODES</span><span>138 EDGES</span><span style="color:var(--txt2);">12 INFERRED</span><span style="color:var(--warning);">4 ORPHANS</span>
+      <span style="margin-left:auto;color:var(--txt2);">build 0.4s · current project only</span>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== FRAME C · CANVAS PLOT ===================== -->
+<div style="position:absolute;left:1900px;top:130px;width:1160px;font-family:'JetBrains Mono',monospace;--line:rgba(232,68,58,.28);--line2:rgba(150,162,180,.10);--line-cy:rgba(76,194,255,.3);--crimson:#e8443a;--amber:#f5b133;--amber-b:#ffcf4a;--cyan:#4cc2ff;--green:#62d99a;--violet:#b07cff;--pink:#ff7ac6;--blocking:#ff5260;--txt:#e4e8ef;--txt2:#8b95a5;--txt3:#525c6b;--accent:{{ accent }};">
+  <div data-drags-parent="1" style="display:inline-flex;align-items:center;gap:9px;margin-bottom:11px;padding:6px 12px;background:rgba(6,8,12,.92);border:1px solid var(--line);color:var(--accent,#4cc2ff);font-size:10px;letter-spacing:.2em;">
+    <span style="display:grid;place-items:center;width:16px;height:16px;background:var(--accent,#4cc2ff);color:#04060a;font-weight:700;">C</span>CANVAS PLOT · FREE BOARD
+  </div>
+  <div data-screen-label="Canvas Plot" style="position:relative;width:100%;height:1000px;background:#070a0e;border:1px solid var(--line);box-shadow:0 16px 60px rgba(0,0,0,.6);overflow:hidden;">
+    <div style="position:absolute;top:-1px;left:-1px;width:14px;height:14px;border-top:1px solid var(--crimson);border-left:1px solid var(--crimson);z-index:9;"></div>
+    <div style="position:absolute;top:3px;left:3px;width:5px;height:5px;background:var(--crimson);z-index:9;"></div>
+    <!-- toolbar -->
+    <div style="position:absolute;top:0;left:0;right:0;height:40px;display:flex;align-items:center;gap:13px;padding:0 14px;border-bottom:1px solid var(--line);background:rgba(6,8,12,.8);z-index:6;">
+      <span style="font-family:'Chakra Petch';font-weight:600;font-size:13px;letter-spacing:.12em;color:#fff;">CANVAS PLOT</span>
+      <span style="font-size:9px;color:var(--accent,#4cc2ff);letter-spacing:.08em;">＋ BLOCK</span>
+      <span style="font-size:9px;color:var(--txt2);letter-spacing:.08em;">▭ FRAME</span>
+      <span style="font-size:9px;color:var(--txt2);letter-spacing:.08em;">⟿ SEED FROM OUTLINE</span>
+      <div style="flex:1;"></div>
+      <span style="font-size:9px;color:var(--txt3);">SNAP ⊞</span>
+      <span style="font-size:9px;color:var(--txt2);">0.75× ⊟ ⊕</span>
+    </div>
+    <!-- dotted grid bg -->
+    <div style="position:absolute;inset:40px 0 0 0;background-image:radial-gradient(circle,rgba(128,140,158,.09) 1px,transparent 1.4px);background-size:34px 34px;"></div>
+
+    <!-- frames/groups -->
+    <div style="position:absolute;left:40px;top:90px;width:480px;height:380px;border:1px solid rgba(76,194,255,.3);background:rgba(76,194,255,.03);z-index:1;">
+      <div style="display:inline-block;background:rgba(76,194,255,.14);color:var(--cyan);font-size:9px;letter-spacing:.16em;padding:4px 11px;border-bottom:1px solid rgba(76,194,255,.3);border-right:1px solid rgba(76,194,255,.3);">RISING ACTION</div>
+    </div>
+    <div style="position:absolute;left:560px;top:340px;width:540px;height:380px;border:1px solid rgba(245,177,51,.3);background:rgba(245,177,51,.03);z-index:1;">
+      <div style="display:inline-block;background:rgba(245,177,51,.14);color:var(--amber);font-size:9px;letter-spacing:.16em;padding:4px 11px;border-bottom:1px solid rgba(245,177,51,.3);border-right:1px solid rgba(245,177,51,.3);">THE TURN</div>
+    </div>
+
+    <!-- connections -->
+    <svg viewBox="0 0 1160 1000" style="position:absolute;inset:0;width:100%;height:100%;z-index:2;">
+      <defs><marker id="c-cy" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6" fill="none" stroke="#4cc2ff" stroke-width="1.1"/></marker>
+      <marker id="c-am" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6" fill="none" stroke="#f5b133" stroke-width="1.1"/></marker></defs>
+      <path d="M250,200 C 330,200 320,300 240,320" fill="none" stroke="#4cc2ff" stroke-width="1.6" marker-end="url(#c-cy)" opacity=".7"/>
+      <path d="M380,330 C 470,330 480,420 560,430" fill="none" stroke="#f5b133" stroke-width="1.6" marker-end="url(#c-am)" opacity=".75"/>
+      <path d="M720,470 C 760,520 760,560 740,600" fill="none" stroke="#e8443a" stroke-width="1.6" opacity=".7"/>
+      <path d="M860,470 C 900,540 880,600 820,620" fill="none" stroke="#4cc2ff" stroke-width="1.4" opacity=".6"/>
+    </svg>
+    <!-- link label -->
+    <div style="position:absolute;left:455px;top:372px;font-size:8px;color:var(--amber);background:rgba(7,10,14,.85);padding:1px 5px;z-index:3;">causality →</div>
+
+    <!-- blocks -->
+    <div style="position:absolute;left:90px;top:150px;width:170px;z-index:4;border:1px solid var(--line2);border-top:2px solid var(--cyan);background:#0b0e15;box-shadow:0 8px 24px rgba(0,0,0,.5);">
+      <div style="display:flex;align-items:center;gap:6px;padding:5px 8px;border-bottom:1px solid var(--line2);"><span style="color:var(--txt3);font-size:9px;">⠿</span><span style="font-size:9px;color:#fff;flex:1;">The Distress Loop</span><span style="font-size:7px;color:var(--cyan);">A</span></div>
+      <div style="padding:8px;font-size:9px;color:var(--txt2);line-height:1.4;">A 9-year-old signal repeats. Vesper knows the voice.</div>
+    </div>
+    <div style="position:absolute;left:140px;top:310px;width:180px;z-index:4;border:1px solid var(--line2);border-top:2px solid var(--green);background:#0b0e15;box-shadow:0 8px 24px rgba(0,0,0,.5);">
+      <div style="display:flex;align-items:center;gap:6px;padding:5px 8px;border-bottom:1px solid var(--line2);"><span style="color:var(--txt3);font-size:9px;">⠿</span><span style="font-size:9px;color:#fff;flex:1;">Who signed the order?</span><span style="font-size:7px;color:var(--green);">?</span></div>
+      <div style="padding:8px;font-size:9px;color:var(--txt2);line-height:1.4;">Theme seed — guilt &amp; silence.</div>
+    </div>
+    <!-- selected block with handles -->
+    <div style="position:absolute;left:300px;top:280px;width:188px;z-index:5;border:1px solid var(--accent,#4cc2ff);border-top:2px solid var(--amber);background:#0c1018;box-shadow:0 0 18px rgba(76,194,255,.25);">
+      <div style="display:flex;align-items:center;gap:6px;padding:5px 8px;border-bottom:1px solid var(--line2);"><span style="color:var(--accent,#4cc2ff);font-size:9px;">⠿</span><span style="font-size:9px;color:#fff;flex:1;">Observation Ring</span><span style="font-size:7px;color:var(--amber);">SC.12</span></div>
+      <div style="padding:8px;font-size:9px;color:var(--txt2);line-height:1.4;">Marlow + Vesper. The static. The Warden's count.</div>
+      <div style="position:absolute;left:-3px;top:-3px;width:6px;height:6px;background:var(--accent,#4cc2ff);"></div>
+      <div style="position:absolute;right:-3px;top:-3px;width:6px;height:6px;background:var(--accent,#4cc2ff);"></div>
+      <div style="position:absolute;left:-3px;bottom:-3px;width:6px;height:6px;background:var(--accent,#4cc2ff);"></div>
+      <div style="position:absolute;right:-3px;bottom:-3px;width:6px;height:6px;background:var(--accent,#4cc2ff);"></div>
+    </div>
+    <div style="position:absolute;left:640px;top:410px;width:180px;z-index:4;border:1px solid var(--line2);border-top:2px solid var(--blocking);background:#0b0e15;box-shadow:0 8px 24px rgba(0,0,0,.5);">
+      <div style="display:flex;align-items:center;gap:6px;padding:5px 8px;border-bottom:1px solid var(--line2);"><span style="color:var(--txt3);font-size:9px;">⠿</span><span style="font-size:9px;color:#fff;flex:1;">All Is Lost</span><span style="font-size:7px;color:var(--blocking);">SC.21</span></div>
+      <div style="padding:8px;font-size:9px;color:var(--txt2);line-height:1.4;">The reactor goes quiet. So does Vesper.</div>
+    </div>
+    <div style="position:absolute;left:790px;top:540px;width:170px;z-index:4;border:1px solid var(--line2);border-top:2px solid var(--violet);background:#0b0e15;box-shadow:0 8px 24px rgba(0,0,0,.5);">
+      <div style="display:flex;align-items:center;gap:6px;padding:5px 8px;border-bottom:1px solid var(--line2);"><span style="color:var(--txt3);font-size:9px;">⠿</span><span style="font-size:9px;color:#fff;flex:1;">Open the box</span><span style="font-size:7px;color:var(--violet);">◇</span></div>
+      <div style="padding:8px;font-size:9px;color:var(--txt2);line-height:1.4;">Payoff or choice? Decide before draft 2.</div>
+    </div>
+
+    <!-- minimap -->
+    <div style="position:absolute;right:12px;bottom:12px;width:150px;height:96px;border:1px solid var(--line2);background:rgba(4,6,9,.8);z-index:6;">
+      <div style="position:absolute;left:10px;top:20px;width:40px;height:32px;border:1px solid rgba(76,194,255,.3);background:rgba(76,194,255,.05);"></div>
+      <div style="position:absolute;left:56px;top:42px;width:46px;height:32px;border:1px solid rgba(245,177,51,.3);background:rgba(245,177,51,.05);"></div>
+      <div style="position:absolute;left:14px;top:26px;width:7px;height:5px;background:var(--cyan);"></div>
+      <div style="position:absolute;left:30px;top:38px;width:7px;height:5px;background:var(--amber);"></div>
+      <div style="position:absolute;left:62px;top:50px;width:7px;height:5px;background:var(--blocking);"></div>
+      <div style="position:absolute;left:8px;top:30px;width:54px;height:38px;border:1px solid var(--accent,#4cc2ff);"></div>
+      <div style="position:absolute;left:5px;top:3px;font-size:6px;color:var(--txt3);letter-spacing:.1em;">MINIMAP</div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== FRAME B · PLOT-LANE TIMELINE ===================== -->
+<div style="position:absolute;left:80px;top:1240px;width:2980px;font-family:'JetBrains Mono',monospace;--line:rgba(232,68,58,.28);--line2:rgba(150,162,180,.10);--line-cy:rgba(76,194,255,.3);--crimson:#e8443a;--amber:#f5b133;--amber-b:#ffcf4a;--cyan:#4cc2ff;--green:#62d99a;--violet:#b07cff;--pink:#ff7ac6;--blocking:#ff5260;--warning:#ffb454;--txt:#e4e8ef;--txt2:#8b95a5;--txt3:#525c6b;--accent:{{ accent }};">
+  <div data-drags-parent="1" style="display:inline-flex;align-items:center;gap:9px;margin-bottom:11px;padding:6px 12px;background:rgba(6,8,12,.92);border:1px solid var(--line);color:var(--accent,#4cc2ff);font-size:10px;letter-spacing:.2em;">
+    <span style="display:grid;place-items:center;width:16px;height:16px;background:var(--accent,#4cc2ff);color:#04060a;font-weight:700;">B</span>PLOT-LANE TIMELINE · SWIMLANE BOARD
+  </div>
+  <div data-screen-label="Plot-Lane Timeline" style="position:relative;width:100%;height:560px;background:linear-gradient(180deg,#080a0f,#05070b);border:1px solid var(--line);box-shadow:0 16px 60px rgba(0,0,0,.6);overflow:hidden;">
+    <div style="position:absolute;top:-1px;left:-1px;width:14px;height:14px;border-top:1px solid var(--crimson);border-left:1px solid var(--crimson);z-index:9;"></div>
+    <div style="position:absolute;top:3px;left:3px;width:5px;height:5px;background:var(--crimson);z-index:9;"></div>
+    <!-- toolbar -->
+    <div style="height:40px;display:flex;align-items:center;gap:14px;padding:0 16px;border-bottom:1px solid var(--line);">
+      <span style="font-family:'Chakra Petch';font-weight:600;font-size:13px;letter-spacing:.12em;color:#fff;">PLOT · TIMELINE</span>
+      <div style="display:flex;border:1px solid var(--line2);font-size:8px;letter-spacing:.1em;">
+        <span style="padding:4px 9px;color:var(--txt3);">STRUCTURAL</span><span style="padding:4px 9px;color:#04060a;background:var(--accent,#4cc2ff);font-weight:600;border-left:1px solid var(--line2);">CUSTOM</span>
+      </div>
+      <span style="font-size:8px;color:var(--amber);border:1px solid rgba(245,177,51,.35);padding:3px 8px;letter-spacing:.1em;">△ OFF-OUTLINE ORDER</span>
+      <span style="font-size:9px;color:var(--txt2);letter-spacing:.08em;">OVERLAY <span style="color:var(--accent,#4cc2ff);">TENSION</span> · PACING · POV</span>
+      <div style="flex:1;"></div>
+      <span style="font-size:9px;color:var(--txt3);">FILTER: character · tag · beat ▾</span>
+      <span style="font-size:9px;color:var(--txt2);">＋ LANE</span>
+    </div>
+
+    <!-- tension heat-ribbon -->
+    <div style="height:26px;position:relative;border-bottom:1px solid var(--line2);overflow:hidden;">
+      <svg viewBox="0 0 2980 26" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;">
+        <polyline points="150,20 480,17 710,12 940,16 1170,9 1400,13 1630,6 1860,14 2090,4 2320,11 2550,18 2780,22" fill="none" stroke="var(--amber)" stroke-width="1.4" opacity=".75"/>
+        <circle cx="2090" cy="4" r="2.5" fill="var(--blocking)"/>
+      </svg>
+      <span style="position:absolute;left:12px;top:6px;font-size:7px;letter-spacing:.16em;color:var(--txt3);">TENSION</span>
+    </div>
+
+    <!-- ruler -->
+    <div style="height:20px;display:flex;align-items:center;border-bottom:1px solid var(--line2);background-image:repeating-linear-gradient(90deg,transparent 0 149px,rgba(245,177,51,.4) 149px 150px);padding-left:132px;">
+      <div style="flex:1;display:flex;justify-content:space-between;padding:0 18px;font-size:7px;color:rgba(245,177,51,.7);letter-spacing:.1em;">
+        <span>T01</span><span>T02</span><span>T03</span><span>T04</span><span>T05</span><span>T06</span><span>T07</span><span>T08</span><span>T09</span><span>T10</span><span>T11</span><span>T12</span>
+      </div>
+    </div>
+
+    <!-- lanes + links overlay -->
+    <div style="position:relative;height:434px;">
+      <!-- bezier links across board -->
+      <svg viewBox="0 0 2980 434" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;z-index:3;pointer-events:none;">
+        <defs><marker id="t-cy" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="none" stroke="#4cc2ff" stroke-width="1"/></marker>
+        <marker id="t-am" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="none" stroke="#f5b133" stroke-width="1"/></marker></defs>
+        <!-- causality A→B -->
+        <path d="M360,48 C 520,48 540,120 690,120" fill="none" stroke="#4cc2ff" stroke-width="1.5" marker-end="url(#t-cy)" opacity=".7"/>
+        <circle cx="360" cy="48" r="3" fill="#4cc2ff"/>
+        <!-- setup_payoff (amber, long span) -->
+        <path d="M820,120 C 1300,200 1700,250 2070,192" fill="none" stroke="#f5b133" stroke-width="1.5" marker-end="url(#t-am)" stroke-dasharray="7 5" opacity=".7"/>
+        <circle cx="820" cy="120" r="3" fill="#f5b133"/>
+        <!-- echo (pink) -->
+        <path d="M1180,264 C 1500,330 1700,330 1840,264" fill="none" stroke="#ff7ac6" stroke-width="1.3" stroke-dasharray="3 4" opacity=".6"/>
+      </svg>
+      <!-- link midpoint labels -->
+      <div style="position:absolute;left:1380px;top:150px;font-size:8px;color:var(--amber);background:rgba(5,7,11,.85);padding:1px 5px;z-index:4;">setup → payoff</div>
+      <div style="position:absolute;left:1500px;top:300px;font-size:8px;color:var(--pink);background:rgba(5,7,11,.85);padding:1px 5px;z-index:4;">echo</div>
+
+      <!-- LANE: A-story -->
+      <div style="display:flex;height:74px;border-bottom:1px solid var(--line2);">
+        <div style="width:132px;flex:none;border-right:1px solid var(--line2);padding:9px 10px;background:rgba(76,194,255,.04);"><div style="display:flex;align-items:center;gap:6px;"><span style="width:7px;height:7px;background:var(--cyan);"></span><span style="font-size:9px;color:var(--cyan);">A · MARLOW</span></div><div style="font-size:7px;color:var(--txt3);margin-top:4px;">rename · color · ⋯</div></div>
+        <div style="flex:1;position:relative;">
+          <div style="position:absolute;left:210px;top:18px;width:140px;height:38px;border:1px solid var(--line-cy);background:rgba(76,194,255,.08);padding:6px 8px;"><div style="font-size:8px;color:#fff;">T02 · Distress Loop</div><div style="display:flex;gap:5px;margin-top:4px;"><span style="font-size:6.5px;color:var(--cyan);border:1px solid var(--line-cy);padding:0 4px;">EDITED</span><span style="font-size:6.5px;color:var(--txt3);">▸ ACT1·CH2</span></div></div>
+          <div style="position:absolute;left:480px;top:18px;width:150px;height:38px;border:1px solid var(--accent,#4cc2ff);background:rgba(76,194,255,.16);padding:6px 8px;box-shadow:0 0 12px rgba(76,194,255,.2);"><div style="font-size:8px;color:#fff;">T05 · Observation Ring ●</div><div style="display:flex;gap:5px;margin-top:4px;"><span style="font-size:6.5px;color:var(--cyan);border:1px solid var(--line-cy);padding:0 4px;">EDITED</span><span style="font-size:6.5px;color:var(--amber);">▸ ACT2·CH4</span></div></div>
+          <div style="position:absolute;left:1020px;top:18px;width:130px;height:38px;border:1px solid var(--line2);background:rgba(255,255,255,.02);padding:6px 8px;"><div style="font-size:8px;color:var(--txt2);">T08 · Descent</div><div style="font-size:6.5px;color:var(--txt3);margin-top:4px;">DRAFT</div></div>
+        </div>
+      </div>
+      <!-- LANE: B-story -->
+      <div style="display:flex;height:74px;border-bottom:1px solid var(--line2);">
+        <div style="width:132px;flex:none;border-right:1px solid var(--line2);padding:9px 10px;background:rgba(98,217,154,.03);"><div style="display:flex;align-items:center;gap:6px;"><span style="width:7px;height:7px;background:var(--green);"></span><span style="font-size:9px;color:var(--green);">B · VESPER</span></div></div>
+        <div style="flex:1;position:relative;">
+          <div style="position:absolute;left:680px;top:18px;width:150px;height:38px;border:1px solid rgba(98,217,154,.35);background:rgba(98,217,154,.07);padding:6px 8px;"><div style="font-size:8px;color:#fff;">T04 · The Confession</div><div style="display:flex;gap:5px;margin-top:4px;"><span style="font-size:6.5px;color:var(--amber);border:1px solid rgba(245,177,51,.3);padding:0 4px;">NEEDS WORK</span><span style="font-size:6.5px;color:var(--blocking);">△ dangling link</span></div></div>
+          <div style="position:absolute;left:1740px;top:18px;width:140px;height:38px;border:1px solid rgba(98,217,154,.35);background:rgba(98,217,154,.07);padding:6px 8px;"><div style="font-size:8px;color:#fff;">T09 · Goes Silent</div><div style="font-size:6.5px;color:var(--txt3);margin-top:4px;">▸ ACT3·CH1</div></div>
+        </div>
+      </div>
+      <!-- LANE: C-story -->
+      <div style="display:flex;height:74px;border-bottom:1px solid var(--line2);">
+        <div style="width:132px;flex:none;border-right:1px solid var(--line2);padding:9px 10px;background:rgba(232,68,58,.03);"><div style="display:flex;align-items:center;gap:6px;"><span style="width:7px;height:7px;background:var(--crimson);"></span><span style="font-size:9px;color:var(--crimson);">C · WARDEN</span></div></div>
+        <div style="flex:1;position:relative;">
+          <div style="position:absolute;left:1160px;top:18px;width:140px;height:38px;border:1px solid rgba(232,68,58,.3);background:rgba(232,68,58,.06);padding:6px 8px;"><div style="font-size:8px;color:var(--txt);">T06 · The Count</div><div style="font-size:6.5px;color:var(--txt3);margin-top:4px;">DRAFT</div></div>
+          <div style="position:absolute;left:1820px;top:18px;width:150px;height:38px;border:1px solid var(--blocking);background:rgba(255,82,96,.12);padding:6px 8px;"><div style="font-size:8px;color:#fff;">T09 · All Is Lost ◆</div><div style="font-size:6.5px;color:var(--blocking);margin-top:4px;">KEY BEAT</div></div>
+        </div>
+      </div>
+      <!-- LANE: Subplot -->
+      <div style="display:flex;height:62px;border-bottom:1px solid var(--line2);">
+        <div style="width:132px;flex:none;border-right:1px solid var(--line2);padding:9px 10px;background:rgba(176,124,255,.03);"><div style="display:flex;align-items:center;gap:6px;"><span style="width:7px;height:7px;background:var(--violet);"></span><span style="font-size:9px;color:var(--violet);">SUBPLOT · ARI</span></div></div>
+        <div style="flex:1;position:relative;">
+          <div style="position:absolute;left:340px;top:13px;width:130px;height:36px;border:1px solid rgba(176,124,255,.3);background:rgba(176,124,255,.06);padding:6px 8px;"><div style="font-size:8px;color:var(--txt2);">T03 · The Errand</div></div>
+          <div style="position:absolute;left:2300px;top:13px;width:130px;height:36px;border:1px solid rgba(176,124,255,.3);background:rgba(176,124,255,.06);padding:6px 8px;"><div style="font-size:8px;color:var(--txt2);">T11 · Reveal</div></div>
+        </div>
+      </div>
+      <!-- Unassigned inbox -->
+      <div style="display:flex;height:62px;">
+        <div style="width:132px;flex:none;border-right:1px solid var(--line2);padding:9px 10px;"><div style="font-size:8px;color:var(--txt3);letter-spacing:.06em;">＋ N SCENES</div><div style="font-size:7px;color:var(--txt3);margin-top:3px;">off timeline</div></div>
+        <div style="flex:1;position:relative;display:flex;align-items:center;padding:0 18px;gap:9px;">
+          <div style="width:120px;height:34px;border:1px dashed var(--line2);display:flex;align-items:center;padding:0 8px;font-size:8px;color:var(--txt3);">＋ Cold Open</div>
+          <div style="width:120px;height:34px;border:1px dashed var(--line2);display:flex;align-items:center;padding:0 8px;font-size:8px;color:var(--txt3);">＋ Boot Seq.</div>
+          <span style="font-size:8px;color:var(--txt3);letter-spacing:.1em;margin-left:6px;">add one · add all ▸</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;writingMode&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;novel&quot;,&quot;screenplay&quot;,&quot;graphic_novel&quot;,&quot;stage_script&quot;,&quot;series&quot;],&quot;default&quot;:&quot;screenplay&quot;,&quot;tsType&quot;:&quot;string&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    const mode = this.props.writingMode ?? "screenplay";
+    const accents = { novel: "#c8a96a", screenplay: "#4cc2ff", graphic_novel: "#ff7ac6", stage_script: "#ffb454", series: "#62d99a" };
+    return { accent: accents[mode] || "#4cc2ff" };
+  }
+}
+</script>
+</body>
+</html>

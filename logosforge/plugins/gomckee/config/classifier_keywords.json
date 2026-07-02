@@ -1,0 +1,159 @@
+{
+  "story": {
+    "keywords": [
+      "outline",
+      "plot",
+      "structure",
+      "scene",
+      "sequence",
+      "act",
+      "turning point",
+      "inciting incident",
+      "climax",
+      "story",
+      "premise",
+      "ending",
+      "beginning",
+      "middle",
+      "spine",
+      "value",
+      "reversal",
+      "reveal",
+      "thriller",
+      "outline a"
+    ],
+    "target_forms": [
+      "outline",
+      "scene",
+      "story",
+      "analysis"
+    ]
+  },
+  "character": {
+    "keywords": [
+      "character",
+      "protagonist",
+      "antagonist",
+      "villain",
+      "hero",
+      "arc",
+      "motivation",
+      "need",
+      "desire",
+      "cast",
+      "backstory",
+      "relationship",
+      "generic",
+      "role",
+      "contradiction"
+    ],
+    "target_forms": [
+      "character",
+      "scene",
+      "story",
+      "analysis"
+    ]
+  },
+  "dialogue": {
+    "keywords": [
+      "dialogue",
+      "line",
+      "subtext",
+      "banter",
+      "conversation",
+      "says",
+      "said",
+      "exchange",
+      "speak",
+      "voice",
+      "on the nose",
+      "quote",
+      "polish this dialogue"
+    ],
+    "target_forms": [
+      "dialogue",
+      "scene",
+      "analysis"
+    ]
+  },
+  "modes": {
+    "diagnosis": [
+      "flat",
+      "not working",
+      "problem",
+      "diagnose",
+      "check",
+      "why isn't",
+      "what's wrong",
+      "feels off",
+      "feels flat"
+    ],
+    "revision": [
+      "revise",
+      "rewrite",
+      "polish",
+      "improve",
+      "fix",
+      "edit"
+    ],
+    "generation": [
+      "write",
+      "generate",
+      "create",
+      "draft",
+      "outline",
+      "brainstorm",
+      "help me"
+    ]
+  },
+  "target_forms": {
+    "dialogue": [
+      "dialogue",
+      "line",
+      "exchange",
+      "conversation",
+      "banter"
+    ],
+    "character": [
+      "character",
+      "protagonist",
+      "antagonist",
+      "cast",
+      "villain"
+    ],
+    "outline": [
+      "outline",
+      "beat sheet",
+      "act",
+      "sequence",
+      "plot"
+    ],
+    "scene": [
+      "scene",
+      "chapter",
+      "moment"
+    ],
+    "story": [
+      "story",
+      "novel",
+      "screenplay",
+      "thriller",
+      "romance",
+      "mystery"
+    ]
+  },
+  "purity_rules": {
+    "dialogue_only_phrases": [
+      "polish this dialogue",
+      "rewrite this dialogue",
+      "improve this dialogue",
+      "fix this dialogue"
+    ],
+    "character_only_phrases": [
+      "my protagonist feels generic",
+      "my character feels generic",
+      "fix this character",
+      "develop this character"
+    ]
+  }
+}

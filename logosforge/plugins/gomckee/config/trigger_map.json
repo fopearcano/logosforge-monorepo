@@ -1,0 +1,628 @@
+{
+  "story": {
+    "outline_generation": {
+      "keywords": [
+        "outline",
+        "beat sheet",
+        "act",
+        "sequence"
+      ],
+      "target_forms": [
+        "outline",
+        "story"
+      ],
+      "modes": [
+        "generation",
+        "revision"
+      ]
+    },
+    "scene_building": {
+      "keywords": [
+        "scene",
+        "chapter",
+        "moment"
+      ],
+      "target_forms": [
+        "scene"
+      ],
+      "modes": [
+        "generation",
+        "revision"
+      ]
+    },
+    "scene_revision": {
+      "keywords": [
+        "flat",
+        "scene",
+        "not working",
+        "weak"
+      ],
+      "target_forms": [
+        "scene"
+      ],
+      "modes": [
+        "revision",
+        "diagnosis"
+      ]
+    },
+    "story_diagnosis": {
+      "keywords": [
+        "story problem",
+        "doesn't work",
+        "not working",
+        "diagnose",
+        "why"
+      ],
+      "target_forms": [
+        "story",
+        "analysis"
+      ],
+      "modes": [
+        "diagnosis"
+      ]
+    },
+    "premise_design": {
+      "keywords": [
+        "premise",
+        "concept",
+        "what is this about"
+      ],
+      "target_forms": [
+        "story"
+      ],
+      "modes": [
+        "generation",
+        "revision"
+      ]
+    },
+    "ending_design": {
+      "keywords": [
+        "ending",
+        "finale",
+        "climax"
+      ],
+      "target_forms": [
+        "story",
+        "outline"
+      ],
+      "modes": [
+        "generation",
+        "revision"
+      ]
+    },
+    "exposition_control": {
+      "keywords": [
+        "exposition",
+        "info dump",
+        "backstory"
+      ],
+      "target_forms": [
+        "scene",
+        "story"
+      ],
+      "modes": [
+        "revision",
+        "diagnosis"
+      ]
+    },
+    "spine_design": {
+      "keywords": [
+        "spine",
+        "desire line",
+        "throughline"
+      ],
+      "target_forms": [
+        "story",
+        "character"
+      ],
+      "modes": [
+        "generation",
+        "revision",
+        "diagnosis"
+      ]
+    },
+    "turning_point_work": {
+      "keywords": [
+        "turning point",
+        "reversal",
+        "twist",
+        "turn"
+      ],
+      "target_forms": [
+        "scene",
+        "story"
+      ],
+      "modes": [
+        "generation",
+        "revision",
+        "diagnosis"
+      ]
+    },
+    "progressive_complication": {
+      "keywords": [
+        "escalate",
+        "raise stakes",
+        "complicate"
+      ],
+      "target_forms": [
+        "scene",
+        "story"
+      ],
+      "modes": [
+        "generation",
+        "revision"
+      ]
+    },
+    "gap_design": {
+      "keywords": [
+        "gap",
+        "expectation",
+        "result",
+        "surprise"
+      ],
+      "target_forms": [
+        "scene",
+        "story"
+      ],
+      "modes": [
+        "generation",
+        "revision",
+        "diagnosis"
+      ]
+    },
+    "crisis_climax_resolution": {
+      "keywords": [
+        "crisis",
+        "climax",
+        "resolution"
+      ],
+      "target_forms": [
+        "story",
+        "outline",
+        "scene"
+      ],
+      "modes": [
+        "generation",
+        "revision"
+      ]
+    },
+    "value_charge_check": {
+      "keywords": [
+        "value",
+        "charge",
+        "flat"
+      ],
+      "target_forms": [
+        "scene",
+        "analysis"
+      ],
+      "modes": [
+        "diagnosis"
+      ]
+    },
+    "genre_design": {
+      "keywords": [
+        "genre",
+        "thriller",
+        "romance",
+        "horror",
+        "mystery"
+      ],
+      "target_forms": [
+        "story",
+        "outline"
+      ],
+      "modes": [
+        "generation",
+        "revision"
+      ]
+    }
+  },
+  "character": {
+    "character_creation": {
+      "keywords": [
+        "character",
+        "protagonist",
+        "antagonist",
+        "villain",
+        "hero",
+        "create character"
+      ],
+      "target_forms": [
+        "character",
+        "story"
+      ],
+      "modes": [
+        "generation",
+        "revision"
+      ]
+    },
+    "character_diagnosis": {
+      "keywords": [
+        "generic",
+        "flat character",
+        "weak character",
+        "unconvincing"
+      ],
+      "target_forms": [
+        "character",
+        "analysis",
+        "story"
+      ],
+      "modes": [
+        "diagnosis",
+        "revision"
+      ]
+    },
+    "arc_design": {
+      "keywords": [
+        "arc",
+        "change",
+        "transformation",
+        "growth",
+        "fall"
+      ],
+      "target_forms": [
+        "character",
+        "story"
+      ],
+      "modes": [
+        "generation",
+        "revision"
+      ]
+    },
+    "motivation_work": {
+      "keywords": [
+        "motivation",
+        "want",
+        "desire",
+        "need"
+      ],
+      "target_forms": [
+        "character",
+        "story"
+      ],
+      "modes": [
+        "generation",
+        "revision",
+        "diagnosis"
+      ]
+    },
+    "cast_design": {
+      "keywords": [
+        "cast",
+        "ensemble",
+        "supporting character"
+      ],
+      "target_forms": [
+        "character",
+        "story"
+      ],
+      "modes": [
+        "generation",
+        "revision"
+      ]
+    },
+    "relationship_work": {
+      "keywords": [
+        "relationship",
+        "dynamic",
+        "chemistry",
+        "bond",
+        "rivalry"
+      ],
+      "target_forms": [
+        "character",
+        "scene",
+        "dialogue"
+      ],
+      "modes": [
+        "generation",
+        "revision",
+        "diagnosis"
+      ],
+      "psyche_signals": [
+        "has_relations"
+      ]
+    },
+    "backstory_work": {
+      "keywords": [
+        "backstory",
+        "past wound",
+        "history"
+      ],
+      "target_forms": [
+        "character",
+        "story"
+      ],
+      "modes": [
+        "generation",
+        "revision"
+      ]
+    },
+    "contradiction_work": {
+      "keywords": [
+        "contradiction",
+        "complexity",
+        "inner conflict"
+      ],
+      "target_forms": [
+        "character"
+      ],
+      "modes": [
+        "generation",
+        "revision",
+        "diagnosis"
+      ]
+    },
+    "progression_work": {
+      "keywords": [
+        "progression",
+        "state",
+        "where are they now"
+      ],
+      "target_forms": [
+        "character",
+        "scene"
+      ],
+      "modes": [
+        "revision",
+        "diagnosis"
+      ],
+      "psyche_signals": [
+        "has_progression"
+      ]
+    },
+    "desire_need_gap": {
+      "keywords": [
+        "desire and need",
+        "need vs want",
+        "need",
+        "desire"
+      ],
+      "target_forms": [
+        "character",
+        "story"
+      ],
+      "modes": [
+        "generation",
+        "revision",
+        "diagnosis"
+      ]
+    },
+    "moral_choice": {
+      "keywords": [
+        "choice",
+        "moral choice",
+        "sacrifice"
+      ],
+      "target_forms": [
+        "character",
+        "scene",
+        "story"
+      ],
+      "modes": [
+        "generation",
+        "revision"
+      ]
+    },
+    "protagonist_design": {
+      "keywords": [
+        "protagonist",
+        "main character"
+      ],
+      "target_forms": [
+        "character",
+        "story"
+      ],
+      "modes": [
+        "generation",
+        "revision"
+      ]
+    },
+    "antagonist_design": {
+      "keywords": [
+        "antagonist",
+        "villain",
+        "opposition"
+      ],
+      "target_forms": [
+        "character",
+        "story"
+      ],
+      "modes": [
+        "generation",
+        "revision"
+      ]
+    }
+  },
+  "dialogue": {
+    "dialogue_writing": {
+      "keywords": [
+        "dialogue",
+        "line",
+        "exchange",
+        "conversation",
+        "banter"
+      ],
+      "target_forms": [
+        "dialogue",
+        "scene"
+      ],
+      "modes": [
+        "generation",
+        "revision"
+      ]
+    },
+    "dialogue_revision": {
+      "keywords": [
+        "polish this dialogue",
+        "rewrite this dialogue",
+        "fix this dialogue",
+        "improve this dialogue"
+      ],
+      "target_forms": [
+        "dialogue"
+      ],
+      "modes": [
+        "revision"
+      ]
+    },
+    "subtext_work": {
+      "keywords": [
+        "subtext",
+        "on the nose",
+        "too direct"
+      ],
+      "target_forms": [
+        "dialogue",
+        "scene"
+      ],
+      "modes": [
+        "revision",
+        "diagnosis"
+      ]
+    },
+    "voice_work": {
+      "keywords": [
+        "voice",
+        "distinct voice",
+        "sounds the same"
+      ],
+      "target_forms": [
+        "dialogue",
+        "character"
+      ],
+      "modes": [
+        "revision",
+        "diagnosis"
+      ]
+    },
+    "exposition_in_dialogue": {
+      "keywords": [
+        "exposition",
+        "info dump",
+        "too much explanation"
+      ],
+      "target_forms": [
+        "dialogue",
+        "scene"
+      ],
+      "modes": [
+        "revision",
+        "diagnosis"
+      ]
+    },
+    "conflict_in_dialogue": {
+      "keywords": [
+        "conflict",
+        "tension",
+        "argument"
+      ],
+      "target_forms": [
+        "dialogue",
+        "scene"
+      ],
+      "modes": [
+        "generation",
+        "revision",
+        "diagnosis"
+      ]
+    },
+    "beats_and_silence": {
+      "keywords": [
+        "pause",
+        "silence",
+        "beat"
+      ],
+      "target_forms": [
+        "dialogue",
+        "scene"
+      ],
+      "modes": [
+        "generation",
+        "revision"
+      ]
+    },
+    "compression": {
+      "keywords": [
+        "trim",
+        "tighten",
+        "compression"
+      ],
+      "target_forms": [
+        "dialogue"
+      ],
+      "modes": [
+        "revision"
+      ]
+    },
+    "character_voice_alignment": {
+      "keywords": [
+        "in character",
+        "voice",
+        "sounds wrong"
+      ],
+      "target_forms": [
+        "dialogue",
+        "character"
+      ],
+      "modes": [
+        "revision",
+        "diagnosis"
+      ],
+      "psyche_signals": [
+        "has_progression"
+      ]
+    },
+    "relationship_dialogue": {
+      "keywords": [
+        "chemistry",
+        "relationship",
+        "dynamic"
+      ],
+      "target_forms": [
+        "dialogue",
+        "scene"
+      ],
+      "modes": [
+        "generation",
+        "revision",
+        "diagnosis"
+      ],
+      "psyche_signals": [
+        "has_relations"
+      ]
+    },
+    "scene_dialogue_function": {
+      "keywords": [
+        "scene purpose",
+        "what should the dialogue do"
+      ],
+      "target_forms": [
+        "dialogue",
+        "scene"
+      ],
+      "modes": [
+        "diagnosis",
+        "revision"
+      ]
+    },
+    "dialogue_diagnosis": {
+      "keywords": [
+        "this scene feels flat",
+        "flat dialogue",
+        "dialogue feels flat",
+        "stiff dialogue"
+      ],
+      "target_forms": [
+        "dialogue",
+        "scene",
+        "analysis"
+      ],
+      "modes": [
+        "diagnosis"
+      ]
+    }
+  }
+}

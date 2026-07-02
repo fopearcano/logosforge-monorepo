@@ -1,0 +1,379 @@
+{
+  "domain": "dialogue",
+  "principles": [
+    {
+      "id": "P1",
+      "name": "Every Line Takes an Inner Action",
+      "description": "No character ever talks without a desire, an obstacle, and a tactic. Beneath every spoken line sits an unspoken verb (to seduce, to warn, to punish, to beg, to conceal). A line with no underlying action is activity, not dialogue — cut it.",
+      "priority": 1.0
+    },
+    {
+      "id": "P2",
+      "name": "Text Conceals, Subtext Drives",
+      "description": "What characters say (text) must never fully expose what they want, fear, or mean (subtext). The gap between the said, the unsaid, and the unsayable is where dialogue generates power. Collapsing that gap is on-the-nose writing and kills the scene.",
+      "priority": 0.98
+    },
+    {
+      "id": "P3",
+      "name": "Every Character Has a Unique Voice",
+      "description": "Each role must possess a distinct vocabulary and locution shaped by its culture, knowledge, psychology, and circumstance. If two characters can swap lines without loss, neither is fully written.",
+      "priority": 0.93
+    },
+    {
+      "id": "P4",
+      "name": "Economy Over Abundance",
+      "description": "Say the maximum in the fewest words. Every syllable carries cost; every line that does not simultaneously act, reveal character, convey exposition, or turn a beat is dead weight.",
+      "priority": 0.9
+    },
+    {
+      "id": "P5",
+      "name": "Dialogue Problems Are Story Problems",
+      "description": "When a line rings false, the fault is rarely in the words. It lies in unclear desire, absent antagonism, or a misdesigned scene. Paraphrasing broken dialogue makes it worse; diagnose the underlying event design before rewriting the words.",
+      "priority": 0.92
+    }
+  ],
+  "methods": [
+    {
+      "id": "M1",
+      "name": "Six-Task Line Test",
+      "goal": "Force every line to pull weight on all six dimensions of effective dialogue.",
+      "rules": [
+        "Take an inner action (a verb the speaker is doing to someone, including himself).",
+        "Advance the beat of action/reaction toward the scene's turning point.",
+        "Convey exposition by statement, allusion, or implication — never by announcement.",
+        "Characterize the speaker through word choice and phrasing unique to him.",
+        "Sustain narrative drive so the reader/audience hungers for the next line.",
+        "Remain credible — authentic to setting, psychology, and the fictional reality.",
+        "If a line fails two or more of these tasks, rewrite or cut it."
+      ],
+      "applies_to": ["dialogue", "scene"],
+      "priority": 1.0
+    },
+    {
+      "id": "M2",
+      "name": "Five Steps from Desire to Expression",
+      "goal": "Derive every line of dialogue from an upstream chain, never invent lines in a vacuum.",
+      "rules": [
+        "Name the character's Scene-Intention (immediate desire in this scene) tied to his Super-Intention (story-long desire).",
+        "Identify the Sense of Antagonism the character perceives here and now.",
+        "Choose a specific tactical action the character takes to provoke the reaction he wants.",
+        "Decide whether the action is carried by physical behavior, verbal behavior, or both.",
+        "Only then compose the expression — the words are the last step, not the first.",
+        "If you cannot name the first three steps for a given line, do not write the line."
+      ],
+      "applies_to": ["dialogue", "scene"],
+      "priority": 0.98
+    },
+    {
+      "id": "M3",
+      "name": "Said / Unsaid / Unsayable Stack",
+      "goal": "Layer every line across three depths so subtext remains live.",
+      "rules": [
+        "The Said: compose the surface words the character chooses to speak.",
+        "The Unsaid: track what the character thinks and feels but deliberately withholds; the words must allow the reader to infer it.",
+        "The Unsayable: track what drives the character from the subconscious — desires the character himself could not articulate.",
+        "Never let the Said equal the Unsaid; if a character voices exactly what he thinks and feels, you are on-the-nose.",
+        "When adapting inner monologue to stage or screen, re-express the Unsayable through tactics, paralanguage, or silence — never through confession."
+      ],
+      "applies_to": ["dialogue"],
+      "priority": 0.95
+    },
+    {
+      "id": "M4",
+      "name": "Action-Not-Activity Audit",
+      "goal": "Convert conversational activity into verbal action.",
+      "rules": [
+        "For every line, answer: 'In the subtext, what action is this character actually taking?' (to flatter, to extract, to intimidate, to test, to deflect…)",
+        "Replace the chatty surface activity with text that discharges that action indirectly.",
+        "If the only answer you can give is 'he's talking' or 'he's explaining,' the line is activity; rewrite it around a clear verb.",
+        "Prefer verbs of doing-to-another over verbs of self-description."
+      ],
+      "applies_to": ["dialogue"],
+      "priority": 0.93
+    },
+    {
+      "id": "M5",
+      "name": "Exposition as Ammunition",
+      "goal": "Deliver fictional facts as weapons characters use, never as data the author needs to broadcast.",
+      "rules": [
+        "Convert every required fact into something a character uses to get what he wants in the scene.",
+        "Release exposition on need-to-know, at the latest possible moment, in the smallest possible dose.",
+        "Pace exposition so that each reveal raises a new question — curiosity must pull the reader forward.",
+        "Refuse the two cardinal sins: Empty Talk (characters saying what both already know for the reader's benefit) and Forced Exposition (headlines, broadcasts, title rolls, overheard radios, etc.).",
+        "When two characters must discuss known history, either give one of them a reason to pretend not to know, or let the scene extract the fact as a revelation.",
+        "Reserve Direct Telling (narration, soliloquy, voice-over) for speed or counterpoint — never as a shortcut around dramatization."
+      ],
+      "applies_to": ["dialogue", "scene"],
+      "priority": 0.9
+    },
+    {
+      "id": "M6",
+      "name": "Character-Specific Voice Forge",
+      "goal": "Build a dialogue fingerprint unique to each role.",
+      "rules": [
+        "Separate vocabulary (nouns and verbs — what the character knows, sees, feels) from locution (modifiers, voice, rhythm, modalities — how the character's personality inflects speech).",
+        "Build the character's vocabulary from his culture: family, class, profession, region, education, era, religion, obsessions.",
+        "Build his locution from his psychology: passive/active, evasive/blunt, ornate/terse, ironic/earnest, concrete/abstract.",
+        "Give each recurring character at least one verbal tic or signature construction — a habit of syntax, a go-to image, a characteristic dodge.",
+        "Swap-test lines between any two characters; if the line still fits both, rewrite until only one can own it.",
+        "Let the character's vocabulary stay smaller than yours — creative limitation sharpens identity."
+      ],
+      "applies_to": ["dialogue", "character"],
+      "priority": 0.92
+    },
+    {
+      "id": "M7",
+      "name": "Line Design by Key-Term Placement",
+      "goal": "Shape each sentence's energy by where its core word lands.",
+      "rules": [
+        "Use the Suspense (periodic) Sentence — key word last — to create tension, emphasis, laughs, or reveals; make meaning wait.",
+        "Use the Cumulative Sentence — key word first — for natural, conversational flow that elaborates after the point.",
+        "Use the Balanced Sentence — key word mid-line — for poised, reflective, comparative rhythm.",
+        "Never rely on a single design throughout a scene; vary to avoid rhythmic monotony.",
+        "At the climactic line of a scene, default to Suspense design: the turning-point word should land last."
+      ],
+      "applies_to": ["dialogue"],
+      "priority": 0.85
+    },
+    {
+      "id": "M8",
+      "name": "Figurative Enrichment",
+      "goal": "Use figurative language to echo subtext without naming it.",
+      "rules": [
+        "Deploy metaphor, simile, synecdoche, metonymy, and similar tropes to resonate meaning into the unsaid and unsayable.",
+        "Let chosen figures reflect the speaker's culture and obsessions, not the author's taste.",
+        "Avoid dead metaphors and dictionary similes — if the phrase could appear in any character's mouth, discard it.",
+        "Do not pile tropes; one strong figure per speech usually outperforms three mediocre ones."
+      ],
+      "applies_to": ["dialogue"],
+      "priority": 0.75
+    },
+    {
+      "id": "M9",
+      "name": "Paralanguage and Silence Management",
+      "goal": "Exploit everything around the words — gesture, pause, silence — as part of verbal action.",
+      "rules": [
+        "For stage and screen, write paralanguage (expression, gesture, posture, pace, pitch, volume, proxemics) sparingly but pointedly; trust actors to fill in.",
+        "For page, translate paralanguage into figurative description integrated with the line.",
+        "Use the Pause for the beat a character chooses not to answer, or answers with body instead of word.",
+        "Use Silence when physical action can carry the beat better than speech; silence invites the camera in.",
+        "If a line and its accompanying action carry the same meaning, cut the line and keep the action."
+      ],
+      "applies_to": ["dialogue", "scene"],
+      "priority": 0.8
+    },
+    {
+      "id": "M10",
+      "name": "Beat-by-Beat Scene Shaping",
+      "goal": "Build scenes out of progressive action/reaction exchanges that turn the scene.",
+      "rules": [
+        "Define the beat as one action paired with its reaction (from another character or from within the same character).",
+        "Each successive beat must change the tactic or escalate the pressure; never repeat the same move twice in a row.",
+        "Locate the scene's turning point on a specific beat — the moment the value charge flips.",
+        "Place the turning-point beat neither too early (aftermath sags) nor too late (tension suffocates).",
+        "If a beat cannot be named in terms of action → reaction, it is not a beat — it is padding."
+      ],
+      "applies_to": ["scene", "dialogue"],
+      "priority": 0.95
+    },
+    {
+      "id": "M11",
+      "name": "Credibility Flaw Diagnostics",
+      "goal": "Detect and repair the seven ways dialogue loses belief.",
+      "rules": [
+        "Incredibility: dialogue out of key with character's nature or setting — rewrite from the character outward, not from the author's voice.",
+        "Empty Talk: characters exchanging facts they both know — replace with tactics or cut.",
+        "Overly Emotive Talk: language more intense than the actual feeling — throttle the words down to match the real charge, or raise the real charge.",
+        "Overly Knowing Talk: characters armed with the author's research — restrict each character to what he could plausibly know.",
+        "Overly Perceptive Talk: characters who analyze themselves like a therapist — reduce self-insight; let behaviour reveal what the character cannot see in himself.",
+        "Excuses Mistaken for Motivation: cheap trauma backstory used to justify extreme behaviour — supply true motivation (desire + stakes), not diagnostic shorthand.",
+        "Melodrama: overwrought expression from underwrought need — increase the weight of causes, never shrink the event."
+      ],
+      "applies_to": ["dialogue", "scene"],
+      "priority": 0.9
+    },
+    {
+      "id": "M12",
+      "name": "Language Flaw Diagnostics",
+      "goal": "Strip dialogue of generic, ornamental, or dead language.",
+      "rules": [
+        "Clichés: any phrase you have heard before in this kind of scene must be rewritten.",
+        "Character-Neutral Language: generic everyday phrasing — replace with specificity anchored to this character.",
+        "Ostentatious Language: showy prose that advertises the author — cut until the voice belongs to the character again.",
+        "Arid Language: dry Latinate constructions over long sentences — apply the preferences below.",
+        "Prefer concrete to abstract; familiar to exotic; short words to long; direct phrases to circumlocution; active to passive voice; short speeches to long; expressive language to literal mimicry of real speech.",
+        "Eliminate clutter: every adjective, adverb, and qualifier must earn its place or die."
+      ],
+      "applies_to": ["dialogue"],
+      "priority": 0.88
+    },
+    {
+      "id": "M13",
+      "name": "Content Flaw Diagnostics",
+      "goal": "Repair the structural content failures that flatten scenes.",
+      "rules": [
+        "On-the-Nose: characters stating fullest thoughts and emotions directly — pull the text back so subtext must carry the real meaning.",
+        "Monologue Fallacy: uninterrupted speeches that assume the world waits silently — break the speech with reaction, interruption, or shift of tactic.",
+        "Duelogue: two characters talking directly, explicitly, emotionally about their immediate problem — route the conflict through indirection, evasion, or a third element.",
+        "Build a Trialogue when two characters are in conflict: funnel their struggle through a third thing (an object, an absent person, a topic) so they fight about X while really fighting about Y."
+      ],
+      "applies_to": ["dialogue", "scene"],
+      "priority": 0.9
+    },
+    {
+      "id": "M14",
+      "name": "Design Flaw Diagnostics",
+      "goal": "Diagnose structural defects in how lines and scenes are shaped.",
+      "rules": [
+        "Repetition: hunt both accidental echoes (read aloud to catch) and thematic repetition (same point made twice) — cut the weaker instance.",
+        "Misshapen Lines: identify blurred meaning (unclear key term), mistimed meaning (key word in wrong position), or mistimed cues (actor cannot find the beat) — reposition the core word.",
+        "Misshapen Scenes: turning point landing too early, too late, or not at all — rebuild beat order so the turn lands where the scene's value change peaks.",
+        "Splintered Scenes: outer behaviour disconnected from inner intention — realign what characters say with what they actually want.",
+        "Paraphrasing Trap: rewriting by reshuffling words when the problem is structural — stop paraphrasing; fix the desire, antagonism, or beat design instead."
+      ],
+      "applies_to": ["dialogue", "scene"],
+      "priority": 0.92
+    },
+    {
+      "id": "M15",
+      "name": "Conflict-Level Calibration",
+      "goal": "Match dialogue density and style to the level(s) of conflict engaged.",
+      "rules": [
+        "Identify which of four levels the scene primarily engages: physical, social, personal, private (inner).",
+        "Physical-conflict scenes tolerate (and often demand) minimal dialogue — let action speak.",
+        "Social and personal conflict scenes require the most dialogue density — they live in what people say to one another.",
+        "Inner-conflict scenes require the most layered dialogue — said, unsaid, unsayable must all be audible.",
+        "The more levels engaged at once, the more complex the dialogue must be; never write inner-conflict scenes with action-genre brevity or physical-conflict scenes with novelistic introspection."
+      ],
+      "applies_to": ["scene", "dialogue"],
+      "priority": 0.8
+    },
+    {
+      "id": "M16",
+      "name": "Dialogue Shape by Conflict Pattern",
+      "goal": "Select the dialogue architecture that fits the kind of conflict being dramatized.",
+      "rules": [
+        "Balanced Conflict (both sides roughly equal, e.g. therapy-room duels): write thrust-and-parry exchanges where each beat inverts the last advantage.",
+        "Comic Conflict: characters pursue scene intentions with over-commitment and blind spots; mine the gap between their certainty and reality for the laughs.",
+        "Asymmetric Conflict: one side holds far more power — give the weaker side indirect tactics (evasion, irony, redirection) and the stronger side presumption and efficiency.",
+        "Indirect Conflict: antagonists rarely confront each other directly — route tension through social ritual, surrogate topics, or third parties.",
+        "Reflexive Conflict: characters in conflict with themselves — split the inner voice, use narratized dialogue or soliloquy, let selves argue.",
+        "Minimal Conflict: situations where little is said and less resolved — widen the subtext, weight each line, let silence and gesture carry the scene."
+      ],
+      "applies_to": ["scene", "dialogue"],
+      "priority": 0.82
+    },
+    {
+      "id": "M17",
+      "name": "Medium Adaptation",
+      "goal": "Adjust dialogue quantity, density, and register to stage, screen, or page.",
+      "rules": [
+        "Stage: language-forward; audiences accept higher poetic register and longer speeches; exploit soliloquy and direct address.",
+        "Film: image-forward; dialogue supplements rather than leads; favour compression, silence, and action — if a beat can be played in the face, cut the line.",
+        "Television: character-forward; longer arcs allow deeper voice differentiation and conversational rhythm; conflict tends to cluster in personal and social levels.",
+        "Prose: access-forward; inner dialogue, narratized dialogue, and indirect dialogue are available — use them, but preserve the said/unsaid/unsayable stack so first-person narrators do not over-disclose their own subconscious.",
+        "When adapting across media, re-derive the scene from desire and antagonism; do not simply transpose lines."
+      ],
+      "applies_to": ["dialogue", "scene"],
+      "priority": 0.75
+    },
+    {
+      "id": "M18",
+      "name": "Iceberg Composition",
+      "goal": "Keep the visible text small and the submerged weight massive.",
+      "rules": [
+        "For every scene, draft a private subtext document: what each character really wants, fears, knows, and conceals.",
+        "Never let more than roughly one-tenth of that content surface in the spoken lines.",
+        "When tempted to add a line that 'clarifies' motivation, delete it — clarity belongs to the reader's inference, not to the character's speech.",
+        "If beta readers miss the subtext entirely, the problem is usually too little action design, not too little exposition; strengthen the tactics, not the explanations."
+      ],
+      "applies_to": ["dialogue", "scene"],
+      "priority": 0.85
+    }
+  ],
+  "triggers": [
+    { "id": "T1", "condition": "dialogue_writing", "apply_methods": ["M2","M1","M3","M4","M6","M5","M18"] },
+    { "id": "T2", "condition": "scene_writing", "apply_methods": ["M10","M15","M16","M2","M1","M18"] },
+    { "id": "T3", "condition": "line_level_polish", "apply_methods": ["M7","M8","M12","M9"] },
+    { "id": "T4", "condition": "line_feels_false_or_flat", "apply_methods": ["M11","M12","M13","M14"] },
+    { "id": "T5", "condition": "on_the_nose_detected", "apply_methods": ["M3","M13","M4","M18"] },
+    { "id": "T6", "condition": "exposition_required", "apply_methods": ["M5","M2"] },
+    { "id": "T7", "condition": "character_voice_creation", "apply_methods": ["M6","M8"] },
+    { "id": "T8", "condition": "scene_fails_to_turn", "apply_methods": ["M14","M10","M2"] },
+    { "id": "T9", "condition": "medium_change_or_adaptation", "apply_methods": ["M17","M15","M9"] },
+    { "id": "T10", "condition": "revision", "apply_methods": ["M1","M11","M12","M13","M14"] },
+    { "id": "T11", "condition": "two_characters_direct_confrontation", "apply_methods": ["M13","M10"] },
+    { "id": "T12", "condition": "inner_monologue_or_soliloquy", "apply_methods": ["M3","M16","M17"] }
+  ],
+  "checks": [
+    {
+      "id": "C1",
+      "applies_to": "dialogue",
+      "questions": [
+        "What action (verb) is the speaker taking on whom with this line?",
+        "What does the character want in this scene, and what stops him from getting it?",
+        "Is the said equal to the unsaid? If yes, this is on-the-nose — pull the text back.",
+        "Could any other character in the story speak this line unchanged? If yes, rewrite it.",
+        "Is the exposition here delivered as ammunition, or as authorial broadcast?",
+        "Does the line's key term sit where its energy requires (last for suspense, first for flow, middle for balance)?",
+        "Which of the six tasks does this line execute? If fewer than three, cut or rewrite."
+      ]
+    },
+    {
+      "id": "C2",
+      "applies_to": "scene",
+      "questions": [
+        "Can each beat be named as a specific action and a specific reaction?",
+        "Where is the turning point, and does the value charge visibly flip on it?",
+        "Do beats change tactics, or merely restate the same move?",
+        "Which level(s) of conflict (physical, social, personal, private) does the scene engage, and is the dialogue density appropriate?",
+        "Is there a Duelogue at the core that should be routed through a Trialogue instead?",
+        "Does the subtext document for this scene hold at least ten times the content of the text?"
+      ]
+    },
+    {
+      "id": "C3",
+      "applies_to": "dialogue",
+      "questions": [
+        "Is this line a cliché — something you have heard in scenes like this before?",
+        "Does the vocabulary belong to the character, or to the author?",
+        "Are the modifiers expressing this character's personality, or generic intensification?",
+        "Could this be said shorter, more concretely, more actively, more directly?",
+        "Does any adjective or adverb here duplicate the meaning already carried by the verb? If yes, delete."
+      ]
+    },
+    {
+      "id": "C4",
+      "applies_to": "scene",
+      "questions": [
+        "Is the character overly knowing (uses author's research)?",
+        "Is the character overly perceptive (diagnoses his own psyche)?",
+        "Is emotion louder than its underlying cause (melodrama) — and if so, is the fix to raise the cause, not shrink the expression?",
+        "Does any backstory trauma function as an excuse rather than a true motivation?",
+        "Does any monologue run long because no character is permitted to react?"
+      ]
+    },
+    {
+      "id": "C5",
+      "applies_to": "dialogue",
+      "questions": [
+        "If you are rewriting by paraphrase and it keeps feeling worse, have you diagnosed the upstream problem (desire, antagonism, beat design)?",
+        "Could this line be replaced by silence, gesture, or a single piece of paralanguage with equal or greater effect?"
+      ]
+    }
+  ],
+  "conflicts": [
+    { "method_a": "M5", "method_b": "M3", "resolution": "M3 wins: if exposition must be delivered but would require collapsing Said onto Unsaid, find a new tactic that plants the fact indirectly. Never sacrifice subtext to deliver information." },
+    { "method_a": "M7", "method_b": "M4", "resolution": "M4 wins: economy outranks line-design elegance. A perfectly balanced sentence that runs long should be shortened; a short line with a slightly awkward key-term position can stand." },
+    { "method_a": "M6", "method_b": "M12", "resolution": "M6 wins: a character's authentic voice may legitimately violate preferences for short words or active voice. If the character is pompous, his sentences may legitimately be arid — the flaw list is guidance, not law, when it contradicts established voice." },
+    { "method_a": "M13", "method_b": "M10", "resolution": "M10 wins at the beat level: a Duelogue can be tolerated for a single beat if it is the scene's turning point and no Trialogue object is available. Elsewhere, M13 prevails." },
+    { "method_a": "M8", "method_b": "M12", "resolution": "M12 wins: figurative language that reads as ostentatious or character-neutral is worse than plain speech. If a trope does not belong to this character's world, strip it." },
+    { "method_a": "M17", "method_b": "M3", "resolution": "M3 wins: medium differences adjust how the stack is expressed (soliloquy vs gesture vs narration), but the Said/Unsaid/Unsayable stack itself is non-negotiable across all media." },
+    { "method_a": "M2", "method_b": "M1", "resolution": "M2 precedes M1: the Six-Task test is applied to lines that have already been derived through the Five Steps. Skipping M2 to reach M1 produces polished surface on hollow action." },
+    { "method_a": "M18", "method_b": "M5", "resolution": "M18 wins: when in doubt about how much to say, submerge. A scene that under-explains and must be reread is stronger than one that explains cleanly and is forgotten." }
+  ],
+  "meta": {
+    "philosophy": "Dialogue is verbal action: the audible tip of a submerged iceberg of desire, antagonism, choice, and tactic, shaped by each character's unique voice and released at the latest, most economical, most indirect moment possible.",
+    "style_bias": "subtext-forward, indirection over confession, specificity over generality, economy over abundance; compatible with any register from comic to tragic and any medium from stage to prose, but uncompromising about the primacy of inner action, the separation of said and unsaid, and the refusal of on-the-nose speech."
+  }
+}

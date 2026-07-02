@@ -1,0 +1,57 @@
+# --- Node / Electron ---------------------------------------------------------
+node_modules/
+**/node_modules/
+dist/
+dist-electron/
+**/dist/
+**/dist-electron/
+# Electron-builder output
+release/
+**/release/
+
+# --- Python ------------------------------------------------------------------
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+**/*.egg-info/
+.pytest_cache/
+**/.pytest_cache/
+# Virtualenvs (dev venv + CI build venvs)
+venv/
+.venv/
+**/venv/
+core-venv/
+buildvenv/
+
+# --- PyInstaller (the core bundle is a build artifact) -----------------------
+pro-desktop/core/build/
+pro-desktop/core/dist/
+# NOTE: pro-desktop/core/logosforge-core.spec + core_entry.py ARE tracked.
+
+# --- Logs / OS / editor ------------------------------------------------------
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# --- Local data --------------------------------------------------------------
+# Packaged builds write the DB to the per-user dir (app userData); dev cores may
+# drop a cwd-relative logosforge.db — never commit/ship a SQLite DB.
+*.sqlite
+*.sqlite3
+*.db
+logosforge.db
+
+# --- Monorepo additions ------------------------------------------------------
+# Large local assets: 6+ GB of local voice / whisper models — never commit
+# (use external storage or git-LFS if these ever need to be shared).
+models/
+# CI-mirror build venvs used for local freeze validation.
+build-venv/
+build-venv*/
+# PyInstaller work dir for the whiteboard backend (its dist/ is covered by **/dist/).
+whiteboard-desktop/backend/build/
+# Claude Code local config (launch.json + session state) — not needed on GitHub/CI.
+.claude/

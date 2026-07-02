@@ -1,0 +1,124 @@
+name: Release — LogosForge Pro (Windows)
+
+# Builds the Windows installer + portable exe for LogosForge Pro desktop.
+# The artifact is fully self-contained: the Electron shell + the renderer +
+# a PyInstaller-bundled copy of the Python core (no Python needed on the
+# user's machine).
+#
+# Triggers:
+#   * push a tag like  v0.1.0   -> builds AND publishes a GitHub Release
+#   * manual "Run workflow"     -> builds + uploads artifacts (no Release)
+#
+# Assumes a single monorepo checkout containing: logosforge/ (core),
+# logosforge-ui-contracts/, pro-shared-ui/, pro-desktop/. If these ever become
+# separate repos, replace the single checkout with multiple checkouts into
+# those sibling paths.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Attach the build to a GitHub Release"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout monorepo
+        uses: actions/checkout@v4
+
+      - name: Verify monorepo layout
+        run: |
+          missing=""
+          for d in logosforge logosforge-ui-contracts pro-shared-ui pro-desktop; do
+            [ -d "$d" ] || missing="$missing $d"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required sibling dir(s):$missing — this workflow expects a single monorepo checkout containing all four. If these are separate repos, add one actions/checkout per repo (with path:) so they end up as siblings."
+            exit 1
+          fi
+          echo "monorepo layout OK"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # --- 1. Bundle the Python core into a standalone onedir exe -----------
+      - name: Build the core bundle (PyInstaller)
+        run: |
+          python -m venv core-venv
+          ./core-venv/Scripts/python.exe -m pip install --upgrade pip
+          ./core-venv/Scripts/python.exe -m pip install "./logosforge[export]" pyinstaller
+          cd pro-desktop/core
+          ../../core-venv/Scripts/python.exe -m PyInstaller logosforge-core.spec --noconfirm --clean --log-level WARN
+
+      - name: Smoke-test the bundled core
+        run: |
+          ./pro-desktop/core/dist/logosforge-core/logosforge-core.exe --host 127.0.0.1 --port 8799 --mode desktop &
+          ok=""
+          for i in $(seq 1 30); do
+            sleep 1
+            code=$(curl -s --max-time 2 -o /dev/null -w "%{http_code}" http://127.0.0.1:8799/api/health || true)
+            if [ "$code" = "200" ]; then ok="yes"; echo "core healthy after ${i}s"; break; fi
+          done
+          # Reliable teardown on Windows: signals from git-bash don't stop a
+          # native console exe, so kill the image directly (//-escaped for bash).
+          taskkill //F //IM logosforge-core.exe //T 2>/dev/null || true
+          if [ -z "$ok" ]; then echo "::error::bundled core failed /api/health"; exit 1; fi
+
+      # --- 2. Build + package the Electron app -----------------------------
+      - name: Install pro-desktop deps
+        working-directory: pro-desktop
+        # npm ci = deterministic install from the committed lockfile. (The
+        # renderer bundles the shared packages from src via Vite aliases, so the
+        # file: deps install is effectively just a presence check.)
+        run: npm ci
+
+      - name: Build renderer + main, then package (NSIS + portable)
+        working-directory: pro-desktop
+        run: npm run dist:win
+        env:
+          # Unsigned build (no code-signing cert configured). Users will see a
+          # Windows SmartScreen prompt until a cert is added — see repo notes.
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      # --- 3. Publish ------------------------------------------------------
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: logosforge-pro-windows
+          # The installers. (latest.yml is only emitted when a publish provider
+          # is configured, so it is intentionally not required here.)
+          path: pro-desktop/release/*.exe
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.publish_release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: pro-desktop/release/*.exe
+          draft: false
+          generate_release_notes: true

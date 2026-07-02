@@ -1,0 +1,7 @@
+{
+  "id": "example_plugin",
+  "name": "Example Plugin",
+  "version": "1.0.0",
+  "author": "Logosforge",
+  "description": "A minimal example plugin that adds a greeting action to the Plugins menu."
+}

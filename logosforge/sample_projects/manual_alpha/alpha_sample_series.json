@@ -1,0 +1,102 @@
+{
+  "project": {
+    "title": "Alpha Sample — Series",
+    "description": "",
+    "format_mode": "series",
+    "writing_mode": "series",
+    "narrative_engine": "series",
+    "default_writing_format": "series"
+  },
+  "characters": [
+    {
+      "name": "Ada North",
+      "description": "Archivist; methodical, first through the door."
+    },
+    {
+      "name": "Milo Voss",
+      "description": "Nervous insider who arrives suspiciously early."
+    }
+  ],
+  "places": [],
+  "notes": [
+    {
+      "title": "Manual test note for Series mode",
+      "content": "Manual Alpha test note. Verify mode, Manuscript, Outline, PSYKE and characters; then save/reload.",
+      "tags": "",
+      "pinned": false,
+      "psyke_links": [],
+      "scene_links": [],
+      "structure_links": []
+    },
+    {
+      "title": "Unicode stress",
+      "content": "Unicode stress (manual): \"Curly quotes\", em dash — ellipsis … emoji 🐕, accented: Zampanò, città, perché.",
+      "tags": "",
+      "pinned": false,
+      "psyke_links": [],
+      "scene_links": [],
+      "structure_links": []
+    }
+  ],
+  "scenes": [
+    {
+      "title": "Episode 1 - The Unlocked Door",
+      "summary": "",
+      "synopsis": "",
+      "goal": "",
+      "conflict": "",
+      "outcome": "",
+      "content": "Episode 1 opens with Ada North discovering that the archive door is already unlocked. Milo Voss insists he arrived after the lock was broken.",
+      "beat": "",
+      "tags": [],
+      "order_index": 1,
+      "act": "Act 1",
+      "chapter": "Chapter 1",
+      "plotline": "",
+      "color_label": "",
+      "slugline": "",
+      "location": "",
+      "interior_exterior": "",
+      "time_of_day": "",
+      "estimated_duration_minutes": 0,
+      "visual_objective": "",
+      "dramatic_turn": "",
+      "blocking_notes": "",
+      "subtext_notes": "",
+      "setup_payoff_links": "",
+      "montage_group": "",
+      "cinematic_pacing": "",
+      "continuity_notes": "",
+      "visible_conflict": "",
+      "hidden_conflict": "",
+      "emotional_turn": "",
+      "who_knows_what": "",
+      "physical_action": "",
+      "visual_symbolism": "",
+      "characters": [],
+      "places": [],
+      "character_states": []
+    }
+  ],
+  "chapters": [],
+  "psyke_entries": [
+    {
+      "name": "Threshold",
+      "entry_type": "theme",
+      "aliases": "",
+      "notes": "A recurring motif about crossing from preparation into irreversible action.",
+      "is_global": false,
+      "details": {},
+      "related_entries": [],
+      "typed_relations": [],
+      "progressions": []
+    }
+  ],
+  "outline": [],
+  "continuity": [],
+  "plot_timeline": {
+    "lanes": [],
+    "links": [],
+    "structure_links": []
+  }
+}
