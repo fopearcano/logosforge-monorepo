@@ -47,7 +47,11 @@ logosforge.db
 # --- Monorepo additions ------------------------------------------------------
 # Large local assets: 6+ GB of local voice / whisper models — never commit
 # (use external storage or git-LFS if these ever need to be shared).
-models/
+# NOTE: root-anchored (leading slash) — an unanchored `models/` also matched the
+# core's SOURCE package logosforge/logosforge/models/, silently excluding it from
+# the repo and crashing the frozen backend at startup ("No module named
+# 'logosforge.models'").
+/models/
 # CI-mirror build venvs used for local freeze validation.
 build-venv/
 build-venv*/
