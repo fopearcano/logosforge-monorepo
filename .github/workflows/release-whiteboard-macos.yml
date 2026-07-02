@@ -5,9 +5,13 @@ name: Release — LogosForge Whiteboard (macOS, Intel)
 # copy of the Whiteboard backend (which embeds the Python core) — no Python needed
 # on the user's machine.
 #
-# Triggers: the SAME `whiteboard-v*` tag as the Windows workflow, so one tag
-# releases both platforms into a single GitHub Release. Manual dispatch builds +
-# uploads artifacts only.
+# PAUSED (2026-07-02): the tag trigger is disabled. The macos-13 (Intel) runner
+# would not allocate on this account/repo — jobs sat `pending` indefinitely and
+# never ran — so every `whiteboard-v*` tag was spawning a stuck macOS job. Until
+# the macOS target is revisited (switch to `macos-latest` / arm64, go universal,
+# or resolve Intel-runner availability), run this manually via
+# "Actions -> Run workflow". Re-add the `push: tags` trigger below to restore
+# automatic per-tag macOS releases.
 #
 # NOTE: builds are UNSIGNED (no Apple Developer ID configured). macOS Gatekeeper
 # will block the app until it is signed + notarized — testers must clear the
@@ -20,9 +24,7 @@ name: Release — LogosForge Whiteboard (macOS, Intel)
 # file: deps), so only those two siblings are required.
 
 on:
-  push:
-    tags:
-      - "whiteboard-v*"
+  # push: { tags: ["whiteboard-v*"] }   # PAUSED — see header note; re-enable to restore per-tag macOS builds
   workflow_dispatch:
     inputs:
       publish_release:

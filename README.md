@@ -20,7 +20,7 @@ Workflows live in `.github/workflows/`. Each freezes the Python backend/core wit
 | Workflow | Product / platform | Trigger |
 |---|---|---|
 | `release-whiteboard-windows.yml` | Whiteboard — Windows (NSIS installer + portable) | tag `whiteboard-v*` |
-| `release-whiteboard-macos.yml` | Whiteboard — macOS Intel (DMG) | tag `whiteboard-v*` |
+| `release-whiteboard-macos.yml` | Whiteboard — macOS Intel (DMG) | manual only — auto-trigger paused (`macos-13` runners won't allocate) |
 | `release-windows.yml` | Pro — Windows | tag `v*` |
 
 Cutting a release: `git tag whiteboard-v0.1.0 && git push origin whiteboard-v0.1.0` (or run the workflow manually via *Actions → Run workflow* for artifacts without a Release).
