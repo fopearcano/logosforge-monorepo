@@ -16,6 +16,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { registerDocFlusher, registerUnloadFlush, useCurrentDocId, withDoc } from '../../state/currentDocument';
 import { getOutlineItems, onOutlineRefresh, saveOutlineItems } from './outlineApi';
 import { publishOutlineColors } from './outlineColorStore';
+import { instantiateTemplate, type OutlineTemplate } from './outlineTemplates';
 import * as M from './outlineModel';
 import {
   EMPTY_FILTER,
@@ -80,6 +81,10 @@ export interface OutlineStore {
   addRoot: () => void;
   addChild: (parentId: string) => void;
   addSibling: (afterId: string) => void;
+  /** Add a node of `type`, auto-placed by structural rank relative to the selection. */
+  addTyped: (type: OutlineItemType) => void;
+  /** Instantiate a writing-method template — append after the outline, or replace it. */
+  applyTemplate: (tpl: OutlineTemplate, replace: boolean) => void;
   rename: (id: string, title: string) => void;
   setType: (id: string, type: OutlineItemType) => void;
   setStatus: (id: string, status: OutlineStatus) => void;
@@ -339,6 +344,59 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
     [mutate, addRoot],
   );
 
+  // Add a typed node auto-placed by structural rank (Act > Chapter/Sequence >
+  // Scene > Beat) relative to the selection — the "auto-structure" affordance.
+  const addTyped = useCallback(
+    (type: OutlineItemType) => {
+      const zoom = zoomRef.current;
+      const place = M.placeForType(itemsRef.current, selectedIdRef.current, type);
+      // The parent the placement would resolve to (a sibling drop keeps the
+      // after-node's parent).
+      const effParent = place.afterId
+        ? M.getNode(itemsRef.current, place.afterId)?.parentId ?? null
+        : place.parentId;
+      // While zoomed, a placement that resolves to the root or to a node outside
+      // the zoom subtree would land the item off-screen (buildRows walks from the
+      // zoom root) — clamp it to a child of the zoom root so it stays visible and
+      // the ▾ menu stays consistent with the primary + Add.
+      const outOfZoom =
+        !!zoom &&
+        !!M.getNode(itemsRef.current, zoom) &&
+        (effParent === null || !M.isSelfOrAncestor(itemsRef.current, zoom, effParent));
+      const id = newId();
+      mutate((list) => {
+        if (outOfZoom) {
+          return M.insertChild(list, zoom as string, M.createNode(id, type, zoom, now()));
+        }
+        const node = M.createNode(id, type, place.parentId, now());
+        if (place.afterId) return M.insertSibling(list, place.afterId, node);
+        if (place.parentId) return M.insertChild(list, place.parentId, node);
+        return M.insertRoot(list, node);
+      });
+      setSelectedId(id);
+      setSelectedIds([]);
+      anchorRef.current = id;
+      setDetailsOpenId(null);
+    },
+    [mutate],
+  );
+
+  const applyTemplate = useCallback(
+    (tpl: OutlineTemplate, replace: boolean) => {
+      const base = replace ? [] : itemsRef.current;
+      const created = instantiateTemplate(base, tpl, newId, now());
+      mutate(() => [...base, ...created]);
+      const firstRoot = created.find((n) => n.parentId === null) ?? created[0];
+      if (firstRoot) {
+        setSelectedId(firstRoot.id);
+        setSelectedIds([]);
+        anchorRef.current = firstRoot.id;
+      }
+      setDetailsOpenId(null);
+    },
+    [mutate],
+  );
+
   const rename = useCallback(
     (id: string, title: string) => mutate((list) => M.rename(list, id, title, now())),
     [mutate],
@@ -518,6 +576,8 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
     addRoot,
     addChild,
     addSibling,
+    addTyped,
+    applyTemplate,
     rename,
     setType,
     setStatus,

@@ -33,21 +33,16 @@ interface Props {
   store: OutlineStore;
   onReveal?: (node: OutlineNode) => void;
   canReveal?: (node: OutlineNode) => boolean;
+  /** Delete request — the panel confirms (in-app dialog) parents-with-children. */
+  onDeleteRequest: (id: string) => void;
 }
 
-export function OutlineOutliner({ store, onReveal, canReveal }: Props) {
+export function OutlineOutliner({ store, onReveal, canReveal, onDeleteRequest }: Props) {
   const rows = buildRows(store.items, store.zoomRootId, store.filter);
   const visibleIds = new Set(rows.map((r) => r.node.id));
   const filtering = isFilterActive(store.filter);
   const canDrag = !filtering; // order is ambiguous under an active filter
   const crumbs = store.zoomRootId ? ancestorChain(store.items, store.zoomRootId) : [];
-
-  const confirmDelete = (id: string) => {
-    if (hasChildren(store.items, id) && !window.confirm('Delete this item and all its children?')) {
-      return;
-    }
-    store.remove(id);
-  };
 
   const handleKey = (e: KeyboardEvent<HTMLInputElement>, atStart: boolean, atEnd: boolean) => {
     const id = store.selectedId;
@@ -121,7 +116,7 @@ export function OutlineOutliner({ store, onReveal, canReveal }: Props) {
     if ((e.key === 'Backspace' || e.key === 'Delete') && node.title.length === 0) {
       e.preventDefault();
       e.stopPropagation();
-      confirmDelete(id);
+      onDeleteRequest(id);
       return;
     }
     if (e.key === 'Escape') {
@@ -179,7 +174,7 @@ export function OutlineOutliner({ store, onReveal, canReveal }: Props) {
               row={row}
               store={store}
               onKeyDown={handleKey}
-              onDelete={confirmDelete}
+              onDelete={onDeleteRequest}
               canDrag={canDrag}
               onReveal={onReveal}
               canReveal={canReveal}

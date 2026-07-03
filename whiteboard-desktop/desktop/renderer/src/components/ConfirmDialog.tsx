@@ -29,9 +29,18 @@ export function ConfirmDialog({
   const confirmRef = useRef<HTMLButtonElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
 
+  // Focus the confirm button ONCE per open (deps: [open]). Keeping this out of
+  // the keydown effect matters: callers often pass fresh inline onConfirm/onCancel
+  // each render, so a parent re-render (e.g. an autosave settling) would otherwise
+  // re-run the effect and yank focus back to the destructive button — Enter would
+  // then confirm the very action the user was tabbing away to cancel.
+  useEffect(() => {
+    if (!open) return;
+    confirmRef.current?.focus();
+  }, [open]);
+
   useEffect(() => {
     if (!open) return undefined;
-    confirmRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();

@@ -30,6 +30,7 @@ import {
   nodeTags,
   normalizeTag,
   outdentItem,
+  placeForType,
   prevVisibleId,
   rangeSlice,
   removeItem,
@@ -54,6 +55,11 @@ import {
   publishOutlineColors,
   subscribeOutlineColors,
 } from './outlineColorStore';
+import {
+  OUTLINE_TEMPLATES,
+  countTemplateNodes,
+  instantiateTemplate,
+} from './outlineTemplates';
 import { storyMapNode } from '../whiteboard/StoryMap';
 import type { OutlineItem } from './types';
 
@@ -497,6 +503,70 @@ check('dropZone zero height -> child', dropZone(0, 0) === 'child');
   check('storymap scene -> scene', node('scene').shape === 'wb-sm-scene');
   check('storymap synopsis -> beat', node('synopsis').shape === 'wb-sm-beat');
   check('storymap note -> beat', node('note').shape === 'wb-sm-beat');
+}
+
+// 26. placeForType — auto-structure placement by structural rank
+{
+  // act A → sequence S → scene SC → beat B
+  let items: OutlineNode[] = [];
+  items = insertRoot(items, createNode('A', 'act', null, NOW));
+  items = insertChild(items, 'A', createNode('S', 'sequence', 'A', NOW));
+  items = insertChild(items, 'S', createNode('SC', 'scene', 'S', NOW));
+  items = insertChild(items, 'SC', createNode('B', 'beat', 'SC', NOW));
+
+  const beatUnderScene = placeForType(items, 'SC', 'beat');
+  check('placeForType: beat nests under selected scene', beatUnderScene.parentId === 'SC' && beatUnderScene.afterId === null);
+
+  const sceneSibling = placeForType(items, 'SC', 'scene');
+  check('placeForType: scene is sibling of selected scene', sceneSibling.parentId === 'S' && sceneSibling.afterId === 'SC');
+
+  const sceneFromBeat = placeForType(items, 'B', 'scene');
+  check('placeForType: scene from a beat → sibling of the beat’s scene', sceneFromBeat.parentId === 'S' && sceneFromBeat.afterId === 'SC');
+
+  const actFromBeat = placeForType(items, 'B', 'act');
+  check('placeForType: act from a beat → root sibling of the act', actFromBeat.parentId === null && actFromBeat.afterId === 'A');
+
+  const sceneUnderAct = placeForType(items, 'A', 'scene');
+  check('placeForType: scene under a selected act nests directly (skips missing levels)', sceneUnderAct.parentId === 'A' && sceneUnderAct.afterId === null);
+
+  const rootWhenNoSelection = placeForType(items, null, 'beat');
+  check('placeForType: no selection → new root', rootWhenNoSelection.parentId === null && rootWhenNoSelection.afterId === null);
+
+  const customNests = placeForType(items, 'SC', 'custom');
+  check('placeForType: custom nests under the selection', customNests.parentId === 'SC');
+
+  const staleSelection = placeForType(items, 'nope', 'scene');
+  check('placeForType: stale selection id → root', staleSelection.parentId === null && staleSelection.afterId === null);
+}
+
+// 27. instantiateTemplate + templates catalogue
+{
+  const tpl = OUTLINE_TEMPLATES.find((t) => t.id === 'three-act')!;
+  check('three-act counts 12 nodes (3 acts + 9 beats)', countTemplateNodes(tpl) === 12);
+
+  let n = 0;
+  const mkid = () => `t${++n}`;
+  const nodes = instantiateTemplate([], tpl, mkid, NOW);
+  check('instantiateTemplate emits every node', nodes.length === countTemplateNodes(tpl));
+  check('instantiateTemplate ids are unique', new Set(nodes.map((x) => x.id)).size === nodes.length);
+
+  const roots = nodes.filter((x) => x.parentId === null);
+  check('three-act → 3 act roots ordered 0..2', roots.length === 3 && roots.every((r) => r.type === 'act') && roots.map((r) => r.order).join(',') === '0,1,2');
+
+  const kids = nodes.filter((x) => x.parentId === roots[0].id);
+  check('act I → 3 beat children ordered 0..2', kids.length === 3 && kids.every((k) => k.type === 'beat') && kids.map((k) => k.order).join(',') === '0,1,2');
+  check('template titles are applied', roots[0].title.length > 0 && kids[0].title.length > 0);
+
+  // Append into a non-empty outline: new roots order after the existing ones.
+  let base: OutlineNode[] = [];
+  base = insertRoot(base, createNode('EX', 'chapter', null, NOW));
+  const appended = instantiateTemplate(base, tpl, mkid, NOW);
+  const appRoots = appended.filter((x) => x.parentId === null);
+  check('instantiateTemplate appends roots after existing', Math.min(...appRoots.map((r) => r.order)) === 1);
+
+  const ids = OUTLINE_TEMPLATES.map((t) => t.id);
+  check('template ids are unique across the catalogue', new Set(ids).size === ids.length);
+  check('every template has nodes', OUTLINE_TEMPLATES.every((t) => t.nodes.length > 0));
 }
 
 // --- report ---

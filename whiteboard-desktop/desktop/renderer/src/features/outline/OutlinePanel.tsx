@@ -11,9 +11,11 @@
 
 import { useCallback, useMemo, useRef, useState } from 'react';
 
+import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { Popover } from '../../components/Popover';
 import { normalizeOutlineTitle } from './outlineColorStore';
 import { OutlineOutliner } from './OutlineOutliner';
+import { OutlineTemplatesDialog } from './OutlineTemplatesDialog';
 import {
   COLOR_LABELS,
   OUTLINE_COLORS,
@@ -21,7 +23,10 @@ import {
   OUTLINE_TYPES,
   STATUS_LABELS,
   TYPE_LABELS,
+  descendantIds,
+  hasChildren,
   isFilterActive,
+  isSelfOrAncestor,
   type OutlineColor,
   type OutlineItemType,
   type OutlineNode,
@@ -29,6 +34,13 @@ import {
 } from './outlineModel';
 import type { OutlineItem, OutlineKind } from './types';
 import { useOutline } from './useOutline';
+
+/** Confirmation state for a pending delete (single row or batch). */
+interface DeletePrompt {
+  title: string;
+  message: string;
+  onConfirm: () => void;
+}
 
 type View = 'manual' | 'document';
 
@@ -127,10 +139,51 @@ function ManualView({
   onNavigate?: (item: OutlineItem) => void;
 }) {
   const saveLabel = SAVE_LABEL[store.saveState] ?? '';
-  // When zoomed in, "+ Add" adds a child of the zoom root (not a new top-level).
-  const add = () => (store.zoomRootId ? store.addChild(store.zoomRootId) : store.addRoot());
+  const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [deletePrompt, setDeletePrompt] = useState<DeletePrompt | null>(null);
   const filterOn = isFilterActive(store.filter);
   const multiCount = store.selectedIds.length;
+
+  // Primary "+ Add": another item at the current level (sibling of the selection),
+  // else a child of the zoom root, else a new top-level item. The ▾ menu adds a
+  // specific type (auto-placed by rank) or opens the templates picker.
+  const smartAdd = () => {
+    const zoom = store.zoomRootId;
+    const sel = store.selectedId;
+    if (!zoom) {
+      if (sel) store.addSibling(sel);
+      else store.addRoot();
+      return;
+    }
+    // Zoomed: only add a sibling when the selection is strictly inside the zoomed
+    // subtree (a stale selection outside it would create the node off-screen);
+    // otherwise add a child of the zoom root so it stays visible.
+    const inside = !!sel && sel !== zoom && isSelfOrAncestor(store.items, zoom, sel);
+    if (inside) store.addSibling(sel as string);
+    else store.addChild(zoom);
+  };
+
+  // Delete routes through the in-app ConfirmDialog — window.confirm is unreliable
+  // in the packaged Electron app, so parent deletes (the only path that confirms)
+  // silently no-op'd. Leaf rows need no confirmation and delete immediately.
+  const requestDelete = (id: string) => {
+    const node = store.items.find((n) => n.id === id);
+    if (!node) return;
+    if (!hasChildren(store.items, id)) {
+      store.remove(id);
+      return;
+    }
+    const n = descendantIds(store.items, id).length;
+    const label = node.title.trim() || TYPE_LABELS[node.type];
+    setDeletePrompt({
+      title: 'Delete item',
+      message: `Delete “${label}” and its ${n} nested item${n === 1 ? '' : 's'}?`,
+      onConfirm: () => {
+        store.remove(id);
+        setDeletePrompt(null);
+      },
+    });
+  };
 
   // Reveal-in-editor: match a manual item's title to document heading(s)/scene(s).
   // Titles can collide (two "Chapter One" headings), so keep every match and
@@ -167,17 +220,60 @@ function ManualView({
   );
 
   const deleteSelected = () => {
-    if (window.confirm(`Delete ${multiCount} selected items and their children?`)) {
-      store.removeSelected();
-    }
+    setDeletePrompt({
+      title: 'Delete selection',
+      message: `Delete ${multiCount} selected items and all their children?`,
+      onConfirm: () => {
+        store.removeSelected();
+        setDeletePrompt(null);
+      },
+    });
   };
 
   return (
     <>
       <div className="outline-toolbar">
-        <button type="button" className="outline-tool" onClick={add}>
-          + Add
-        </button>
+        <div className="outline-add-split" role="group" aria-label="Add outline item">
+          <button type="button" className="outline-tool outline-add-main" onClick={smartAdd} title="Add an item at the current level">
+            + Add
+          </button>
+          <Popover
+            align="left"
+            triggerClassName="outline-tool outline-add-caret"
+            label="▾"
+            title="Add a specific type, or apply a structure template"
+          >
+            {(close) => (
+              <div className="wb-menu outline-add-menu">
+                <div className="wb-menu-label">Add item</div>
+                {OUTLINE_TYPES.map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    className="wb-menu-item"
+                    onClick={() => {
+                      store.addTyped(t);
+                      close();
+                    }}
+                  >
+                    {TYPE_LABELS[t]}
+                  </button>
+                ))}
+                <div className="wb-menu-sep" role="separator" />
+                <button
+                  type="button"
+                  className="wb-menu-item"
+                  onClick={() => {
+                    setTemplatesOpen(true);
+                    close();
+                  }}
+                >
+                  Structure templates…
+                </button>
+              </div>
+            )}
+          </Popover>
+        </div>
         <button type="button" className="outline-tool" onClick={store.collapseAll} title="Collapse all">
           Collapse all
         </button>
@@ -305,9 +401,32 @@ function ManualView({
         ) : store.error ? (
           <p className="outline-hint outline-error">Couldn’t load outline: {store.error}</p>
         ) : (
-          <OutlineOutliner store={store} onReveal={onReveal} canReveal={canReveal} />
+          <OutlineOutliner
+            store={store}
+            onReveal={onReveal}
+            canReveal={canReveal}
+            onDeleteRequest={requestDelete}
+          />
         )}
       </div>
+
+      <ConfirmDialog
+        open={!!deletePrompt}
+        title={deletePrompt?.title ?? ''}
+        message={deletePrompt?.message ?? ''}
+        confirmLabel="Delete"
+        onConfirm={() => deletePrompt?.onConfirm()}
+        onCancel={() => setDeletePrompt(null)}
+      />
+      <OutlineTemplatesDialog
+        open={templatesOpen}
+        hasExisting={store.items.length > 0}
+        onApply={(tpl, replace) => {
+          store.applyTemplate(tpl, replace);
+          setTemplatesOpen(false);
+        }}
+        onClose={() => setTemplatesOpen(false)}
+      />
     </>
   );
 }

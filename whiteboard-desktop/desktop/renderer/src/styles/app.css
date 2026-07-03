@@ -335,6 +335,14 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .outline-save-saved  { color: var(--ok); }
 .outline-save-error  { color: var(--error); }
 
+/* Split "+ Add": a primary quick-add joined to a ▾ type/template menu. */
+.outline-add-split { display: inline-flex; align-items: stretch; }
+.outline-add-split .wb-popover { display: flex; }
+.outline-add-main { border: 1px solid var(--border); border-radius: var(--r-sm) 0 0 var(--r-sm); }
+.outline-add-caret { border: 1px solid var(--border); border-left: 0; border-radius: 0 var(--r-sm) var(--r-sm) 0; padding: 3px 6px; }
+.outline-add-split .outline-tool.is-active { background: var(--hover); color: var(--text); }
+.outline-add-menu { min-width: 150px; }
+
 .outline-searchbar { display: flex; align-items: center; gap: 6px; padding: 4px 11px 8px; }
 .outline-search, .psyke-search input, .sp-ac-input, .outline-tag-input {
   flex: 1; min-width: 0;
@@ -1114,3 +1122,32 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .pp-pagenum { position: absolute; top: .5in; right: 1in; }
 .pp-row { white-space: pre; line-height: 1; height: 1em; }
 .pp-right { text-align: right; }
+
+/* --- Outline structure-templates dialog ------------------------------------ */
+.otpl-dialog {
+  width: min(560px, calc(100vw - 32px));
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-lg);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .4); padding: 18px 20px 16px;
+  display: flex; flex-direction: column; max-height: calc(100vh - 48px);
+}
+.otpl-body { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; min-height: 0; margin-bottom: 12px; }
+.otpl-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; overflow-y: auto; max-height: 46vh; }
+.otpl-item {
+  display: grid; grid-template-columns: 1fr auto; gap: 1px 8px; width: 100%; text-align: left;
+  padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r-md);
+  background: transparent; color: var(--text); cursor: pointer;
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.otpl-item:hover { background: var(--hover); }
+.otpl-item.is-active { border-color: var(--accent); background: var(--accent-soft); }
+.otpl-item-name { font: 600 12px/1.25 var(--font-ui); }
+.otpl-item-desc { grid-column: 1 / -1; font: 400 11px/1.4 var(--font-ui); color: var(--muted); }
+.otpl-item-count { font: 500 9px/1 var(--font-mono); letter-spacing: .04em; color: var(--muted); white-space: nowrap; align-self: start; padding-top: 2px; }
+.otpl-preview { overflow-y: auto; max-height: 46vh; background: var(--panel); border: 1px solid var(--border-soft); border-radius: var(--r-md); padding: 8px; }
+.otpl-prev-row { display: flex; align-items: baseline; gap: 7px; padding: 2px 0; }
+.otpl-prev-type { flex: none; font: 500 8.5px/1.4 var(--font-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); min-width: 44px; }
+.otpl-prev-title { font: 400 11.5px/1.4 var(--font-ui); color: var(--text); }
+.otpl-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.otpl-replace { display: inline-flex; align-items: center; gap: 6px; font: 400 11px/1.3 var(--font-ui); color: var(--muted); cursor: pointer; }
+.otpl-actions { display: flex; gap: 8px; }
+@media (max-width: 520px) { .otpl-body { grid-template-columns: 1fr; } }

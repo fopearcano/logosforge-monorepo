@@ -155,6 +155,55 @@ export function childType(mode: string, parentType: OutlineItemType): OutlineIte
   return chains[mode]?.[parentType] ?? 'custom';
 }
 
+/**
+ * Structural depth of each type, mode-independent. `act`/`part` are top-level
+ * containers (0); `chapter`/`sequence` the next level (1); `scene` (2); `beat`
+ * (3). They share ranks because they don't co-occur across modes (screenplay
+ * act→sequence→scene→beat; novel part→chapter→scene→beat). `custom` is treated
+ * as a leaf so it always nests under whatever is selected.
+ */
+export const TYPE_RANK: Record<OutlineItemType, number> = {
+  act: 0,
+  part: 0,
+  chapter: 1,
+  sequence: 1,
+  scene: 2,
+  beat: 3,
+  custom: 99,
+};
+
+export interface TypedPlacement {
+  parentId: string | null;
+  afterId: string | null;
+}
+
+/**
+ * Where a newly-added node of `type` should land, given the current selection —
+ * the "auto-structure" rule. Walking up from the selected node (inclusive):
+ *   - the first ancestor SHALLOWER than the new type → nest as its child
+ *     (e.g. add a Scene while an Act is selected → Scene under the Act);
+ *   - the first ancestor at the SAME rank → add as its sibling
+ *     (add a Scene while a Scene/Beat is selected → a sibling Scene);
+ *   - deeper ancestors are skipped (you're adding something higher-level).
+ * Nothing selected, or the walk reaches the top → a new root. Pure.
+ */
+export function placeForType(
+  items: OutlineNode[],
+  selectedId: string | null,
+  type: OutlineItemType,
+): TypedPlacement {
+  if (!selectedId || !getNode(items, selectedId)) return { parentId: null, afterId: null };
+  const newRank = TYPE_RANK[type];
+  const chain = ancestorChain(items, selectedId); // root → … → selected
+  for (let i = chain.length - 1; i >= 0; i--) {
+    const n = chain[i];
+    const r = TYPE_RANK[n.type];
+    if (r < newRank) return { parentId: n.id, afterId: null };
+    if (r === newRank) return { parentId: n.parentId, afterId: n.id };
+  }
+  return { parentId: null, afterId: null };
+}
+
 // --- queries ----------------------------------------------------------------
 
 export function childrenOf(items: OutlineNode[], parentId: string | null): OutlineNode[] {
