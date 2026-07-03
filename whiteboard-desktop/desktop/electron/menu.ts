@@ -54,6 +54,8 @@ export function setAppMenu({ getWindow }: MenuDeps): void {
   const exportSubmenu: MenuItemConstructorOptions = {
     label: 'Export',
     submenu: [
+      { label: 'Export Project (.lfbundle)…', click: () => fileAction('export:project-bundle') },
+      { type: 'separator' },
       { label: 'Export as Text…', click: () => fileAction('export:txt') },
       { label: 'Export as Markdown…', click: () => fileAction('export:md') },
       { label: 'Export as Fountain…', click: () => fileAction('export:fountain') },

@@ -14,6 +14,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { withDoc } from '../../state/currentDocument';
 import { createPsykeElement } from '../psyke/psykeApi';
 import type { PsykeElementType } from '../psyke/types';
 import { emitOutlineRefresh, getOutlineItems, saveOutlineItems } from '../outline/outlineApi';
@@ -190,6 +191,33 @@ export function useImportExport(opts: Options): ImportExportApi {
       const def = EXPORT_BY_ID.get(id);
       if (!def) return;
       const o = optsRef.current;
+
+      // Whole-project bundle: the backend assembles it (manuscript + outline +
+      // comments + PSYKE) in one pass — the renderer just fetches + saves it.
+      if (id === 'project-bundle') {
+        const label = o.getFileLabel();
+        const title = label && label !== 'Untitled' ? label.replace(/\.[^./\\]+$/, '') : o.getTitle();
+        let content: string;
+        try {
+          const resp = await fetch(withDoc(`${o.baseUrl}/api/export/project`));
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          content = await resp.text();
+        } catch (err) {
+          console.error('[export] project bundle fetch failed:', err);
+          say('error', 'Could not assemble the project bundle.');
+          return;
+        }
+        const suggested = suggestedExportName(label || title || 'untitled', 'lfbundle');
+        const res = await exportSave(content, suggested, def.filters);
+        if (res.canceled) return;
+        if (!res.ok) {
+          say('error', res.error ?? 'Export failed.');
+          return;
+        }
+        say('ok', `Exported ${res.fileName ?? suggested}.`);
+        return;
+      }
+
       if (id === 'comments' && o.getComments().length === 0) {
         say('ok', 'No comments to export.');
         return;

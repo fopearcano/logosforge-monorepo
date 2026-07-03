@@ -20,7 +20,15 @@ export const LOGOSFORGE_FORMAT = 'logosforge-whiteboard';
 export const LOGOSFORGE_VERSION = '1.0';
 
 export type ImportFormatId = 'txt' | 'md' | 'fountain' | 'logosforge' | 'fdx';
-export type ExportFormatId = 'txt' | 'md' | 'fountain' | 'logosforge' | 'json' | 'html' | 'comments';
+export type ExportFormatId =
+  | 'txt'
+  | 'md'
+  | 'fountain'
+  | 'logosforge'
+  | 'json'
+  | 'html'
+  | 'comments'
+  | 'project-bundle';
 
 export interface DialogFilter {
   name: string;
@@ -55,6 +63,9 @@ export const IMPORT_FORMATS: ImportFormatDef[] = [
 ];
 
 export const EXPORT_FORMATS: ExportFormatDef[] = [
+  // Whole-project bundle (manuscript + outline + comments + PSYKE) — the migration
+  // + backup format. Its content is assembled by the backend, not buildExport().
+  { id: 'project-bundle', label: 'Export Project (.lfbundle)…', action: 'export:project-bundle', ext: 'lfbundle', filters: [{ name: 'LogosForge Project', extensions: ['lfbundle'] }] },
   { id: 'txt', label: 'Export as Text…', action: 'export:txt', ext: 'txt', filters: [{ name: 'Text', extensions: ['txt'] }] },
   { id: 'md', label: 'Export as Markdown…', action: 'export:md', ext: 'md', filters: [{ name: 'Markdown', extensions: ['md'] }] },
   { id: 'fountain', label: 'Export as Fountain…', action: 'export:fountain', ext: 'fountain', filters: [{ name: 'Fountain', extensions: ['fountain'] }] },

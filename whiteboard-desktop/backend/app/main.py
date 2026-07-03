@@ -21,6 +21,7 @@ from app.local_state import WhiteboardCreate, migrate_legacy, whiteboard_store
 from app.routers import (
     comments,
     documents,
+    export,
     littleboy,
     outline,
     psyke,
@@ -68,6 +69,7 @@ app.include_router(outline.router)
 app.include_router(littleboy.router)
 app.include_router(comments.router)
 app.include_router(settings.router)
+app.include_router(export.router)
 
 
 @app.get("/health")
