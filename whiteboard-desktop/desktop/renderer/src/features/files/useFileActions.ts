@@ -18,6 +18,14 @@ interface Options {
   getBlocks: () => WhiteboardBlock[];
   loadBlocks: (blocks: WhiteboardBlock[]) => void;
   mode: string;
+  /**
+   * How "New" makes a blank slate. In the document-backed Whiteboard this creates
+   * a fresh DOCUMENT (blank manuscript AND its own empty outline/comments) rather
+   * than only blanking the editor — otherwise the current document's outline is
+   * left orphaned against an empty manuscript. When omitted, New falls back to
+   * blanking the editor in place (the file-only behaviour).
+   */
+  onNewDocument?: () => void | Promise<void>;
 }
 
 export interface FileActionsApi {
@@ -39,7 +47,7 @@ export interface FileActionsApi {
   confirmProceedPastUnsavedChanges: (reason: string) => Promise<boolean>;
 }
 
-export function useFileActions({ getBlocks, loadBlocks, mode }: Options): FileActionsApi {
+export function useFileActions({ getBlocks, loadBlocks, mode, onNewDocument }: Options): FileActionsApi {
   const [filePath, setFilePath] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [status, setStatus] = useState<FileStatus>('saved');
@@ -54,6 +62,8 @@ export function useFileActions({ getBlocks, loadBlocks, mode }: Options): FileAc
   filePathRef.current = filePath;
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
+  const onNewDocumentRef = useRef(onNewDocument);
+  onNewDocumentRef.current = onNewDocument;
   const suppressDirty = useRef(false);
 
   // Mirror dirty state to main (drives the close/quit save prompt).
@@ -137,7 +147,19 @@ export function useFileActions({ getBlocks, loadBlocks, mode }: Options): FileAc
   );
 
   const newDocument = useCallback(async () => {
-    if (await confirmProceed('Save changes before creating a new document?')) loadInto(BLANK, null);
+    if (!(await confirmProceed('Save changes before creating a new document?'))) return;
+    const createFresh = onNewDocumentRef.current;
+    if (createFresh) {
+      // Create a genuinely fresh document (blank manuscript + its own empty
+      // outline/comments); the editor re-mounts on the new doc id. Reset the file
+      // association so the new document starts as an unsaved, clean slate.
+      await createFresh();
+      setFilePath(null);
+      setDirty(false);
+      setStatus('saved');
+    } else {
+      loadInto(BLANK, null);
+    }
   }, [confirmProceed, loadInto]);
 
   const openDocument = useCallback(async () => {

@@ -192,7 +192,15 @@ export function WhiteboardPage({
   const loadBlocks = useCallback((blocks: WhiteboardBlock[]) => {
     editorRef.current?.commands.setContent(blocksToDoc(blocks), true);
   }, []);
-  const fileDoc = useFileActions({ getBlocks: () => liveBlocksRef.current, loadBlocks, mode });
+  // "New" creates a fresh DOCUMENT (blank manuscript + its own empty outline &
+  // comments), same as the title-menu "New document" — not just a blank editor,
+  // which would leave this document's outline orphaned against empty prose.
+  const fileDoc = useFileActions({
+    getBlocks: () => liveBlocksRef.current,
+    loadBlocks,
+    mode,
+    onNewDocument: () => createNewDoc(),
+  });
   const markFileDirty = fileDoc.markDirty;
 
   // Import / Export (extends file management; never alters Open/Save semantics).
