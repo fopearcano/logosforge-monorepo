@@ -71,11 +71,9 @@ export function setAppMenu({ getWindow }: MenuDeps): void {
   const fileMenu: MenuItemConstructorOptions = {
     label: 'File',
     submenu: [
-      { label: 'New', accelerator: 'CmdOrCtrl+N', click: () => fileAction('new') },
-      { label: 'Open…', accelerator: 'CmdOrCtrl+O', click: () => fileAction('open') },
-      { type: 'separator' },
-      { label: 'Save', accelerator: 'CmdOrCtrl+S', click: () => fileAction('save') },
-      { label: 'Save As…', accelerator: 'CmdOrCtrl+Shift+S', click: () => fileAction('save-as') },
+      // Documents auto-save to the app; open/switch documents from the in-app
+      // File menu or the title dropdown. Text-file I/O is Import / Export.
+      { label: 'New Document', accelerator: 'CmdOrCtrl+N', click: () => fileAction('new') },
       { type: 'separator' },
       importSubmenu,
       exportSubmenu,

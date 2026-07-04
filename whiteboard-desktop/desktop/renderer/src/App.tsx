@@ -257,42 +257,23 @@ export function App() {
             <div className="app-title-menu wb-menu wb-menu-scroll" role="menu">
               <div className="wb-menu-label">Documents</div>
               {docMenu.documents.map((d) => (
-                <div key={d.id} className="wb-doc-row">
-                  <button
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked={d.id === docMenu.currentDocId}
-                    className={`wb-menu-item wb-doc-item${d.id === docMenu.currentDocId ? ' is-current' : ''}`}
-                    onClick={() => {
-                      setTitleMenuOpen(false);
-                      docMenu.selectDocument(d.id);
-                    }}
-                  >
-                    <span className="wb-doc-check" aria-hidden="true">
-                      {d.id === docMenu.currentDocId ? '✓' : ''}
-                    </span>
-                    <span className="wb-doc-name">{d.title || 'Untitled'}</span>
-                    <span className="wb-doc-mode">{d.mode}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="wb-doc-del"
-                    title={`Delete “${d.title || 'Untitled'}”`}
-                    aria-label={`Delete ${d.title || 'Untitled'}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (
-                        window.confirm(
-                          `Delete “${d.title || 'Untitled'}”? This also removes its outline and story bible.`,
-                        )
-                      ) {
-                        docMenu.deleteDocument(d.id);
-                      }
-                    }}
-                  >
-                    ×
-                  </button>
-                </div>
+                <button
+                  key={d.id}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={d.id === docMenu.currentDocId}
+                  className={`wb-menu-item wb-doc-item${d.id === docMenu.currentDocId ? ' is-current' : ''}`}
+                  onClick={() => {
+                    setTitleMenuOpen(false);
+                    docMenu.selectDocument(d.id);
+                  }}
+                >
+                  <span className="wb-doc-check" aria-hidden="true">
+                    {d.id === docMenu.currentDocId ? '✓' : ''}
+                  </span>
+                  <span className="wb-doc-name">{d.title || 'Untitled'}</span>
+                  <span className="wb-doc-mode">{d.mode}</span>
+                </button>
               ))}
               <button
                 type="button"
@@ -306,59 +287,6 @@ export function App() {
                 + New document
               </button>
 
-              <div className="wb-menu-sep" role="separator" />
-              <button
-                type="button"
-                role="menuitem"
-                className="wb-menu-item"
-                onClick={() => {
-                  setTitleMenuOpen(false);
-                  const current = docMenu.documents.find((d) => d.id === docMenu.currentDocId);
-                  const next = window.prompt('Rename document', current?.title ?? project.name);
-                  if (next != null && next.trim()) docMenu.renameCurrent(next);
-                }}
-              >
-                Rename…
-              </button>
-
-              {docMenu.hasFileBridge && (
-                <>
-                  <div className="wb-menu-sep" role="separator" />
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="wb-menu-item"
-                    onClick={() => {
-                      setTitleMenuOpen(false);
-                      docMenu.openDocument();
-                    }}
-                  >
-                    Open file…
-                  </button>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="wb-menu-item"
-                    onClick={() => {
-                      setTitleMenuOpen(false);
-                      docMenu.saveDocument();
-                    }}
-                  >
-                    Save to file
-                  </button>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="wb-menu-item"
-                    onClick={() => {
-                      setTitleMenuOpen(false);
-                      docMenu.saveDocumentAs();
-                    }}
-                  >
-                    Save to file as…
-                  </button>
-                </>
-              )}
               <div className="wb-menu-sep" role="separator" />
               <button
                 type="button"

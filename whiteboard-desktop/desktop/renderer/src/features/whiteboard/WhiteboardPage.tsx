@@ -5,6 +5,7 @@ import type { Editor } from '@tiptap/react';
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 
 import { ConfirmDialog } from '../../components/ConfirmDialog';
+import { PromptDialog } from '../../components/PromptDialog';
 import { Popover } from '../../components/Popover';
 import { deriveOutline } from '../outline/deriveOutline';
 import type { OutlineItem } from '../outline/types';
@@ -13,7 +14,7 @@ import { editorToolsAttrs, editorToolsVars } from '../editorTools/editorToolsSur
 import { useFolding } from '../editorTools/folding/useFolding';
 import { useEditorTools } from '../editorTools/useEditorTools';
 import { filesAvailable, onMenuFile } from '../files/fileApi';
-import { fileStateLabel, windowTitle } from '../files/fileState';
+import { windowTitle } from '../files/fileState';
 import { EXPORT_FORMATS, IMPORT_FORMATS } from '../files/importExportFormats';
 import { useFileActions } from '../files/useFileActions';
 import { useImportExport } from '../files/useImportExport';
@@ -126,6 +127,10 @@ export function WhiteboardPage({
   // non-blocking, theme-styled dialog replaces window.confirm, which froze the
   // renderer synchronously.
   const [pendingMode, setPendingMode] = useState<string | null>(null);
+  // Document-menu affordances (in-app dialogs, not window.prompt/confirm which are
+  // unreliable in the packaged Electron app).
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [docToDelete, setDocToDelete] = useState<string | null>(null);
 
   const requestModeChange = useCallback(
     (next: string) => {
@@ -277,17 +282,17 @@ export function WhiteboardPage({
     [onChangeBlocks, doc?.mode, markFileDirty],
   );
 
-  // The project name: a saved file shows its file name; an unsaved document
-  // shows its document title ("Untitled" by default). It changes when a file is
-  // opened/saved (fileName) or a project loads (doc.title).
-  const projectName = fileDoc.filePath ? fileDoc.fileName : doc?.title || 'Untitled';
+  // The project name is the document title (documents auto-save to the app; there
+  // is no separate on-disk file to name it after).
+  const projectName = doc?.title || 'Untitled';
 
-  // Reflect the project name + dirty state in BOTH the OS window/document title
-  // and the in-app title bar (via the shell callback).
+  // Reflect the project name + a transient "unsaved" marker (the backend autosave
+  // in flight / failed) in BOTH the OS window title and the in-app title bar.
   useEffect(() => {
-    document.title = windowTitle(projectName, fileDoc.dirty);
-    onTitleChangeRef.current?.(projectName, fileDoc.dirty);
-  }, [projectName, fileDoc.dirty]);
+    const unsaved = saveStatus === 'saving' || saveStatus === 'error';
+    document.title = windowTitle(projectName, unsaved);
+    onTitleChangeRef.current?.(projectName, unsaved);
+  }, [projectName, saveStatus]);
 
   // Re-derive the outline whenever the document loads or the mode changes; reset
   // the live snapshot only when a different document loads (a mode switch keeps
@@ -402,6 +407,29 @@ export function WhiteboardPage({
         }}
         onCancel={() => setPendingMode(null)}
       />
+      <PromptDialog
+        open={renameOpen}
+        title="Rename document"
+        initialValue={doc?.title ?? ''}
+        placeholder="Document title"
+        confirmLabel="Rename"
+        onConfirm={(name) => {
+          renameDocument(name);
+          setRenameOpen(false);
+        }}
+        onCancel={() => setRenameOpen(false)}
+      />
+      <ConfirmDialog
+        open={docToDelete !== null}
+        title="Delete document"
+        message={`Delete “${docList.find((d) => d.id === docToDelete)?.title || 'Untitled'}”? This also removes its outline and story bible. This can’t be undone.`}
+        confirmLabel="Delete"
+        onConfirm={() => {
+          if (docToDelete) deleteDoc(docToDelete);
+          setDocToDelete(null);
+        }}
+        onCancel={() => setDocToDelete(null)}
+      />
       <div className="wb-statusline">
         <div className="wb-statusline-left">
           <Popover label="File" title="File menu">
@@ -409,43 +437,59 @@ export function WhiteboardPage({
               <div className="wb-menu wb-menu-scroll">
                 <button
                   type="button"
-                  className="wb-menu-item"
+                  className="wb-menu-item wb-menu-strong"
                   onClick={() => {
-                    fileDoc.newDocument();
+                    createNewDoc();
                     close();
                   }}
                 >
-                  New
+                  New Document
                 </button>
+
+                <div className="wb-menu-sep" role="separator" />
+                <div className="wb-menu-label">Open Document</div>
+                {docList.map((d) => (
+                  <div key={d.id} className="wb-doc-row">
+                    <button
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={d.id === doc?.id}
+                      className={`wb-menu-item wb-doc-item${d.id === doc?.id ? ' is-current' : ''}`}
+                      onClick={() => {
+                        selectDocument(d.id);
+                        close();
+                      }}
+                    >
+                      <span className="wb-doc-check" aria-hidden="true">{d.id === doc?.id ? '✓' : ''}</span>
+                      <span className="wb-doc-name">{d.title || 'Untitled'}</span>
+                      <span className="wb-doc-mode">{d.mode}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="wb-doc-del"
+                      title={`Delete “${d.title || 'Untitled'}”`}
+                      aria-label={`Delete ${d.title || 'Untitled'}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDocToDelete(d.id);
+                        close();
+                      }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+
+                <div className="wb-menu-sep" role="separator" />
                 <button
                   type="button"
                   className="wb-menu-item"
                   onClick={() => {
-                    fileDoc.openDocument();
+                    setRenameOpen(true);
                     close();
                   }}
                 >
-                  Open…
-                </button>
-                <button
-                  type="button"
-                  className="wb-menu-item"
-                  onClick={() => {
-                    fileDoc.saveDocument();
-                    close();
-                  }}
-                >
-                  Save
-                </button>
-                <button
-                  type="button"
-                  className="wb-menu-item"
-                  onClick={() => {
-                    fileDoc.saveDocumentAs();
-                    close();
-                  }}
-                >
-                  Save As…
+                  Rename current document…
                 </button>
 
                 <div className="wb-menu-sep" role="separator" />
@@ -500,19 +544,8 @@ export function WhiteboardPage({
           )}
         </div>
         <div className="wb-statusline-right">
-          {/* Subtle backend autosave/session indicator (NOT the file save). */}
+          {/* Backend autosave indicator — documents save automatically. */}
           <span className={`wb-draft wb-draft-${saveStatus}`}>{DRAFT_LABEL[saveStatus]}</span>
-          {/* Explicit FILE state — the source of truth for "saved to disk". */}
-          <span
-            className={`wb-filestate${fileDoc.dirty ? ' is-dirty' : ''}`}
-            title={fileDoc.filePath ?? 'Not saved to a file yet (File → Save)'}
-          >
-            {fileDoc.status === 'saving'
-              ? `${fileDoc.fileName} — Saving…`
-              : fileDoc.status === 'error'
-                ? `${fileDoc.fileName} — Save failed`
-                : fileStateLabel(fileDoc.fileName, fileDoc.filePath != null, fileDoc.dirty)}
-          </span>
           <EditorSettingsPopover api={editorToolsApi} onReset={resetEditorView} />
         </div>
       </div>

@@ -806,6 +806,12 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .cf-cancel:hover { border-color: var(--muted); }
 .cf-confirm { background: var(--accent); border: 1px solid var(--accent); color: var(--on-accent); }
 .cf-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-soft); }
+.pd-input {
+  width: 100%; box-sizing: border-box; margin: 0 0 18px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-sm);
+  color: var(--text); padding: 9px 11px; font: 400 13px/1.3 var(--font-ui);
+}
+.pd-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 
 /* AI provider settings dialog */
 .settings-dialog { width: min(460px, calc(100vw - 32px)); background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: 0 24px 60px rgba(0, 0, 0, .4); padding: 18px 20px 16px; }
