@@ -6,6 +6,7 @@ import { onMenuView } from './features/files/fileApi';
 import { OutlinePanel } from './features/outline/OutlinePanel';
 import type { OutlineItem } from './features/outline/types';
 import { PsykeWindow } from './features/psyke/PsykeWindow';
+import { HelpDialog } from './features/help/HelpDialog';
 import { SettingsDialog } from './features/settings/SettingsDialog';
 import {
   toggleCommentsPanel,
@@ -58,6 +59,7 @@ export function App() {
   const [psykeOpen, setPsykeOpen] = useState(false);
   const [psykeQuery, setPsykeQuery] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const commentsPanelOpen = useCommentsPanelOpen();
   // Live open-state of the LittleBoy agents (Billy chat + Logos), published by
   // LittleBoyProvider — drives the title-bar toggle buttons' active state.
@@ -335,6 +337,15 @@ export function App() {
           <ThemeSelector />
           <button
             type="button"
+            className={`icon-toggle${helpOpen ? ' is-active' : ''}`}
+            onClick={() => setHelpOpen(true)}
+            title="Quick Start & hotkeys"
+            aria-label="Quick Start and hotkeys"
+          >
+            ?
+          </button>
+          <button
+            type="button"
             className={`icon-toggle${settingsOpen ? ' is-active' : ''}`}
             onClick={() => setSettingsOpen(true)}
             title="AI provider settings"
@@ -404,6 +415,7 @@ export function App() {
         <PsykeWindow baseUrl={baseUrl} initialQuery={psykeQuery} onClose={() => setPsykeOpen(false)} />
       )}
       <SettingsDialog open={settingsOpen} baseUrl={baseUrl} onClose={() => setSettingsOpen(false)} />
+      <HelpDialog open={helpOpen} onClose={() => setHelpOpen(false)} />
       {ui.statusBarVisible && <StatusBar status={status} />}
       {focusHint && <div className="focus-hint">Focus Mode — press Esc to exit</div>}
     </div>
