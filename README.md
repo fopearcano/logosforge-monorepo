@@ -21,6 +21,7 @@ Workflows live in `.github/workflows/`. Each freezes the Python backend/core wit
 |---|---|---|
 | `release-whiteboard-windows.yml` | Whiteboard — Windows (NSIS installer + portable) | tag `whiteboard-v*` |
 | `release-whiteboard-macos.yml` | Whiteboard — macOS Intel (DMG) | tag `whiteboard-v*` — runs on a **self-hosted Intel Mac** runner |
+| `release-whiteboard-linux.yml` | Whiteboard — Linux x64 (AppImage) | tag `whiteboard-v*` — hosted `ubuntu-latest` |
 | `release-windows.yml` | Pro — Windows | tag `v*` |
 
 Cutting a release: `git tag whiteboard-v0.1.0 && git push origin whiteboard-v0.1.0` (or run the workflow manually via *Actions → Run workflow* for artifacts without a Release). The macOS job needs the self-hosted Intel Mac runner online (repo *Settings → Actions → Runners*) with **Python 3.11+** installed (Homebrew or python.org) — the workflow discovers it on the Mac rather than downloading one, since `actions/setup-python` can't install onto a self-hosted Mac.
@@ -33,4 +34,4 @@ Cutting a release: `git tag whiteboard-v0.1.0 && git push origin whiteboard-v0.1
 
 ## Status
 
-**Alpha.** Desktop builds are currently **unsigned** — Windows SmartScreen and macOS Gatekeeper will warn (on macOS, clear quarantine with `xattr -cr "/Applications/LogosForge Whiteboard.app"`). macOS arm64/universal and Linux targets are later milestones.
+**Alpha.** Desktop builds are currently **unsigned** — Windows SmartScreen and macOS Gatekeeper will warn (on macOS, clear quarantine with `xattr -cr "/Applications/LogosForge Whiteboard.app"`). Whiteboard ships Windows, macOS Intel, and Linux x64 (AppImage — `chmod +x` and run). macOS arm64/universal, Linux `.deb`, and Pro's Mac/Linux are later milestones.

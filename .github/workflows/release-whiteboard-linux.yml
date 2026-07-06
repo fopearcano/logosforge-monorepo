@@ -1,0 +1,128 @@
+name: Release — LogosForge Whiteboard (Linux)
+
+# Builds the Linux x64 AppImage for LogosForge Whiteboard desktop on the free
+# GitHub-hosted ubuntu-latest runner. Fully self-contained: the Electron shell +
+# renderer + a PyInstaller-frozen copy of the Whiteboard backend (which embeds the
+# Python core) — no Python needed on the user's machine. An AppImage runs on any
+# modern distro (Ubuntu included): `chmod +x` it and launch, no install or root.
+#
+# Triggers:
+#   * push a tag  whiteboard-v*      -> builds AND publishes to that tag's Release
+#   * manual "Run workflow"          -> builds; publishes when publish_release is
+#                                       set, to the chosen release_tag (used to
+#                                       attach Linux to an already-published release)
+#
+# Assumes a single monorepo checkout containing logosforge/ (core) and
+# whiteboard-desktop/. The renderer is self-contained (no shared-ui file: deps),
+# so only those two siblings are required. Unsigned build.
+
+on:
+  push:
+    tags:
+      - "whiteboard-v*"
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Attach the build to a GitHub Release"
+        type: boolean
+        default: false
+      release_tag:
+        description: "Release tag to attach the AppImage to (when publishing a manual run)"
+        type: string
+        default: "whiteboard-v0.1.5"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-whiteboard-linux-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout monorepo
+        uses: actions/checkout@v4
+
+      - name: Verify monorepo layout
+        run: |
+          missing=""
+          for d in logosforge whiteboard-desktop; do
+            [ -d "$d" ] || missing="$missing $d"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required sibling dir(s):$missing — this workflow expects a single monorepo checkout containing the core (logosforge/) and whiteboard-desktop/."
+            exit 1
+          fi
+          echo "monorepo layout OK"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # --- 1. Bundle the Whiteboard backend (it embeds the core), x64 ------
+      - name: Build the backend bundle (PyInstaller)
+        run: |
+          python -m venv build-venv
+          ./build-venv/bin/python -m pip install --upgrade pip
+          ./build-venv/bin/python -m pip install "./logosforge[export]" fastapi "uvicorn[standard]" httpx pyinstaller
+          cd whiteboard-desktop/backend
+          ../../build-venv/bin/python -m PyInstaller logosforge-whiteboard-backend.spec --noconfirm --clean --log-level WARN
+
+      - name: Smoke-test the bundled backend
+        run: |
+          ./whiteboard-desktop/backend/dist/logosforge-whiteboard-backend/logosforge-whiteboard-backend --host 127.0.0.1 --port 8799 &
+          BPID=$!
+          ok=""
+          for i in $(seq 1 30); do
+            sleep 1
+            code=$(curl -s --max-time 2 -o /dev/null -w "%{http_code}" http://127.0.0.1:8799/health || true)
+            if [ "$code" = "200" ]; then ok="yes"; echo "backend healthy after ${i}s"; break; fi
+          done
+          kill "$BPID" 2>/dev/null || true
+          if [ -z "$ok" ]; then echo "::error::bundled backend failed /health"; exit 1; fi
+
+      # --- 2. Build + package the Electron app (AppImage) ------------------
+      - name: Install whiteboard-desktop deps
+        working-directory: whiteboard-desktop/desktop
+        run: npm ci
+
+      - name: Build renderer + main, then package (AppImage)
+        working-directory: whiteboard-desktop/desktop
+        run: npm run dist:linux
+        env:
+          # No Linux signing. APPIMAGE_EXTRACT_AND_RUN lets appimagetool build
+          # without FUSE, which the CI runner lacks.
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+
+      # --- 3. Publish ------------------------------------------------------
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: logosforge-whiteboard-linux-x64
+          path: whiteboard-desktop/desktop/release/*.AppImage
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/whiteboard-v') || inputs.publish_release
+        uses: softprops/action-gh-release@v2
+        with:
+          # On a tag push, tag_name is empty and the action falls back to the tag
+          # ref. On a manual run (dispatched from a branch) it targets the chosen
+          # existing release instead of creating one named after the branch.
+          tag_name: ${{ inputs.release_tag }}
+          files: whiteboard-desktop/desktop/release/*.AppImage
+          draft: false
+          generate_release_notes: true

@@ -54,3 +54,16 @@ mac:
   artifactName: ${productName}-${version}-${arch}.${ext}
 dmg:
   artifactName: ${productName}-${version}-${arch}.${ext}
+# Linux (x64) AppImage — a single portable file that runs on any modern distro
+# (Ubuntu included): mark it executable and launch, no install or root needed.
+# Same self-contained bundle — the PyInstaller-frozen backend rides along under
+# resources/backend and is spawned on startup (the backend-manager drops the .exe
+# suffix off-Windows, so it runs the native ELF binary). Built on ubuntu-latest by
+# release-whiteboard-linux.yml. Unsigned; icon generated from build/icon.png.
+linux:
+  icon: build/icon.png
+  category: Office
+  target:
+    - target: AppImage
+      arch: [x64]
+  artifactName: ${productName}-${version}-${arch}.${ext}
