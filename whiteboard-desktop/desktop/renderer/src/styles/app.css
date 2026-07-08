@@ -444,7 +444,12 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 /* Actions pinned to the row's reserved right gutter — always fully visible +
    clickable at any nesting depth (the row's content clips before reaching it). */
-.outline-row-actions { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); display: inline-flex; align-items: center; gap: 2px; }
+/* Centre via top/bottom rather than translateY: a `transform` here creates a
+   stacking context that TRAPS an open ⋯ menu's z-index inside the row, so later
+   rows paint over the menu and steal its clicks. top:0/bottom:0 + align-items
+   centre it identically without the trap, letting the menu's z-index lift it
+   above the rows below. */
+.outline-row-actions { position: absolute; right: 4px; top: 0; bottom: 0; display: inline-flex; align-items: center; gap: 2px; }
 .outline-row-actions .wb-tool { width: 22px; height: 22px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
 .outline-act { width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: var(--r-sm); background: none; color: var(--muted); }
 .outline-act:hover { background: var(--hover); color: var(--text); }
