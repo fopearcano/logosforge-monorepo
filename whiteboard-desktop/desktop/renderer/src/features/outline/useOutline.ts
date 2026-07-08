@@ -13,7 +13,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { registerDocFlusher, registerUnloadFlush, useCurrentDocId, withDoc } from '../../state/currentDocument';
+import { getCurrentDocId, registerDocFlusher, registerUnloadFlush, useCurrentDocId, withDoc } from '../../state/currentDocument';
 import { getOutlineItems, onOutlineRefresh, saveOutlineItems } from './outlineApi';
 import { publishOutlineColors } from './outlineColorStore';
 import { instantiateTemplate, type OutlineTemplate } from './outlineTemplates';
@@ -89,6 +89,13 @@ export interface OutlineStore {
   setType: (id: string, type: OutlineItemType) => void;
   setStatus: (id: string, status: OutlineStatus) => void;
   setColorLabel: (id: string, color: OutlineColor) => void;
+  /** Bind a node to a manuscript block (blockIndex + a text snapshot for re-anchoring). */
+  linkToBlock: (id: string, blockIndex: number, quote: string) => void;
+  unlink: (id: string) => void;
+  /** Re-locate every link after the manuscript changed (no save unless something moved).
+   *  `blockTextsDocId` stamps which document the texts belong to — re-anchoring is
+   *  skipped unless it matches the loaded outline's document (guards doc switches). */
+  reanchor: (blockTexts: string[], blockTextsDocId: string | null) => void;
   toggleCompleted: (id: string) => void;
   addTag: (id: string, tag: string) => void;
   removeTag: (id: string, tag: string) => void;
@@ -153,6 +160,10 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
 
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pending = useRef<OutlineNode[] | null>(null);
+  // The document id whose items are currently in the store. Lags `docId` during a
+  // switch (the new load hasn't resolved yet); `reanchor` compares against it so
+  // it never re-anchors the NEW doc's links against the OLD doc's manuscript text.
+  const loadedDocIdRef = useRef<string | null>(null);
 
   const flush = useCallback(async () => {
     const next = pending.current;
@@ -198,6 +209,7 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
     getOutlineItems(baseUrl, controller.signal)
       .then((loaded) => {
         itemsRef.current = loaded;
+        loadedDocIdRef.current = docId; // these items belong to this doc
         setItems(loaded);
         setLoading(false);
       })
@@ -217,6 +229,7 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
       getOutlineItems(baseUrl)
         .then((loaded) => {
           itemsRef.current = loaded;
+          loadedDocIdRef.current = getCurrentDocId(); // refreshed for the active doc
           setItems(loaded);
         })
         .catch(() => {
@@ -413,6 +426,34 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
     (id: string, color: OutlineColor) => mutate((list) => M.setColorLabel(list, id, color, now())),
     [mutate],
   );
+  const linkToBlock = useCallback(
+    (id: string, blockIndex: number, quote: string) =>
+      mutate((list) => M.setLink(list, id, { blockIndex, quote }, now())),
+    [mutate],
+  );
+  const unlink = useCallback(
+    (id: string) => mutate((list) => M.setLink(list, id, null, now())),
+    [mutate],
+  );
+  // Re-anchor without the generic `mutate` so an unchanged pass (nothing moved)
+  // does NOT schedule a save — this runs on every manuscript edit.
+  const reanchor = useCallback(
+    (blockTexts: string[], blockTextsDocId: string | null) => {
+      // Doc-identity guard: the caller stamps `blockTexts` with the document they
+      // came from. During a switch the editor can emit one doc's text while the
+      // store still holds the OTHER doc's links; re-anchoring then would relocate
+      // the wrong links and persist corrupted indices. Only proceed when the text
+      // and the loaded items belong to the SAME document.
+      if (!blockTextsDocId || blockTextsDocId !== loadedDocIdRef.current) return;
+      const cur = itemsRef.current;
+      const next = M.reanchorLinks(cur, blockTexts, now());
+      if (next === cur) return;
+      itemsRef.current = next;
+      setItems(next);
+      scheduleSave(next);
+    },
+    [scheduleSave],
+  );
   const toggleCompleted = useCallback(
     (id: string) => mutate((list) => M.toggleCompleted(list, id, now())),
     [mutate],
@@ -582,6 +623,9 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
     setType,
     setStatus,
     setColorLabel,
+    linkToBlock,
+    unlink,
+    reanchor,
     toggleCompleted,
     addTag,
     removeTag,

@@ -35,9 +35,26 @@ interface Props {
   canReveal?: (node: OutlineNode) => boolean;
   /** Delete request — the panel confirms (in-app dialog) parents-with-children. */
   onDeleteRequest: (id: string) => void;
+  /** The linked node the editor caret currently sits in ("you are here"). */
+  activeLinkId?: string | null;
+  /** Whether a manuscript caret is available to link to. */
+  canLink?: boolean;
+  /** Bind a node to the current caret block. */
+  onLinkToCursor?: (id: string) => void;
+  /** Jump the editor to a linked node's manuscript block. */
+  onNavigateBlock?: (blockIndex: number) => void;
 }
 
-export function OutlineOutliner({ store, onReveal, canReveal, onDeleteRequest }: Props) {
+export function OutlineOutliner({
+  store,
+  onReveal,
+  canReveal,
+  onDeleteRequest,
+  activeLinkId = null,
+  canLink = false,
+  onLinkToCursor,
+  onNavigateBlock,
+}: Props) {
   const rows = buildRows(store.items, store.zoomRootId, store.filter);
   const visibleIds = new Set(rows.map((r) => r.node.id));
   const filtering = isFilterActive(store.filter);
@@ -178,6 +195,10 @@ export function OutlineOutliner({ store, onReveal, canReveal, onDeleteRequest }:
               canDrag={canDrag}
               onReveal={onReveal}
               canReveal={canReveal}
+              active={row.node.id === activeLinkId}
+              canLink={canLink}
+              onLinkToCursor={onLinkToCursor}
+              onNavigateBlock={onNavigateBlock}
             />
           ))}
         </ul>

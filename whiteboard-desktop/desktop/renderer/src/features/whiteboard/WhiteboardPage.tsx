@@ -60,6 +60,11 @@ interface Props {
   onModeChange?: (mode: string) => void;
   /** Notifies the shell of the current project name + unsaved state (title bar). */
   onTitleChange?: (name: string, dirty: boolean) => void;
+  /** The linked-outline breadcrumb the caret sits in ("you are here"). */
+  locationPath?: string[];
+  /** Report the caret's manuscript block + block texts + which doc they belong to
+   *  (the doc id lets the outline skip re-anchoring during a document switch). */
+  onEditorLocation?: (caretBlock: number | null, blockTexts: string[], docId: string | null) => void;
 }
 
 export function WhiteboardPage({
@@ -68,6 +73,8 @@ export function WhiteboardPage({
   onOutlineChange,
   onModeChange,
   onTitleChange,
+  locationPath,
+  onEditorLocation,
 }: Props) {
   const {
     doc,
@@ -87,6 +94,12 @@ export function WhiteboardPage({
   const [element, setElement] = useState<FountainType | null>(null);
   const [preview, setPreview] = useState(false);
   const [liveBlocks, setLiveBlocks] = useState<WhiteboardBlock[]>([]);
+  // The document `liveBlocks` currently belongs to — set in the SAME update as
+  // every setLiveBlocks so the two can never diverge. `doc.id` alone is unsafe:
+  // it advances (setDoc) one render before the liveBlocks reset, so stamping the
+  // published block texts with doc.id would briefly mislabel the OLD doc's text
+  // as the NEW doc's, letting the outline re-anchor cross-document mid-switch.
+  const [liveBlocksDocId, setLiveBlocksDocId] = useState<string | null>(null);
   const commentsApi = useComments(baseUrl, ready);
   const hideResolved = useResolvedHidden();
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
@@ -194,9 +207,50 @@ export function WhiteboardPage({
   editorRef.current = editor;
   const liveBlocksRef = useRef(liveBlocks);
   liveBlocksRef.current = liveBlocks;
+  // Always-current doc id (handleBlocks' deps don't track doc.id, so its closure
+  // can be stale when modes match across a switch — read the ref instead).
+  const docIdRef = useRef<string | null>(doc?.id ?? null);
+  docIdRef.current = doc?.id ?? null;
   const loadBlocks = useCallback((blocks: WhiteboardBlock[]) => {
     editorRef.current?.commands.setContent(blocksToDoc(blocks), true);
   }, []);
+
+  // --- outline hard link: report the caret's manuscript block + the block texts,
+  // so the Outline can show "you are here" and bind/re-anchor links. caretBlock
+  // updates only when the caret CROSSES into a different block (not every move).
+  const [caretBlock, setCaretBlock] = useState<number | null>(null);
+  useEffect(() => {
+    // On doc switch the editor is torn down and remounted; drop the stale caret
+    // so no breadcrumb flashes against the newly-loading document's outline.
+    if (!editor) {
+      setCaretBlock(null);
+      return undefined;
+    }
+    const update = () => {
+      try {
+        const idx = editor.state.selection.$from.index(0);
+        setCaretBlock((prev) => (prev === idx ? prev : idx));
+      } catch {
+        setCaretBlock(null);
+      }
+    };
+    update();
+    editor.on('selectionUpdate', update);
+    return () => {
+      editor.off('selectionUpdate', update);
+    };
+  }, [editor]);
+  const blockTexts = useMemo(() => liveBlocks.map((b) => b.text ?? ''), [liveBlocks]);
+  // Stamp the published texts with the doc `liveBlocks` belong to (NOT doc.id — see
+  // liveBlocksDocId), so the outline can reject a re-anchor pass whose items are
+  // from a different document. Because the stamp is set in the same update as the
+  // blocks, it always truthfully labels blockTexts — even mid-switch.
+  const editorDocId = liveBlocksDocId;
+  const onEditorLocationRef = useRef(onEditorLocation);
+  onEditorLocationRef.current = onEditorLocation;
+  useEffect(() => {
+    onEditorLocationRef.current?.(caretBlock, blockTexts, editorDocId);
+  }, [caretBlock, blockTexts, editorDocId]);
   // "New" creates a fresh DOCUMENT (blank manuscript + its own empty outline &
   // comments), same as the title-menu "New document" — not just a blank editor,
   // which would leave this document's outline orphaned against empty prose.
@@ -276,6 +330,7 @@ export function WhiteboardPage({
     (blocks: WhiteboardBlock[]) => {
       markFileDirty();
       setLiveBlocks(blocks);
+      setLiveBlocksDocId(docIdRef.current); // these blocks belong to the live doc
       onChangeBlocks(blocks);
       onOutlineRef.current?.(deriveOutline(blocks, doc?.mode ?? 'novel'));
     },
@@ -302,6 +357,7 @@ export function WhiteboardPage({
     if (doc.id !== lastDocIdRef.current) {
       lastDocIdRef.current = doc.id;
       setLiveBlocks(doc.blocks);
+      setLiveBlocksDocId(doc.id); // stamp atomically with the blocks
       onOutlineRef.current?.(deriveOutline(doc.blocks, doc.mode));
     } else {
       onOutlineRef.current?.(deriveOutline(liveBlocksRef.current, doc.mode));
@@ -563,6 +619,26 @@ export function WhiteboardPage({
         />
       )}
       {!isScreenplay && <ProseToolbar editor={editor} scale={scale} onScale={applyScale} />}
+
+      {locationPath && locationPath.length > 0 && (
+        <div className="wb-location" aria-label="Current outline section">
+          <span className="wb-location-pin" aria-hidden="true">
+            ⚓
+          </span>
+          {locationPath.map((crumb, i) => (
+            <span key={i} className="wb-location-crumb-wrap">
+              {i > 0 && (
+                <span className="wb-location-sep" aria-hidden="true">
+                  ›
+                </span>
+              )}
+              <span className={`wb-location-crumb${i === locationPath.length - 1 ? ' is-last' : ''}`}>
+                {crumb}
+              </span>
+            </span>
+          ))}
+        </div>
+      )}
 
       <div
         className={`wb-surface${showPreview ? ' is-preview' : ''}`}

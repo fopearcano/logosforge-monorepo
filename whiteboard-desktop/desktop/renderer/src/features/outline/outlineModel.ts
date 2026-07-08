@@ -92,6 +92,16 @@ export const COLOR_LABELS: Record<OutlineColor, string> = {
   gray: 'Gray',
 };
 
+/**
+ * A hard link from an outline node to a place in the manuscript. Anchored by
+ * block INDEX (blocks have no stable id) plus a `quote` snapshot of that block's
+ * text, so the index can be re-located after edits shift it (see reanchorLinks).
+ */
+export interface OutlineLink {
+  blockIndex: number;
+  quote: string;
+}
+
 export interface OutlineNode {
   id: string;
   parentId: string | null;
@@ -104,6 +114,8 @@ export interface OutlineNode {
   tags: string[];
   colorLabel: OutlineColor;
   linkedLineId?: string | null;
+  /** Optional binding to a manuscript block (the section this node "owns"). */
+  link?: OutlineLink | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -126,6 +138,7 @@ export function createNode(
     tags: [],
     colorLabel: 'none',
     linkedLineId: null,
+    link: null,
     createdAt: now,
     updatedAt: now,
   };
@@ -466,6 +479,73 @@ export function setStatus(items: OutlineNode[], id: string, status: OutlineStatu
 }
 export function setColorLabel(items: OutlineNode[], id: string, colorLabel: OutlineColor, now: string): OutlineNode[] {
   return items.map((i) => (i.id === id ? { ...i, colorLabel, updatedAt: now } : i));
+}
+
+// --- manuscript hard link ---------------------------------------------------
+
+/** Bind (or, with null, unbind) a node to a manuscript block. */
+export function setLink(items: OutlineNode[], id: string, link: OutlineLink | null, now: string): OutlineNode[] {
+  return items.map((i) => (i.id === id ? { ...i, link, updatedAt: now } : i));
+}
+
+/**
+ * The node whose linked block is the closest one at-or-before `blockIndex` — i.e.
+ * the manuscript section the caret currently sits in ("you are here"). Returns
+ * null when the caret is before every linked node (or nothing is linked).
+ *
+ * If two nodes link the SAME block, the first in `items` order wins. That's a
+ * rare, cosmetic-only tie (it only affects which row highlights — never data),
+ * so we don't pay to resolve it against visible outline order.
+ */
+export function activeLinkedNodeId(items: OutlineNode[], blockIndex: number | null): string | null {
+  if (blockIndex === null || blockIndex < 0) return null;
+  let bestId: string | null = null;
+  let bestBlock = -1;
+  for (const n of items) {
+    const b = n.link?.blockIndex;
+    if (typeof b === 'number' && b <= blockIndex && b > bestBlock) {
+      bestBlock = b;
+      bestId = n.id;
+    }
+  }
+  return bestId;
+}
+
+/**
+ * Re-locate every link's blockIndex after the manuscript changed: if the block
+ * at the stored index no longer matches the stored quote, find the block whose
+ * text equals the quote nearest the old index and move the link there. Best-effort
+ * and non-destructive — a link whose quote can't be found keeps its old index
+ * rather than being dropped. Returns the SAME array when nothing moved (so callers
+ * can skip a needless save). A blank quote (empty block) is never re-located.
+ *
+ * When several blocks share the quote's exact text (e.g. repeated scene slugs),
+ * the nearest to the old index wins, ties resolving to the lower index. That can
+ * pick a sibling duplicate, but it's cosmetic (the badge/breadcrumb jump one
+ * identical-looking block off) and self-corrects the moment the texts diverge.
+ */
+export function reanchorLinks(items: OutlineNode[], blockTexts: string[], now: string): OutlineNode[] {
+  let changed = false;
+  const next = items.map((n) => {
+    const link = n.link;
+    if (!link || !link.quote) return n; // unlinked, or an un-relocatable blank anchor
+    if (blockTexts[link.blockIndex] === link.quote) return n; // still correct
+    let best = -1;
+    let bestDist = Infinity;
+    for (let i = 0; i < blockTexts.length; i += 1) {
+      if (blockTexts[i] === link.quote) {
+        const d = Math.abs(i - link.blockIndex);
+        if (d < bestDist) {
+          bestDist = d;
+          best = i;
+        }
+      }
+    }
+    if (best === -1 || best === link.blockIndex) return n; // not found (keep) / unchanged
+    changed = true;
+    return { ...n, link: { ...link, blockIndex: best }, updatedAt: now };
+  });
+  return changed ? next : items;
 }
 export function setCompleted(items: OutlineNode[], id: string, completed: boolean, now: string): OutlineNode[] {
   return items.map((i) => (i.id === id ? { ...i, completed, updatedAt: now } : i));

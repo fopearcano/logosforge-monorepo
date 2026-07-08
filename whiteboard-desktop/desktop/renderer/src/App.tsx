@@ -60,6 +60,12 @@ export function App() {
   const [psykeQuery, setPsykeQuery] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  // Editor ↔ outline hard-link channel: the manuscript block the caret is in, the
+  // block texts (for binding + re-anchoring), and the "you are here" breadcrumb.
+  const [editorCaret, setEditorCaret] = useState<number | null>(null);
+  const [editorBlockTexts, setEditorBlockTexts] = useState<string[]>([]);
+  const [editorBlockTextsDocId, setEditorBlockTextsDocId] = useState<string | null>(null);
+  const [activePath, setActivePath] = useState<string[]>([]);
   const commentsPanelOpen = useCommentsPanelOpen();
   // Live open-state of the LittleBoy agents (Billy chat + Logos), published by
   // LittleBoyProvider — drives the title-bar toggle buttons' active state.
@@ -401,6 +407,11 @@ export function App() {
             baseUrl={baseUrl}
             ready={ready}
             mode={docMode}
+            caretBlockIndex={editorCaret}
+            blockTexts={editorBlockTexts}
+            blockTextsDocId={editorBlockTextsDocId}
+            onNavigateBlock={scrollToBlock}
+            onActivePathChange={setActivePath}
           />
         )}
         <WhiteboardPage
@@ -409,6 +420,12 @@ export function App() {
           onOutlineChange={setOutlineItems}
           onModeChange={setDocMode}
           onTitleChange={(name, dirty) => setProject({ name, dirty })}
+          locationPath={activePath}
+          onEditorLocation={(caret, texts, docId) => {
+            setEditorCaret(caret);
+            setEditorBlockTexts(texts);
+            setEditorBlockTextsDocId(docId);
+          }}
         />
       </div>
       {psykeOpen && (

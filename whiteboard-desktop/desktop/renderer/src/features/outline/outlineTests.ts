@@ -31,6 +31,9 @@ import {
   normalizeTag,
   outdentItem,
   placeForType,
+  activeLinkedNodeId,
+  reanchorLinks,
+  setLink,
   prevVisibleId,
   rangeSlice,
   removeItem,
@@ -567,6 +570,76 @@ check('dropZone zero height -> child', dropZone(0, 0) === 'child');
   const ids = OUTLINE_TEMPLATES.map((t) => t.id);
   check('template ids are unique across the catalogue', new Set(ids).size === ids.length);
   check('every template has nodes', OUTLINE_TEMPLATES.every((t) => t.nodes.length > 0));
+}
+
+// 28. manuscript hard link — setLink / activeLinkedNodeId / reanchorLinks
+{
+  let items: OutlineNode[] = [];
+  items = insertRoot(items, createNode('A', 'act', null, NOW));
+  items = insertChild(items, 'A', createNode('S1', 'scene', 'A', NOW));
+  items = insertChild(items, 'A', createNode('S2', 'scene', 'A', NOW));
+
+  // link Act A → block 0, Scene 1 → block 2, Scene 2 → block 6
+  items = setLink(items, 'A', { blockIndex: 0, quote: 'ACT ONE' }, NOW);
+  items = setLink(items, 'S1', { blockIndex: 2, quote: 'A knock at the hull' }, NOW);
+  items = setLink(items, 'S2', { blockIndex: 6, quote: 'Mara surfaces' }, NOW);
+
+  check('setLink stores the anchor', getNode(items, 'S2')!.link!.blockIndex === 6);
+  check('activeLinkedNode: caret in S1 range', activeLinkedNodeId(items, 4) === 'S1');
+  check('activeLinkedNode: caret at S2 start', activeLinkedNodeId(items, 6) === 'S2');
+  check('activeLinkedNode: caret past S2', activeLinkedNodeId(items, 20) === 'S2');
+  check('activeLinkedNode: caret at Act start', activeLinkedNodeId(items, 0) === 'A');
+  check('activeLinkedNode: caret before all links', activeLinkedNodeId(items, -1) === null);
+  check('activeLinkedNode: null caret', activeLinkedNodeId(items, null) === null);
+
+  // insert two blocks above → S1/S2 shift down by 2; re-anchor by quote finds them
+  const shifted = ['x', 'y', 'ACT ONE', 'p', 'A knock at the hull', 'q', 'r', 'Mara surfaces'];
+  const re = reanchorLinks(items, shifted, NOW);
+  check('reanchor moves Act to block 2', getNode(re, 'A')!.link!.blockIndex === 2);
+  check('reanchor moves S1 to block 4', getNode(re, 'S1')!.link!.blockIndex === 4);
+  check('reanchor moves S2 to block 7', getNode(re, 'S2')!.link!.blockIndex === 7);
+
+  // no change → same array reference (no needless save)
+  const same = reanchorLinks(re, shifted, NOW);
+  check('reanchor no-op returns same ref', same === re);
+
+  // a link whose quote is gone keeps its index (never dropped)
+  const gone = reanchorLinks(items, ['ACT ONE', '', '', '', '', '', ''], NOW);
+  check('reanchor keeps a link whose quote vanished', getNode(gone, 'S1')!.link!.blockIndex === 2);
+
+  // unlink
+  const unl = setLink(items, 'S1', null, NOW);
+  check('unlink clears the anchor', getNode(unl, 'S1')!.link == null && activeLinkedNodeId(unl, 4) === 'A');
+}
+
+// 29. hard link — documented edge behaviors (blank quote, duplicates, same-block tie)
+{
+  // A blank-quote link (linked on an empty block) is never re-located, even when
+  // the blocks shift — an empty line has no text to anchor by.
+  let blank: OutlineNode[] = insertRoot([], createNode('B', 'scene', null, NOW));
+  blank = setLink(blank, 'B', { blockIndex: 1, quote: '' }, NOW);
+  const blankRe = reanchorLinks(blank, ['inserted', 'moved-down', 'more'], NOW);
+  check('reanchor leaves a blank-quote link put (unanchortable)', blankRe === blank);
+
+  // Duplicate block texts: the nearest occurrence to the old index wins; on a
+  // distance tie the lower index wins.
+  let dup: OutlineNode[] = insertRoot([], createNode('D', 'scene', null, NOW));
+  dup = setLink(dup, 'D', { blockIndex: 3, quote: 'INT. KITCHEN' }, NOW);
+  // "INT. KITCHEN" now at 1 (d=2) and 4 (d=1) → nearest is 4
+  const dupNear = reanchorLinks(dup, ['a', 'INT. KITCHEN', 'b', 'c', 'INT. KITCHEN'], NOW);
+  check('reanchor picks the nearest duplicate', getNode(dupNear, 'D')!.link!.blockIndex === 4);
+  // equidistant (2 and 4 around old index 3) → lower index (2) wins
+  const dupTie = reanchorLinks(dup, ['a', 'b', 'INT. KITCHEN', 'c', 'INT. KITCHEN'], NOW);
+  check('reanchor breaks a duplicate tie to the lower index', getNode(dupTie, 'D')!.link!.blockIndex === 2);
+
+  // Two nodes linking the SAME block → activeLinkedNodeId returns the first such
+  // node in items order (cosmetic tie, but deterministic).
+  let tie: OutlineNode[] = insertRoot([], createNode('P', 'chapter', null, NOW));
+  tie = insertChild(tie, 'P', createNode('C', 'scene', 'P', NOW));
+  tie = setLink(tie, 'P', { blockIndex: 10, quote: 'X' }, NOW);
+  tie = setLink(tie, 'C', { blockIndex: 10, quote: 'X' }, NOW);
+  const firstAtBlock10 = tie.find((n) => n.link?.blockIndex === 10)!.id;
+  check('activeLinkedNode: same-block tie → first in items order', activeLinkedNodeId(tie, 12) === firstAtBlock10);
 }
 
 // --- report ---

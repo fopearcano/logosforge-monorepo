@@ -53,6 +53,12 @@ interface Props {
   canDrag: boolean;
   onReveal?: (node: OutlineNode) => void;
   canReveal?: (node: OutlineNode) => boolean;
+  /** This is the linked node the editor caret currently sits in ("you are here"). */
+  active?: boolean;
+  /** A manuscript caret is available to bind a link to. */
+  canLink?: boolean;
+  onLinkToCursor?: (id: string) => void;
+  onNavigateBlock?: (blockIndex: number) => void;
 }
 
 function dropZoneFor(e: DragEvent<HTMLElement>): DropPosition {
@@ -60,7 +66,19 @@ function dropZoneFor(e: DragEvent<HTMLElement>): DropPosition {
   return dropZone(e.clientY - rect.top, rect.height);
 }
 
-export function OutlineRow({ row, store, onKeyDown, onDelete, canDrag, onReveal, canReveal }: Props) {
+export function OutlineRow({
+  row,
+  store,
+  onKeyDown,
+  onDelete,
+  canDrag,
+  onReveal,
+  canReveal,
+  active = false,
+  canLink = false,
+  onLinkToCursor,
+  onNavigateBlock,
+}: Props) {
   const { node, depth, hasChildren } = row;
   const selected = store.selectedId === node.id;
   const multi = store.selectedIds.includes(node.id);
@@ -135,6 +153,7 @@ export function OutlineRow({ row, store, onKeyDown, onDelete, canDrag, onReveal,
     multi ? 'is-multi' : '',
     node.completed ? 'is-completed' : '',
     dragging ? 'is-dragging' : '',
+    active ? 'is-linked-active' : '',
     dropZone ? `drop-${dropZone}` : '',
   ]
     .filter(Boolean)
@@ -248,6 +267,20 @@ export function OutlineRow({ row, store, onKeyDown, onDelete, canDrag, onReveal,
           )}
         </Popover>
 
+        {node.link && (
+          <button
+            type="button"
+            className="outline-link-badge"
+            title="Go to linked passage"
+            aria-label="Go to linked passage"
+            draggable={false}
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={() => node.link && onNavigateBlock?.(node.link.blockIndex)}
+          >
+            ⚓
+          </button>
+        )}
+
         {selected ? (
           <input
             ref={inputRef}
@@ -309,6 +342,37 @@ export function OutlineRow({ row, store, onKeyDown, onDelete, canDrag, onReveal,
             <Popover label="⋯" title="Item actions" align="right">
               {(close) => (
                 <div className="wb-menu outline-menu">
+                  {node.link ? (
+                    <>
+                      <button
+                        type="button"
+                        className="wb-menu-item"
+                        onClick={() => { if (node.link) onNavigateBlock?.(node.link.blockIndex); close(); }}
+                      >
+                        Go to linked passage
+                      </button>
+                      <button
+                        type="button"
+                        className="wb-menu-item"
+                        onClick={() => { store.unlink(node.id); close(); }}
+                      >
+                        Unlink from manuscript
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      className="wb-menu-item"
+                      disabled={!canLink}
+                      title={canLink
+                        ? 'Bind this item to where your cursor is in the manuscript'
+                        : 'Put your cursor on a manuscript line that has text'}
+                      onClick={() => { onLinkToCursor?.(node.id); close(); }}
+                    >
+                      Link to cursor position
+                    </button>
+                  )}
+                  <div className="wb-menu-sep" role="separator" />
                   <button type="button" className="wb-menu-item" onClick={() => { store.addChild(node.id); close(); }}>
                     Add child
                   </button>

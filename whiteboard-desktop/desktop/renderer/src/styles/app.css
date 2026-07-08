@@ -424,6 +424,15 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .outline-title-input { flex: 1; min-width: 0; font: 450 12px/1.3 var(--font-ui); color: var(--text); background: var(--bg); border: 1px solid var(--accent); border-radius: var(--r-sm); padding: 2px 6px; box-shadow: 0 0 0 3px var(--accent-soft); }
 .outline-title-input:focus { outline: none; }
 
+/* --- outline ↔ manuscript hard link --- */
+/* ⚓ badge on a linked row → jumps the editor to the bound passage. */
+.outline-link-badge { flex: none; width: 15px; height: 15px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 3px; background: none; color: color-mix(in oklab, var(--accent) 68%, var(--muted)); font-size: 10px; line-height: 1; cursor: pointer; }
+.outline-link-badge:hover { background: var(--accent-soft); color: var(--accent); }
+/* The linked row whose passage the manuscript caret currently sits in. Placed
+   after :hover / .is-multi (equal specificity) so it wins on source order. */
+.outline-row.is-linked-active { background: color-mix(in oklab, var(--accent-soft) 55%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
+.outline-row.is-linked-active .outline-link-badge { color: var(--accent); }
+
 .outline-status-trigger { font: 500 8px/1 var(--font-mono); letter-spacing: .06em; text-transform: uppercase; padding: 2px 6px; border-radius: var(--r-pill); border: 1px solid var(--border-soft); color: var(--muted); background: none; flex: none; cursor: pointer; }
 .outline-status-trigger.is-empty { width: 14px; padding: 0; border-style: dashed; opacity: .7; }
 .outline-status-trigger.is-empty::before { content: '+'; }
@@ -499,6 +508,17 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .wb-scale-pct { min-width: 40px; text-align: center; color: var(--text); }
 .wb-spacer { flex: 1; }
 .wb-pages { font: 500 9px/1 var(--font-mono); letter-spacing: .05em; color: var(--paper-muted); }
+
+/* "You are here": the linked-outline breadcrumb for the block the caret sits in.
+   A quiet strip below the toolbar; only shown when the caret is inside a linked
+   section, so it never adds chrome to unlinked writing. */
+.wb-location { flex: none; display: flex; align-items: center; gap: 5px; min-height: 25px; padding: 3px 16px; border-bottom: 1px solid var(--border-soft); background: color-mix(in oklab, var(--accent-soft) 24%, var(--paper)); font: 500 10px/1.3 var(--font-mono); letter-spacing: .04em; color: var(--paper-muted); overflow: hidden; }
+.wb-location-pin { color: var(--accent); font-size: 11px; flex: none; }
+.wb-location-crumb-wrap { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
+.wb-location-sep { color: var(--paper-muted); opacity: .6; flex: none; }
+.wb-location-crumb { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wb-location-crumb.is-last { color: var(--text); font-weight: 600; }
+.app.is-focus .wb-location, .app.is-top-hidden .wb-location { opacity: 0; height: 0; min-height: 0; padding: 0; border: 0; overflow: hidden; pointer-events: none; }
 
 /* surface + sheet */
 .wb-surface { flex: 1; min-height: 0; overflow-y: auto; position: relative; background: var(--paper); padding: clamp(18px, 3vh, 40px) clamp(14px, 3vw, 40px); }
@@ -1121,7 +1141,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   @page { size: letter; margin: 1in 1in 1in 1.5in; }
 
   /* hide everything that isn't the document itself */
-  .titlebar, .outline-panel, .wb-toolbar, .wb-statusline, .wb-storymap,
+  .titlebar, .outline-panel, .wb-toolbar, .wb-location, .wb-statusline, .wb-storymap,
   .statusbar, .wb-popover, .psyke-window, .littleboy-box, .wb-tool,
   .wb-hint, .sp-titlepage-edit { display: none !important; }
 

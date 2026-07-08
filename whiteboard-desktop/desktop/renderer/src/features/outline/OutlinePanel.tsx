@@ -9,7 +9,7 @@
  * The panel stays exactly where it is (left side, lightweight, Whiteboard Free).
  */
 
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { Popover } from '../../components/Popover';
@@ -23,6 +23,8 @@ import {
   OUTLINE_TYPES,
   STATUS_LABELS,
   TYPE_LABELS,
+  activeLinkedNodeId,
+  ancestorChain,
   descendantIds,
   hasChildren,
   isFilterActive,
@@ -74,6 +76,16 @@ interface Props {
   baseUrl: string;
   ready: boolean;
   mode: string;
+  /** The manuscript block the editor caret is in (for hard links / "you are here"). */
+  caretBlockIndex?: number | null;
+  /** The manuscript block texts (for binding a link's quote + re-anchoring). */
+  blockTexts?: string[];
+  /** Which document `blockTexts` belong to — re-anchoring is skipped on a mismatch. */
+  blockTextsDocId?: string | null;
+  /** Scroll the editor to a manuscript block (a linked node → its passage). */
+  onNavigateBlock?: (blockIndex: number) => void;
+  /** Report the ancestor titles of the linked node the caret sits in (breadcrumb). */
+  onActivePathChange?: (path: string[]) => void;
 }
 
 const SAVE_LABEL: Record<string, string> = {
@@ -82,7 +94,18 @@ const SAVE_LABEL: Record<string, string> = {
   error: 'Save failed',
 };
 
-export function OutlinePanel({ derivedItems, onNavigate, baseUrl, ready, mode }: Props) {
+export function OutlinePanel({
+  derivedItems,
+  onNavigate,
+  baseUrl,
+  ready,
+  mode,
+  caretBlockIndex = null,
+  blockTexts,
+  blockTextsDocId = null,
+  onNavigateBlock,
+  onActivePathChange,
+}: Props) {
   const [view, setView] = useState<View>(loadView);
   const store = useOutline({ baseUrl, ready, mode });
 
@@ -121,7 +144,16 @@ export function OutlinePanel({ derivedItems, onNavigate, baseUrl, ready, mode }:
       </div>
 
       {view === 'manual' ? (
-        <ManualView store={store} derivedItems={derivedItems} onNavigate={onNavigate} />
+        <ManualView
+          store={store}
+          derivedItems={derivedItems}
+          onNavigate={onNavigate}
+          caretBlockIndex={caretBlockIndex}
+          blockTexts={blockTexts}
+          blockTextsDocId={blockTextsDocId}
+          onNavigateBlock={onNavigateBlock}
+          onActivePathChange={onActivePathChange}
+        />
       ) : (
         <DerivedView items={derivedItems} onNavigate={onNavigate} />
       )}
@@ -133,16 +165,71 @@ function ManualView({
   store,
   derivedItems,
   onNavigate,
+  caretBlockIndex,
+  blockTexts,
+  blockTextsDocId,
+  onNavigateBlock,
+  onActivePathChange,
 }: {
   store: ReturnType<typeof useOutline>;
   derivedItems: OutlineItem[];
   onNavigate?: (item: OutlineItem) => void;
+  caretBlockIndex: number | null;
+  blockTexts?: string[];
+  blockTextsDocId?: string | null;
+  onNavigateBlock?: (blockIndex: number) => void;
+  onActivePathChange?: (path: string[]) => void;
 }) {
   const saveLabel = SAVE_LABEL[store.saveState] ?? '';
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [deletePrompt, setDeletePrompt] = useState<DeletePrompt | null>(null);
   const filterOn = isFilterActive(store.filter);
   const multiCount = store.selectedIds.length;
+
+  // --- hard link: re-anchor on manuscript edits, track "you are here", bind ---
+  // Re-anchor every link when the manuscript text changes (no-op / no save when
+  // nothing moved). Also depends on `store.items` so it retries once the outline
+  // finishes loading (the editor may publish blockTexts before the items arrive);
+  // `reanchor` itself skips unless blockTexts + items are the SAME document.
+  const reanchor = store.reanchor;
+  // `storeItems` is a dep so a late outline load re-triggers the anchor pass.
+  const storeItems = store.items;
+  useEffect(() => {
+    if (blockTexts) reanchor(blockTexts, blockTextsDocId ?? null);
+  }, [blockTexts, blockTextsDocId, storeItems, reanchor]);
+
+  // The linked node the caret sits in, and its ancestor titles (the breadcrumb).
+  const activeLinkId = useMemo(
+    () => activeLinkedNodeId(store.items, caretBlockIndex),
+    [store.items, caretBlockIndex],
+  );
+  const activePath = useMemo(
+    () =>
+      activeLinkId
+        ? ancestorChain(store.items, activeLinkId).map((n) => n.title.trim() || TYPE_LABELS[n.type])
+        : [],
+    [store.items, activeLinkId],
+  );
+  // Report the breadcrumb up (to the editor) only when it actually changes.
+  const onActivePathChangeRef = useRef(onActivePathChange);
+  onActivePathChangeRef.current = onActivePathChange;
+  const lastPathRef = useRef<string | null>(null);
+  useEffect(() => {
+    const key = activePath.join(' › ');
+    if (key === lastPathRef.current) return;
+    lastPathRef.current = key;
+    onActivePathChangeRef.current?.(activePath);
+  }, [activePath]);
+
+  // A link is anchored by the caret block's TEXT (blocks have no stable id), so an
+  // empty line can never be re-anchored after edits — it would silently drift.
+  // Only allow linking when the caret sits on a block that actually has text.
+  const caretText = caretBlockIndex != null ? blockTexts?.[caretBlockIndex] ?? '' : '';
+  const canLink = caretBlockIndex != null && caretText.trim().length > 0;
+  const linkToCursor = (id: string) => {
+    if (!canLink || caretBlockIndex == null) return;
+    store.linkToBlock(id, caretBlockIndex, caretText);
+  };
 
   // Primary "+ Add": another item at the current level (sibling of the selection),
   // else a child of the zoom root, else a new top-level item. The ▾ menu adds a
@@ -406,6 +493,10 @@ function ManualView({
             onReveal={onReveal}
             canReveal={canReveal}
             onDeleteRequest={requestDelete}
+            activeLinkId={activeLinkId}
+            canLink={canLink}
+            onLinkToCursor={linkToCursor}
+            onNavigateBlock={onNavigateBlock}
           />
         )}
       </div>

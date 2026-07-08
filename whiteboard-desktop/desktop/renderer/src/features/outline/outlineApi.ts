@@ -15,6 +15,7 @@ import {
   OUTLINE_TYPES,
   type OutlineColor,
   type OutlineItemType,
+  type OutlineLink,
   type OutlineNode,
   type OutlineStatus,
 } from './outlineModel';
@@ -26,6 +27,13 @@ interface OutlineItemsResponse {
 }
 
 const asString = (v: unknown, fallback = ''): string => (typeof v === 'string' ? v : fallback);
+
+function parseLink(v: unknown): OutlineLink | null {
+  if (!v || typeof v !== 'object') return null;
+  const o = v as Record<string, unknown>;
+  if (typeof o.blockIndex !== 'number' || o.blockIndex < 0) return null;
+  return { blockIndex: o.blockIndex, quote: typeof o.quote === 'string' ? o.quote : '' };
+}
 
 function normalize(raw: unknown): OutlineNode | null {
   if (!raw || typeof raw !== 'object') return null;
@@ -56,6 +64,7 @@ function normalize(raw: unknown): OutlineNode | null {
     tags,
     colorLabel,
     linkedLineId: typeof r.linkedLineId === 'string' ? r.linkedLineId : null,
+    link: parseLink(r.link),
     createdAt: asString(r.createdAt, now),
     updatedAt: asString(r.updatedAt, now),
   };
