@@ -16,6 +16,7 @@ export function editorToolsAttrs(tools: EditorToolsState): Record<string, string
   if (tools.fontSize != null) a['data-editor-font'] = 'on';
   if (tools.lineHeight != null) a['data-editor-lh'] = 'on';
   if (tools.typeface !== 'default') a['data-editor-typeface'] = tools.typeface;
+  if (tools.layout === 'paged') a['data-layout'] = 'paged';
   return a;
 }
 

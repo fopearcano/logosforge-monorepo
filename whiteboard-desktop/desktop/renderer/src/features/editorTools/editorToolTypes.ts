@@ -11,6 +11,9 @@
 /** General editor typeface override ('default' = keep the per-mode typeface). */
 export type EditorTypeface = 'default' | 'serif' | 'mono' | 'system';
 
+/** How the manuscript is laid out: one continuous column, or framed as pages. */
+export type EditorLayout = 'flow' | 'paged';
+
 export interface EditorToolsState {
   lineNumbers: boolean;
   currentLineHighlight: boolean;
@@ -22,6 +25,8 @@ export interface EditorToolsState {
   lineHeight: number | null;
   /** General typeface override across all modes. */
   typeface: EditorTypeface;
+  /** 'flow' = continuous scroll (default); 'paged' = a page sheet with page breaks. */
+  layout: EditorLayout;
 }
 
 export const DEFAULT_EDITOR_TOOLS: EditorToolsState = {
@@ -34,6 +39,7 @@ export const DEFAULT_EDITOR_TOOLS: EditorToolsState = {
   fontSize: null,
   lineHeight: null,
   typeface: 'default',
+  layout: 'flow',
 };
 
 /** Bounds for the typography overrides (kept reasonable for writing). */

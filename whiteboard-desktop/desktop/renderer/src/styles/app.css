@@ -300,12 +300,30 @@ button { font: inherit; color: inherit; cursor: pointer; }
  * OUTLINE PANEL
  * ========================================================================== */
 .outline-panel {
-  flex: none; width: 232px;
+  flex: none; width: var(--outline-w, 300px);
   display: flex; flex-direction: column; min-height: 0;
   background: var(--panel);
   border-right: 1px solid var(--border);
   transition: background var(--dur-slow) var(--ease), border-color var(--dur-slow) var(--ease);
 }
+
+/* Draggable divider between the outline and the manuscript. A slim hit-area that
+   straddles the panel's border; a hover/active accent line shows it's grabbable. */
+.workarea-resizer {
+  flex: none; width: 7px; margin: 0 -4px 0 -3px; z-index: 5;
+  cursor: col-resize; position: relative; align-self: stretch;
+  -webkit-app-region: no-drag; touch-action: none;
+}
+.workarea-resizer::after {
+  content: ''; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px;
+  background: var(--accent); opacity: 0; transition: opacity var(--dur) var(--ease);
+}
+.workarea-resizer:hover::after, .workarea-resizer:active::after { opacity: .8; }
+.workarea-resizer:focus-visible { outline: none; }
+.workarea-resizer:focus-visible::after { opacity: 1; width: 3px; box-shadow: 0 0 0 1px var(--accent-soft); }
+body.is-col-resizing { cursor: col-resize; user-select: none; }
+body.is-col-resizing * { cursor: col-resize !important; }
+.app.is-focus .workarea-resizer { opacity: 0; pointer-events: none; }
 .outline-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 13px 10px; }
 .outline-title-label { font: 500 9px/1 var(--font-mono); letter-spacing: .18em; text-transform: uppercase; color: var(--muted); }
 
@@ -373,7 +391,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .outline-body { flex: 1; min-height: 0; overflow: hidden auto; padding: 2px 7px 12px; }
 .outline-tree, .outline-list { list-style: none; margin: 0; padding: 0; }
 .outline-node { list-style: none; }
-.outline-row { position: relative; display: flex; align-items: center; gap: 5px; padding: 5px 30px 5px 6px; border-radius: var(--r-sm); transition: background var(--dur) var(--ease); }
+.outline-row { position: relative; display: flex; align-items: center; gap: 6px; padding: 6px 30px 6px 6px; border-radius: var(--r-sm); transition: background var(--dur) var(--ease); }
 .outline-row:hover { background: var(--hover); }
 .outline-node.is-selected > .outline-row { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
 .outline-row.is-multi { background: color-mix(in oklab, var(--accent-soft) 70%, transparent); box-shadow: inset 2px 0 0 color-mix(in oklab, var(--accent) 55%, transparent); }
@@ -419,9 +437,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 .outline-type-trigger { font: 500 8px/1 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: color-mix(in oklab, var(--muted) 55%, var(--text)); flex: none; border: 0; background: none; padding: 2px 3px; border-radius: 3px; cursor: pointer; }
 .outline-type-trigger:hover, .outline-type-trigger.is-active { background: var(--hover); color: var(--text); }
-.outline-title { flex: 1; min-width: 0; font: 450 12px/1.3 var(--font-ui); color: var(--text); background: none; border: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: text; }
+.outline-title { flex: 1; min-width: 0; font: 450 13px/1.4 var(--font-ui); color: var(--text); background: none; border: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: text; }
 .outline-title.is-untitled { color: var(--paper-muted); font-style: italic; }
-.outline-title-input { flex: 1; min-width: 0; font: 450 12px/1.3 var(--font-ui); color: var(--text); background: var(--bg); border: 1px solid var(--accent); border-radius: var(--r-sm); padding: 2px 6px; box-shadow: 0 0 0 3px var(--accent-soft); }
+.outline-title-input { flex: 1; min-width: 0; font: 450 13px/1.4 var(--font-ui); color: var(--text); background: var(--bg); border: 1px solid var(--accent); border-radius: var(--r-sm); padding: 2px 6px; box-shadow: 0 0 0 3px var(--accent-soft); }
 .outline-title-input:focus { outline: none; }
 
 /* --- outline ↔ manuscript hard link --- */
@@ -572,6 +590,51 @@ button { font: inherit; color: inherit; cursor: pointer; }
 /* loading / empty / error hints */
 .wb-hint { color: var(--muted); font: 400 14px/1.6 var(--font-ui); text-align: center; padding: 18vh 0; }
 .wb-error { color: var(--error); }
+
+/* ---- Page Layout view (Editor → Layout → Pages) --------------------------
+   Frames the manuscript as a page sheet floating on a darker "desk", with faint
+   page-break guides every page-height of content. Selectors carry the .whiteboard
+   ancestor so they out-rank the responsive `.wb-surface` padding rules. Content
+   flows continuously across the guides (it's a layout aid, not print pagination). */
+.whiteboard .wb-surface[data-layout="paged"]:not(.is-preview) {
+  /* page geometry scales with the view zoom (--wb-scale, applied to the font),
+     so a "page" always holds the same amount of text and the break guides stay
+     accurate at any zoom. Base = ~US Letter @ 96dpi. */
+  --page-w: calc(816px * var(--wb-scale));
+  --page-pad-y: calc(80px * var(--wb-scale));
+  --page-pad-x: calc(92px * var(--wb-scale));
+  --page-content-h: calc(896px * var(--wb-scale)); /* Letter 1056 − 2×80 margin */
+  padding-inline: 0;
+  padding-block: clamp(20px, 4vh, 48px);
+  /* mix toward --ink (not #000) so the desk is distinct from the paper sheet in
+     BOTH light and near-black dark themes. */
+  background: color-mix(in oklab, var(--paper) 84%, var(--ink) 16%);
+}
+.whiteboard .wb-surface[data-layout="paged"]:not(.is-preview) .wb-content {
+  max-width: min(var(--page-w), calc(100% - 24px));
+  width: min(var(--page-w), calc(100% - 24px));
+  margin: 0 auto;
+  background: var(--paper);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  box-shadow: var(--page-shadow); /* theme-tuned → the sheet floats in every theme */
+  padding: var(--page-pad-y) var(--page-pad-x);
+  min-height: var(--page-content-h);
+}
+.whiteboard .wb-surface[data-layout="paged"]:not(.is-preview) .wb-editor {
+  /* faint tinted band leading into a firmer hairline — reads as a page boundary
+     without heavily striking through the line of text it crosses. */
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent calc(var(--page-content-h) - 14px),
+    color-mix(in oklab, var(--ink) 5%, transparent) calc(var(--page-content-h) - 14px),
+    color-mix(in oklab, var(--ink) 5%, transparent) calc(var(--page-content-h) - 1px),
+    color-mix(in oklab, var(--ink) 26%, transparent) calc(var(--page-content-h) - 1px),
+    color-mix(in oklab, var(--ink) 26%, transparent) var(--page-content-h)
+  );
+  background-position: 0 0;
+}
 
 /* preview surface (editor hidden; the formatted page is the PREVIEW pane below).
    Field + .wb-preview rules live once, further down — see "screenplay TITLE PAGE"

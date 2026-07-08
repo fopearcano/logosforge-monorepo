@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+} from 'react';
 
 import { bridge, type BackendStatus } from './api/backend';
 import { StatusBar } from './components/StatusBar';
@@ -37,6 +46,24 @@ function currentSelectionText(): string {
   return window.getSelection()?.toString().trim() ?? '';
 }
 
+// --- outline panel width (draggable divider, persisted) ---------------------
+const OUTLINE_W_KEY = 'lf-outline-width';
+const OUTLINE_W_MIN = 220;
+const OUTLINE_W_MAX = 620;
+const OUTLINE_W_DEFAULT = 300;
+
+function loadOutlineWidth(): number {
+  try {
+    const v = Number(localStorage.getItem(OUTLINE_W_KEY));
+    if (Number.isFinite(v) && v >= OUTLINE_W_MIN && v <= OUTLINE_W_MAX) return v;
+  } catch {
+    /* ignore */
+  }
+  return OUTLINE_W_DEFAULT;
+}
+
+const clampOutlineWidth = (w: number) => Math.min(OUTLINE_W_MAX, Math.max(OUTLINE_W_MIN, w));
+
 export function App() {
   const ui = useUiVisibility();
   const { themeId, setThemeId } = useTheme();
@@ -66,6 +93,104 @@ export function App() {
   const [editorBlockTexts, setEditorBlockTexts] = useState<string[]>([]);
   const [editorBlockTextsDocId, setEditorBlockTextsDocId] = useState<string | null>(null);
   const [activePath, setActivePath] = useState<string[]>([]);
+  // Draggable outline↔manuscript divider width (persisted).
+  const [outlineWidth, setOutlineWidth] = useState<number>(loadOutlineWidth);
+  const persistOutlineWidth = useCallback((w: number) => {
+    try {
+      localStorage.setItem(OUTLINE_W_KEY, String(w));
+    } catch {
+      /* ignore */
+    }
+  }, []);
+  const setOutlineWidthPersist = useCallback(
+    (w: number) => {
+      const next = clampOutlineWidth(w);
+      setOutlineWidth(next);
+      persistOutlineWidth(next);
+    },
+    [persistOutlineWidth],
+  );
+  // Functional nudge so rapid keypresses accumulate off the latest width, not a
+  // stale render's value. Persist inside the updater (an idempotent localStorage
+  // write) so it commits the SAME value the updater returns.
+  const nudgeOutlineWidth = useCallback(
+    (delta: number) => {
+      setOutlineWidth((w) => {
+        const next = clampOutlineWidth(w + delta);
+        persistOutlineWidth(next);
+        return next;
+      });
+    },
+    [persistOutlineWidth],
+  );
+  const startOutlineResize = useCallback(
+    (e: ReactPointerEvent) => {
+      e.preventDefault();
+      // Capture the pointer to the resizer element so a mouse release OUTSIDE the
+      // window (or focus loss mid-drag) still delivers pointerup → we always clean
+      // up. Element-scoped listeners + a buttons===0 guard belt-and-suspenders it.
+      const el = e.currentTarget as HTMLElement;
+      const pointerId = e.pointerId;
+      const startX = e.clientX;
+      const startWidth = outlineWidth;
+      let cur = startWidth;
+      function end() {
+        el.removeEventListener('pointermove', move);
+        el.removeEventListener('pointerup', end);
+        el.removeEventListener('pointercancel', end);
+        el.removeEventListener('lostpointercapture', end);
+        try {
+          el.releasePointerCapture(pointerId);
+        } catch {
+          /* already released */
+        }
+        document.body.classList.remove('is-col-resizing');
+        persistOutlineWidth(cur);
+      }
+      function move(ev: PointerEvent) {
+        if (ev.buttons === 0) {
+          end();
+          return;
+        }
+        cur = clampOutlineWidth(startWidth + (ev.clientX - startX));
+        setOutlineWidth(cur);
+      }
+      try {
+        el.setPointerCapture(pointerId);
+      } catch {
+        /* capture unsupported — window fallback still works via the listeners below */
+      }
+      document.body.classList.add('is-col-resizing');
+      el.addEventListener('pointermove', move);
+      el.addEventListener('pointerup', end);
+      el.addEventListener('pointercancel', end);
+      el.addEventListener('lostpointercapture', end);
+    },
+    [outlineWidth, persistOutlineWidth],
+  );
+  const resetOutlineWidth = useCallback(
+    () => setOutlineWidthPersist(OUTLINE_W_DEFAULT),
+    [setOutlineWidthPersist],
+  );
+  // Keyboard resize (the divider is a focusable separator): ← / → nudge, Home/End jump.
+  const onOutlineResizerKey = useCallback(
+    (e: ReactKeyboardEvent) => {
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        nudgeOutlineWidth(-16);
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        nudgeOutlineWidth(16);
+      } else if (e.key === 'Home') {
+        e.preventDefault();
+        setOutlineWidthPersist(OUTLINE_W_MIN);
+      } else if (e.key === 'End') {
+        e.preventDefault();
+        setOutlineWidthPersist(OUTLINE_W_MAX);
+      }
+    },
+    [nudgeOutlineWidth, setOutlineWidthPersist],
+  );
   const commentsPanelOpen = useCommentsPanelOpen();
   // Live open-state of the LittleBoy agents (Billy chat + Logos), published by
   // LittleBoyProvider — drives the title-bar toggle buttons' active state.
@@ -399,7 +524,7 @@ export function App() {
           )}
         </div>
       </header>
-      <div className="workarea">
+      <div className="workarea" style={{ '--outline-w': `${outlineWidth}px` } as CSSProperties}>
         {ui.outlineVisible && (
           <OutlinePanel
             derivedItems={outlineItems}
@@ -412,6 +537,22 @@ export function App() {
             blockTextsDocId={editorBlockTextsDocId}
             onNavigateBlock={scrollToBlock}
             onActivePathChange={setActivePath}
+          />
+        )}
+        {ui.outlineVisible && (
+          <div
+            className="workarea-resizer"
+            role="separator"
+            aria-orientation="vertical"
+            tabIndex={0}
+            aria-label="Resize outline panel"
+            aria-valuenow={outlineWidth}
+            aria-valuemin={OUTLINE_W_MIN}
+            aria-valuemax={OUTLINE_W_MAX}
+            title="Drag or ← → to resize · double-click to reset"
+            onPointerDown={startOutlineResize}
+            onDoubleClick={resetOutlineWidth}
+            onKeyDown={onOutlineResizerKey}
           />
         )}
         <WhiteboardPage

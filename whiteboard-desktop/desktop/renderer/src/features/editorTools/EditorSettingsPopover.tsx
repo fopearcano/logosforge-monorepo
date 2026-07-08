@@ -11,6 +11,7 @@ import {
   FONT_SIZE_MIN,
   LINE_HEIGHT_MAX,
   LINE_HEIGHT_MIN,
+  type EditorLayout,
   type EditorTypeface,
 } from './editorToolTypes';
 import type { EditorToolsApi } from './useEditorTools';
@@ -117,6 +118,18 @@ export function EditorSettingsPopover({ api, onReset }: Props) {
               ))}
             </select>
           </label>
+
+          <label className="wb-field">
+            <span>Layout</span>
+            <select value={tools.layout} onChange={(e) => update('layout', e.target.value as EditorLayout)}>
+              <option value="flow">Continuous</option>
+              <option value="paged">Pages</option>
+            </select>
+          </label>
+          <p className="wb-field-hint">
+            Pages frames your manuscript as a page sheet with page-break guides, instead of one
+            continuous scroll.
+          </p>
 
           <button type="button" className="wb-reset" onClick={onReset}>
             Reset editor view
