@@ -4,7 +4,7 @@
  * Escape or an overlay click closes it.
  */
 
-import { useEffect } from 'react';
+import { Fragment, useEffect } from 'react';
 
 interface Props {
   open: boolean;
@@ -88,6 +88,74 @@ const GROUPS: Group[] = [
   },
 ];
 
+interface SyntaxGroup {
+  title: string;
+  rows: [syntax: string, meaning: string][];
+}
+
+// Mirrors MANUSCRIPT_SYNTAX.md — the patterns each mode's live formatter reads.
+const SYNTAX: SyntaxGroup[] = [
+  {
+    title: 'Every mode',
+    rows: [
+      ['[[note]]', 'Private note — dimmed, not printed'],
+      ['@@Name', 'PSYKE bible mention (character / place / lore)'],
+      ['[text](url)', 'Link (a bare https://… works too)'],
+      ['TODO  FIXME  XXX', 'Flagged for follow-up'],
+    ],
+  },
+  {
+    title: 'Novel',
+    rows: [
+      ['#  ##  ###', 'Title / Heading / Subheading (or Format ▾)'],
+      ['Ctrl+B  Ctrl+I', 'Bold / italic — real rich text'],
+      ['"…"', 'Dialogue — auto colour-coded'],
+      ['- item   * item', 'Bullet'],
+      ['- [ ]   - [x]', 'Task / done'],
+      ['#tag   @tag', 'Tag'],
+    ],
+  },
+  {
+    title: 'Screenplay (Fountain)',
+    rows: [
+      ['INT.  EXT.  EST.', 'Scene heading — force any line with a leading .'],
+      ['MARA', 'Character cue — ALL-CAPS (force with @)'],
+      ['(whispering)', 'Parenthetical, under a cue'],
+      ['SARAH ^', 'Dual dialogue'],
+      ['CUT TO:', 'Transition (or force with a leading >)'],
+      ['>THE END<', 'Centred'],
+      ['#  ##  ###', 'Section — outline only, not printed'],
+      ['= synopsis', 'Synopsis — not printed'],
+      ['~lyric', 'Lyrics'],
+      ['===', 'Page break'],
+      ['*i*  **b**  _u_', 'Italic / bold / underline (***bold-italic*** too)'],
+      ['Title: …', 'Title page keys, at the very top'],
+      ['/* … */', 'Boneyard — hide text without deleting it'],
+      ['!action', 'Force an action line'],
+    ],
+  },
+  {
+    title: 'Graphic Novel',
+    rows: [
+      ['PAGE ONE   PAGE 1', 'Page (or a Heading)'],
+      ['PANEL 1', 'Panel (or a Subheading)'],
+      ['CAPTION:', 'Caption (also CAPTION (Name): )'],
+      ['SFX:  SOUND:  FX:', 'Sound effect'],
+      ['MARA: speech', 'Inline dialogue (or a cue + line below)'],
+      ['(beat)', 'Parenthetical'],
+    ],
+  },
+  {
+    title: 'Stage Script',
+    rows: [
+      ['ACT  SCENE  CURTAIN', 'Scene heading (or a Heading)'],
+      ['MARA:', 'Character cue — a trailing “:” is fine'],
+      ['line under a cue', 'Dialogue — centred'],
+      ['(crosses left)', 'Stage direction'],
+    ],
+  },
+];
+
 function Keys({ combo }: { combo: string }) {
   const alts = combo.split(' / ');
   return (
@@ -158,6 +226,27 @@ export function HelpDialog({ open, onClose }: Props) {
               </li>
             ))}
           </ul>
+
+          <div className="help-eyebrow">Manuscript syntax</div>
+          <p className="settings-sub help-syntax-intro">
+            You type plain text — the editor formats each line live for the current mode. The markers
+            below only matter when you want to force or fine-tune a type.
+          </p>
+          <div className="help-keys-grid">
+            {SYNTAX.map((g) => (
+              <div key={g.title} className="help-group">
+                <h3>{g.title}</h3>
+                <div className="help-syntax-list">
+                  {g.rows.map(([syntax, meaning]) => (
+                    <Fragment key={syntax}>
+                      <code className="help-syntax">{syntax}</code>
+                      <span className="help-desc">{meaning}</span>
+                    </Fragment>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
 
           <div className="help-eyebrow">Hotkeys</div>
           <div className="help-keys-grid">
