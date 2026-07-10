@@ -182,7 +182,11 @@ export function SettingsDialog({ open, baseUrl, onClose }: Props) {
                 type="text"
                 spellCheck={false}
                 value={form.model}
-                placeholder="e.g. llama-3.1-8b · gpt-4o · claude-sonnet-4-5"
+                placeholder={
+                  form.provider === 'OpenRouter'
+                    ? 'e.g. anthropic/claude-opus-4-8 · openrouter/auto'
+                    : 'e.g. llama-3.1-8b · gpt-4o · claude-sonnet-4-5'
+                }
                 onChange={(e) => set({ model: e.target.value })}
               />
             </label>

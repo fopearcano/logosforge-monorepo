@@ -2,7 +2,7 @@
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:8777';
 
-export const AI_PROVIDERS = ['LM Studio', 'Ollama', 'OpenAI', 'Anthropic'] as const;
+export const AI_PROVIDERS = ['LM Studio', 'Ollama', 'OpenAI', 'Anthropic', 'OpenRouter'] as const;
 
 /** Default base URL per provider (used by the "Default" button in the dialog). */
 export const PROVIDER_DEFAULT_URL: Record<string, string> = {
@@ -10,6 +10,9 @@ export const PROVIDER_DEFAULT_URL: Record<string, string> = {
   Ollama: 'http://localhost:11434/v1',
   OpenAI: 'https://api.openai.com/v1',
   Anthropic: 'https://api.anthropic.com',
+  // OpenRouter is OpenAI-compatible — the core routes it through the OpenAI path
+  // (chat/completions + Bearer key); models are namespaced e.g. anthropic/claude-*.
+  OpenRouter: 'https://openrouter.ai/api/v1',
 };
 
 export interface AiSettings {
