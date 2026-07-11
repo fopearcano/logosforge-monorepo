@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from "react";
-import type { NoteDTO, CharacterDTO, SceneDTO, PsykeEntryDTO, PsykeRelationDTO, PsykeProgressionDTO, OutlineNodeDTO, ProjectDTO, TimelineEventDTO, PlotBlockDTO, ExportRequestDTO, ExportResponseDTO, NarrativeDashboardDTO, ContinuityReportDTO, PacingInsightDTO, BalanceDataDTO, StoryHealthDTO, StructuralAnalysisDTO, WorkflowRunDTO, DecisionRadarDTO, GraphGravityDTO, QuantumResultDTO, AssistantResponseDTO, ExtractionResultDTO, ExtractionApplyRequestDTO, ExtractionApplyReportDTO } from "@logosforge/ui-contracts";
+import type { NoteDTO, CharacterDTO, SceneDTO, PsykeEntryDTO, PsykeRelationDTO, PsykeProgressionDTO, OutlineNodeDTO, ProjectDTO, TimelineEventDTO, PlotBlockDTO, ExportRequestDTO, ExportResponseDTO, NarrativeDashboardDTO, ContinuityReportDTO, PacingInsightDTO, BalanceDataDTO, StoryHealthDTO, StructuralAnalysisDTO, WorkflowRunDTO, DecisionRadarDTO, GraphGravityDTO, AdaptDTO, ReviewReportDTO, FormatReviewDTO, QuantumResultDTO, AssistantResponseDTO, ExtractionResultDTO, ExtractionApplyRequestDTO, ExtractionApplyReportDTO } from "@logosforge/ui-contracts";
 import { useStudio } from "../adapters/StudioProvider";
 import { useResource, type Resource } from "./useResource";
 
@@ -118,19 +118,43 @@ export function useGraphGravity(): Resource<GraphGravityDTO> {
   return useResource(projectId ?? null, () => api.getGraphGravity(projectId as number), ["scenes_changed", "scene_changed", "psyke_changed"]);
 }
 
-/** Quantum outliner — generate a wavefunction of branches from a premise (POST action). */
-export function useQuantum(): { generate: (premise: string, n?: number) => Promise<void>; running: boolean; result: QuantumResultDTO | null; error: string | null } {
+/** Adaptive-AI mode (stage × health) + actionable suggestions for the active project. */
+export function useAdapt(): Resource<AdaptDTO> {
+  const { api, projectId } = useStudio();
+  return useResource(projectId ?? null, () => api.getAdapt(projectId as number), ["scenes_changed", "scene_changed", "psyke_changed", "project_data_changed"]);
+}
+
+/** Screenplay review dashboard — per-scene readiness + summary metrics. */
+export function useReview(): Resource<ReviewReportDTO> {
+  const { api, projectId } = useStudio();
+  return useResource(projectId ?? null, () => api.getReview(projectId as number), ["scenes_changed", "scene_changed", "project_data_changed"]);
+}
+
+/** Format-specific review checks (graphic novel / stage / series). */
+export function useFormatReview(): Resource<FormatReviewDTO> {
+  const { api, projectId } = useStudio();
+  return useResource(projectId ?? null, () => api.getFormatReview(projectId as number), ["scenes_changed", "scene_changed", "project_data_changed"]);
+}
+
+/** Quantum outliner — generate a wavefunction of branches from a premise (POST action).
+ *  `structureMode` (auto/classical/quantum/hybrid) picks the compose strategy. */
+export function useQuantum(): { generate: (premise: string, n?: number, structureMode?: string) => Promise<void>; running: boolean; result: QuantumResultDTO | null; error: string | null } {
   const { api, projectId } = useStudio();
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<QuantumResultDTO | null>(null);
   const [error, setError] = useState<string | null>(null);
   const generate = useCallback(
-    async (premise: string, n = 4) => {
+    async (premise: string, n = 4, structureMode?: string) => {
       if (projectId == null || !premise.trim()) return;
       setRunning(true);
       setError(null);
       try {
-        setResult(await api.generateQuantumOutline(projectId, { premise, n }));
+        // The Quantum Outliner is the generative panel — request the LLM-backed
+        // LAMBDA branches (degrades to deterministic stub branches with no provider).
+        setResult(await api.generateQuantumOutline(projectId, {
+          premise, n, generative: true,
+          ...(structureMode ? { structure_mode: structureMode } : {}),
+        }));
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
         setResult(null);

@@ -41,11 +41,6 @@ def build_provider():
     return build_active_provider(require_configured=True)
 
 
-def outline_messages(prompt: str) -> list[dict]:
-    """Standard system+user message pair for an outline generation prompt."""
-    return [
-        {"role": "system",
-         "content": "You are a story-structure assistant. Produce a clean, "
-                    "structured outline only — no prose."},
-        {"role": "user", "content": prompt},
-    ]
+# Re-exported from the Qt-free core so the API route and the UI share one
+# definition (moved to logosforge.outline_actions).
+from logosforge.outline_actions import outline_messages  # noqa: E402,F401

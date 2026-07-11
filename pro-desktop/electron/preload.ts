@@ -20,6 +20,9 @@ export interface LogosForgeDesktop {
   openExternal(target: string): Promise<void>;
   loadLayout(projectId: number): Promise<unknown | null>;
   saveLayout(projectId: number, layout: unknown): Promise<void>;
+
+  /** Menu → renderer commands (see electron/menu.ts for the grammar). */
+  onMenuCommand(cb: (command: string) => void): () => void;
 }
 
 function subscribe<T>(channel: string, cb: (payload: T) => void): () => void {
@@ -38,6 +41,8 @@ const api: LogosForgeDesktop = {
   openExternal: (target) => ipcRenderer.invoke('shell:open-external', { target }),
   loadLayout: (projectId) => ipcRenderer.invoke('layout:load', { projectId }),
   saveLayout: (projectId, layout) => ipcRenderer.invoke('layout:save', { projectId, layout }),
+
+  onMenuCommand: (cb) => subscribe<string>('menu:command', cb),
 };
 
 contextBridge.exposeInMainWorld('logosforge', api);

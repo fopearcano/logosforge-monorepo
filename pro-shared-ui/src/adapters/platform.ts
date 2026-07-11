@@ -10,6 +10,9 @@ export interface OpenFileResult {
   path?: string;
   /** text content if the host read it for us; else undefined. */
   content?: string;
+  /** raw file bytes, base64-encoded — for binary imports (e.g. .docx) that a
+   *  UTF-8 read would corrupt. Set by desktop alongside `content`. */
+  contentBase64?: string;
 }
 
 export interface SaveFileResult {

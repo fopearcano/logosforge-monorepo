@@ -5,7 +5,7 @@ const panelBox: CSSProperties = {
   position: "relative",
   width: "100%",
   height: "100%",
-  background: "linear-gradient(180deg,#080a0f,#05070b)",
+  background: "linear-gradient(180deg,var(--panel),var(--base))",
   border: "1px solid var(--line)",
   boxShadow: "0 16px 60px rgba(0,0,0,.6)",
   overflow: "hidden",
@@ -27,7 +27,7 @@ function CommitTick({ left, top, size, color, glow = false }: { left: number; to
         height: size,
         borderRadius: "50%",
         background: color,
-        border: "2px solid #05070b",
+        border: "2px solid var(--base)",
         boxShadow: glow ? `0 0 ${size >= 16 ? 10 : 8}px ${color}` : undefined,
       }}
     />
@@ -52,7 +52,7 @@ export function StagesPanel(props: PanelProps) {
 
         {/* header */}
         <div style={{ height: 40, flex: "none", display: "flex", alignItems: "center", gap: 11, padding: "0 16px", borderBottom: "1px solid var(--line)" }}>
-          <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".1em", color: "#fff" }}>STAGES</span>
+          <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".1em", color: "var(--strong)" }}>STAGES</span>
           <span style={{ fontSize: 9, color: "var(--txt2)" }}>⟲ next autosave 2:41</span>
           <div style={{ flex: 1 }} />
           <span style={{ fontSize: 8, color: "var(--amber)" }}>↳ restore → NEW PROJECT · non-destructive</span>
@@ -115,10 +115,10 @@ export function StagesPanel(props: PanelProps) {
             </div>
             <div style={{ fontFamily: "'Courier Prime'", fontSize: 11, lineHeight: 1.6, marginBottom: 12 }}>
               <div style={{ background: "rgba(255,82,96,.1)", borderLeft: "2px solid var(--blocking,#ff5260)", padding: "1px 8px", color: "var(--txt3)" }}>− 6 scenes in Act II</div>
-              <div style={{ background: "rgba(98,217,154,.1)", borderLeft: "2px solid var(--green)", padding: "1px 8px", color: "#eef1f6" }}>+ 8 scenes · +2,140 words</div>
+              <div style={{ background: "rgba(98,217,154,.1)", borderLeft: "2px solid var(--green)", padding: "1px 8px", color: "var(--txt)" }}>+ 8 scenes · +2,140 words</div>
             </div>
             <div style={{ display: "flex", gap: 8 }}>
-              <span style={{ fontSize: 9, color: "#04060a", background: "var(--accent)", padding: "6px 13px", fontWeight: 600, letterSpacing: ".06em" }}>RESTORE → NEW PROJECT</span>
+              <span style={{ fontSize: 9, color: "var(--on-accent)", background: "var(--accent)", padding: "6px 13px", fontWeight: 600, letterSpacing: ".06em" }}>RESTORE → NEW PROJECT</span>
               <span style={{ fontSize: 9, color: "var(--txt2)", border: "1px solid var(--line2)", padding: "6px 13px" }}>DIFF</span>
               <span style={{ fontSize: 9, color: "var(--txt3)", border: "1px solid var(--line2)", padding: "6px 13px" }}>DELETE</span>
             </div>

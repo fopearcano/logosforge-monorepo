@@ -8,7 +8,7 @@ const panelBox: CSSProperties = {
   position: "relative",
   width: "100%",
   height: "100%",
-  background: "linear-gradient(180deg,#080a0f,#05070b)",
+  background: "linear-gradient(180deg,var(--panel),var(--base))",
   border: "1px solid var(--line)",
   boxShadow: "0 16px 60px rgba(0,0,0,.6)",
   overflow: "hidden",
@@ -28,7 +28,7 @@ function ActRow({ n, title, spark }: { n: string; title: string; spark: { points
   return (
     <div style={{ margin: "10px 0 5px", display: "flex", alignItems: "center", gap: 9, padding: "7px 6px", borderBottom: "1px solid var(--line2)" }}>
       <span style={{ fontFamily: "'Chakra Petch'", fontSize: 12, color: "var(--accent)", minWidth: 30 }}>{n}</span>
-      <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".08em", color: "#fff", flex: 1 }}>{title}</span>
+      <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".08em", color: "var(--strong)", flex: 1 }}>{title}</span>
       <Spark points={spark.points} color={spark.color} />
     </div>
   );
@@ -99,7 +99,7 @@ export function StructurePanel(props: PanelProps) {
       <div data-screen-label="Structure Panel" style={panelBox}>
         <Corners />
         <div style={{ height: 42, flex: "none", display: "flex", alignItems: "center", gap: 10, padding: "0 14px", borderBottom: "1px solid var(--line)" }}>
-          <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".12em", color: "#fff" }}>STRUCTURE</span>
+          <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".12em", color: "var(--strong)" }}>STRUCTURE</span>
           <div style={{ flex: 1 }} />
           <span style={{ fontSize: 7.5, color: "var(--txt3)", border: "1px solid var(--line2)", padding: "2px 7px", letterSpacing: ".12em" }}>NO ACT / CHAPTER TABLES · DERIVED</span>
         </div>

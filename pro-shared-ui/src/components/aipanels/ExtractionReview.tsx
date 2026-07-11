@@ -8,7 +8,7 @@ const panelBox: CSSProperties = {
   position: "relative",
   width: "100%",
   height: "100%",
-  background: "linear-gradient(180deg,#0a0810,#05050a)",
+  background: "linear-gradient(180deg,var(--panel2),var(--base))",
   border: "1px solid var(--line)",
   boxShadow: "0 16px 60px rgba(0,0,0,.6)",
   overflow: "hidden",
@@ -27,7 +27,7 @@ function Check({ on, onClick }: { on: boolean; onClick: () => void }) {
   return (
     <span
       onClick={onClick}
-      style={{ width: 13, height: 13, flex: "none", cursor: "pointer", border: `1px solid ${on ? "var(--accent)" : "var(--line2)"}`, background: on ? "var(--accent)" : "transparent", display: "grid", placeItems: "center", fontSize: 9, lineHeight: 1, color: "#04060a", marginTop: 1 }}
+      style={{ width: 13, height: 13, flex: "none", cursor: "pointer", border: `1px solid ${on ? "var(--accent)" : "var(--line2)"}`, background: on ? "var(--accent)" : "transparent", display: "grid", placeItems: "center", fontSize: 9, lineHeight: 1, color: "var(--on-accent)", marginTop: 1 }}
     >
       {on ? "✓" : ""}
     </span>
@@ -104,7 +104,7 @@ export function ExtractionReview(props: PanelProps) {
       <div key={key} style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 10, color: isOn(key) ? "var(--txt2)" : "var(--txt3)", opacity: isOn(key) ? 1 : 0.5 }}>
         <Check on={isOn(key)} onClick={() => toggle(key)} />
         <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
-          <span><span style={{ color: "#fff" }}>{rel.source}</span> <span style={{ color: REL_COLOR[rel.rel_type] ?? "var(--txt3)" }}>{rel.rel_type}</span> <span style={{ color: "#fff" }}>{rel.target}</span>{rel.why ? <span style={{ color: "var(--txt3)" }}> · {rel.why}</span> : null}</span>
+          <span><span style={{ color: "var(--strong)" }}>{rel.source}</span> <span style={{ color: REL_COLOR[rel.rel_type] ?? "var(--txt3)" }}>{rel.rel_type}</span> <span style={{ color: "var(--strong)" }}>{rel.target}</span>{rel.why ? <span style={{ color: "var(--txt3)" }}> · {rel.why}</span> : null}</span>
           {dupes.length > 0 && <span style={{ fontSize: 8.5, display: "flex", gap: 8, flexWrap: "wrap" }}>{dupes}</span>}
         </div>
       </div>
@@ -118,10 +118,10 @@ export function ExtractionReview(props: PanelProps) {
 
         {/* header */}
         <div style={{ height: 42, flex: "none", display: "flex", alignItems: "center", gap: 11, padding: "0 16px", borderBottom: "1px solid var(--line)" }}>
-          <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".1em", color: "#fff" }}>EXTRACT STRUCTURE</span>
+          <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".1em", color: "var(--strong)" }}>EXTRACT STRUCTURE</span>
           <div style={{ display: "flex", border: "1px solid var(--line2)", fontSize: 8, letterSpacing: ".08em" }}>
-            <span onClick={() => setUseLlm(false)} style={{ padding: "4px 8px", cursor: "pointer", color: useLlm ? "var(--txt3)" : "#04060a", background: useLlm ? undefined : "var(--accent)", fontWeight: useLlm ? 400 : 600 }}>TIER 1 ONLY</span>
-            <span onClick={() => setUseLlm(true)} style={{ padding: "4px 8px", cursor: "pointer", borderLeft: "1px solid var(--line2)", color: useLlm ? "#04060a" : "var(--txt3)", background: useLlm ? "var(--accent)" : undefined, fontWeight: useLlm ? 600 : 400 }}>+ AI INFERENCE</span>
+            <span onClick={() => setUseLlm(false)} style={{ padding: "4px 8px", cursor: "pointer", color: useLlm ? "var(--txt3)" : "var(--on-accent)", background: useLlm ? undefined : "var(--accent)", fontWeight: useLlm ? 400 : 600 }}>TIER 1 ONLY</span>
+            <span onClick={() => setUseLlm(true)} style={{ padding: "4px 8px", cursor: "pointer", borderLeft: "1px solid var(--line2)", color: useLlm ? "var(--on-accent)" : "var(--txt3)", background: useLlm ? "var(--accent)" : undefined, fontWeight: useLlm ? 600 : 400 }}>+ AI INFERENCE</span>
           </div>
           {useLlm && (
             <>
@@ -132,7 +132,7 @@ export function ExtractionReview(props: PanelProps) {
                 placeholder={models.length ? "model override (blank = default)" : "model override (free-text)"}
                 spellCheck={false}
                 title="Optional: run AI inference with a specific (e.g. stronger) model — kept on the active provider's endpoint. Pick a loaded model or type any name."
-                style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9, color: "var(--txt2)", background: "#11151e", border: "1px solid var(--line2)", padding: "4px 7px", width: 230, outline: "none" }}
+                style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9, color: "var(--txt2)", background: "var(--raised)", border: "1px solid var(--line2)", padding: "4px 7px", width: 230, outline: "none" }}
               />
               <datalist id="extract-model-list">
                 {models.map((m) => <option key={m} value={m} />)}
@@ -142,7 +142,7 @@ export function ExtractionReview(props: PanelProps) {
           <div style={{ flex: 1 }} />
           <span
             onClick={running ? undefined : () => { setRejected(new Set()); propose(useLlm, model.trim() || undefined); }}
-            style={{ fontSize: 9.5, color: "#04060a", background: running ? "var(--line2)" : "var(--accent)", padding: "6px 13px", fontWeight: 600, letterSpacing: ".08em", cursor: running ? "default" : "pointer", boxShadow: running ? undefined : "0 0 14px rgba(176,124,255,.35)" }}
+            style={{ fontSize: 9.5, color: "var(--on-accent)", background: running ? "var(--line2)" : "var(--accent)", padding: "6px 13px", fontWeight: 600, letterSpacing: ".08em", cursor: running ? "default" : "pointer", boxShadow: running ? undefined : "0 0 14px rgba(176,124,255,.35)" }}
           >
             {running ? "EXTRACTING…" : "⟳ EXTRACT FROM MANUSCRIPT"}
           </span>
@@ -155,7 +155,7 @@ export function ExtractionReview(props: PanelProps) {
               <div style={{ color: "var(--accent)", fontSize: 12, marginBottom: 10 }}>
                 Reading the manuscript… {progress ? `scene ${progress.done} / ${progress.total}` : "starting job…"}
               </div>
-              <div style={{ height: 6, background: "rgba(255,255,255,.06)", overflow: "hidden" }}>
+              <div style={{ height: 6, background: "var(--tint2)", overflow: "hidden" }}>
                 <div style={{ width: progress && progress.total ? `${Math.round((progress.done / progress.total) * 100)}%` : "6%", height: "100%", background: "var(--accent)", transition: "width .3s" }} />
               </div>
               <div style={{ fontSize: 8.5, color: "var(--txt3)", marginTop: 7 }}>Runs as a background job — Tier-1 cues are instant; AI inference runs per scene. You can keep working.</div>
@@ -177,8 +177,8 @@ export function ExtractionReview(props: PanelProps) {
                 const hasAny = s.characters.length || (s.who_knows_what ?? "").trim() || (s.relations ?? []).length;
                 if (!hasAny) return null;
                 return (
-                  <div key={s.scene_id} style={{ border: "1px solid var(--line2)", background: "rgba(11,8,18,.5)", padding: "9px 11px", marginBottom: 8 }}>
-                    <div style={{ fontFamily: "'Chakra Petch'", fontSize: 11, color: "#fff", letterSpacing: ".04em", marginBottom: 7 }}>{s.title || `Scene ${s.scene_id}`}</div>
+                  <div key={s.scene_id} style={{ border: "1px solid var(--line2)", background: "var(--tint)", padding: "9px 11px", marginBottom: 8 }}>
+                    <div style={{ fontFamily: "'Chakra Petch'", fontSize: 11, color: "var(--strong)", letterSpacing: ".04em", marginBottom: 7 }}>{s.title || `Scene ${s.scene_id}`}</div>
                     {s.characters.length > 0 && (
                       <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 6 }}>
                         <Check on={isOn(charKey)} onClick={() => toggle(charKey)} />
@@ -217,7 +217,7 @@ export function ExtractionReview(props: PanelProps) {
         </div>
 
         {/* apply footer */}
-        <div style={{ flex: "none", minHeight: 34, display: "flex", alignItems: "center", gap: 12, padding: "0 16px", borderTop: "1px solid var(--line2)", background: "rgba(255,255,255,.015)" }}>
+        <div style={{ flex: "none", minHeight: 34, display: "flex", alignItems: "center", gap: 12, padding: "0 16px", borderTop: "1px solid var(--line2)", background: "var(--tint2)" }}>
           {report ? (
             <span style={{ fontSize: 9.5, color: "var(--green)", letterSpacing: ".04em" }}>
               ✓ APPLIED · {report.characters_created} chars · {report.links_added} links · {report.who_knows_what_set} knows · {report.relations_added} relations {report.psyke_created ? `· ${report.psyke_created} PSYKE` : ""}
@@ -239,7 +239,7 @@ export function ExtractionReview(props: PanelProps) {
           ) : proposals ? (
             <span
               onClick={applying || accepted === 0 ? undefined : () => apply(request)}
-              style={{ fontSize: 9.5, color: "#04060a", background: applying || accepted === 0 ? "var(--line2)" : "var(--green)", padding: "6px 13px", fontWeight: 600, letterSpacing: ".08em", cursor: applying || accepted === 0 ? "default" : "pointer" }}
+              style={{ fontSize: 9.5, color: "var(--on-accent)", background: applying || accepted === 0 ? "var(--line2)" : "var(--green)", padding: "6px 13px", fontWeight: 600, letterSpacing: ".08em", cursor: applying || accepted === 0 ? "default" : "pointer" }}
             >
               {applying ? "APPLYING…" : `APPLY ${accepted} ACCEPTED ▸`}
             </span>

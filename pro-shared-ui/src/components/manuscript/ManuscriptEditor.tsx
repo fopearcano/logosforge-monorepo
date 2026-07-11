@@ -5,6 +5,7 @@ import { useStudio, useManuscriptTarget } from "../../adapters/StudioProvider";
 import { useSelection } from "../../adapters/selection";
 import { useScenes } from "../../hooks";
 import { classifyLines, renderLineText, fountainLineStyle } from "../../format/fountain";
+import { ProseEditor } from "./ProseEditor";
 
 /**
  * The Studio's genuine writing surface — a continuous, inline-editable manuscript.
@@ -23,7 +24,7 @@ const SCRIPT_MODES = new Set(["screenplay", "stage_script", "stage", "series"]);
 
 const panelBox: CSSProperties = {
   position: "relative", width: "100%", height: "100%",
-  background: "radial-gradient(120% 70% at 50% 0%,#080b11,#040609)",
+  background: "radial-gradient(120% 70% at 50% 0%,var(--panel),var(--base))",
   border: "1px solid var(--line)", boxShadow: "0 16px 60px rgba(0,0,0,.6)",
   overflow: "hidden", display: "flex", flexDirection: "column",
 };
@@ -59,10 +60,10 @@ const ActDivider = ({ scene }: { scene: SceneDTO }) => (
 
 // --------------------------------------------------------------- Scene editor
 function SceneEditor({
-  scene, index, showAct, widthKey, busy, onWords, onContent, onStatus, onActive, registerFlush,
+  scene, index, showAct, formatted, mode, busy, onWords, onContent, onStatus, onActive, registerFlush,
   onDelete, onMoveUp, onMoveDown, isFirst, isLast,
 }: {
-  scene: SceneDTO; index: number; showAct: boolean; widthKey: unknown; busy: boolean;
+  scene: SceneDTO; index: number; showAct: boolean; formatted: boolean; mode: string; busy: boolean;
   onWords: (id: number, n: number) => void;
   onContent: (id: number, c: string) => void;
   onStatus: (id: number, s: SaveStatus) => void;
@@ -84,7 +85,6 @@ function SceneEditor({
   const [confirmDel, setConfirmDel] = useState(false);
   const dirty = useRef(false);
   const timer = useRef<number | null>(null);
-  const taRef = useRef<HTMLTextAreaElement | null>(null);
   const editSeq = useRef(0);
   const inFlight = useRef(false);
   const pendingAgain = useRef(false);
@@ -141,19 +141,13 @@ function SceneEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const grow = () => { const ta = taRef.current; if (ta) { ta.style.height = "auto"; ta.style.height = `${ta.scrollHeight}px`; } };
-  useEffect(grow, [content, widthKey]);
-
   const lastPub = useRef("");
-  const publishSelection = (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
-    const el = e.currentTarget;
-    const start = el.selectionStart ?? 0, end = el.selectionEnd ?? 0;
-    const text = el.value.substring(start, end);
-    const key = `${scene.id}:${start}:${end}:${text}`;
+  const publishText = useCallback((text: string) => {
+    const key = `${scene.id}:${text}`;
     if (key === lastPub.current) return;
     lastPub.current = key;
     setSelection({ sceneId: scene.id, text, section: "Manuscript" });
-  };
+  }, [scene.id, setSelection]);
 
   const st = STATUS_GLYPH[status];
   return (
@@ -169,7 +163,7 @@ function SceneEditor({
           placeholder="UNTITLED SCENE"
           aria-label={`Scene ${index + 1} title`}
           spellCheck={false}
-          style={{ flex: 1, minWidth: 0, background: "transparent", border: "none", outline: "none", color: "#fff", fontWeight: 700, letterSpacing: ".02em", fontSize: 15, fontFamily: "'Courier Prime',monospace", padding: 0 }}
+          style={{ flex: 1, minWidth: 0, background: "transparent", border: "none", outline: "none", color: "var(--strong)", fontWeight: 700, letterSpacing: ".02em", fontSize: 15, fontFamily: "'Courier Prime',monospace", padding: 0 }}
         />
         <span title={st.t} style={{ flex: "none", fontSize: 11, color: st.c, minWidth: 12, textAlign: "right" }}>{st.g}</span>
         {confirmDel ? (
@@ -199,26 +193,21 @@ function SceneEditor({
                 onBlur={() => void flushNow()}
                 placeholder={ph}
                 aria-label={`Scene ${index + 1} ${label.toLowerCase()}`}
-                style={{ width: w, background: "rgba(11,14,21,.5)", border: "1px solid var(--line2)", outline: "none", color: "var(--txt)", fontFamily: "inherit", fontSize: 11, padding: "5px 8px" }}
+                style={{ width: w, background: "var(--tint)", border: "1px solid var(--line2)", outline: "none", color: "var(--txt)", fontFamily: "inherit", fontSize: 11, padding: "5px 8px" }}
               />
             </label>
           ))}
         </div>
       )}
-      <textarea
-        ref={taRef}
-        data-prose
+      <ProseEditor
         value={content}
-        onChange={(e) => { setContent(e.target.value); schedule(); }}
-        onFocus={(e) => { onActive(scene.id); publishSelection(e); }}
-        onSelect={publishSelection}
-        onMouseUp={publishSelection}
-        onKeyUp={publishSelection}
+        onChange={(v) => { setContent(v); schedule(); }}
+        onFocusActive={() => { onActive(scene.id); publishText(""); }}
+        onSelectionText={publishText}
         onBlur={() => void flushNow()}
+        formatted={formatted}
+        mode={mode}
         placeholder="Write the scene…"
-        aria-label={`Scene ${index + 1} prose`}
-        spellCheck
-        style={{ display: "block", width: "100%", resize: "none", overflow: "hidden", minHeight: 48, background: "transparent", border: "none", outline: "none", color: "#c6ccd6", fontFamily: "'Courier Prime',monospace", fontSize: 15, lineHeight: 1.62, padding: 0, caretColor: "var(--accent)" }}
       />
     </div>
   );
@@ -228,17 +217,17 @@ function SceneEditor({
 function FormatPreview({ scene, content }: { scene: SceneDTO | undefined; content: string }) {
   const lines = classifyLines(content || "");
   return (
-    <div style={{ width: 340, flex: "none", borderLeft: "1px solid var(--line)", background: "linear-gradient(180deg,#07090e,#05070b)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+    <div style={{ width: 340, flex: "none", borderLeft: "1px solid var(--line)", background: "linear-gradient(180deg,var(--panel2),var(--base))", display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <div style={{ height: 30, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 13px", borderBottom: "1px solid var(--line)", background: "rgba(76,194,255,.04)" }}>
         <span style={{ fontSize: 8.5, letterSpacing: ".24em", color: "var(--accent)" }}>FORMAT PREVIEW</span>
         <span style={{ fontSize: 8, color: "var(--txt3)", letterSpacing: ".1em" }}>◈ LIVE</span>
       </div>
-      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "16px 18px", fontFamily: "'Courier Prime',monospace", fontSize: 13, lineHeight: 1.6, color: "#c6ccd6" }}>
+      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "16px 18px", fontFamily: "'Courier Prime',monospace", fontSize: 13, lineHeight: 1.6, color: "var(--txt)" }}>
         {!scene
           ? <div style={{ color: "var(--txt3)", fontStyle: "italic", fontSize: 11 }}>Click into a scene to preview it formatted.</div>
           : (
             <>
-              <div style={{ fontWeight: 700, color: "#fff", marginBottom: 12, letterSpacing: ".02em" }}>{scene.title || "UNTITLED SCENE"}</div>
+              <div style={{ fontWeight: 700, color: "var(--strong)", marginBottom: 12, letterSpacing: ".02em" }}>{scene.title || "UNTITLED SCENE"}</div>
               {content.trim() === ""
                 ? <div style={{ opacity: 0.5, fontStyle: "italic" }}>(no prose yet)</div>
                 : lines.map((l, i) =>
@@ -265,12 +254,12 @@ function ManuscriptRail({
   const avg = scenes.length ? Math.round(total / scenes.length) : 0;
   const Stat = ({ label, value }: { label: string; value: string }) => (
     <div style={{ flex: 1 }}>
-      <div style={{ fontFamily: "'Chakra Petch'", fontSize: 19, color: "#fff", letterSpacing: ".02em" }}>{value}</div>
+      <div style={{ fontFamily: "'Chakra Petch'", fontSize: 19, color: "var(--strong)", letterSpacing: ".02em" }}>{value}</div>
       <div style={{ fontSize: 8, color: "var(--txt3)", letterSpacing: ".16em", marginTop: 2 }}>{label}</div>
     </div>
   );
   return (
-    <div style={{ width: 300, flex: "none", borderLeft: "1px solid var(--line)", background: "linear-gradient(180deg,#07090e,#05070b)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+    <div style={{ width: 300, flex: "none", borderLeft: "1px solid var(--line)", background: "linear-gradient(180deg,var(--panel2),var(--base))", display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <div style={{ height: 30, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 13px", borderBottom: "1px solid var(--line)", background: "rgba(76,194,255,.04)" }}>
         <span style={{ fontSize: 8.5, letterSpacing: ".24em", color: "var(--accent)" }}>MANUSCRIPT</span>
         <span style={{ fontSize: 8, color: "var(--txt3)", letterSpacing: ".1em" }}>◈ LIVE</span>
@@ -292,11 +281,11 @@ function ManuscriptRail({
               style={{ display: "block", width: "100%", textAlign: "left", background: active ? "rgba(76,194,255,.07)" : "transparent", border: "none", borderLeft: `2px solid ${active ? "var(--accent)" : "transparent"}`, padding: "6px 6px", cursor: "pointer", font: "inherit" }}>
               <div style={{ display: "flex", alignItems: "baseline", gap: 7 }}>
                 <span style={{ fontFamily: "'Chakra Petch'", fontSize: 10, color: "var(--txt3)", flex: "none" }}>{i + 1}</span>
-                <span style={{ flex: 1, minWidth: 0, fontSize: 11, color: active ? "#fff" : "var(--txt2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{s.title || "Untitled"}</span>
+                <span style={{ flex: 1, minWidth: 0, fontSize: 11, color: active ? "var(--strong)" : "var(--txt2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{s.title || "Untitled"}</span>
                 {stt.g && <span style={{ fontSize: 9, color: stt.c, flex: "none" }}>{stt.g}</span>}
                 <span style={{ fontSize: 9, color: "var(--txt3)", flex: "none" }}>{w}</span>
               </div>
-              <div style={{ height: 3, marginTop: 4, background: "rgba(255,255,255,.05)" }}>
+              <div style={{ height: 3, marginTop: 4, background: "var(--tint2)" }}>
                 <div style={{ width: `${Math.round((w / maxWords) * 100)}%`, height: "100%", background: active ? "var(--accent)" : "var(--line-cy,#2b6f8f)" }} />
               </div>
             </button>
@@ -361,9 +350,12 @@ export function ManuscriptEditor(props: PanelProps) {
   const { sceneId: navTarget, clear: clearNavTarget } = useManuscriptTarget();
   useEffect(() => {
     if (navTarget != null && sorted.some((s) => s.id === navTarget)) {
-      // wait a tick so the scene DOM exists after a panel switch
-      const t = window.setTimeout(() => jump(navTarget), 60);
-      clearNavTarget();
+      // wait a tick so the scene DOM exists after a panel switch, THEN jump and
+      // clear. Clearing must happen inside the timeout: clearing synchronously
+      // flips navTarget→null, which re-runs this effect and its cleanup would
+      // cancel the still-pending jump (a real race — the scene never activated).
+      const target = navTarget;
+      const t = window.setTimeout(() => { jump(target); clearNavTarget(); }, 60);
       return () => clearTimeout(t);
     }
     return undefined;
@@ -397,8 +389,8 @@ export function ManuscriptEditor(props: PanelProps) {
     <PanelShell {...props}>
       <div data-screen-label="Manuscript Editor" style={panelBox} onKeyDown={onKeyDown}>
         <Corners br />
-        <div style={{ height: 44, flex: "none", display: "flex", alignItems: "center", gap: 14, padding: "0 18px", borderBottom: "1px solid var(--line)", background: "rgba(6,8,12,.6)" }}>
-          <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 14, letterSpacing: ".14em", color: "#fff" }}>MANUSCRIPT</span>
+        <div style={{ height: 44, flex: "none", display: "flex", alignItems: "center", gap: 14, padding: "0 18px", borderBottom: "1px solid var(--line)", background: "var(--tint)" }}>
+          <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 14, letterSpacing: ".14em", color: "var(--strong)" }}>MANUSCRIPT</span>
           <span style={{ fontSize: 10, color: "var(--txt2)" }}>{total.toLocaleString()} <span style={{ color: "var(--txt3)" }}>WORDS</span> · {sorted.length} SCENES</span>
           <div style={{ display: "flex", alignItems: "center", gap: 6, height: 20, padding: "0 9px", border: `1px solid ${saveColor}`, color: saveColor, fontSize: 9, letterSpacing: ".14em" }}>
             <span style={{ width: 5, height: 5, borderRadius: "50%", background: saveColor }} />{saveLabel}
@@ -425,7 +417,7 @@ export function ManuscriptEditor(props: PanelProps) {
                   <SceneEditor
                     key={s.id} scene={s} index={i}
                     showAct={i === 0 || sorted[i - 1]!.act !== s.act}
-                    widthKey={focus} busy={busy}
+                    formatted={isScript && format} mode={String(writingMode ?? "")} busy={busy}
                     onWords={onWords} onContent={onContent} onStatus={onStatus} onActive={onActive} registerFlush={registerFlush}
                     onDelete={() => removeScene(s.id)} onMoveUp={() => moveScene(s.id, i - 1)} onMoveDown={() => moveScene(s.id, i + 1)}
                     isFirst={i === 0} isLast={i === sorted.length - 1}

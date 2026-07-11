@@ -13,7 +13,7 @@ import { useStudio } from "../../adapters/StudioProvider";
 
 const panelBox: CSSProperties = {
   position: "relative", width: "100%", height: "100%",
-  background: "linear-gradient(180deg,#080a0f,#05070b)",
+  background: "linear-gradient(180deg,var(--panel),var(--base))",
   border: "1px solid var(--line)", boxShadow: "0 16px 60px rgba(0,0,0,.6)",
   overflow: "hidden", display: "flex", flexDirection: "column",
 };
@@ -78,13 +78,13 @@ export function ThemeScenes(props: PanelProps) {
         <Corners />
         {/* header */}
         <div style={{ height: 40, flex: "none", display: "flex", alignItems: "center", gap: 13, padding: "0 16px", borderBottom: "1px solid var(--line)" }}>
-          <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".12em", color: "#fff" }}>THEME SCENES</span>
+          <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".12em", color: "var(--strong)" }}>THEME SCENES</span>
           {themes.length > 0 && (
             <select
               value={activeId != null ? String(activeId) : ""}
               onChange={(e) => setSelected(e.target.value ? Number(e.target.value) : null)}
               disabled={busy || projectId == null}
-              style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 11, color: "var(--txt)", background: "#11151e", border: "1px solid var(--line2)", padding: "4px 7px", minWidth: 160 }}
+              style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 11, color: "var(--txt)", background: "var(--raised)", border: "1px solid var(--line2)", padding: "4px 7px", minWidth: 160 }}
             >
               {themes.map((t) => <option key={t.id} value={String(t.id)}>{t.name}</option>)}
             </select>
@@ -115,11 +115,11 @@ export function ThemeScenes(props: PanelProps) {
                   <div
                     key={s.id}
                     onClick={() => toggle(s.id)}
-                    style={{ display: "flex", alignItems: "center", gap: 11, padding: "7px 11px", cursor: busy ? "default" : "pointer", border: `1px solid ${on ? "var(--line-cy)" : "var(--line2)"}`, background: on ? "rgba(76,194,255,.07)" : "rgba(11,14,21,.4)", opacity: busy ? 0.6 : 1 }}
+                    style={{ display: "flex", alignItems: "center", gap: 11, padding: "7px 11px", cursor: busy ? "default" : "pointer", border: `1px solid ${on ? "var(--line-cy)" : "var(--line2)"}`, background: on ? "rgba(76,194,255,.07)" : "var(--tint)", opacity: busy ? 0.6 : 1 }}
                   >
                     <span style={{ width: 11, height: 11, flex: "none", border: on ? "1px solid var(--line-cy)" : "1px solid var(--line2)", background: on ? "var(--accent)" : undefined }} />
                     <span style={{ fontSize: 8.5, color: "var(--txt3)", width: 24, flex: "none" }}>{s.sort_order ?? i + 1}</span>
-                    <span style={{ fontFamily: "'Chakra Petch'", fontSize: 11.5, color: on ? "#fff" : "var(--txt2)", letterSpacing: ".02em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{s.title || `Scene ${s.id}`}</span>
+                    <span style={{ fontFamily: "'Chakra Petch'", fontSize: 11.5, color: on ? "var(--strong)" : "var(--txt2)", letterSpacing: ".02em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{s.title || `Scene ${s.id}`}</span>
                   </div>
                 );
               })}

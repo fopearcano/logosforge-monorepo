@@ -5,7 +5,7 @@ const panelBox: CSSProperties = {
   position: "relative",
   width: "100%",
   height: "100%",
-  background: "radial-gradient(80% 70% at 42% 42%,#0a0e16,#040609 75%)",
+  background: "radial-gradient(80% 70% at 42% 42%,var(--raised),var(--base) 75%)",
   border: "1px solid var(--line)",
   boxShadow: "0 16px 60px rgba(0,0,0,.6)",
   overflow: "hidden",
@@ -18,9 +18,9 @@ interface NodeDef {
 }
 
 const NODES: NodeDef[] = [
-  { left: 360, top: 290, size: 64, border: "var(--cyan)", bg: "radial-gradient(circle,rgba(76,194,255,.25),rgba(76,194,255,.04))", shadow: "0 0 22px rgba(76,194,255,.3)", icon: "◆", iconSize: 20, label: "MARLOW", labelColor: "#fff", labelSize: 12 },
-  { left: 560, top: 460, size: 72, border: "var(--cyan)", bg: "radial-gradient(circle,rgba(76,194,255,.3),rgba(76,194,255,.05))", shadow: "0 0 30px rgba(76,194,255,.5)", icon: "◆", iconColor: "#fff", iconSize: 22, label: "VESPER", labelColor: "#fff", labelSize: 13, halo: true, focus: true },
-  { left: 620, top: 680, size: 54, border: "var(--crimson)", bg: "radial-gradient(circle,rgba(232,68,58,.25),rgba(232,68,58,.04))", shadow: "0 0 18px rgba(232,68,58,.35)", icon: "◆", iconSize: 17, label: "THE WARDEN", labelColor: "#fff", labelSize: 11 },
+  { left: 360, top: 290, size: 64, border: "var(--cyan)", bg: "radial-gradient(circle,rgba(76,194,255,.25),rgba(76,194,255,.04))", shadow: "0 0 22px rgba(76,194,255,.3)", icon: "◆", iconSize: 20, label: "MARLOW", labelColor: "var(--strong)", labelSize: 12 },
+  { left: 560, top: 460, size: 72, border: "var(--cyan)", bg: "radial-gradient(circle,rgba(76,194,255,.3),rgba(76,194,255,.05))", shadow: "0 0 30px rgba(76,194,255,.5)", icon: "◆", iconColor: "var(--strong)", iconSize: 22, label: "VESPER", labelColor: "var(--strong)", labelSize: 13, halo: true, focus: true },
+  { left: 620, top: 680, size: 54, border: "var(--crimson)", bg: "radial-gradient(circle,rgba(232,68,58,.25),rgba(232,68,58,.04))", shadow: "0 0 18px rgba(232,68,58,.35)", icon: "◆", iconSize: 17, label: "THE WARDEN", labelColor: "var(--strong)", labelSize: 11 },
   { left: 250, top: 580, size: 46, border: "var(--amber)", bg: "radial-gradient(circle,rgba(245,177,51,.2),transparent)", icon: "▲", iconSize: 15, label: "HELIOS-9", labelSize: 10 },
   { left: 840, top: 340, size: 44, border: "var(--violet)", bg: "radial-gradient(circle,rgba(176,124,255,.2),transparent)", icon: "◇", iconSize: 14, label: "BLACK BOX", labelSize: 10 },
   { left: 880, top: 580, size: 42, border: "#ff7ac6", bg: "radial-gradient(circle,rgba(255,122,198,.18),transparent)", icon: "✦", iconSize: 14, label: "STATIC", labelSize: 10 },
@@ -41,7 +41,7 @@ function Node(n: NodeDef) {
 }
 
 const edgeLabel = (left: number, top: number, color: string, text: string) => (
-  <div style={{ position: "absolute", left, top, fontSize: 8, color, background: "rgba(4,6,9,.8)", padding: "1px 5px", zIndex: 2 }}>{text}</div>
+  <div style={{ position: "absolute", left, top, fontSize: 8, color, background: "var(--tint)", padding: "1px 5px", zIndex: 2 }}>{text}</div>
 );
 
 export function RelationGraph(props: PanelProps) {
@@ -51,8 +51,8 @@ export function RelationGraph(props: PanelProps) {
         <div style={{ position: "absolute", top: -1, left: -1, width: 14, height: 14, borderTop: "1px solid var(--crimson)", borderLeft: "1px solid var(--crimson)", zIndex: 5 }} />
         <div style={{ position: "absolute", top: 3, left: 3, width: 5, height: 5, background: "var(--crimson)", zIndex: 5 }} />
         {/* toolbar */}
-        <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 40, display: "flex", alignItems: "center", gap: 12, padding: "0 14px", borderBottom: "1px solid var(--line)", background: "rgba(6,8,12,.7)", zIndex: 4 }}>
-          <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".12em", color: "#fff" }}>RELATION GRAPH</span>
+        <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 40, display: "flex", alignItems: "center", gap: 12, padding: "0 14px", borderBottom: "1px solid var(--line)", background: "var(--tint)", zIndex: 4 }}>
+          <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".12em", color: "var(--strong)" }}>RELATION GRAPH</span>
           <span style={{ fontSize: 9, color: "var(--txt3)" }}>⌕ focus…</span>
           <div style={{ flex: 1 }} />
           <span style={{ fontSize: 8.5, color: "var(--txt2)", letterSpacing: ".1em" }}>LAYOUT FORCE ▾</span>
@@ -85,7 +85,7 @@ export function RelationGraph(props: PanelProps) {
         {NODES.map((n) => <Node key={n.label} {...n} />)}
 
         {/* legend */}
-        <div style={{ position: "absolute", left: 14, bottom: 12, background: "rgba(6,8,12,.9)", border: "1px solid var(--line2)", padding: "9px 11px", zIndex: 4 }}>
+        <div style={{ position: "absolute", left: 14, bottom: 12, background: "var(--tint)", border: "1px solid var(--line2)", padding: "9px 11px", zIndex: 4 }}>
           <div style={{ fontSize: 7.5, letterSpacing: ".18em", color: "var(--txt3)", marginBottom: 6 }}>EDGE TYPES</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 8.5, color: "var(--txt2)" }}>
             <span><span style={{ color: "var(--cyan)" }}>━</span> associated</span>
@@ -95,7 +95,7 @@ export function RelationGraph(props: PanelProps) {
             <span><span style={{ color: "#ff7ac6" }}>┄</span> thematic echo</span>
           </div>
         </div>
-        <div style={{ position: "absolute", right: 14, bottom: 12, display: "flex", alignItems: "center", gap: 7, background: "rgba(6,8,12,.9)", border: "1px solid rgba(98,217,154,.25)", padding: "6px 10px", zIndex: 4, fontSize: 8, letterSpacing: ".12em", color: "var(--green)" }}>
+        <div style={{ position: "absolute", right: 14, bottom: 12, display: "flex", alignItems: "center", gap: 7, background: "var(--tint)", border: "1px solid rgba(98,217,154,.25)", padding: "6px 10px", zIndex: 4, fontSize: 8, letterSpacing: ".12em", color: "var(--green)" }}>
           <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--green)", boxShadow: "0 0 6px var(--green)" }} />DETERMINISTIC · TRACEABLE · NODE SIZE = PRESENCE
         </div>
       </div>

@@ -121,10 +121,27 @@ def select_mode(stage: StoryStage, health: HealthState) -> AIMode:
 
 
 def compute_mode(db: Database, project_id: int) -> ModeResult:
-    """Compute the current adaptive AI mode for a project."""
+    """Compute the current adaptive AI mode for a project.
+
+    Auto = story stage × health (``select_mode``). A user override
+    (global setting ``adaptive_mode_override`` = ``Structure|Balance|Refinement``;
+    empty = auto) forces the mode — stage/health are still reported for context.
+    The override flows into every consumer (``mode_context_block`` in prompts,
+    ``mode_suggestions``, the ``/adapt`` endpoint) because they all read from here.
+    """
     stage = detect_stage(db, project_id)
     health = detect_health(db, project_id)
     mode = select_mode(stage, health)
+    try:
+        from logosforge.settings import get_manager
+        override = str(get_manager().get("adaptive_mode_override") or "").strip()
+    except Exception:
+        override = ""
+    if override:
+        for m in AIMode:
+            if m.value == override:
+                mode = m
+                break
     return ModeResult(
         mode=mode,
         stage=stage,

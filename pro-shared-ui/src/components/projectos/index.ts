@@ -11,3 +11,8 @@ export * from "./NarrativeDashboard";
 export * from "./DecisionRadar";
 export * from "./GuidedWorkflowStepper";
 export * from "./ContinuityPanel";
+export * from "./ProjectsPanel";
+export * from "./ProjectReview";
+export * from "./MiscPanels";
+export * from "./AiSettings";
+export * from "./ConnectorPanel";

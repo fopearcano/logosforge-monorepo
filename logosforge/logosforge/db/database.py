@@ -13,6 +13,10 @@ from typing import Optional
 
 from sqlmodel import Session, SQLModel, create_engine, select
 
+# Sentinel for partial updates: distinguishes "argument not provided" (leave the
+# column as-is) from an explicit ``None`` (clear a nullable column).
+_UNSET: object = object()
+
 from logosforge.models import (
     ChatMessage,
     ChatSummary,
@@ -198,6 +202,13 @@ class Database:
                 conn.execute(
                     text("ALTER TABLE scene ADD COLUMN color_label TEXT DEFAULT ''")
                 )
+                conn.commit()
+
+            # Outline node → manuscript scene hard link (nullable FK-ish int).
+            rows = conn.execute(text("PRAGMA table_info(outlinenode)")).fetchall()
+            columns = {row[1] for row in rows}
+            if rows and "scene_id" not in columns:
+                conn.execute(text("ALTER TABLE outlinenode ADD COLUMN scene_id INTEGER"))
                 conn.commit()
 
             # Screenplay-engine fields — added safely; existing rows pick up
@@ -3322,6 +3333,80 @@ class Database:
             )
             return list(session.exec(stmt).all())
 
+    # -- Format-structure single-row update/delete completions --------------
+    # These entities previously had create/get only (no in-app way to correct or
+    # prune a wrong row); thin _patch_row/delete wrappers, same style as the
+    # GN page / season / episode methods above.
+    def delete_series_arc(self, arc_id: int) -> None:
+        with Session(self._engine) as session:
+            row = session.get(SeriesArc, arc_id)
+            if row:
+                session.delete(row)
+                session.commit()
+
+    def update_episode_plotline(self, plotline_id: int, **fields) -> None:
+        if "characters" in fields and not isinstance(fields["characters"], str):
+            fields["characters"] = self._csv_join(fields["characters"])
+        self._patch_row(EpisodePlotline, plotline_id, fields)
+
+    def delete_episode_plotline(self, plotline_id: int) -> None:
+        with Session(self._engine) as session:
+            row = session.get(EpisodePlotline, plotline_id)
+            if row:
+                session.delete(row)
+                session.commit()
+
+    def update_gn_continuity_item(self, item_id: int, **fields) -> None:
+        self._patch_row(GraphicNovelContinuityItem, item_id, fields)
+
+    def delete_gn_continuity_item(self, item_id: int) -> None:
+        with Session(self._engine) as session:
+            for app in session.exec(
+                select(GraphicNovelContinuityAppearance).where(
+                    GraphicNovelContinuityAppearance.continuity_item_id == item_id,
+                )
+            ).all():
+                session.delete(app)
+            row = session.get(GraphicNovelContinuityItem, item_id)
+            if row:
+                session.delete(row)
+            session.commit()
+
+    def update_gn_continuity_appearance(self, appearance_id: int, **fields) -> None:
+        self._patch_row(GraphicNovelContinuityAppearance, appearance_id, fields)
+
+    def delete_gn_continuity_appearance(self, appearance_id: int) -> None:
+        with Session(self._engine) as session:
+            row = session.get(GraphicNovelContinuityAppearance, appearance_id)
+            if row:
+                session.delete(row)
+                session.commit()
+
+    def update_stage_cue(self, row_id: int, **fields) -> None:
+        self._patch_row(StageCue, row_id, fields)
+
+    def update_stage_entrance_exit(self, row_id: int, **fields) -> None:
+        self._patch_row(StageEntranceExit, row_id, fields)
+
+    def delete_stage_business(self, row_id: int) -> None:
+        with Session(self._engine) as session:
+            row = session.get(StageBusiness, row_id)
+            if row:
+                session.delete(row)
+                session.commit()
+
+    # -- Continuity note single-row update/delete (StoryMemoryEntry) ---------
+    def update_continuity_memory(self, memory_id: int, **fields) -> None:
+        """Edit a single pinned continuity note (value/target)."""
+        self._patch_row(StoryMemoryEntry, memory_id, fields)
+
+    def delete_continuity_memory(self, memory_id: int) -> None:
+        with Session(self._engine) as session:
+            row = session.get(StoryMemoryEntry, memory_id)
+            if row:
+                session.delete(row)
+                session.commit()
+
     # -- PSYKE (Story Bible) ------------------------------------------------
 
     def get_psyke_entry_by_id(self, entry_id: int) -> PsykeEntry | None:
@@ -4009,6 +4094,7 @@ class Database:
         description: str = "",
         parent_id: int | None = None,
         sort_order: int = 0,
+        scene_id: int | None = None,
     ) -> OutlineNode:
         with Session(self._engine) as session:
             node = OutlineNode(
@@ -4017,6 +4103,7 @@ class Database:
                 title=title,
                 description=description,
                 sort_order=sort_order,
+                scene_id=scene_id,
             )
             session.add(node)
             session.commit()
@@ -4029,6 +4116,7 @@ class Database:
         title: str | None = None,
         description: str | None = None,
         sort_order: int | None = None,
+        scene_id: "int | None | object" = _UNSET,
     ) -> None:
         with Session(self._engine) as session:
             node = session.get(OutlineNode, node_id)
@@ -4040,6 +4128,8 @@ class Database:
                 node.description = description
             if sort_order is not None:
                 node.sort_order = sort_order
+            if scene_id is not _UNSET:   # explicit set/clear of the scene link
+                node.scene_id = scene_id  # type: ignore[assignment]
             session.commit()
 
     def delete_outline_node(self, node_id: int) -> None:

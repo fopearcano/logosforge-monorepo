@@ -7,7 +7,7 @@
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:ital,wght@0,400;0,500;0,600;0,700;1,500;1,600&family=JetBrains+Mono:ital,wght@0,400;0,500;0,700;1,400&family=Courier+Prime:ital,wght@0,400;0,700;1,400&display=swap');
 .lf-shell, .lf-shell *{box-sizing:border-box;}
-.lf-shell ::selection{background:rgba(76,194,255,.28);color:#fff;}
+.lf-shell ::selection{background:rgba(76,194,255,.28);color:var(--strong);}
 .lf-shell ::-webkit-scrollbar{width:7px;height:7px;}
 .lf-shell ::-webkit-scrollbar-thumb{background:rgba(232,68,58,.32);}
 .lf-shell ::-webkit-scrollbar-thumb:hover{background:rgba(232,68,58,.55);}
@@ -35,8 +35,8 @@ const CSS = `
 .lf-shell .lf-warn:hover{background:rgba(255,180,84,.12);}
 .lf-shell .lf-sug:hover{background:rgba(76,194,255,.12);}
 .lf-shell .lf-opp:hover{background:rgba(98,217,154,.12);}
-.lf-shell .lf-row:hover{background:rgba(255,255,255,.03);}
-.lf-shell .lf-row2:hover{background:rgba(255,255,255,.02);}
+.lf-shell .lf-row:hover{background:var(--tint2);}
+.lf-shell .lf-row2:hover{background:var(--tint2);}
 `;
 
 export function ShellStyles() {

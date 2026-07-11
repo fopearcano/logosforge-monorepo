@@ -31,7 +31,7 @@ function NavItem({
 }) {
   if (active) {
     return (
-      <div style={{ position: "relative", display: "flex", alignItems: "center", gap: 10, height: 30, padding: "0 9px", background: "linear-gradient(90deg,rgba(76,194,255,.14),rgba(76,194,255,.02))", color: "#fff" }}>
+      <div style={{ position: "relative", display: "flex", alignItems: "center", gap: 10, height: 30, padding: "0 9px", background: "linear-gradient(90deg,rgba(76,194,255,.14),rgba(76,194,255,.02))", color: "var(--strong)" }}>
         <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 2, background: "var(--accent)", boxShadow: "0 0 10px var(--accent)" }} />
         <span style={{ width: 15, textAlign: "center", color: "var(--accent)" }}>{icon}</span>
         <span style={{ flex: 1, fontSize: 11, letterSpacing: ".04em", fontWeight: 500 }}>{label}</span>
@@ -68,14 +68,14 @@ export function Navigator({ projectTitle, modeName, spineLabel }: { projectTitle
     : null;
 
   return (
-    <div style={{ width: 232, flex: "none", display: "flex", flexDirection: "column", background: "linear-gradient(180deg,#07090e,#05070b)", borderRight: "1px solid var(--line)" }}>
+    <div style={{ width: 232, flex: "none", display: "flex", flexDirection: "column", background: "linear-gradient(180deg,var(--panel2),var(--base))", borderRight: "1px solid var(--line)" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", height: 30, padding: "0 12px", borderBottom: "1px solid var(--line2)" }}>
         <span style={{ fontSize: 8.5, letterSpacing: ".28em", color: "var(--txt3)" }}>NAVIGATOR</span>
         <span style={{ fontSize: 11, color: "var(--txt3)" }}>◧</span>
       </div>
 
       {/* project switcher → opens the Launchpad */}
-      <div title="Switch project · open Launchpad" style={{ margin: "10px 10px 8px", padding: "8px 10px", border: "1px solid var(--line2)", background: "rgba(11,14,21,.55)", cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}>
+      <div title="Switch project · open Launchpad" style={{ margin: "10px 10px 8px", padding: "8px 10px", border: "1px solid var(--line2)", background: "var(--tint)", cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 7.5, letterSpacing: ".3em", color: "var(--txt3)" }}>PROJECT</div>
           <div style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 14, letterSpacing: ".04em", color: "var(--txt)", marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{projectTitle}</div>
@@ -128,7 +128,7 @@ export function Navigator({ projectTitle, modeName, spineLabel }: { projectTitle
 
       {/* footer: project intel mini */}
       <div style={{ borderTop: "1px solid var(--line2)", padding: "9px 11px", display: "flex", alignItems: "center", gap: 9 }}>
-        <div style={{ position: "relative", width: 26, height: 26, borderRadius: "50%", background: `conic-gradient(var(--green) 0 ${healthPct ?? 0}%,rgba(255,255,255,.08) ${healthPct ?? 0}% 100%)`, display: "grid", placeItems: "center" }}>
+        <div style={{ position: "relative", width: 26, height: 26, borderRadius: "50%", background: `conic-gradient(var(--green) 0 ${healthPct ?? 0}%,var(--tint2) ${healthPct ?? 0}% 100%)`, display: "grid", placeItems: "center" }}>
           <div style={{ width: 18, height: 18, borderRadius: "50%", background: "var(--base)", display: "grid", placeItems: "center", fontSize: 8, color: "var(--green)" }}>{healthPct ?? "—"}</div>
         </div>
         <div style={{ lineHeight: 1.3 }}>

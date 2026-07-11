@@ -5,7 +5,7 @@ const panelBox: CSSProperties = {
   position: "relative",
   width: "100%",
   height: "100%",
-  background: "linear-gradient(180deg,#080a0f,#05070b)",
+  background: "linear-gradient(180deg,var(--panel),var(--base))",
   border: "1px solid var(--line)",
   boxShadow: "0 16px 60px rgba(0,0,0,.6)",
   overflow: "hidden",
@@ -13,10 +13,10 @@ const panelBox: CSSProperties = {
 };
 
 function Dot({ kind }: { kind: "done" | "creative-done" | "current" | "todo" }) {
-  if (kind === "done") return <span style={{ position: "relative", zIndex: 1, width: 20, height: 20, flex: "none", borderRadius: "50%", background: "var(--green)", display: "grid", placeItems: "center", color: "#04060a", fontSize: 10 }}>✓</span>;
-  if (kind === "creative-done") return <span style={{ position: "relative", zIndex: 1, width: 20, height: 20, flex: "none", borderRadius: "50%", border: "1px solid var(--green)", background: "#0a0d12", display: "grid", placeItems: "center", color: "var(--green)", fontSize: 9 }}>✎</span>;
-  if (kind === "current") return <span style={{ position: "relative", zIndex: 1, width: 20, height: 20, flex: "none", borderRadius: "50%", background: "var(--accent)", display: "grid", placeItems: "center", color: "#04060a", fontSize: 9, boxShadow: "0 0 12px var(--accent)" }}>✎</span>;
-  return <span style={{ position: "relative", zIndex: 1, width: 20, height: 20, flex: "none", borderRadius: "50%", border: "1px solid var(--txt3)", background: "#0a0d12", display: "grid", placeItems: "center", color: "var(--txt3)", fontSize: 9 }}>○</span>;
+  if (kind === "done") return <span style={{ position: "relative", zIndex: 1, width: 20, height: 20, flex: "none", borderRadius: "50%", background: "var(--green)", display: "grid", placeItems: "center", color: "var(--on-accent)", fontSize: 10 }}>✓</span>;
+  if (kind === "creative-done") return <span style={{ position: "relative", zIndex: 1, width: 20, height: 20, flex: "none", borderRadius: "50%", border: "1px solid var(--green)", background: "var(--raised)", display: "grid", placeItems: "center", color: "var(--green)", fontSize: 9 }}>✎</span>;
+  if (kind === "current") return <span style={{ position: "relative", zIndex: 1, width: 20, height: 20, flex: "none", borderRadius: "50%", background: "var(--accent)", display: "grid", placeItems: "center", color: "var(--on-accent)", fontSize: 9, boxShadow: "0 0 12px var(--accent)" }}>✎</span>;
+  return <span style={{ position: "relative", zIndex: 1, width: 20, height: 20, flex: "none", borderRadius: "50%", border: "1px solid var(--txt3)", background: "var(--raised)", display: "grid", placeItems: "center", color: "var(--txt3)", fontSize: 9 }}>○</span>;
 }
 
 function Step({ kind, title, tag, tagColor, dim = false, children }: { kind: "done" | "creative-done" | "current" | "todo"; title: string; tag?: string; tagColor?: string; dim?: boolean; children?: ReactNode }) {
@@ -44,17 +44,17 @@ export function GuidedWorkflowStepper(props: PanelProps) {
       <div data-screen-label="Guided Workflow Stepper" style={panelBox}>
         <Corners />
         {/* runs + gallery */}
-        <div style={{ width: 260, flex: "none", borderRight: "1px solid var(--line)", background: "#06080c", display: "flex", flexDirection: "column" }}>
+        <div style={{ width: 260, flex: "none", borderRight: "1px solid var(--line)", background: "var(--panel2)", display: "flex", flexDirection: "column" }}>
           <div style={{ height: 38, display: "flex", alignItems: "center", padding: "0 13px", borderBottom: "1px solid var(--line2)", fontSize: 8.5, letterSpacing: ".18em", color: "var(--txt3)" }}>ACTIVE RUNS</div>
           <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 7 }}>
             <div style={{ border: "1px solid var(--line-cy)", background: "rgba(76,194,255,.07)", padding: "9px 10px" }}>
-              <div style={{ fontSize: 10, color: "#fff", marginBottom: 5 }}>Rewrite Pass</div>
-              <div style={{ height: 4, background: "rgba(255,255,255,.06)" }}><div style={{ width: "44%", height: "100%", background: "var(--accent)" }} /></div>
+              <div style={{ fontSize: 10, color: "var(--strong)", marginBottom: 5 }}>Rewrite Pass</div>
+              <div style={{ height: 4, background: "var(--tint2)" }}><div style={{ width: "44%", height: "100%", background: "var(--accent)" }} /></div>
               <div style={{ fontSize: 7.5, color: "var(--txt3)", marginTop: 4 }}>4/9 · active</div>
             </div>
-            <div style={{ border: "1px solid var(--line2)", background: "rgba(11,14,21,.4)", padding: "9px 10px" }}>
+            <div style={{ border: "1px solid var(--line2)", background: "var(--tint)", padding: "9px 10px" }}>
               <div style={{ fontSize: 10, color: "var(--txt2)", marginBottom: 5 }}>Export Readiness</div>
-              <div style={{ height: 4, background: "rgba(255,255,255,.06)" }}><div style={{ width: "70%", height: "100%", background: "var(--txt3)" }} /></div>
+              <div style={{ height: 4, background: "var(--tint2)" }}><div style={{ width: "70%", height: "100%", background: "var(--txt3)" }} /></div>
               <div style={{ fontSize: 7.5, color: "var(--txt3)", marginTop: 4 }}>7/10 · paused</div>
             </div>
           </div>
@@ -70,7 +70,7 @@ export function GuidedWorkflowStepper(props: PanelProps) {
         {/* stepper */}
         <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
           <div style={{ height: 42, flex: "none", display: "flex", alignItems: "center", gap: 11, padding: "0 16px", borderBottom: "1px solid var(--line)" }}>
-            <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".1em", color: "#fff" }}>REWRITE PASS</span>
+            <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".1em", color: "var(--strong)" }}>REWRITE PASS</span>
             <span style={{ fontSize: 8, color: "var(--txt3)" }}>mode-aware · resumable</span>
             <div style={{ flex: 1 }} /><span style={{ fontSize: 8.5, color: "var(--txt2)" }}>⏸ PAUSE</span><span style={{ fontSize: 8.5, color: "var(--txt3)" }}>CANCEL</span>
           </div>
@@ -81,11 +81,11 @@ export function GuidedWorkflowStepper(props: PanelProps) {
             <Step kind="creative-done" title="Address blocking issue" tag="CREATIVE · done by you" tagColor="var(--txt3)" />
             <Step kind="current" title="">
               <div style={{ flex: 1, border: "1px solid var(--line-cy)", background: "rgba(76,194,255,.06)", padding: "10px 12px" }}>
-                <div style={{ fontSize: 11.5, color: "#fff", marginBottom: 4 }}>Tighten Act II middle (SC.13–15)</div>
+                <div style={{ fontSize: 11.5, color: "var(--strong)", marginBottom: 4 }}>Tighten Act II middle (SC.13–15)</div>
                 <div style={{ fontSize: 8, color: "var(--accent)", letterSpacing: ".1em", marginBottom: 8 }}>CREATIVE · CURRENT STEP</div>
                 <div style={{ display: "flex", gap: 7 }}>
                   <span style={{ fontSize: 8, color: "var(--cyan)", border: "1px solid var(--line-cy)", padding: "3px 9px" }}>GO TO MANUSCRIPT ▸</span>
-                  <span style={{ fontSize: 8, color: "#04060a", background: "var(--accent)", padding: "3px 9px", fontWeight: 600 }}>RUN LOGOS: TIGHTEN</span>
+                  <span style={{ fontSize: 8, color: "var(--on-accent)", background: "var(--accent)", padding: "3px 9px", fontWeight: 600 }}>RUN LOGOS: TIGHTEN</span>
                 </div>
               </div>
             </Step>
@@ -95,7 +95,7 @@ export function GuidedWorkflowStepper(props: PanelProps) {
             </div>
           </div>
           {/* quest log */}
-          <div style={{ flex: "none", height: 96, borderTop: "1px solid var(--line)", padding: "9px 16px", background: "#06080c", overflowY: "auto" }}>
+          <div style={{ flex: "none", height: 96, borderTop: "1px solid var(--line)", padding: "9px 16px", background: "var(--panel2)", overflowY: "auto" }}>
             <div style={{ fontSize: 7.5, letterSpacing: ".18em", color: "var(--txt3)", marginBottom: 7 }}>EVENT TIMELINE · quest log</div>
             <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 8.5, color: "var(--txt2)" }}>
               {logRow("09:14", "var(--green)", "started · Rewrite Pass")}

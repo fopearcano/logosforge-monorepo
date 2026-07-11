@@ -50,12 +50,28 @@ def assistant_chat(
     # (optional) active scene + outline + PSYKE bible + story memory, already
     # capped at CONTEXT_MAX_CHARS. A context failure degrades to no context so
     # it can never break chat.
+    from logosforge.settings import get_manager
+    _s = get_manager()
     try:
         context = build_chat_context(
             db, project.id, active_scene_id=body.active_scene_id,
+            include_outline=bool(_s.get("assistant_ctx_outline")),
+            include_psyke=bool(_s.get("assistant_ctx_bible")),
+            include_memory=bool(_s.get("assistant_ctx_memory")),
         )
     except Exception:
         context = ""
+
+    # Irrational mode — fold surreal creative provocations into the grounding
+    # block (per-request; needs an active scene to draw fragments from).
+    if getattr(body, "irrational", False) and body.active_scene_id:
+        try:
+            from logosforge.irrational import build_irrational_context
+            irr = build_irrational_context(db, project.id, int(body.active_scene_id))
+            if irr:
+                context = (context + "\n\n" + irr) if context else irr
+        except Exception:
+            pass
 
     # Fold any inline-editor context (selection / nearby text / document title)
     # into the same grounding block, so a thin editor client just sends the raw
@@ -187,3 +203,54 @@ def patch_assistant_settings(
     if patch.get("api_key"):  # write-only; only set when non-empty
         settings.set("ai_api_key", patch["api_key"])
     return get_assistant_settings(project=project)
+
+
+# Behaviour keys → global settings keys. Only flags the HEADLESS API actually
+# honours are exposed here (chat grounding + connector governance), so every
+# toggle a client shows is a real control, never a mockup.
+_BEHAVIOR_KEYS = {
+    "ctx_outline": "assistant_ctx_outline",
+    "ctx_bible": "assistant_ctx_bible",
+    "ctx_memory": "assistant_ctx_memory",
+    "connector_enabled": "connector_enabled",
+    "connector_allow_writes": "connector_allow_writes",
+    "connector_confirm_writes": "connector_confirm_writes",
+    "connector_disabled_actions": "connector_disabled_actions",
+    "adaptive_override": "adaptive_mode_override",
+}
+
+
+@router.get(
+    "/projects/{project_id}/ai/behavior",
+    response_model=schemas.AiBehaviorDTO,
+)
+def get_ai_behavior(project=Depends(get_project)):
+    from logosforge.settings import get_manager
+
+    s = get_manager()
+    disabled = s.get("connector_disabled_actions")
+    return schemas.AiBehaviorDTO(
+        ctx_outline=bool(s.get("assistant_ctx_outline")),
+        ctx_bible=bool(s.get("assistant_ctx_bible")),
+        ctx_memory=bool(s.get("assistant_ctx_memory")),
+        connector_enabled=bool(s.get("connector_enabled")),
+        connector_allow_writes=bool(s.get("connector_allow_writes")),
+        connector_confirm_writes=bool(s.get("connector_confirm_writes")),
+        connector_disabled_actions=list(disabled) if isinstance(disabled, list) else [],
+        adaptive_override=str(s.get("adaptive_mode_override") or ""),
+    )
+
+
+@router.patch(
+    "/projects/{project_id}/ai/behavior",
+    response_model=schemas.AiBehaviorDTO,
+)
+def patch_ai_behavior(body: schemas.AiBehaviorUpdateDTO, project=Depends(get_project)):
+    from logosforge.settings import get_manager
+
+    s = get_manager()
+    patch = body.model_dump(exclude_unset=True)
+    for dto_key, settings_key in _BEHAVIOR_KEYS.items():
+        if dto_key in patch:
+            s.set(settings_key, patch[dto_key])
+    return get_ai_behavior(project=project)

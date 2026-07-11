@@ -1,13 +1,14 @@
-import type { CSSProperties, ReactNode } from "react";
-import type { TimelineEventDTO } from "@logosforge/ui-contracts";
+import { useState, type CSSProperties, type ReactNode } from "react";
+import type { TimelineEventDTO, TimelineEventCreateDTO } from "@logosforge/ui-contracts";
 import { PanelShell, type PanelProps } from "../shell/PanelShell";
 import { useTimeline } from "../../hooks";
+import { useStudio } from "../../adapters/StudioProvider";
 
 const panelBox: CSSProperties = {
   position: "relative",
   width: "100%",
   height: "100%",
-  background: "linear-gradient(180deg,#080a0f,#05070b)",
+  background: "linear-gradient(180deg,var(--panel),var(--base))",
   border: "1px solid var(--line)",
   boxShadow: "0 16px 60px rgba(0,0,0,.6)",
   overflow: "hidden",
@@ -47,6 +48,16 @@ function TCard({ left, width, height = 60, border, bg, children }: { left: numbe
 }
 const chip = (t: string, color: string, border?: string) => <span style={{ fontSize: 6.5, color, border: border ? `1px solid ${border}` : undefined, padding: border ? "0 4px" : undefined, whiteSpace: "nowrap" }}>{t}</span>;
 
+const inp: CSSProperties = { background: "var(--tint)", border: "1px solid var(--line2)", color: "var(--txt)", fontSize: 9, padding: "3px 7px", outline: "none", fontFamily: "inherit", minWidth: 0 };
+// Toolbar create button — mirrors the FormatStructure "+ ADD" chip idiom.
+function Add({ on, busy }: { on: () => void; busy: boolean }) {
+  return <span onClick={busy ? undefined : on} style={{ fontSize: 8, color: "var(--on-accent)", background: busy ? "var(--line2)" : "var(--accent)", padding: "3px 9px", fontWeight: 600, letterSpacing: ".06em", cursor: busy ? "default" : "pointer", flex: "none" }}>{busy ? "…" : "+ ADD"}</span>;
+}
+// Per-card destructive ✕ — non-destructive (removes from timeline, keeps the scene).
+function Del({ on, busy }: { on: () => void; busy: boolean }) {
+  return <span onClick={busy ? undefined : on} title="remove from timeline" style={{ position: "absolute", top: 3, right: 4, fontSize: 8.5, lineHeight: 1, color: "var(--crimson)", border: "1px solid var(--crimson)", borderRadius: 2, padding: "1px 4px", cursor: busy ? "default" : "pointer", opacity: busy ? 0.5 : 0.8, zIndex: 2 }}>✕</span>;
+}
+
 const message = (text: string) => (
   <div style={{ flex: 1, display: "grid", placeItems: "center", padding: "34px 0", textAlign: "center", fontSize: 11, color: "var(--txt3)", letterSpacing: ".04em" }}>{text}</div>
 );
@@ -66,7 +77,35 @@ function byAct(events: TimelineEventDTO[]): { acts: { act: string; events: Timel
 }
 
 export function TimelinePanel(props: PanelProps) {
-  const { data, loading, error } = useTimeline();
+  const { data, loading, error, refetch } = useTimeline();
+  const { api, projectId } = useStudio();
+  const [title, setTitle] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [delId, setDelId] = useState<number | null>(null);
+  const [mutErr, setMutErr] = useState("");
+
+  const add = async () => {
+    const t = title.trim();
+    if (projectId == null || !t) return;
+    setBusy(true); setMutErr("");
+    try {
+      const body: TimelineEventCreateDTO = { title: t };
+      await api.createTimelineEvent(projectId, body);
+      setTitle("");
+      refetch(); // useTimeline also refetches on timeline_changed; this is immediate
+    } catch (e) { setMutErr(`add failed — ${e instanceof Error ? e.message : String(e)}`); }
+    finally { setBusy(false); }
+  };
+  const remove = async (id: number) => {
+    if (projectId == null) return;
+    setDelId(id); setMutErr("");
+    try {
+      await api.deleteTimelineEvent(projectId, id);
+      refetch();
+    } catch (e) { setMutErr(`remove failed — ${e instanceof Error ? e.message : String(e)}`); }
+    finally { setDelId(null); }
+  };
+
   const events = (data ?? []).slice().sort((a, b) => a.order_index - b.order_index);
   const { acts, unassigned } = byAct(events);
   const maxOrder = events.reduce((m, e) => Math.max(m, e.order_index), 1);
@@ -80,9 +119,22 @@ export function TimelinePanel(props: PanelProps) {
         <div style={{ position: "absolute", top: 3, left: 3, width: 5, height: 5, background: "var(--crimson)", zIndex: 9 }} />
         {/* toolbar */}
         <div style={{ height: 40, flex: "none", display: "flex", alignItems: "center", gap: 14, padding: "0 16px", borderBottom: "1px solid var(--line)" }}>
-          <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".12em", color: "#fff" }}>PLOT · TIMELINE</span>
+          <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".12em", color: "var(--strong)" }}>PLOT · TIMELINE</span>
           <span style={{ fontSize: 8, color: "var(--accent)", border: "1px solid var(--line-cy)", padding: "2px 7px", letterSpacing: ".1em" }}>{events.length} EVENTS · {acts.length} ACTS</span>
           <div style={{ flex: 1 }} />
+          {mutErr && <span style={{ fontSize: 7.5, color: "var(--crimson)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 200 }}>{mutErr}</span>}
+          {projectId != null && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flex: "none" }}>
+              <input
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") void add(); }}
+                placeholder="new event title…"
+                style={{ ...inp, width: 150 }}
+              />
+              <Add on={() => void add()} busy={busy} />
+            </div>
+          )}
           <span style={{ fontSize: 7.5, color: "var(--txt3)", border: "1px solid var(--line2)", padding: "2px 7px", letterSpacing: ".12em" }}>DERIVED FROM STRUCTURE</span>
         </div>
 
@@ -107,7 +159,8 @@ export function TimelinePanel(props: PanelProps) {
                         <Lane key={act} height={84} color={lane.color} label={act} labelBg={lane.bg} sub={`${evs.length} ev`}>
                           {evs.map((e) => (
                             <TCard key={e.id} left={xOf(e)} width={CARD_W} border={lane.color} bg={lane.bg}>
-                              <div title={e.title} style={{ fontSize: 8, color: "#fff", lineHeight: 1.25, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{e.title}</div>
+                              <Del on={() => void remove(e.id)} busy={delId === e.id} />
+                              <div title={e.title} style={{ fontSize: 8, color: "var(--strong)", lineHeight: 1.25, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", paddingRight: 14 }}>{e.title}</div>
                               <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 4 }}>
                                 {e.chapter && chip(`▸ ${e.chapter}`, "var(--txt3)")}
                                 {e.time_of_day && chip(e.time_of_day, "var(--amber)", "rgba(245,177,51,.3)")}
@@ -128,10 +181,11 @@ export function TimelinePanel(props: PanelProps) {
                     })}
                     {/* unassigned — events with no act */}
                     {unassigned.length > 0 && (
-                      <Lane height={84} color="var(--txt3)" label="UNASSIGNED" labelBg="rgba(255,255,255,.02)" sub={`${unassigned.length} ev · no act`}>
+                      <Lane height={84} color="var(--txt3)" label="UNASSIGNED" labelBg="var(--tint2)" sub={`${unassigned.length} ev · no act`}>
                         {unassigned.map((e, i) => (
-                          <TCard key={e.id} left={i * STEP + 8} width={CARD_W} border="var(--line2)" bg="rgba(255,255,255,.02)">
-                            <div title={e.title} style={{ fontSize: 8, color: "var(--txt2)", lineHeight: 1.25, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{e.title}</div>
+                          <TCard key={e.id} left={i * STEP + 8} width={CARD_W} border="var(--line2)" bg="var(--tint2)">
+                            <Del on={() => void remove(e.id)} busy={delId === e.id} />
+                            <div title={e.title} style={{ fontSize: 8, color: "var(--txt2)", lineHeight: 1.25, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", paddingRight: 14 }}>{e.title}</div>
                             <div style={{ fontSize: 6.5, color: "var(--txt3)", marginTop: 4 }}>off timeline</div>
                           </TCard>
                         ))}

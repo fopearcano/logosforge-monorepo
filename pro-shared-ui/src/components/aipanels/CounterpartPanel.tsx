@@ -6,7 +6,7 @@ const panelBox: CSSProperties = {
   position: "relative",
   width: "100%",
   height: "100%",
-  background: "linear-gradient(180deg,#0a0810,#05050a)",
+  background: "linear-gradient(180deg,var(--panel2),var(--base))",
   border: "1px solid var(--line)",
   boxShadow: "0 16px 60px rgba(0,0,0,.6)",
   overflow: "hidden",
@@ -30,13 +30,13 @@ export function CounterpartPanel(props: PanelProps) {
 
         {/* header — title + mode tabs + contract badge */}
         <div style={{ height: 42, flex: "none", display: "flex", alignItems: "center", gap: 11, padding: "0 16px", borderBottom: "1px solid var(--line)" }}>
-          <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".1em", color: "#fff" }}>COUNTERPART</span>
+          <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".1em", color: "var(--strong)" }}>COUNTERPART</span>
           <div style={{ display: "flex", gap: 0, border: "1px solid var(--line2)", fontSize: 8, letterSpacing: ".08em" }}>
             {MODES.map((m, i) => (
               <span
                 key={m}
                 onClick={() => setMode(m)}
-                style={{ padding: "4px 8px", cursor: "pointer", borderLeft: i === 0 ? undefined : "1px solid var(--line2)", color: mode === m ? "#04060a" : "var(--txt3)", background: mode === m ? "var(--accent)" : undefined, fontWeight: mode === m ? 600 : 400 }}
+                style={{ padding: "4px 8px", cursor: "pointer", borderLeft: i === 0 ? undefined : "1px solid var(--line2)", color: mode === m ? "var(--on-accent)" : "var(--txt3)", background: mode === m ? "var(--accent)" : undefined, fontWeight: mode === m ? 600 : 400 }}
               >
                 {m.toUpperCase()}
               </span>
@@ -47,18 +47,18 @@ export function CounterpartPanel(props: PanelProps) {
         </div>
 
         {/* scene-context input */}
-        <div style={{ flex: "none", padding: "11px 16px", borderBottom: "1px solid var(--line2)", background: "rgba(255,255,255,.015)" }}>
+        <div style={{ flex: "none", padding: "11px 16px", borderBottom: "1px solid var(--line2)", background: "var(--tint2)" }}>
           <div style={{ fontSize: 8, letterSpacing: ".16em", color: "var(--txt3)", marginBottom: 6 }}>SCENE / EXCERPT TO REFLECT ON</div>
           <textarea
             value={sceneText}
             onChange={(e) => setSceneText(e.target.value)}
             placeholder="Paste the scene text or an excerpt…"
-            style={{ width: "100%", height: 64, resize: "vertical", background: "rgba(11,8,18,.6)", border: "1px solid var(--line2)", color: "var(--txt)", fontFamily: "'Courier Prime'", fontSize: 12, lineHeight: 1.5, padding: "8px 10px", outline: "none" }}
+            style={{ width: "100%", height: 64, resize: "vertical", background: "var(--tint)", border: "1px solid var(--line2)", color: "var(--txt)", fontFamily: "'Courier Prime'", fontSize: 12, lineHeight: 1.5, padding: "8px 10px", outline: "none" }}
           />
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
             <span
               onClick={canRun ? () => reflect(mode, sceneText) : undefined}
-              style={{ fontSize: 9.5, color: "#04060a", background: canRun ? "var(--accent)" : "var(--line2)", padding: "6px 13px", fontWeight: 600, letterSpacing: ".08em", cursor: canRun ? "pointer" : "default", boxShadow: canRun ? "0 0 14px rgba(176,124,255,.35)" : undefined }}
+              style={{ fontSize: 9.5, color: "var(--on-accent)", background: canRun ? "var(--accent)" : "var(--line2)", padding: "6px 13px", fontWeight: 600, letterSpacing: ".08em", cursor: canRun ? "pointer" : "default", boxShadow: canRun ? "0 0 14px rgba(176,124,255,.35)" : undefined }}
             >
               {running ? "REFLECTING…" : `↯ REFLECT · ${mode.toUpperCase()}`}
             </span>

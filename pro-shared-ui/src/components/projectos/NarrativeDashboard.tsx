@@ -7,7 +7,7 @@ const panelBox: CSSProperties = {
   position: "relative",
   width: "100%",
   height: "100%",
-  background: "linear-gradient(180deg,#080a0f,#05070b)",
+  background: "linear-gradient(180deg,var(--panel),var(--base))",
   border: "1px solid var(--line)",
   boxShadow: "0 16px 60px rgba(0,0,0,.6)",
   overflow: "hidden",
@@ -17,7 +17,7 @@ const panelBox: CSSProperties = {
 
 function Tile({ span = 1, label, right, accent = false, children }: { span?: number; label: string; right?: ReactNode; accent?: boolean; children: ReactNode }) {
   return (
-    <div style={{ gridColumn: `span ${span}`, border: accent ? "1px solid rgba(255,180,84,.25)" : "1px solid var(--line2)", background: accent ? "rgba(255,180,84,.04)" : "rgba(11,14,21,.4)", padding: 12 }}>
+    <div style={{ gridColumn: `span ${span}`, border: accent ? "1px solid rgba(255,180,84,.25)" : "1px solid var(--line2)", background: accent ? "rgba(255,180,84,.04)" : "var(--tint)", padding: 12 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 9 }}>
         <span style={{ fontSize: 7.5, letterSpacing: ".18em", color: "var(--txt3)" }}>{label}</span>{right}
       </div>
@@ -28,13 +28,13 @@ function Tile({ span = 1, label, right, accent = false, children }: { span?: num
 
 const miniGauge = (color: string, pct: number, label: string) => (
   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-    <div style={{ width: 22, height: 22, borderRadius: "50%", background: `conic-gradient(${color} 0 ${pct}%,rgba(255,255,255,.08) ${pct}%)`, display: "grid", placeItems: "center" }}><div style={{ width: 15, height: 15, borderRadius: "50%", background: "#0a0d12" }} /></div>
+    <div style={{ width: 22, height: 22, borderRadius: "50%", background: `conic-gradient(${color} 0 ${pct}%,var(--tint2) ${pct}%)`, display: "grid", placeItems: "center" }}><div style={{ width: 15, height: 15, borderRadius: "50%", background: "var(--raised)" }} /></div>
     <span style={{ fontSize: 8, color: "var(--txt2)" }}>{label}</span>
   </div>
 );
 
 const loopStep = (label: string, color: string, active = false) => active
-  ? <span style={{ padding: "0 18px", color: "#04060a", background: "var(--accent)", height: "100%", display: "flex", alignItems: "center", fontWeight: 700 }}>{label}</span>
+  ? <span style={{ padding: "0 18px", color: "var(--on-accent)", background: "var(--accent)", height: "100%", display: "flex", alignItems: "center", fontWeight: 700 }}>{label}</span>
   : <span style={{ padding: "0 18px", color }}>{label}</span>;
 const sep = <span style={{ color: "var(--txt3)" }}>›</span>;
 
@@ -140,7 +140,7 @@ export function NarrativeDashboard(props: PanelProps) {
         <Corners />
         {/* OS loop ribbon */}
         <div style={{ flex: "none", display: "flex", alignItems: "stretch", height: 42, borderBottom: "1px solid var(--line)" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 18px", fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".1em", color: "#fff", borderRight: "1px solid var(--line2)" }}>PROJECT OS</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 18px", fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".1em", color: "var(--strong)", borderRight: "1px solid var(--line2)" }}>PROJECT OS</div>
           <div style={{ flex: 1, display: "flex", alignItems: "center", fontSize: 9, letterSpacing: ".14em" }}>
             {loopStep("UNDERSTAND", "var(--green)")}{sep}{loopStep("DECIDE", "", true)}{sep}{loopStep("ACT", "var(--txt2)")}{sep}{loopStep("VERIFY", "var(--txt2)")}{sep}{loopStep("APPLY", "var(--txt2)")}
           </div>
@@ -157,7 +157,7 @@ export function NarrativeDashboard(props: PanelProps) {
                 : (
             <>
               <Tile label="OVERVIEW">
-                <div style={{ fontFamily: "'Chakra Petch'", fontSize: 26, color: "#fff", lineHeight: 1 }}>{num(totalWords)}</div>
+                <div style={{ fontFamily: "'Chakra Petch'", fontSize: 26, color: "var(--strong)", lineHeight: 1 }}>{num(totalWords)}</div>
                 <div style={{ fontSize: 8, color: "var(--txt3)", marginBottom: 9 }}>words{structure?.inferred ? " · acts inferred" : ""}</div>
                 <div style={{ display: "flex", gap: 11, fontSize: 9, color: "var(--txt2)" }}><span>{totalScenes} sc</span><span>{charCount} ch</span><span>{actCount} act</span></div>
               </Tile>
@@ -166,7 +166,7 @@ export function NarrativeDashboard(props: PanelProps) {
                   <div style={{ height: 78, display: "grid", placeItems: "center", fontSize: 9, color: "var(--txt3)" }}>No tension data</div>
                 ) : (
                   <svg viewBox="0 0 580 78" style={{ width: "100%", height: 78, display: "block" }}>
-                    <line x1="0" y1="39" x2="580" y2="39" stroke="rgba(255,255,255,.05)" />
+                    <line x1="0" y1="39" x2="580" y2="39" stroke="var(--tint2)" />
                     <polyline points={tensionLine} fill="none" stroke="var(--amber)" strokeWidth="1.6" style={{ filter: "drop-shadow(0 0 3px rgba(245,177,51,.6))" }} />
                     {peak && <circle cx={peak.x} cy={peak.y} r="3" fill="var(--blocking)" />}
                   </svg>
@@ -205,7 +205,7 @@ export function NarrativeDashboard(props: PanelProps) {
                     {segments.map((s, i) => (
                       <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         <span style={{ fontSize: 8, color: "var(--txt2)", width: 64, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{s.label}</span>
-                        <div style={{ flex: 1, height: 6, background: "rgba(255,255,255,.06)" }}>
+                        <div style={{ flex: 1, height: 6, background: "var(--tint2)" }}>
                           <div style={{ width: `${maxSegWords > 0 ? Math.round((s.word_count / maxSegWords) * 100) : 0}%`, height: "100%", background: "var(--accent)" }} />
                         </div>
                         <span style={{ fontSize: 8, color: "var(--txt3)", width: 70, textAlign: "right", whiteSpace: "nowrap" }}>{s.scene_count} sc · {num(s.word_count)}w</span>
@@ -236,7 +236,7 @@ export function NarrativeDashboard(props: PanelProps) {
           )}
         </div>
         {/* summary line */}
-        <div style={{ flex: "none", height: 24, borderTop: "1px solid var(--line2)", display: "flex", alignItems: "center", gap: 14, padding: "0 16px", background: "#05070b", fontSize: 8, letterSpacing: ".1em", color: "var(--txt3)" }}>
+        <div style={{ flex: "none", height: 24, borderTop: "1px solid var(--line2)", display: "flex", alignItems: "center", gap: 14, padding: "0 16px", background: "var(--base)", fontSize: 8, letterSpacing: ".1em", color: "var(--txt3)" }}>
           <span style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--green)" }}><span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--green)" }} />DETERMINISTIC · ADVISORY ONLY</span>
           <span style={{ marginLeft: "auto", color: "var(--txt2)" }}>{totalScenes} scenes · {charCount} characters · {pacingList.length} pacing insights</span>
         </div>
@@ -263,7 +263,7 @@ function presenceRow(item: CharacterPresenceDTO | ThemePresenceDTO) {
   return (
     <div key={item.entry_id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
       <span style={{ fontSize: 9, color: "var(--txt2)", width: 78, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{item.name}</span>
-      <div style={{ flex: 1, height: 5, background: "rgba(255,255,255,.06)" }}>
+      <div style={{ flex: 1, height: 5, background: "var(--tint2)" }}>
         <div style={{ width: `${pct}%`, height: "100%", background: thin ? "var(--amber)" : "var(--cyan)" }} />
       </div>
       {mark && <span title={mark.title} style={{ fontSize: 8, color: mark.color, width: 8, textAlign: "center", cursor: "help" }}>{mark.sym}</span>}

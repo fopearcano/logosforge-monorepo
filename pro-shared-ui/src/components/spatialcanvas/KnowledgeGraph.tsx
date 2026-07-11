@@ -7,7 +7,7 @@ const panelBox: CSSProperties = {
   position: "relative",
   width: "100%",
   height: "100%",
-  background: "radial-gradient(70% 60% at 40% 45%,#0a0e16,#040609 78%)",
+  background: "radial-gradient(70% 60% at 40% 45%,var(--raised),var(--base) 78%)",
   border: "1px solid var(--line)",
   boxShadow: "0 16px 60px rgba(0,0,0,.6)",
   overflow: "hidden",
@@ -35,7 +35,7 @@ const check = (label: string, on: boolean) => (
   <label style={{ display: "flex", alignItems: "center", gap: 7 }}><span style={{ width: 10, height: 10, border: on ? "1px solid var(--line-cy)" : "1px solid var(--line2)", background: on ? "var(--accent)" : undefined }} />{label}</label>
 );
 const gbar = (label: string, color: string, pct: number) => (
-  <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 8.5, color: "var(--txt2)" }}><span style={{ width: 62 }}>{label}</span><div style={{ flex: 1, height: 4, background: "rgba(255,255,255,.06)" }}><div style={{ width: `${pct}%`, height: "100%", background: color }} /></div></div>
+  <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 8.5, color: "var(--txt2)" }}><span style={{ width: 62 }}>{label}</span><div style={{ flex: 1, height: 4, background: "var(--tint2)" }}><div style={{ width: `${pct}%`, height: "100%", background: color }} /></div></div>
 );
 function Insight({ icon, label, labelColor, text, border, bg }: { icon: ReactNode; label: string; labelColor: string; text: string; border: string; bg: string }) {
   return (
@@ -110,20 +110,20 @@ export function KnowledgeGraph(props: PanelProps) {
         <div style={{ position: "absolute", top: -1, left: -1, width: 14, height: 14, borderTop: "1px solid var(--crimson)", borderLeft: "1px solid var(--crimson)", zIndex: 9 }} />
         <div style={{ position: "absolute", top: 3, left: 3, width: 5, height: 5, background: "var(--crimson)", zIndex: 9 }} />
         {/* toolbar */}
-        <div style={{ height: 44, flex: "none", display: "flex", alignItems: "center", gap: 13, padding: "0 16px", borderBottom: "1px solid var(--line)", background: "rgba(6,8,12,.7)", zIndex: 5 }}>
-          <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 14, letterSpacing: ".12em", color: "#fff" }}>KNOWLEDGE GRAPH</span>
+        <div style={{ height: 44, flex: "none", display: "flex", alignItems: "center", gap: 13, padding: "0 16px", borderBottom: "1px solid var(--line)", background: "var(--tint)", zIndex: 5 }}>
+          <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 14, letterSpacing: ".12em", color: "var(--strong)" }}>KNOWLEDGE GRAPH</span>
           <span style={{ fontSize: 7.5, color: "var(--txt3)", border: "1px solid var(--line2)", padding: "2px 7px", letterSpacing: ".12em" }}>DERIVED FROM PSYKE</span>
           <div style={{ flex: 1 }} />
           <span
             onClick={() => gravAvailable && setGravityOn((v) => !v)}
             title={gravAvailable ? "Size nodes by story gravity" : "Gravity unavailable for this project"}
-            style={{ fontSize: 9, color: useGrav ? "#04060a" : gravAvailable ? "var(--accent)" : "var(--txt3)", background: useGrav ? "var(--accent)" : undefined, padding: useGrav ? "3px 7px" : undefined, letterSpacing: ".1em", cursor: gravAvailable ? "pointer" : "default" }}
+            style={{ fontSize: 9, color: useGrav ? "var(--on-accent)" : gravAvailable ? "var(--accent)" : "var(--txt3)", background: useGrav ? "var(--accent)" : undefined, padding: useGrav ? "3px 7px" : undefined, letterSpacing: ".1em", cursor: gravAvailable ? "pointer" : "default" }}
           >⊹ GRAVITY</span>
         </div>
 
         <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
           {/* LAYERS / FILTERS */}
-          <div style={{ width: 198, flex: "none", borderRight: "1px solid var(--line)", background: "#06080c", overflowY: "auto", padding: "12px 11px" }}>
+          <div style={{ width: 198, flex: "none", borderRight: "1px solid var(--line)", background: "var(--panel2)", overflowY: "auto", padding: "12px 11px" }}>
             <div style={{ fontSize: 7.5, letterSpacing: ".22em", color: "var(--txt3)", marginBottom: 8 }}>LAYERS · NODE TYPES</div>
             <div style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 9.5 }}>
               {LAYER_TYPES.map((t) => {
@@ -143,7 +143,7 @@ export function KnowledgeGraph(props: PanelProps) {
             </div>
             <div style={{ fontSize: 7.5, letterSpacing: ".22em", color: "var(--txt3)", margin: "14px 0 8px" }}>PHASE-10P</div>
             <div style={{ fontSize: 8.5, color: "var(--txt2)", marginBottom: 5 }}>confidence_min</div>
-            <div style={{ height: 5, background: "rgba(255,255,255,.06)", marginBottom: 4, position: "relative" }}><div style={{ width: "55%", height: "100%", background: "var(--green)" }} /><div style={{ position: "absolute", left: "55%", top: -3, width: 3, height: 11, background: "#fff" }} /></div>
+            <div style={{ height: 5, background: "var(--tint2)", marginBottom: 4, position: "relative" }}><div style={{ width: "55%", height: "100%", background: "var(--green)" }} /><div style={{ position: "absolute", left: "55%", top: -3, width: 3, height: 11, background: "var(--strong)" }} /></div>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 7, color: "var(--txt3)" }}><span>possible</span><span style={{ color: "var(--green)" }}>likely</span><span>confirmed</span></div>
           </div>
 
@@ -180,14 +180,14 @@ export function KnowledgeGraph(props: PanelProps) {
                     <div key={e.id} onClick={() => setSelId(e.id)} style={{ position: "absolute", left: p.x, top: p.y, transform: "translate(-50%,-50%)", zIndex: isSel ? 4 : 3, textAlign: "center", cursor: "pointer" }}>
                       {highGrav && <div style={{ position: "absolute", left: "50%", top: size / 2, transform: "translate(-50%,-50%)", width: size + 48, height: size + 48, borderRadius: "50%", background: `radial-gradient(circle, ${m.color}40, transparent 68%)`, pointerEvents: "none", zIndex: 0 }} />}
                       {(isHub || isSel) && <div style={{ position: "absolute", left: "50%", top: size / 2, transform: "translate(-50%,-50%)", width: size + 30, height: size + 30, borderRadius: "50%", border: `1px solid ${m.color}`, animation: "lf-halo 3s ease-in-out infinite" }} />}
-                      <div style={{ width: size, height: size, borderRadius: "50%", border: `${isSel ? 2.5 : 2}px solid ${m.color}`, background: "rgba(11,14,21,.72)", display: "grid", placeItems: "center", color: m.color, fontSize: Math.round(size * 0.34), boxShadow: isSel || isHub ? `0 0 20px ${m.color}` : undefined }}>{m.icon}</div>
-                      <div style={{ fontFamily: "'Chakra Petch'", fontSize: size >= 50 ? 12 : 9.5, color: isSel ? "#fff" : "var(--txt)", marginTop: 4, letterSpacing: ".04em", whiteSpace: "nowrap" }}>{e.name}</div>
+                      <div style={{ width: size, height: size, borderRadius: "50%", border: `${isSel ? 2.5 : 2}px solid ${m.color}`, background: "var(--tint)", display: "grid", placeItems: "center", color: m.color, fontSize: Math.round(size * 0.34), boxShadow: isSel || isHub ? `0 0 20px ${m.color}` : undefined }}>{m.icon}</div>
+                      <div style={{ fontFamily: "'Chakra Petch'", fontSize: size >= 50 ? 12 : 9.5, color: isSel ? "var(--strong)" : "var(--txt)", marginTop: 4, letterSpacing: ".04em", whiteSpace: "nowrap" }}>{e.name}</div>
                       {isHub && <div style={{ fontSize: 7, color: "var(--accent)", letterSpacing: ".16em" }}>◉ MOST CONNECTED</div>}
                     </div>
                   );
                 })}
                 {/* legend */}
-                <div style={{ position: "absolute", left: 8, bottom: 8, background: "rgba(4,6,9,.8)", border: "1px solid var(--line2)", padding: "7px 10px", zIndex: 4, fontSize: 8, color: "var(--txt2)" }}>
+                <div style={{ position: "absolute", left: 8, bottom: 8, background: "var(--tint)", border: "1px solid var(--line2)", padding: "7px 10px", zIndex: 4, fontSize: 8, color: "var(--txt2)" }}>
                   <div style={{ display: "flex", gap: 11 }}><span><span style={{ color: "#8b95a5" }}>──▸</span> relation</span><span><span style={{ color: "var(--accent)" }}>──</span> selected</span></div>
                   <div style={{ marginTop: 3, color: useGrav ? "var(--accent)" : "var(--txt3)" }}>node size = {useGrav ? "story gravity ⊹" : "relation degree"}</div>
                 </div>
@@ -196,7 +196,7 @@ export function KnowledgeGraph(props: PanelProps) {
           </div>
 
           {/* INSPECTOR + INSIGHTS */}
-          <div style={{ width: 372, flex: "none", borderLeft: "1px solid var(--line)", background: "#06080c", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          <div style={{ width: 372, flex: "none", borderLeft: "1px solid var(--line)", background: "var(--panel2)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
             <div style={{ flex: "none", height: 30, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 13px", borderBottom: "1px solid var(--line)", background: "rgba(76,194,255,.04)" }}>
               <span style={{ fontSize: 8.5, letterSpacing: ".22em", color: "var(--accent)" }}>INSPECTOR · explain_node</span><span style={{ fontSize: 8, color: "var(--txt3)" }}>⠿</span>
             </div>
@@ -204,7 +204,7 @@ export function KnowledgeGraph(props: PanelProps) {
               <div style={{ flex: "none", padding: 13, borderBottom: "1px solid var(--line2)" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
                   <span style={{ width: 30, height: 30, display: "grid", placeItems: "center", border: `1px solid ${metaOf(selected.type).color}`, color: metaOf(selected.type).color, fontSize: 14 }}>{metaOf(selected.type).icon}</span>
-                  <div style={{ minWidth: 0 }}><div style={{ fontFamily: "'Chakra Petch'", fontSize: 15, color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{selected.name}</div><div style={{ fontSize: 8, color: "var(--txt3)", letterSpacing: ".1em" }}>{metaOf(selected.type).label.toUpperCase()} · {neighbors.length} RELATION{neighbors.length === 1 ? "" : "S"}</div></div>
+                  <div style={{ minWidth: 0 }}><div style={{ fontFamily: "'Chakra Petch'", fontSize: 15, color: "var(--strong)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{selected.name}</div><div style={{ fontSize: 8, color: "var(--txt3)", letterSpacing: ".1em" }}>{metaOf(selected.type).label.toUpperCase()} · {neighbors.length} RELATION{neighbors.length === 1 ? "" : "S"}</div></div>
                   {selected.is_global && <span style={{ marginLeft: "auto", fontSize: 7, color: "var(--c-place)", border: "1px solid rgba(245,177,51,.35)", padding: "2px 6px", letterSpacing: ".06em" }}>GLOBAL</span>}
                 </div>
                 <div style={{ fontSize: 7.5, letterSpacing: ".18em", color: "var(--txt3)", marginBottom: 6 }}>CENTRALITY · {(deg(selected.id) / maxDeg).toFixed(2)}</div>
@@ -226,7 +226,7 @@ export function KnowledgeGraph(props: PanelProps) {
                   <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
                     {neighbors.map((n, i) => (
                       <div key={`${n.id}-${i}`} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 9.5, color: "var(--txt2)", cursor: "pointer" }} onClick={() => setSelId(n.id)}>
-                        <span style={{ color: "var(--txt3)" }}>{n.out ? "→" : "←"}</span><span style={{ color: "#fff" }}>{n.name}</span><span style={{ color: "var(--accent)" }}>{n.rel}</span>
+                        <span style={{ color: "var(--txt3)" }}>{n.out ? "→" : "←"}</span><span style={{ color: "var(--strong)" }}>{n.name}</span><span style={{ color: "var(--accent)" }}>{n.rel}</span>
                       </div>
                     ))}
                   </div>
@@ -236,14 +236,14 @@ export function KnowledgeGraph(props: PanelProps) {
             <div style={{ flex: 1, overflowY: "auto", padding: 13 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
                 <div style={{ position: "relative", width: 20, height: 20, borderRadius: "50%", border: "1px solid var(--line)", overflow: "hidden" }}><div style={{ position: "absolute", inset: 0, background: "conic-gradient(from 0deg,rgba(232,68,58,.5),transparent 30%)", animation: "lf-pulse 2.6s infinite" }} /></div>
-                <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 12, letterSpacing: ".1em", color: "#fff" }}>INSIGHTS</span>
+                <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 12, letterSpacing: ".1em", color: "var(--strong)" }}>INSIGHTS</span>
                 <span style={{ marginLeft: "auto", fontSize: 8, color: "var(--txt3)" }}>DERIVED</span>
               </div>
               {hubId != null && hubDeg > 0 && (
-                <Insight border="var(--line2)" bg="rgba(11,14,21,.5)" labelColor="var(--txt2)" icon={<span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--info)" }} />} label="CENTRAL" text={`${visible.find((e) => e.id === hubId)?.name ?? ""} is the most connected — ${hubDeg} relations. Rewrites carry risk.`} />
+                <Insight border="var(--line2)" bg="var(--tint)" labelColor="var(--txt2)" icon={<span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--info)" }} />} label="CENTRAL" text={`${visible.find((e) => e.id === hubId)?.name ?? ""} is the most connected — ${hubDeg} relations. Rewrites carry risk.`} />
               )}
               {orphans.length > 0 && (
-                <Insight border="var(--line2)" bg="rgba(11,14,21,.5)" labelColor="var(--warning)" icon={<span style={{ width: 8, height: 8, transform: "rotate(45deg)", background: "var(--warning)" }} />} label="ORPHANS" text={`${orphans.length} isolated: ${orphans.slice(0, 4).map((e) => e.name).join(", ")}${orphans.length > 4 ? "…" : ""}.`} />
+                <Insight border="var(--line2)" bg="var(--tint)" labelColor="var(--warning)" icon={<span style={{ width: 8, height: 8, transform: "rotate(45deg)", background: "var(--warning)" }} />} label="ORPHANS" text={`${orphans.length} isolated: ${orphans.slice(0, 4).map((e) => e.name).join(", ")}${orphans.length > 4 ? "…" : ""}.`} />
               )}
               {edges.length === 0 && visible.length > 0 && (
                 <Insight border="var(--line-cy)" bg="rgba(76,194,255,.05)" labelColor="var(--cyan)" icon={<span style={{ width: 7, height: 7, borderRadius: "50%", border: "2px solid var(--suggestion)" }} />} label="SUGGESTION" text="No relations yet — add some in PSYKE to weave the web." />
@@ -253,7 +253,7 @@ export function KnowledgeGraph(props: PanelProps) {
         </div>
 
         {/* provenance status */}
-        <div style={{ height: 24, flex: "none", borderTop: "1px solid var(--line2)", display: "flex", alignItems: "center", gap: 14, padding: "0 16px", background: "#05070b", fontSize: 8, letterSpacing: ".1em", color: "var(--txt3)" }}>
+        <div style={{ height: 24, flex: "none", borderTop: "1px solid var(--line2)", display: "flex", alignItems: "center", gap: 14, padding: "0 16px", background: "var(--base)", fontSize: 8, letterSpacing: ".1em", color: "var(--txt3)" }}>
           <span style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--green)" }}><span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--green)", boxShadow: "0 0 6px var(--green)" }} />DETERMINISTIC · NO AI · REBUILT LIVE</span>
           <span>{visible.length} NODES</span><span>{edges.length} EDGES</span><span style={{ color: "var(--warning)" }}>{orphans.length} ORPHANS</span>
           {hidden.size > 0 && <span style={{ color: "var(--txt2)" }}>{hidden.size} LAYER{hidden.size === 1 ? "" : "S"} HIDDEN</span>}

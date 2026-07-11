@@ -35,6 +35,20 @@ hiddenimports += collect_submodules("sqlmodel")
 # certifi ships cacert.pem (used for any HTTPS the providers make).
 datas += collect_data_files("certifi")
 
+# Dexter's Room voice: bundle the faster-whisper / CTranslate2 STT stack (CT2
+# only — no torch). ctranslate2 + av ship native extensions/DLLs; faster_whisper
+# ships its VAD asset + tokenizer data. The GPU CUDA runtime DLLs are NOT bundled
+# — the host adds the user's local ones to the DLL path at runtime. Resilient:
+# skip any package the build venv doesn't have (voice just reports unavailable).
+for pkg in ("ctranslate2", "faster_whisper", "av", "tokenizers", "onnxruntime", "huggingface_hub"):
+    try:
+        d, b, h = collect_all(pkg)
+        datas += d
+        binaries += b
+        hiddenimports += h
+    except Exception:
+        pass
+
 # uvicorn resolves its loop/protocol/lifespan implementations by string at
 # runtime; pin the "auto" targets so the frozen build can find them.
 hiddenimports += [
@@ -59,9 +73,10 @@ a = Analysis(
     runtime_hooks=[],
     # Keep the bundle lean: the headless API never needs the GUI/voice/heavy
     # ML stacks. (They aren't installed in the build venv either — belt + braces.)
+    # faster_whisper / ctranslate2 / av are now BUNDLED (collected above) for
+    # Dexter's Room voice; only the genuinely-unused heavy stacks stay excluded.
     excludes=["PySide6", "PyQt5", "PyQt6", "shiboken6", "torch", "torchaudio",
-              "faster_whisper", "ctranslate2", "tkinter", "matplotlib",
-              "IPython", "notebook", "pytest"],
+              "tkinter", "matplotlib", "IPython", "notebook", "pytest"],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,

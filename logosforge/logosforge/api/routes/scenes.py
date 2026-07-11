@@ -178,3 +178,43 @@ def add_continuity(
     m = db.add_memory(project.id, scene_id, f"continuity_{kind}", body.target, body.value)
     broker.publish("scene_changed", project_id=project.id, scene_id=scene_id)
     return _continuity_dto(m)
+
+
+@router.patch(
+    "/projects/{project_id}/scenes/{scene_id}/continuity/{memory_id}",
+    response_model=schemas.ContinuityMemoryDTO,
+)
+def update_continuity(
+    scene_id: int,
+    memory_id: int,
+    body: schemas.ContinuityMemoryDTO,
+    project=Depends(get_project),
+    db: Database = Depends(get_db),
+    broker: ApiEventBroker = Depends(get_broker),
+):
+    """Edit a pinned continuity note's target/value (and kind → memory_type)."""
+    _scene_or_404(db, project.id, scene_id)
+    fields: dict = {"target": body.target, "value": body.value}
+    if body.kind:
+        fields["memory_type"] = f"continuity_{(body.kind or 'state').strip() or 'state'}"
+    db.update_continuity_memory(memory_id, **fields)
+    broker.publish("scene_changed", project_id=project.id, scene_id=scene_id)
+    for m in db.get_memories(project.id, scene_id):
+        if m.id == memory_id:
+            return _continuity_dto(m)
+    raise not_found(f"Continuity note {memory_id} not found")
+
+
+@router.delete("/projects/{project_id}/scenes/{scene_id}/continuity/{memory_id}")
+def delete_continuity(
+    scene_id: int,
+    memory_id: int,
+    project=Depends(get_project),
+    db: Database = Depends(get_db),
+    broker: ApiEventBroker = Depends(get_broker),
+):
+    """Remove a pinned continuity note."""
+    _scene_or_404(db, project.id, scene_id)
+    db.delete_continuity_memory(memory_id)
+    broker.publish("scene_changed", project_id=project.id, scene_id=scene_id)
+    return {"ok": True, "deleted": memory_id}

@@ -9,6 +9,8 @@ from logosforge.api.routes import (
     export,
     extraction,
     format_data,
+    grammar,
+    imports,
     intelligence,
     logos,
     notes,
@@ -20,6 +22,7 @@ from logosforge.api.routes import (
     scenes,
     themes,
     timeline,
+    voice,
     writing_modes,
 )
 
@@ -44,7 +47,10 @@ ALL_ROUTERS = [
     connector.router,
     export.router,
     events.router,
+    voice.router,
     writing_modes.router,
+    imports.router,
+    grammar.router,
 ]
 
 __all__ = ["ALL_ROUTERS"]

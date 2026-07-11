@@ -10,3 +10,4 @@ export * from "./StoryGrid";
 export * from "./OutlinePanel";
 export * from "./StructurePanel";
 export * from "./NotesPanel";
+export * from "./Breakdowns";

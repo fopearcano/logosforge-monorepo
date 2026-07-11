@@ -5,7 +5,7 @@ const panelBox: CSSProperties = {
   position: "relative",
   width: "100%",
   height: "100%",
-  background: "linear-gradient(180deg,#080a0f,#05070b)",
+  background: "linear-gradient(180deg,var(--panel),var(--base))",
   border: "1px solid var(--line)",
   boxShadow: "0 16px 60px rgba(0,0,0,.6)",
   overflow: "hidden",
@@ -46,7 +46,7 @@ export function ModeReskin(props: PanelProps) {
 
         {/* header bar */}
         <div style={{ height: 42, flex: "none", display: "flex", alignItems: "center", gap: 13, padding: "0 18px", borderBottom: "1px solid var(--line)" }}>
-          <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 14, letterSpacing: ".1em", color: "#fff" }}>WRITING-MODE RE-SKIN</span>
+          <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 14, letterSpacing: ".1em", color: "var(--strong)" }}>WRITING-MODE RE-SKIN</span>
           <span style={{ fontSize: 9, color: "var(--txt3)" }}>same shell · vocabulary · scene-body · structure labels · accent band change per mode</span>
           <div style={{ flex: 1 }} />
           <span style={{ fontSize: 8, color: "var(--stage)", border: "1px solid rgba(255,180,84,.35)", padding: "3px 9px", letterSpacing: ".1em" }}>⊘ ONE-WAY LOCK · set on empty scaffold</span>
@@ -76,9 +76,9 @@ export function ModeReskin(props: PanelProps) {
             }
             body={
               <>
-                <div style={{ color: "#fff", fontWeight: 700 }}>INT. HELIOS-9 — NIGHT</div>
+                <div style={{ color: "var(--strong)", fontWeight: 700 }}>INT. HELIOS-9 — NIGHT</div>
                 <div style={{ margin: "5px 0", opacity: 0.8 }}>Marlow floats at the viewport.</div>
-                <div style={{ textAlign: "center", fontWeight: 700, color: "#fff" }}>VESPER</div>
+                <div style={{ textAlign: "center", fontWeight: 700, color: "var(--strong)" }}>VESPER</div>
                 <div style={{ textAlign: "center", opacity: 0.85 }}>He's counting heartbeats.</div>
               </>
             }
@@ -109,7 +109,7 @@ export function ModeReskin(props: PanelProps) {
             body={
               <>
                 <div style={{ fontStyle: "italic", opacity: 0.8 }}>(Marlow at the port. Vesper enters.)</div>
-                <div style={{ textAlign: "center", fontWeight: 700, color: "#fff", marginTop: 5 }}>VESPER</div>
+                <div style={{ textAlign: "center", fontWeight: 700, color: "var(--strong)", marginTop: 5 }}>VESPER</div>
                 <div style={{ textAlign: "center", opacity: 0.85 }}>You shouldn't be up here.</div>
                 <div style={{ color: "var(--stage)", marginTop: 5 }}>[LIGHT CUE 12 — fade amber]</div>
               </>
@@ -125,7 +125,7 @@ export function ModeReskin(props: PanelProps) {
             body={
               <>
                 <div style={{ color: "var(--series)" }}>EP.103 · TEASER</div>
-                <div style={{ color: "#fff", fontWeight: 700, marginTop: 4 }}>INT. HELIOS-9 — NIGHT</div>
+                <div style={{ color: "var(--strong)", fontWeight: 700, marginTop: 4 }}>INT. HELIOS-9 — NIGHT</div>
                 <div style={{ margin: "4px 0", opacity: 0.8 }}>The signal repeats. Vesper freezes.</div>
                 <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 8, color: "var(--series)" }}>[A-STORY] [CLIFFHANGER]</div>
               </>

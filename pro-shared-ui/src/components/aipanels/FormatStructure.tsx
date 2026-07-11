@@ -5,16 +5,20 @@ import { useStudio } from "../../adapters/StudioProvider";
 
 const panelBox: CSSProperties = {
   position: "relative", width: "100%", height: "100%",
-  background: "linear-gradient(180deg,#0a0810,#05050a)", border: "1px solid var(--line)",
+  background: "linear-gradient(180deg,var(--panel2),var(--base))", border: "1px solid var(--line)",
   boxShadow: "0 16px 60px rgba(0,0,0,.6)", overflow: "hidden", display: "flex", flexDirection: "column",
 };
-const inp: CSSProperties = { background: "rgba(11,8,18,.6)", border: "1px solid var(--line2)", color: "var(--txt)", fontSize: 10.5, padding: "4px 8px", outline: "none", fontFamily: "inherit", minWidth: 0 };
+const inp: CSSProperties = { background: "var(--tint)", border: "1px solid var(--line2)", color: "var(--txt)", fontSize: 10.5, padding: "4px 8px", outline: "none", fontFamily: "inherit", minWidth: 0 };
 const lbl: CSSProperties = { fontSize: 8, letterSpacing: ".14em", color: "var(--txt3)", marginBottom: 6 };
 
 function Add({ on, busy }: { on: () => void; busy?: boolean }) {
-  return <span onClick={busy ? undefined : on} style={{ fontSize: 9, color: "#04060a", background: busy ? "var(--line2)" : "var(--accent)", padding: "4px 11px", fontWeight: 600, letterSpacing: ".06em", cursor: busy ? "default" : "pointer", flex: "none" }}>{busy ? "…" : "+ ADD"}</span>;
+  return <span onClick={busy ? undefined : on} style={{ fontSize: 9, color: "var(--on-accent)", background: busy ? "var(--line2)" : "var(--accent)", padding: "4px 11px", fontWeight: 600, letterSpacing: ".06em", cursor: busy ? "default" : "pointer", flex: "none" }}>{busy ? "…" : "+ ADD"}</span>;
 }
-const card: CSSProperties = { border: "1px solid var(--line2)", background: "rgba(11,8,18,.5)", padding: "8px 10px", marginBottom: 7 };
+// Small destructive ✕ next to a listed row — mirrors the Add chip idiom.
+function Del({ on, busy }: { on: () => void; busy?: boolean }) {
+  return <span onClick={busy ? undefined : on} title="delete" style={{ fontSize: 8.5, lineHeight: 1, color: "var(--crimson)", border: "1px solid var(--crimson)", borderRadius: 2, padding: "2px 5px", cursor: busy ? "default" : "pointer", opacity: busy ? 0.5 : 0.85, flex: "none", marginLeft: "auto" }}>✕</span>;
+}
+const card: CSSProperties = { border: "1px solid var(--line2)", background: "var(--tint)", padding: "8px 10px", marginBottom: 7 };
 const row: CSSProperties = { display: "flex", gap: 7, alignItems: "center", marginBottom: 9 };
 
 // ----------------------------------------------------------------- Graphic novel
@@ -40,6 +44,12 @@ function GnAuthoring({ pid }: { pid: number }) {
   const addItem = async () => { if (!itemName.trim()) return; await api.createGnContinuityItem(pid, { name: itemName, item_type: itemType }); setItemName(""); loadItems(); };
   const addAppearance = async (itemId: number) => { const pg = apPage[itemId]; if (pg === "" || pg == null) return; await api.createGnContinuityAppearance(pid, itemId, { page_id: pg }); setApPage((m) => ({ ...m, [itemId]: "" })); api.listGnContinuityAppearances(pid, itemId).then((a) => setAppears((m) => ({ ...m, [itemId]: a }))).catch(() => {}); };
   const addPage = async () => { if (!summary.trim()) return; await api.createGnPage(pid, { summary }); setSummary(""); loadPages(); };
+  const [busyDel, setBusyDel] = useState<string | null>(null);
+  const [delErr, setDelErr] = useState("");
+  const delPage = async (id: number) => { setBusyDel(`pg${id}`); setDelErr(""); try { await api.deleteGnPage(pid, id); loadPages(); } catch (e) { setDelErr(`delete failed — ${e instanceof Error ? e.message : String(e)}`); } finally { setBusyDel(null); } };
+  const delPanel = async (pageId: number, id: number) => { setBusyDel(`pn${id}`); setDelErr(""); try { await api.deleteGnPanel(pid, id); api.listGnPanels(pid, pageId).then((ps) => setPanels((m) => ({ ...m, [pageId]: ps }))).catch(() => {}); } catch (e) { setDelErr(`delete failed — ${e instanceof Error ? e.message : String(e)}`); } finally { setBusyDel(null); } };
+  const delItem = async (id: number) => { setBusyDel(`it${id}`); setDelErr(""); try { await api.deleteGnContinuityItem(pid, id); loadItems(); } catch (e) { setDelErr(`delete failed — ${e instanceof Error ? e.message : String(e)}`); } finally { setBusyDel(null); } };
+  const delAppearance = async (itemId: number, id: number) => { setBusyDel(`ap${id}`); setDelErr(""); try { await api.deleteGnContinuityAppearance(pid, id); api.listGnContinuityAppearances(pid, itemId).then((a) => setAppears((m) => ({ ...m, [itemId]: a }))).catch(() => {}); } catch (e) { setDelErr(`delete failed — ${e instanceof Error ? e.message : String(e)}`); } finally { setBusyDel(null); } };
   // Bridge authored GN-script scene text into structured page/panel rows the graph reads.
   const syncFromScenes = async () => {
     setSyncMsg("syncing…");
@@ -61,12 +71,16 @@ function GnAuthoring({ pid }: { pid: number }) {
       {syncMsg && <div style={{ fontSize: 9, color: "var(--txt2)", marginBottom: 8 }}>{syncMsg}</div>}
       <div style={lbl}>ADD PAGE</div>
       <div style={row}><input value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="page summary, e.g. “The vault at night”" style={{ ...inp, flex: 1 }} /><Add on={addPage} /></div>
+      {delErr && <div style={{ fontSize: 9, color: "var(--crimson)", marginBottom: 6 }}>{delErr}</div>}
       {pages.map((p) => (
         <div key={p.id} style={card}>
-          <div style={{ fontFamily: "'Chakra Petch'", fontSize: 11, color: "#fff" }}>PAGE {p.page_number} <span style={{ color: "var(--txt2)", fontWeight: 400 }}>· {p.summary}</span></div>
+          <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+            <div style={{ fontFamily: "'Chakra Petch'", fontSize: 11, color: "var(--strong)" }}>PAGE {p.page_number} <span style={{ color: "var(--txt2)", fontWeight: 400 }}>· {p.summary}</span></div>
+            {p.id != null && <Del on={() => delPage(p.id!)} busy={busyDel === `pg${p.id}`} />}
+          </div>
           <div style={{ marginTop: 6, paddingLeft: 10, borderLeft: "1px solid var(--line2)" }}>
             {(panels[p.id ?? -1] || []).map((pn) => (
-              <div key={pn.id} style={{ fontSize: 10, color: "var(--txt2)", marginBottom: 3 }}>▸ {pn.description}{(pn.visual_motifs || []).length ? <span style={{ color: "var(--cyan)" }}> · {(pn.visual_motifs || []).join(", ")}</span> : null}</div>
+              <div key={pn.id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, color: "var(--txt2)", marginBottom: 3 }}><span>▸ {pn.description}{(pn.visual_motifs || []).length ? <span style={{ color: "var(--cyan)" }}> · {(pn.visual_motifs || []).join(", ")}</span> : null}</span>{p.id != null && pn.id != null && <Del on={() => delPanel(p.id!, pn.id!)} busy={busyDel === `pn${pn.id}`} />}</div>
             ))}
             <div style={{ display: "flex", gap: 6, marginTop: 5 }}>
               <input value={draft[p.id ?? -1] || ""} onChange={(e) => setDraft((m) => ({ ...m, [p.id!]: e.target.value }))} placeholder="panel description | motif, motif" style={{ ...inp, flex: 1, fontSize: 9.5 }} />
@@ -84,8 +98,10 @@ function GnAuthoring({ pid }: { pid: number }) {
       </div>
       {items.map((it) => (
         <div key={it.id} style={{ ...card, padding: "7px 10px" }}>
-          <div style={{ fontSize: 10.5, color: "#fff" }}>◆ {it.name} <span style={{ color: "var(--txt3)", fontWeight: 400 }}>· {it.item_type}</span>
-            {(appears[it.id ?? -1] || []).length ? <span style={{ color: "var(--cyan)", fontSize: 9 }}> — {(appears[it.id ?? -1] || []).map((a) => pageNum(a.page_id)).join(", ")}</span> : null}
+          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10.5, color: "var(--strong)" }}>
+            <span>◆ {it.name} <span style={{ color: "var(--txt3)", fontWeight: 400 }}>· {it.item_type}</span></span>
+            {(appears[it.id ?? -1] || []).length ? <span style={{ color: "var(--cyan)", fontSize: 9, display: "inline-flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>{(appears[it.id ?? -1] || []).map((ap) => <span key={ap.id} style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>{pageNum(ap.page_id)}{ap.id != null && <span onClick={busyDel === `ap${ap.id}` ? undefined : () => it.id != null && delAppearance(it.id, ap.id!)} title="delete" style={{ color: "var(--crimson)", cursor: busyDel === `ap${ap.id}` ? "default" : "pointer", opacity: busyDel === `ap${ap.id}` ? 0.5 : 0.85 }}>✕</span>}</span>)}</span> : null}
+            {it.id != null && <Del on={() => delItem(it.id!)} busy={busyDel === `it${it.id}`} />}
           </div>
           {pages.length > 0 && (
             <div style={{ display: "flex", gap: 5, marginTop: 4 }}>
@@ -119,6 +135,16 @@ function SceneGraphAuthoring({ pid }: { pid: number }) {
   }, [sel, scenes]);
   const saveWkw = async () => { if (sel == null) return; setMsg("saving…"); try { await api.updateScene(pid, sel, { who_knows_what: wkw }); setMsg("saved who-knows"); } catch (e) { setMsg(`failed — ${e instanceof Error ? e.message : String(e)}`); } };
   const addNote = async () => { if (sel == null || !target.trim()) return; await api.addContinuity(pid, sel, { target, kind, value: "" }); setTarget(""); api.listContinuity(pid, sel).then(setNotes).catch(() => {}); };
+  const [busyDel, setBusyDel] = useState<string | null>(null);
+  const [delErr, setDelErr] = useState("");
+  const [editId, setEditId] = useState<number | null>(null);
+  const [eTarget, setETarget] = useState("");
+  const [eValue, setEValue] = useState("");
+  const [eKind, setEKind] = useState("state");
+  const reloadNotes = () => { if (sel != null) api.listContinuity(pid, sel).then(setNotes).catch(() => {}); };
+  const delNote = async (id: number) => { if (sel == null) return; setBusyDel(`n${id}`); setDelErr(""); try { await api.deleteContinuity(pid, sel, id); reloadNotes(); } catch (e) { setDelErr(`delete failed — ${e instanceof Error ? e.message : String(e)}`); } finally { setBusyDel(null); } };
+  const beginEdit = (n: ContinuityMemoryDTO) => { if (n.id == null) return; setEditId(n.id); setETarget(n.target ?? ""); setEValue(n.value ?? ""); setEKind(n.kind ?? "state"); };
+  const saveNote = async (id: number) => { if (sel == null) return; const t = eTarget.trim(); setEditId(null); if (!t) return; setDelErr(""); try { await api.updateContinuity(pid, sel, id, { target: t, value: eValue, kind: eKind }); reloadNotes(); } catch (e) { setDelErr(`update failed — ${e instanceof Error ? e.message : String(e)}`); } };
   return (
     <>
       <div style={lbl}>SCENE (feeds the “knowledge” + “continuity” graph edges)</div>
@@ -138,7 +164,25 @@ function SceneGraphAuthoring({ pid }: { pid: number }) {
         <select value={kind} onChange={(e) => setKind(e.target.value)} style={{ ...inp, width: 92 }}>{["state", "object", "wound", "secret"].map((k) => <option key={k} value={k}>{k}</option>)}</select>
         <Add on={addNote} />
       </div>
-      {notes.map((n) => <div key={n.id} style={{ ...card, padding: "5px 10px", fontSize: 10, color: "var(--txt2)" }}><span style={{ color: "var(--cyan)" }}>{n.kind}</span> · {n.target}</div>)}
+      {delErr && <div style={{ fontSize: 9, color: "var(--crimson)", marginBottom: 6 }}>{delErr}</div>}
+      {notes.map((n) => (
+        <div key={n.id} style={{ ...card, padding: "5px 10px", display: "flex", alignItems: "center", gap: 6, fontSize: 10, color: "var(--txt2)" }}>
+          {editId === n.id ? (
+            <>
+              <select value={eKind} onChange={(e) => setEKind(e.target.value)} style={{ ...inp, width: 82, fontSize: 9 }}>{["state", "object", "wound", "secret"].map((k) => <option key={k} value={k}>{k}</option>)}</select>
+              <input value={eTarget} onChange={(e) => setETarget(e.target.value)} placeholder="element" style={{ ...inp, flex: 1, fontSize: 9 }} />
+              <input value={eValue} onChange={(e) => setEValue(e.target.value)} placeholder="value" style={{ ...inp, flex: 1, fontSize: 9 }} />
+              <span onClick={() => n.id != null && saveNote(n.id)} style={{ fontSize: 9, color: "var(--accent)", cursor: "pointer", letterSpacing: ".06em" }}>SAVE</span>
+              <span onClick={() => setEditId(null)} style={{ fontSize: 9, color: "var(--txt3)", cursor: "pointer" }}>✕</span>
+            </>
+          ) : (
+            <>
+              <span onClick={() => beginEdit(n)} title="edit" style={{ cursor: "text" }}><span style={{ color: "var(--cyan)" }}>{n.kind}</span> · {n.target}{n.value ? <span style={{ color: "var(--txt3)" }}> — {n.value}</span> : null}</span>
+              {n.id != null && <Del on={() => delNote(n.id!)} busy={busyDel === `n${n.id}`} />}
+            </>
+          )}
+        </div>
+      ))}
     </>
   );
 }
@@ -179,6 +223,11 @@ function StageAuthoring({ pid }: { pid: number }) {
   const addCue = async () => { if (!cueText.trim()) return; await api.createStageCue(pid, sceneId, { cue_type: cueType, cue_text: cueText }); setCueText(""); load(); };
   const addEntrance = async () => { await api.createStageEntrance(pid, sceneId, { type: entType, character_id: entChar === "" ? null : entChar, cue_text: entCue }); setEntCue(""); setEntChar(""); load(); };
   const addBiz = async () => { if (bizProp === "") return; await api.createStageBusiness(pid, sceneId, { prop_psyke_entry_id: bizProp, character_id: bizChar === "" ? null : bizChar, stage_action: bizAction }); setBizAction(""); setBizProp(""); setBizChar(""); load(); };
+  const [busyDel, setBusyDel] = useState<string | null>(null);
+  const [delErr, setDelErr] = useState("");
+  const delCue = async (id: number) => { setBusyDel(`cue${id}`); setDelErr(""); try { await api.deleteStageCue(pid, id); load(); } catch (e) { setDelErr(`delete failed — ${e instanceof Error ? e.message : String(e)}`); } finally { setBusyDel(null); } };
+  const delEntrance = async (id: number) => { setBusyDel(`ent${id}`); setDelErr(""); try { await api.deleteStageEntrance(pid, id); load(); } catch (e) { setDelErr(`delete failed — ${e instanceof Error ? e.message : String(e)}`); } finally { setBusyDel(null); } };
+  const delBiz = async (id: number) => { setBusyDel(`biz${id}`); setDelErr(""); try { await api.deleteStageBusiness(pid, id); load(); } catch (e) { setDelErr(`delete failed — ${e instanceof Error ? e.message : String(e)}`); } finally { setBusyDel(null); } };
   // Parse stage directions across all scenes into cue/entrance/offstage rows.
   const syncStage = async () => {
     setStageSyncMsg("syncing…");
@@ -199,7 +248,8 @@ function StageAuthoring({ pid }: { pid: number }) {
         <select value={cueType} onChange={(e) => setCueType(e.target.value)} style={{ ...inp, width: 90 }}>{["light", "sound", "music", "prop", "movement", "other"].map((t) => <option key={t} value={t}>{t}</option>)}</select>
         <input value={cueText} onChange={(e) => setCueText(e.target.value)} placeholder="cue text, e.g. “lights snap up”" style={{ ...inp, flex: 1 }} /><Add on={addCue} />
       </div>
-      {cues.map((c) => <div key={c.id} style={{ ...card, padding: "6px 10px", display: "flex", gap: 9, fontSize: 10 }}><span style={{ color: "var(--amber)", letterSpacing: ".1em", width: 70 }}>{(c.cue_type || "").toUpperCase()}</span><span style={{ color: "var(--txt2)" }}>{c.cue_text}</span></div>)}
+      {delErr && <div style={{ fontSize: 9, color: "var(--crimson)", marginBottom: 6 }}>{delErr}</div>}
+      {cues.map((c) => <div key={c.id} style={{ ...card, padding: "6px 10px", display: "flex", gap: 9, alignItems: "center", fontSize: 10 }}><span style={{ color: "var(--amber)", letterSpacing: ".1em", width: 70 }}>{(c.cue_type || "").toUpperCase()}</span><span style={{ color: "var(--txt2)" }}>{c.cue_text}</span>{c.id != null && <Del on={() => delCue(c.id!)} busy={busyDel === `cue${c.id}`} />}</div>)}
 
       <div style={{ ...lbl, marginTop: 12 }}>ADD ENTRANCE / EXIT</div>
       <div style={row}>
@@ -207,7 +257,7 @@ function StageAuthoring({ pid }: { pid: number }) {
         <select value={entChar === "" ? "" : String(entChar)} onChange={(e) => setEntChar(e.target.value ? Number(e.target.value) : "")} style={{ ...inp, flex: 1 }}><option value="">— character —</option>{chars.map((c) => <option key={c.id} value={String(c.id)}>{c.name}</option>)}</select>
         <input value={entCue} onChange={(e) => setEntCue(e.target.value)} placeholder="cue text" style={{ ...inp, flex: 1 }} /><Add on={addEntrance} />
       </div>
-      {entrances.map((en) => <div key={en.id} style={{ ...card, padding: "6px 10px", display: "flex", gap: 9, fontSize: 10 }}><span style={{ color: "var(--cyan)", letterSpacing: ".1em", width: 70 }}>{(en.type || "").toUpperCase()}</span><span style={{ color: "#fff" }}>{charName(en.character_id)}</span><span style={{ color: "var(--txt2)" }}>{en.cue_text}</span></div>)}
+      {entrances.map((en) => <div key={en.id} style={{ ...card, padding: "6px 10px", display: "flex", gap: 9, alignItems: "center", fontSize: 10 }}><span style={{ color: "var(--cyan)", letterSpacing: ".1em", width: 70 }}>{(en.type || "").toUpperCase()}</span><span style={{ color: "var(--strong)" }}>{charName(en.character_id)}</span><span style={{ color: "var(--txt2)" }}>{en.cue_text}</span>{en.id != null && <Del on={() => delEntrance(en.id!)} busy={busyDel === `ent${en.id}`} />}</div>)}
 
       <div style={{ ...lbl, marginTop: 12 }}>ADD STAGE BUSINESS (prop)</div>
       <div style={row}>
@@ -216,7 +266,7 @@ function StageAuthoring({ pid }: { pid: number }) {
         <input value={bizAction} onChange={(e) => setBizAction(e.target.value)} placeholder="stage action, e.g. “pockets the watch”" style={{ ...inp, flex: 1 }} /><Add on={addBiz} />
       </div>
       {props.length === 0 && <div style={{ fontSize: 9, color: "var(--txt3)", fontStyle: "italic", marginBottom: 7 }}>Add a PSYKE “object” entry to use as a prop.</div>}
-      {biz.map((b) => <div key={b.id} style={{ ...card, padding: "6px 10px", display: "flex", gap: 9, fontSize: 10 }}><span style={{ color: "var(--green)", width: 90 }}>{propName(b.prop_psyke_entry_id)}</span><span style={{ color: "#fff", width: 70 }}>{charName(b.character_id)}</span><span style={{ color: "var(--txt2)" }}>{b.stage_action}</span></div>)}
+      {biz.map((b) => <div key={b.id} style={{ ...card, padding: "6px 10px", display: "flex", gap: 9, alignItems: "center", fontSize: 10 }}><span style={{ color: "var(--green)", width: 90 }}>{propName(b.prop_psyke_entry_id)}</span><span style={{ color: "var(--strong)", width: 70 }}>{charName(b.character_id)}</span><span style={{ color: "var(--txt2)" }}>{b.stage_action}</span>{b.id != null && <Del on={() => delBiz(b.id!)} busy={busyDel === `biz${b.id}`} />}</div>)}
     </>
   );
 }
@@ -251,6 +301,16 @@ function SeriesAuthoring({ pid }: { pid: number }) {
   const epLabel = (id?: number | null) => { const e = episodes.find((x) => x.id === id); return e ? `EP${e.episode_number} ${e.title ?? ""}`.trim() : (id != null ? `#${id}` : "—"); };
   const addSeason = async () => { if (!seasonTitle.trim()) return; await api.createSeason(pid, { title: seasonTitle }); setSeasonTitle(""); loadAll(); };
   const addEpisode = async (seasonId: number) => { const t = (epDraft[seasonId] || "").trim(); if (!t) return; await api.createEpisode(pid, seasonId, { title: t }); setEpDraft((m) => ({ ...m, [seasonId]: "" })); loadAll(); };
+  const [busyDel, setBusyDel] = useState<string | null>(null);
+  const [delErr, setDelErr] = useState("");
+  const [editKey, setEditKey] = useState<string | null>(null);
+  const [editVal, setEditVal] = useState("");
+  const delSeason = async (id: number) => { setBusyDel(`s${id}`); setDelErr(""); try { await api.deleteSeason(pid, id); loadAll(); } catch (e) { setDelErr(`delete failed — ${e instanceof Error ? e.message : String(e)}`); } finally { setBusyDel(null); } };
+  const delEpisode = async (id: number) => { setBusyDel(`e${id}`); setDelErr(""); try { await api.deleteEpisode(pid, id); loadAll(); } catch (e) { setDelErr(`delete failed — ${e instanceof Error ? e.message : String(e)}`); } finally { setBusyDel(null); } };
+  const delArc = async (id: number) => { setBusyDel(`arc${id}`); setDelErr(""); try { await api.deleteSeriesArc(pid, id); loadAll(); } catch (e) { setDelErr(`delete failed — ${e instanceof Error ? e.message : String(e)}`); } finally { setBusyDel(null); } };
+  const delPlotline = async (episodeId: number, id: number) => { setBusyDel(`pl${id}`); setDelErr(""); try { await api.deleteEpisodePlotline(pid, id); api.listEpisodePlotlines(pid, episodeId).then((pl) => setPlotlines((m) => ({ ...m, [episodeId]: pl }))).catch(() => {}); } catch (e) { setDelErr(`delete failed — ${e instanceof Error ? e.message : String(e)}`); } finally { setBusyDel(null); } };
+  const saveSeasonTitle = async (id: number) => { const t = editVal.trim(); setEditKey(null); if (!t) return; setDelErr(""); try { await api.updateSeason(pid, id, { title: t }); loadAll(); } catch (e) { setDelErr(`rename failed — ${e instanceof Error ? e.message : String(e)}`); } };
+  const saveEpisodeTitle = async (id: number) => { const t = editVal.trim(); setEditKey(null); if (!t) return; setDelErr(""); try { await api.updateEpisode(pid, id, { title: t }); loadAll(); } catch (e) { setDelErr(`rename failed — ${e instanceof Error ? e.message : String(e)}`); } };
   const addPlotline = async (episodeId: number) => { const t = (plDraft[episodeId] || "").trim(); if (!t) return; await api.createEpisodePlotline(pid, episodeId, { type: "A", title: t }); setPlDraft((m) => ({ ...m, [episodeId]: "" })); api.listEpisodePlotlines(pid, episodeId).then((pl) => setPlotlines((m) => ({ ...m, [episodeId]: pl }))).catch(() => {}); };
   // Merge a per-episode status (echo edges) + an optional continuity flag (contradict)
   // onto the chosen PSYKE character's series memory.
@@ -277,15 +337,32 @@ function SeriesAuthoring({ pid }: { pid: number }) {
     <>
       <div style={lbl}>ADD SEASON</div>
       <div style={row}><input value={seasonTitle} onChange={(e) => setSeasonTitle(e.target.value)} placeholder="season title" style={{ ...inp, flex: 1 }} /><Add on={addSeason} /></div>
+      {delErr && <div style={{ fontSize: 9, color: "var(--crimson)", marginBottom: 6 }}>{delErr}</div>}
       {seasons.map((s) => (
         <div key={s.id} style={card}>
-          <div style={{ fontFamily: "'Chakra Petch'", fontSize: 11, color: "#fff" }}>SEASON {s.season_number} <span style={{ color: "var(--txt2)", fontWeight: 400 }}>· {s.title}</span></div>
+          <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+            <span style={{ fontFamily: "'Chakra Petch'", fontSize: 11, color: "var(--strong)" }}>SEASON {s.season_number} </span>
+            {editKey === `s${s.id}` ? (
+              <input autoFocus value={editVal} onChange={(ev) => setEditVal(ev.target.value)} onBlur={() => s.id != null && saveSeasonTitle(s.id)} onKeyDown={(ev) => { if (ev.key === "Enter") s.id != null && saveSeasonTitle(s.id); if (ev.key === "Escape") setEditKey(null); }} style={{ ...inp, flex: 1, fontSize: 9.5 }} />
+            ) : (
+              <span onClick={() => { setEditKey(`s${s.id}`); setEditVal(s.title ?? ""); }} title="rename" style={{ color: "var(--txt2)", fontWeight: 400, fontSize: 11, cursor: "text" }}>· {s.title}</span>
+            )}
+            {s.id != null && <Del on={() => delSeason(s.id!)} busy={busyDel === `s${s.id}`} />}
+          </div>
           <div style={{ marginTop: 6, paddingLeft: 10, borderLeft: "1px solid var(--line2)" }}>
             {episodes.filter((e) => e.season_id === s.id).map((e) => (
               <div key={e.id} style={{ marginBottom: 5 }}>
-                <div style={{ fontSize: 10, color: "var(--txt2)" }}>▸ EP{e.episode_number} {e.title}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, color: "var(--txt2)" }}>
+                  <span>▸ EP{e.episode_number}</span>
+                  {editKey === `e${e.id}` ? (
+                    <input autoFocus value={editVal} onChange={(ev) => setEditVal(ev.target.value)} onBlur={() => e.id != null && saveEpisodeTitle(e.id)} onKeyDown={(ev) => { if (ev.key === "Enter") e.id != null && saveEpisodeTitle(e.id); if (ev.key === "Escape") setEditKey(null); }} style={{ ...inp, flex: 1, fontSize: 9 }} />
+                  ) : (
+                    <span onClick={() => { setEditKey(`e${e.id}`); setEditVal(e.title ?? ""); }} title="rename" style={{ cursor: "text" }}>{e.title}</span>
+                  )}
+                  {e.id != null && <Del on={() => delEpisode(e.id!)} busy={busyDel === `e${e.id}`} />}
+                </div>
                 <div style={{ paddingLeft: 12 }}>
-                  {(plotlines[e.id ?? -1] || []).map((pl) => <div key={pl.id} style={{ fontSize: 9, color: "var(--cyan)" }}>· {pl.type}-story — {pl.title}</div>)}
+                  {(plotlines[e.id ?? -1] || []).map((pl) => <div key={pl.id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 9, color: "var(--cyan)" }}><span>· {pl.type}-story — {pl.title}</span>{e.id != null && pl.id != null && <Del on={() => delPlotline(e.id!, pl.id!)} busy={busyDel === `pl${pl.id}`} />}</div>)}
                   <div style={{ display: "flex", gap: 5, marginTop: 2 }}>
                     <input value={plDraft[e.id ?? -1] || ""} onChange={(ev) => setPlDraft((m) => ({ ...m, [e.id!]: ev.target.value }))} placeholder="plotline (A-story)" style={{ ...inp, flex: 1, fontSize: 9 }} />
                     <Add on={() => e.id && addPlotline(e.id)} />
@@ -306,7 +383,7 @@ function SeriesAuthoring({ pid }: { pid: number }) {
         <Add on={addArc} />
       </div>
       {episodes.length === 0 && <div style={{ fontSize: 9, color: "var(--txt3)", fontStyle: "italic", marginBottom: 7 }}>Add episodes first to bind an arc’s setup → payoff (unbound arcs emit no arc edges).</div>}
-      {arcs.map((a) => <div key={a.id} style={{ ...card, padding: "6px 10px", fontSize: 10, color: "var(--txt2)" }}><span style={{ color: "var(--green)", letterSpacing: ".08em" }}>◆ {a.title}</span> <span style={{ color: "var(--txt3)" }}>· {a.status}</span>{(a.setup_episode_id != null || a.payoff_episode_id != null) && <span style={{ color: "var(--cyan)" }}> · {epLabel(a.setup_episode_id)} → {epLabel(a.payoff_episode_id)}</span>}</div>)}
+      {arcs.map((a) => <div key={a.id} style={{ ...card, padding: "6px 10px", display: "flex", alignItems: "center", gap: 6, fontSize: 10, color: "var(--txt2)" }}><span><span style={{ color: "var(--green)", letterSpacing: ".08em" }}>◆ {a.title}</span> <span style={{ color: "var(--txt3)" }}>· {a.status}</span>{(a.setup_episode_id != null || a.payoff_episode_id != null) && <span style={{ color: "var(--cyan)" }}> · {epLabel(a.setup_episode_id)} → {epLabel(a.payoff_episode_id)}</span>}</span>{a.id != null && <Del on={() => delArc(a.id!)} busy={busyDel === `arc${a.id}`} />}</div>)}
 
       <div style={{ ...lbl, marginTop: 12 }}>SERIES MEMORY (echo / contradict)</div>
       <div style={row}>
@@ -333,10 +410,10 @@ export function FormatStructure(props: PanelProps) {
       <div data-screen-label="Format Structure" style={panelBox}>
         <Corners />
         <div style={{ height: 42, flex: "none", display: "flex", alignItems: "center", gap: 11, padding: "0 16px", borderBottom: "1px solid var(--line)" }}>
-          <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".1em", color: "#fff" }}>STRUCTURE</span>
+          <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".1em", color: "var(--strong)" }}>STRUCTURE</span>
           <div style={{ display: "flex", border: "1px solid var(--line2)", fontSize: 8, letterSpacing: ".08em" }}>
             {TABS.map(([label, key], i) => (
-              <span key={key} onClick={() => setTab(key)} style={{ padding: "4px 9px", cursor: "pointer", borderLeft: i === 0 ? undefined : "1px solid var(--line2)", color: tab === key ? "#04060a" : "var(--txt3)", background: tab === key ? "var(--accent)" : undefined, fontWeight: tab === key ? 600 : 400 }}>{label}</span>
+              <span key={key} onClick={() => setTab(key)} style={{ padding: "4px 9px", cursor: "pointer", borderLeft: i === 0 ? undefined : "1px solid var(--line2)", color: tab === key ? "var(--on-accent)" : "var(--txt3)", background: tab === key ? "var(--accent)" : undefined, fontWeight: tab === key ? 600 : 400 }}>{label}</span>
             ))}
           </div>
           <div style={{ flex: 1 }} />

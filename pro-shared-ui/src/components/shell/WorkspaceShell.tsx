@@ -13,7 +13,7 @@ import {
   MODE_SPINES,
   MODE_FORMATS,
   type ShellLayout,
-  type CinematicLevel,
+  type AppearanceTheme,
 } from "./shellVars";
 
 export interface WorkspaceShellProps {
@@ -22,8 +22,8 @@ export interface WorkspaceShellProps {
   writingMode?: WritingMode | string;
   /** 'cockpit' shows all docks; 'focus' hides nav/right/bottom (editor only). */
   layout?: ShellLayout;
-  /** Ambient HUD intensity: restrained < cinematic < full_hud. */
-  cinematicLevel?: CinematicLevel;
+  /** Visual theme: 'dark' | 'light' | 'warm'. Drives the whole surface palette. */
+  theme?: AppearanceTheme;
   /** Active project name shown in the top-bar switcher. */
   projectTitle?: string;
   countdown?: string;
@@ -34,6 +34,13 @@ export interface WorkspaceShellProps {
   centerSlot?: ReactNode;
   rightSlot?: ReactNode;
   bottomSlot?: ReactNode;
+  /** Show the slim PSYKE console bar under the editor (a design element). Off when
+   *  a real app supplies its own input surfaces. Default true. */
+  showConsole?: boolean;
+  /** Open the app's command palette (the top-bar ⌘K omnibox). */
+  onCommandPalette?: () => void;
+  /** Toggle Focus ↔ Cockpit (Focus hides the rails for distraction-free writing). */
+  onToggleFocus?: () => void;
 }
 
 const ambient = (s: CSSProperties): CSSProperties => ({ position: "absolute", inset: 0, pointerEvents: "none", ...s });
@@ -42,11 +49,13 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
   const ctxMode = useWritingMode();
   const mode = resolveMode(props.writingMode ?? ctxMode);
   const layout: ShellLayout = props.layout ?? "cockpit";
-  const cine: CinematicLevel = props.cinematicLevel ?? "full_hud";
+  const theme: AppearanceTheme = props.theme ?? "dark";
 
   const showDocks = layout !== "focus";
-  const gridOn = cine !== "restrained";
-  const scanOn = cine === "full_hud";
+  // A calm, clean surface (the old HUD grid/scanlines/rulers/brackets are gone).
+  // On dark, a soft edge vignette adds depth; on light/warm it would muddy the
+  // paper, so it's dark-only and gentle.
+  const isDark = theme === "dark";
 
   // Real current-project title from the core (falls back to the prop, then a
   // neutral default — never the old "NULL HORIZON" mock).
@@ -72,42 +81,20 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
     fontSize: 12,
     lineHeight: 1.45,
     letterSpacing: ".02em",
-    ...shellThemeVars(mode),
+    ...shellThemeVars(mode, theme),
   };
-
-  const cornerBracket = (pos: CSSProperties, glow: string): CSSProperties => ({
-    position: "absolute",
-    width: 17,
-    height: 17,
-    pointerEvents: "none",
-    zIndex: 58,
-    boxShadow: glow,
-    ...pos,
-  });
 
   return (
     <div className="lf-shell" data-screen-label="Workspace Shell — Cockpit" style={root}>
       <ShellStyles />
 
-      {/* ambient background layers */}
-      {gridOn && <div style={ambient({ backgroundImage: "radial-gradient(circle,rgba(128,140,158,.07) 1px,transparent 1.4px)", backgroundSize: "30px 30px", zIndex: 0 })} />}
-      <div style={ambient({ background: "radial-gradient(120% 90% at 50% -10%,rgba(232,68,58,.10),transparent 55%),radial-gradient(90% 70% at 80% 120%,rgba(76,194,255,.05),transparent 60%)", zIndex: 0 })} />
-      <div style={ambient({ background: "radial-gradient(130% 120% at 50% 50%,transparent 62%,rgba(0,0,0,.72))", zIndex: 1 })} />
-      {scanOn && <>
-        <div style={ambient({ background: "repeating-linear-gradient(0deg,transparent 0 2px,rgba(255,255,255,.013) 2px 3px)", zIndex: 60 })} />
-        <div style={{ position: "absolute", left: 0, right: 0, height: 140, top: 0, background: "linear-gradient(180deg,transparent,rgba(76,194,255,.05),transparent)", pointerEvents: "none", zIndex: 60, animation: "lf-scan 9s linear infinite" }} />
-      </>}
-      {/* perimeter tick rulers */}
-      <div style={{ position: "absolute", top: 3, left: 120, right: 120, height: 5, backgroundImage: "repeating-linear-gradient(90deg,rgba(245,177,51,.5) 0 1px,transparent 1px 26px)", pointerEvents: "none", zIndex: 55 }} />
-      <div style={{ position: "absolute", bottom: 2, left: 120, right: 120, height: 5, backgroundImage: "repeating-linear-gradient(90deg,rgba(245,177,51,.32) 0 1px,transparent 1px 26px)", pointerEvents: "none", zIndex: 55 }} />
-      {/* corner frame brackets */}
-      <div style={cornerBracket({ top: 6, left: 6, borderTop: "1px solid var(--crimson)", borderLeft: "1px solid var(--crimson)" }, "-1px -1px 8px rgba(232,68,58,.3)")} />
-      <div style={cornerBracket({ top: 6, right: 6, borderTop: "1px solid var(--crimson)", borderRight: "1px solid var(--crimson)" }, "1px -1px 8px rgba(232,68,58,.3)")} />
-      <div style={cornerBracket({ bottom: 6, left: 6, borderBottom: "1px solid var(--crimson)", borderLeft: "1px solid var(--crimson)" }, "-1px 1px 8px rgba(232,68,58,.3)")} />
-      <div style={cornerBracket({ bottom: 6, right: 6, borderBottom: "1px solid var(--crimson)", borderRight: "1px solid var(--crimson)" }, "1px 1px 8px rgba(232,68,58,.3)")} />
+      {/* a single soft edge vignette for depth — DARK only; on light/warm it would
+          muddy the paper, so those stay clean. (The old HUD grid/scanlines/rulers/
+          corner-brackets were removed — they added noise without meaning.) */}
+      {isDark && <div style={ambient({ background: "radial-gradient(130% 120% at 50% 50%,transparent 66%,rgba(0,0,0,.42))", zIndex: 1 })} />}
 
       {/* top bar */}
-      <TopBar formatBadge={MODE_FORMATS[mode]} layout={layout} countdown={countdown} />
+      <TopBar formatBadge={MODE_FORMATS[mode]} layout={layout} countdown={countdown} onCommandPalette={props.onCommandPalette} onToggleFocus={props.onToggleFocus} />
 
       {/* body row */}
       <div style={{ position: "relative", zIndex: 20, display: "flex", flex: 1, minHeight: 0 }}>
@@ -117,7 +104,7 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
           <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
             {props.centerSlot ?? <ManuscriptRegion />}
           </div>
-          <PsykeConsole />
+          {(props.showConsole ?? true) && <PsykeConsole />}
         </div>
         {showDocks && (props.rightSlot ?? <IntelligenceDock />)}
       </div>

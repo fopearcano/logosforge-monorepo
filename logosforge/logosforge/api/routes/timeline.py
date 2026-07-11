@@ -93,6 +93,24 @@ def update_event(
     return _event_dto(db, project.id, event_id)
 
 
+@router.delete("/projects/{project_id}/timeline/events/{event_id}")
+def delete_event(
+    event_id: int,
+    project=Depends(get_project),
+    db: Database = Depends(get_db),
+    broker: ApiEventBroker = Depends(get_broker),
+):
+    """Remove an event from the timeline. Non-destructive — the underlying scene
+    is kept (timeline membership is a project setting); it just stops appearing
+    on the timeline."""
+    scene = db.get_scene_by_id(event_id)
+    if scene is None or scene.project_id != project.id:
+        raise not_found(f"Timeline event {event_id} not found")
+    db.remove_timeline_event(project.id, event_id)
+    broker.publish("timeline_changed", project_id=project.id)
+    return {"ok": True, "removed": event_id}
+
+
 def _event_dto(db: Database, project_id: int, scene_id: int):
     for event in serializers.timeline_events(db, project_id):
         if event.id == scene_id:

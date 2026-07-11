@@ -85,3 +85,56 @@ def delete_note(
     db.delete_note(note_id)
     broker.publish("notes_changed", project_id=project.id)
     return {"ok": True, "deleted": note_id}
+
+
+# -- Note cross-references (note ↔ scene / note ↔ PSYKE) ----------------------
+# The note's tags are editable via PATCH above; these wire the *link* metadata
+# the Notes cards already display, so a writer can cross-reference from the app.
+
+
+@router.post("/projects/{project_id}/notes/{note_id}/scene-links/{scene_id}")
+def link_note_scene(
+    note_id: int, scene_id: int,
+    project=Depends(get_project), db: Database = Depends(get_db),
+    broker: ApiEventBroker = Depends(get_broker),
+):
+    _note_or_404(db, project.id, note_id)
+    db.link_note_to_scene(note_id, scene_id)
+    broker.publish("notes_changed", project_id=project.id)
+    return {"ok": True, "scene_links": db.get_note_scene_links(note_id)}
+
+
+@router.delete("/projects/{project_id}/notes/{note_id}/scene-links/{scene_id}")
+def unlink_note_scene(
+    note_id: int, scene_id: int,
+    project=Depends(get_project), db: Database = Depends(get_db),
+    broker: ApiEventBroker = Depends(get_broker),
+):
+    _note_or_404(db, project.id, note_id)
+    db.unlink_note_from_scene(note_id, scene_id)
+    broker.publish("notes_changed", project_id=project.id)
+    return {"ok": True, "scene_links": db.get_note_scene_links(note_id)}
+
+
+@router.post("/projects/{project_id}/notes/{note_id}/psyke-links/{entry_id}")
+def link_note_psyke(
+    note_id: int, entry_id: int,
+    project=Depends(get_project), db: Database = Depends(get_db),
+    broker: ApiEventBroker = Depends(get_broker),
+):
+    _note_or_404(db, project.id, note_id)
+    db.link_note_to_psyke(note_id, entry_id)
+    broker.publish("notes_changed", project_id=project.id)
+    return {"ok": True, "psyke_links": db.get_note_psyke_links(note_id)}
+
+
+@router.delete("/projects/{project_id}/notes/{note_id}/psyke-links/{entry_id}")
+def unlink_note_psyke(
+    note_id: int, entry_id: int,
+    project=Depends(get_project), db: Database = Depends(get_db),
+    broker: ApiEventBroker = Depends(get_broker),
+):
+    _note_or_404(db, project.id, note_id)
+    db.unlink_note_from_psyke(note_id, entry_id)
+    broker.publish("notes_changed", project_id=project.id)
+    return {"ok": True, "psyke_links": db.get_note_psyke_links(note_id)}

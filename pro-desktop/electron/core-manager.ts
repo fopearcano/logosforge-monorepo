@@ -14,6 +14,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as http from 'node:http';
+import * as os from 'node:os';
 import * as path from 'node:path';
 
 export type CoreState = 'connecting' | 'connected' | 'error';
@@ -76,6 +77,44 @@ function resolveDevPython(): { coreDir: string; python: string } {
       : path.join(coreDir, 'venv', 'bin', 'python');
   if (fs.existsSync(venv)) return { coreDir, python: venv };
   return { coreDir, python: process.platform === 'win32' ? 'python' : 'python3' };
+}
+
+/**
+ * Dexter's Room voice: point the core at the user's local faster-whisper model.
+ * Nothing is bundled (the model is ~1.5GB) — an explicit LOGOSFORGE_VOICE_MODEL
+ * env wins; otherwise auto-detect a `faster-whisper-large-v3` dir in a few known
+ * spots and, if a sibling `_cuda_runtime` exists, enable GPU. No model found →
+ * empty env → the core reports voice unavailable (handled gracefully in the UI).
+ */
+function resolveVoiceEnv(): Record<string, string> {
+  if (process.env.LOGOSFORGE_VOICE_MODEL) {
+    return {
+      LOGOSFORGE_VOICE_MODEL: process.env.LOGOSFORGE_VOICE_MODEL,
+      LOGOSFORGE_VOICE_DEVICE: process.env.LOGOSFORGE_VOICE_DEVICE ?? 'cuda',
+      LOGOSFORGE_VOICE_COMPUTE: process.env.LOGOSFORGE_VOICE_COMPUTE ?? 'float16',
+      LOGOSFORGE_VOICE_CUDA_DIRS: process.env.LOGOSFORGE_VOICE_CUDA_DIRS ?? '',
+    };
+  }
+  const home = os.homedir();
+  const modelsDir = process.env.LOGOSFORGE_MODELS_DIR;
+  const candidates = [
+    modelsDir ? path.join(modelsDir, 'faster-whisper-large-v3') : '',
+    path.join(home, '.logosforge', 'models', 'faster-whisper-large-v3'),
+    path.resolve(__dirname, '..', '..', 'models', 'faster-whisper-large-v3'), // dev monorepo checkout
+    path.join(home, 'Desktop', 'Logosforge Alphatest', 'models', 'faster-whisper-large-v3'), // this machine's setup
+  ].filter(Boolean);
+  for (const model of candidates) {
+    if (!fs.existsSync(model)) continue;
+    const cudaDir = path.join(path.dirname(model), '_cuda_runtime');
+    const hasCuda = fs.existsSync(cudaDir);
+    return {
+      LOGOSFORGE_VOICE_MODEL: model,
+      LOGOSFORGE_VOICE_DEVICE: hasCuda ? 'cuda' : 'cpu',
+      LOGOSFORGE_VOICE_COMPUTE: hasCuda ? 'float16' : 'int8',
+      LOGOSFORGE_VOICE_CUDA_DIRS: hasCuda ? cudaDir : '',
+    };
+  }
+  return {};
 }
 
 export class CoreManager {
@@ -181,7 +220,7 @@ export class CoreManager {
     const cwd = launcher.kind === 'bundled' ? launcher.cwd : launcher.coreDir;
     const child = spawn(command, launcher.args, {
       cwd,
-      env: { ...process.env, API_HOST: HOST, API_PORT: String(PORT), API_MODE: 'desktop' },
+      env: { ...process.env, API_HOST: HOST, API_PORT: String(PORT), API_MODE: 'desktop', ...resolveVoiceEnv() },
       stdio: 'pipe',
       windowsHide: true, // the bundled core is a console exe; don't flash a window
     });

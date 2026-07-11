@@ -8,7 +8,7 @@ const panelBox: CSSProperties = {
   position: "relative",
   width: "100%",
   height: "100%",
-  background: "linear-gradient(180deg,#080a0f,#05070b)",
+  background: "linear-gradient(180deg,var(--panel),var(--base))",
   border: "1px solid var(--line)",
   boxShadow: "0 16px 60px rgba(0,0,0,.6)",
   overflow: "hidden",
@@ -68,7 +68,7 @@ const OPTIONS: { key: keyof ExportRequestDTO; label: string }[] = [
 
 function TargetRow({ label, active = false, disabled = false, tag, onClick }: { label: string; active?: boolean; disabled?: boolean; tag?: string; onClick?: () => void }) {
   return (
-    <div onClick={disabled ? undefined : onClick} style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 9px", cursor: disabled ? "default" : "pointer", border: active ? "1px solid var(--line-cy)" : "1px solid var(--line2)", background: active ? "rgba(76,194,255,.08)" : undefined, color: disabled ? "var(--txt3)" : active ? "#fff" : "var(--txt2)", opacity: disabled ? 0.55 : 1 }}>
+    <div onClick={disabled ? undefined : onClick} style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 9px", cursor: disabled ? "default" : "pointer", border: active ? "1px solid var(--line-cy)" : "1px solid var(--line2)", background: active ? "rgba(76,194,255,.08)" : undefined, color: disabled ? "var(--txt3)" : active ? "var(--strong)" : "var(--txt2)", opacity: disabled ? 0.55 : 1 }}>
       <span style={{ flex: 1 }}>{label}{active ? " ●" : ""}</span>
       {tag && <span style={{ fontSize: 6.5, letterSpacing: ".1em", color: "var(--txt3)", border: "1px solid var(--line2)", padding: "0 4px" }}>{tag}</span>}
     </div>
@@ -142,10 +142,10 @@ export function ExportDialog(props: PanelProps) {
 
         {/* header */}
         <div style={{ height: 40, flex: "none", display: "flex", alignItems: "center", gap: 11, padding: "0 16px", borderBottom: "1px solid var(--line)" }}>
-          <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".1em", color: "#fff" }}>EXPORT STUDIO</span>
+          <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".1em", color: "var(--strong)" }}>EXPORT STUDIO</span>
           <span style={{ fontSize: 8, color: "var(--accent)", border: "1px solid var(--line-cy)", padding: "2px 7px", letterSpacing: ".1em" }}>{docExport ? docExport.replace(/_/g, " ").toUpperCase() : `${exportType.replace(/_/g, " ").toUpperCase()} · ${format.toUpperCase()}`}</span>
           <div style={{ flex: 1 }} />
-          {result && <span style={{ fontSize: 9, color: "var(--txt2)" }}><span style={{ color: "#fff" }}>{(isBinary ? approxBytes : text.length).toLocaleString()}</span> {isBinary ? "bytes" : "chars"}</span>}
+          {result && <span style={{ fontSize: 9, color: "var(--txt2)" }}><span style={{ color: "var(--strong)" }}>{(isBinary ? approxBytes : text.length).toLocaleString()}</span> {isBinary ? "bytes" : "chars"}</span>}
         </div>
 
         <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
@@ -186,11 +186,11 @@ export function ExportDialog(props: PanelProps) {
           </div>
 
           {/* controls */}
-          <div style={{ width: 240, flex: "none", padding: "12px 13px", background: "#06080c", overflowY: "auto" }}>
+          <div style={{ width: 240, flex: "none", padding: "12px 13px", background: "var(--panel2)", overflowY: "auto" }}>
             <div style={{ fontSize: 7.5, letterSpacing: ".18em", color: "var(--txt3)", marginBottom: 8 }}>SCOPE</div>
             <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 13 }}>
               {EXPORT_TYPES.map((t) => (
-                <div key={t.id} onClick={() => { setDocExport(null); setExportType(t.id); }} style={{ fontSize: 9, padding: "5px 9px", cursor: "pointer", border: !docExport && exportType === t.id ? "1px solid var(--line-cy)" : "1px solid var(--line2)", background: !docExport && exportType === t.id ? "rgba(76,194,255,.08)" : undefined, color: !docExport && exportType === t.id ? "#fff" : "var(--txt2)" }}>{t.label}</div>
+                <div key={t.id} onClick={() => { setDocExport(null); setExportType(t.id); }} style={{ fontSize: 9, padding: "5px 9px", cursor: "pointer", border: !docExport && exportType === t.id ? "1px solid var(--line-cy)" : "1px solid var(--line2)", background: !docExport && exportType === t.id ? "rgba(76,194,255,.08)" : undefined, color: !docExport && exportType === t.id ? "var(--strong)" : "var(--txt2)" }}>{t.label}</div>
               ))}
             </div>
             <div style={{ fontSize: 7.5, letterSpacing: ".18em", color: "var(--txt3)", marginBottom: 8 }}>SECTIONS</div>
@@ -205,7 +205,7 @@ export function ExportDialog(props: PanelProps) {
         </div>
 
         {/* action bar */}
-        <div style={{ flex: "none", borderTop: "1px solid var(--line)", padding: "9px 16px", display: "flex", alignItems: "center", gap: 16, background: "rgba(6,8,12,.6)" }}>
+        <div style={{ flex: "none", borderTop: "1px solid var(--line)", padding: "9px 16px", display: "flex", alignItems: "center", gap: 16, background: "var(--tint)" }}>
           <span style={{ fontSize: 8, letterSpacing: ".16em", color: status.c }}>● {status.t}</span>
           <span style={{ fontSize: 9, color: "var(--txt3)" }}>{docExport ? docExport.replace(/_/g, " ") : `${exportType.replace(/_/g, " ")} · ${format}`}</span>
           {error && <span style={{ fontSize: 8.5, color: "var(--blocking)", maxWidth: 320, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{error}</span>}
@@ -213,7 +213,7 @@ export function ExportDialog(props: PanelProps) {
           <div style={{ flex: 1 }} />
           <span onClick={canCopy ? () => navigator.clipboard.writeText(text) : undefined} style={{ fontSize: 9, color: canCopy ? "var(--txt2)" : "var(--txt3)", border: "1px solid var(--line2)", padding: "6px 12px", letterSpacing: ".06em", cursor: canCopy ? "pointer" : "default", opacity: canCopy ? 1 : 0.5 }}>⧉ COPY</span>
           <span onClick={canSave ? onSave : undefined} title={hasSave ? "Save the exported file" : "Saving needs the desktop or web host"} style={{ fontSize: 9, color: canSave ? "var(--txt2)" : "var(--txt3)", border: "1px solid var(--line2)", padding: "6px 12px", letterSpacing: ".06em", cursor: canSave ? "pointer" : "default", opacity: canSave ? 1 : 0.5 }}>⬇ SAVE</span>
-          <span onClick={running ? undefined : () => { setSaveMsg(null); run(request); }} style={{ fontSize: 10, color: "#04060a", background: running ? "var(--txt3)" : "var(--green)", padding: "7px 18px", fontWeight: 700, letterSpacing: ".06em", cursor: running ? "default" : "pointer" }}>{running ? "EXPORTING…" : "EXPORT"}</span>
+          <span onClick={running ? undefined : () => { setSaveMsg(null); run(request); }} style={{ fontSize: 10, color: "var(--on-accent)", background: running ? "var(--txt3)" : "var(--green)", padding: "7px 18px", fontWeight: 700, letterSpacing: ".06em", cursor: running ? "default" : "pointer" }}>{running ? "EXPORTING…" : "EXPORT"}</span>
         </div>
       </div>
     </PanelShell>

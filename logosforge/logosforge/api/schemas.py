@@ -33,6 +33,195 @@ class ProjectCreateDTO(BaseModel):
     default_writing_format: str = ""
 
 
+class ProjectUpdateDTO(BaseModel):
+    """PATCH a project — fields left None are unchanged."""
+    title: str | None = None
+    description: str | None = None
+
+
+# --- Free-tier Whiteboard document import (blocks -> a new Pro project) ------
+class WhiteboardImportBlockDTO(BaseModel):
+    """One Whiteboard block (mirrors the Free app's WhiteboardBlock)."""
+    id: str = ""
+    type: str = "paragraph"          # 'paragraph' | 'heading'
+    text: str = ""
+    level: int | None = None
+    sp: str | None = None            # legacy screenplay-element attr (usually null)
+    marks: list[dict[str, Any]] | None = None  # [{type:'bold'|'italic', from, to}]
+
+
+class WhiteboardImportDTO(BaseModel):
+    """A Whiteboard document to graduate into a new Pro project."""
+    title: str = ""
+    mode: str = "novel"              # novel | screenplay | graphic_novel | stage_script
+    blocks: list[WhiteboardImportBlockDTO] = Field(default_factory=list)
+
+
+class WhiteboardImportResultDTO(BaseModel):
+    project_id: int
+    title: str = ""
+    mode: str = "novel"
+    scenes_created: int = 0
+    scene_titles: list[str] = Field(default_factory=list)
+    # For each source block index (0-based into the imported manuscript blocks),
+    # the id of the scene that block landed in (-1 if it mapped to none). Lets a
+    # caller resolve a block-anchored link (e.g. an outline node's) to a scene.
+    scene_ids_by_block: list[int] = Field(default_factory=list)
+
+
+class ManuscriptImportDTO(BaseModel):
+    """A raw, unformatted manuscript file (.txt / .md / .docx) to import into a
+    brand-new project, segmented into scenes. ``content_base64`` is the raw file
+    bytes base64-encoded (so binary .docx survives transport)."""
+    title: str = ""
+    mode: str = "novel"              # novel | screenplay | graphic_novel | stage_script | series
+    strategy: str = "smart"          # smart | chapter | scene_break | single
+    filename: str = ""               # used to sniff .docx vs plain text
+    content_base64: str = ""
+
+
+class ManuscriptImportResultDTO(BaseModel):
+    project_id: int
+    title: str = ""
+    mode: str = "novel"
+    scenes_created: int = 0
+    scene_titles: list[str] = Field(default_factory=list)
+
+
+class VoiceStatusDTO(BaseModel):
+    """Whether local Dexter voice (faster-whisper) is available on this core."""
+    available: bool = False
+    message: str = ""
+    model_configured: bool = False
+    device: str = "cpu"
+
+
+class VoiceTranscribeDTO(BaseModel):
+    """One PCM segment to transcribe (base64 of int16 mono little-endian)."""
+    audio_base64: str
+    sample_rate: int = 16000
+    language: str | None = None
+
+
+class VoiceTranscriptDTO(BaseModel):
+    text: str = ""
+    language: str = ""
+    error: str = ""
+
+
+# --- Full Dexter's Room facade (VoiceRoomService over HTTP) request bodies ---
+# ``ctx`` carries the serializable commit-context fields the frontend knows
+# (has_active_editor, writing_mode, psyke_entry_type, character_name, gn_* …);
+# the core wires runtime callables (db / ai_complete / cursor sink) server-side.
+
+
+class VoiceSegmentReqDTO(BaseModel):
+    """A finalized PCM segment to transcribe + record in the session history."""
+    audio_base64: str
+    sample_rate: int = 16000
+
+
+class VoiceCtxReqDTO(BaseModel):
+    """Just the commit-context — used to list intents / Billy ops / commit targets."""
+    ctx: dict[str, Any] | None = None
+
+
+class VoiceIntentPreviewReqDTO(BaseModel):
+    intent_id: str
+    source_text: str
+    commit_target_id: str = ""
+    source_segment_ids: list[str] = Field(default_factory=list)
+    ctx: dict[str, Any] | None = None
+
+
+class VoiceIntentApplyReqDTO(BaseModel):
+    preview_id: str
+    ctx: dict[str, Any] | None = None
+
+
+class VoiceBillyGenReqDTO(BaseModel):
+    operation: str
+    transcript_text: str
+    source_segment_ids: list[str] = Field(default_factory=list)
+    ctx: dict[str, Any] | None = None
+
+
+class VoiceBillyApplyReqDTO(BaseModel):
+    proposal_id: str
+    ctx: dict[str, Any] | None = None
+
+
+class VoiceCommitReqDTO(BaseModel):
+    text: str
+    target_id: str
+    ctx: dict[str, Any] | None = None
+
+
+class ModeSuggestionDTO(BaseModel):
+    text: str
+    category: str = ""
+
+
+class AdaptDTO(BaseModel):
+    """Adaptive-AI mode + actionable suggestions for the current story state."""
+    mode: str
+    stage: str
+    health: str
+    description: str = ""
+    suggestions: list[ModeSuggestionDTO] = Field(default_factory=list)
+    # "" = auto (mode derived from stage×health); else the forced mode name.
+    override: str = ""
+
+
+class ReviewRowDTO(BaseModel):
+    scene_id: int
+    number: str = ""
+    title: str = ""
+    word_count: int = 0
+    overall_status: str = ""
+    next_action: str = ""
+    health_severity: str = ""
+    continuity_severity: str = ""
+    has_rewrite_candidate: bool = False
+
+
+class FormatReviewCheckDTO(BaseModel):
+    check_type: str
+    message: str
+    severity: str = "info"
+    ref_id: int | None = None
+
+
+class FormatReviewDTO(BaseModel):
+    """Format-specific review findings (graphic novel / stage / series)."""
+    format: str = ""
+    checks: list[FormatReviewCheckDTO] = Field(default_factory=list)
+
+
+class PluginDTO(BaseModel):
+    name: str
+    description: str = ""
+    category: str = ""
+    requires_scene: bool = False
+
+
+class ReviewReportDTO(BaseModel):
+    """Screenplay review dashboard: summary metrics + per-scene readiness rows."""
+    format: str = "screenplay"
+    project_title: str = ""
+    total_scenes: int = 0
+    written: int = 0
+    planned: int = 0
+    needs_work: int = 0
+    with_health_warnings: int = 0
+    with_continuity_warnings: int = 0
+    with_export_warnings: int = 0
+    timeline_linked: int = 0
+    with_psyke_links: int = 0
+    export_ready: bool = False
+    rows: list[ReviewRowDTO] = Field(default_factory=list)
+
+
 class SettingsDTO(BaseModel):
     settings: dict[str, Any] = Field(default_factory=dict)
 
@@ -141,6 +330,7 @@ class OutlineNodeDTO(BaseModel):
     title: str
     description: str = ""
     sort_order: int = 0
+    scene_id: int | None = None   # optional hard link to a manuscript scene
     children: list["OutlineNodeDTO"] = Field(default_factory=list)
 
 
@@ -149,12 +339,38 @@ class OutlineNodeCreateDTO(BaseModel):
     description: str = ""
     parent_id: int | None = None
     sort_order: int = 0
+    scene_id: int | None = None
 
 
 class OutlineNodeUpdateDTO(BaseModel):
     title: str | None = None
     description: str | None = None
     sort_order: int | None = None
+    # Present (even null) => set/clear the scene link; absent => leave unchanged.
+    scene_id: int | None = None
+
+
+class OutlineGenerateRequestDTO(BaseModel):
+    """AI outline-generation request. ``scope`` picks the tier to generate
+    (full | act | chapter | scene); ``parent_id`` applies the result under an
+    existing node (scoped generation); ``instructions`` folds in extra guidance."""
+
+    scope: str = "full"
+    parent_id: int | None = None
+    instructions: str = ""
+
+
+class OutlineGenerateResultDTO(BaseModel):
+    """Result of an AI outline generation. ``ok`` is false (with ``errors``) when
+    the model's reply wasn't a usable outline — nothing is applied in that case.
+    ``warnings`` report non-fatal repairs (filled placeholders, dropped
+    meta-sections)."""
+
+    ok: bool
+    created: int
+    node_ids: list[int] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -287,6 +503,11 @@ class PsykeProgressionCreateDTO(BaseModel):
     scene_id: int | None = None
 
 
+class PsykeProgressionUpdateDTO(BaseModel):
+    text: str
+    scene_id: int | None = None
+
+
 # ---------------------------------------------------------------------------
 # Notes
 # ---------------------------------------------------------------------------
@@ -339,11 +560,61 @@ class AssistantRequestDTO(BaseModel):
     selected_text: str = ""
     nearby_text: str = ""
     document_title: str = ""
+    # "Go Irrational" — inject surreal creative provocations for this one reply
+    # (needs active_scene_id). Per-request; nothing is persisted.
+    irrational: bool = False
 
 
 class AssistantResponseDTO(BaseModel):
     reply: str
     cached: bool = False
+
+
+class AiBehaviorDTO(BaseModel):
+    """Global (app-level) AI behaviour the headless API actually honours: which
+    grounding sources Billy folds in (build_chat_context), and the connector's
+    safe-action governance (enforced in the connector execute route)."""
+
+    # Chat grounding sources (build_chat_context)
+    ctx_outline: bool = True
+    ctx_bible: bool = True
+    ctx_memory: bool = True
+    # Connector governance (enforced server-side)
+    connector_enabled: bool = False
+    connector_allow_writes: bool = False
+    connector_confirm_writes: bool = True
+    connector_disabled_actions: list[str] = Field(default_factory=list)
+    # Adaptive coaching mode override ("" = auto; else Structure|Balance|Refinement)
+    adaptive_override: str = ""
+
+
+class AiBehaviorUpdateDTO(BaseModel):
+    ctx_outline: bool | None = None
+    ctx_bible: bool | None = None
+    ctx_memory: bool | None = None
+    connector_enabled: bool | None = None
+    connector_allow_writes: bool | None = None
+    connector_confirm_writes: bool | None = None
+    connector_disabled_actions: list[str] | None = None
+    adaptive_override: str | None = None
+
+
+class GrammarCheckRequestDTO(BaseModel):
+    text: str
+    language: str = ""   # "" = auto-detect (trigram)
+
+
+class GrammarIssueDTO(BaseModel):
+    start: int
+    end: int
+    issue_type: str      # spelling | grammar | style
+    message: str
+    suggestions: list[str] = Field(default_factory=list)
+
+
+class GrammarCheckResultDTO(BaseModel):
+    language: str
+    issues: list[GrammarIssueDTO] = Field(default_factory=list)
 
 
 class AssistantActionRequestDTO(BaseModel):
@@ -706,6 +977,35 @@ class QuantumBranchesRequestDTO(BaseModel):
     generative: bool = False
 
 
+class QuantumSettingsDTO(BaseModel):
+    """Per-project Lambda-mode scoring configuration — read by the generate path
+    (``db.get_scoring_weights`` / ``get_selection_mode`` / … in
+    ``quantum_outliner``). ``preset_names`` / ``weight_keys`` are read-only hints
+    the UI uses to render pickers in a stable order."""
+
+    preset: str = "Balanced"
+    weights: dict[str, float] = Field(default_factory=dict)
+    selection_mode: str = "weighted"   # weighted | pareto
+    show_tradeoffs: bool = False
+    ensemble_alpha: float = 0.7
+    weight_learning: bool = True
+    preset_names: list[str] = Field(default_factory=list)   # read-only (UI)
+    weight_keys: list[str] = Field(default_factory=list)    # read-only (UI, canonical order)
+
+
+class QuantumSettingsUpdateDTO(BaseModel):
+    """Partial update — only provided fields are written. Setting ``preset`` to a
+    known preset also applies its weights (unless ``weights`` is also provided);
+    editing ``weights`` directly marks the preset ``Custom``."""
+
+    preset: str | None = None
+    weights: dict[str, float] | None = None
+    selection_mode: str | None = None
+    show_tradeoffs: bool | None = None
+    ensemble_alpha: float | None = None
+    weight_learning: bool | None = None
+
+
 # ---------------------------------------------------------------------------
 # Story gravity (graph node weights) + Counterpart (reflective AI)
 # ---------------------------------------------------------------------------
@@ -1004,6 +1304,11 @@ class CharacterUpdateDTO(BaseModel):
     name: str | None = None
     description: str | None = None
     psyke_entry_id: int | None = None
+
+
+class CharacterCreateDTO(BaseModel):
+    name: str
+    description: str = ""
 
 
 class ThemeScenesDTO(BaseModel):

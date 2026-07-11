@@ -5,7 +5,7 @@ const panelBox: CSSProperties = {
   position: "relative",
   width: "100%",
   height: "100%",
-  background: "linear-gradient(180deg,#0c0810,#06050a)",
+  background: "linear-gradient(180deg,var(--panel2),var(--base))",
   border: "1px solid var(--gn-line)",
   boxShadow: "0 16px 60px rgba(0,0,0,.6)",
   overflow: "hidden",
@@ -40,13 +40,13 @@ export function PageCanvas(props: PanelProps) {
         {/* page preview */}
         <div style={{ flex: 1, display: "flex", flexDirection: "column", borderRight: "1px solid var(--line2)", minWidth: 0 }}>
           <div style={{ height: 40, flex: "none", display: "flex", alignItems: "center", gap: 11, padding: "0 16px", borderBottom: "1px solid var(--gn-line)" }}>
-            <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".1em", color: "#fff" }}>PAGE CANVAS</span>
+            <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".1em", color: "var(--strong)" }}>PAGE CANVAS</span>
             <span style={{ fontSize: 9, color: "var(--gn)" }}>PAGE 4 / 32</span>
             <div style={{ flex: 1 }} />
             <span style={{ fontSize: 8, color: "var(--txt3)" }}>◂ ▸ · density: medium</span>
           </div>
           <div style={{ flex: 1, display: "grid", placeItems: "center", padding: 18 }}>
-            <div style={{ width: 280, height: "100%", background: "#0a0a10", border: "1px solid var(--gn-line)", padding: 9, display: "flex", flexDirection: "column", gap: 8, boxShadow: "0 0 24px rgba(255,122,198,.1)" }}>
+            <div style={{ width: 280, height: "100%", background: "var(--panel2)", border: "1px solid var(--gn-line)", padding: 9, display: "flex", flexDirection: "column", gap: 8, boxShadow: "0 0 24px rgba(255,122,198,.1)" }}>
               {/* splash panel */}
               <div style={{ flex: 2, border: "1px solid var(--gn)", background: "rgba(255,122,198,.05)", position: "relative", display: "grid", placeItems: "center" }}>
                 <div style={{ position: "absolute", top: 5, left: 6, fontSize: 7, color: "var(--gn)" }}>P1 · SPLASH · wide</div>
@@ -55,17 +55,17 @@ export function PageCanvas(props: PanelProps) {
               </div>
               {/* row of 2 */}
               <div style={{ flex: 1, display: "flex", gap: 8 }}>
-                <PanelCell label="P2" labelColor="var(--txt3)" border="1px solid var(--line2)" background="rgba(255,255,255,.02)" />
+                <PanelCell label="P2" labelColor="var(--txt3)" border="1px solid var(--line2)" background="var(--tint2)" />
                 <PanelCell label="P3 ◉" labelColor="var(--gn)" border="1px solid var(--gn)" background="rgba(255,122,198,.05)" />
               </div>
               {/* reveal panel */}
-              <PanelCell label="P4 · ⟳ page-turn reveal" labelColor="var(--amber)" border="1px solid var(--line2)" background="rgba(255,255,255,.02)" />
+              <PanelCell label="P4 · ⟳ page-turn reveal" labelColor="var(--amber)" border="1px solid var(--line2)" background="var(--tint2)" />
             </div>
           </div>
         </div>
 
         {/* panel inspector */}
-        <div style={{ width: 380, flex: "none", background: "#06080c", display: "flex", flexDirection: "column", overflowY: "auto" }}>
+        <div style={{ width: 380, flex: "none", background: "var(--panel2)", display: "flex", flexDirection: "column", overflowY: "auto" }}>
           <div style={{ height: 40, flex: "none", display: "flex", alignItems: "center", gap: 8, padding: "0 14px", borderBottom: "1px solid var(--line2)" }}>
             <span style={{ fontSize: 9, letterSpacing: ".16em", color: "var(--gn)" }}>PANEL 3 INSPECTOR</span>
             <span style={{ marginLeft: "auto", fontSize: 8, color: "var(--txt3)" }}>shot: CU · cam: low</span>

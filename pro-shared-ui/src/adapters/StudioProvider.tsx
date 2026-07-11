@@ -15,6 +15,10 @@ export interface NavTarget {
   navigate?: (panel: string, opts?: { sceneId?: number }) => void;
   manuscriptTargetSceneId?: number | null;
   clearManuscriptTarget?: () => void;
+  /** Switch the active project (host owns projectId state). */
+  selectProject?: (id: number) => void;
+  /** Ask the host to re-fetch its project list (after create/rename/delete). */
+  refreshProjects?: () => void;
 }
 
 export interface StudioContextValue extends StudioServices, NavTarget {
@@ -76,6 +80,18 @@ export function useProjectId(): number | undefined {
 export function useNavigate(): (panel: string, opts?: { sceneId?: number }) => void {
   const nav = useContext(StudioContext)?.navigate;
   return nav ?? (() => {});
+}
+
+/** Switch the active project from any panel (no-op outside a provider or if the host didn't inject it). */
+export function useSelectProject(): (id: number) => void {
+  const fn = useContext(StudioContext)?.selectProject;
+  return fn ?? (() => {});
+}
+
+/** Ask the host to re-fetch its project list (after a create/rename/delete). */
+export function useRefreshProjects(): () => void {
+  const fn = useContext(StudioContext)?.refreshProjects;
+  return fn ?? (() => {});
 }
 
 /** The scene the Manuscript editor should scroll to + focus, plus a clear() — consumed by ManuscriptEditor. */

@@ -735,6 +735,9 @@ class OutlineNode(SQLModel, table=True):
     title: str
     description: str = ""
     sort_order: int = 0
+    # Optional hard link to the manuscript scene this node "owns" (the section↔
+    # scene association Whiteboard records and its bundle carries). Null = unlinked.
+    scene_id: Optional[int] = Field(default=None)
     created_at: datetime = Field(default_factory=_now)
 
 

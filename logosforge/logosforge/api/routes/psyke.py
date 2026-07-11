@@ -192,6 +192,36 @@ def create_progression(
     return serializers.progression_to_dto(db, project.id, prog, body.entry_id)
 
 
+@router.patch(
+    "/projects/{project_id}/psyke/progressions/{progression_id}",
+    response_model=schemas.PsykeProgressionDTO,
+)
+def update_progression(
+    progression_id: int,
+    body: schemas.PsykeProgressionUpdateDTO,
+    project=Depends(get_project),
+    db: Database = Depends(get_db),
+    broker: ApiEventBroker = Depends(get_broker),
+):
+    """Edit an arc-progression beat's text and/or the scene it anchors to."""
+    prog = db.update_psyke_progression(progression_id, body.text, scene_id=body.scene_id)
+    broker.publish("psyke_changed", project_id=project.id, entry_id=prog.entry_id)
+    return serializers.progression_to_dto(db, project.id, prog, prog.entry_id)
+
+
+@router.delete("/projects/{project_id}/psyke/progressions/{progression_id}")
+def delete_progression(
+    progression_id: int,
+    project=Depends(get_project),
+    db: Database = Depends(get_db),
+    broker: ApiEventBroker = Depends(get_broker),
+):
+    """Remove an arc-progression beat."""
+    db.delete_psyke_progression(progression_id)
+    broker.publish("psyke_changed", project_id=project.id)
+    return {"ok": True, "deleted": progression_id}
+
+
 # -- Search ------------------------------------------------------------------
 
 

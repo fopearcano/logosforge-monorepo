@@ -12,11 +12,12 @@ export interface DesktopBridge {
   coreBaseUrl(): Promise<string>;
   getCoreStatus(): Promise<CoreStatus>;
   onCoreStatus(cb: (s: CoreStatus) => void): () => void;
-  openFile(filters?: { name: string; extensions: string[] }[]): Promise<{ canceled: boolean; path?: string; content?: string }>;
+  openFile(filters?: { name: string; extensions: string[] }[]): Promise<{ canceled: boolean; path?: string; content?: string; contentBase64?: string }>;
   saveFile(p: { suggestedName?: string; content?: string; contentBase64?: string; mimeType?: string }): Promise<{ canceled: boolean; path?: string }>;
   openExternal(target: string): Promise<void>;
   loadLayout(projectId: number): Promise<unknown | null>;
   saveLayout(projectId: number, layout: unknown): Promise<void>;
+  onMenuCommand(cb: (command: string) => void): () => void;
 }
 
 declare global {

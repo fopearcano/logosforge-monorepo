@@ -1,9 +1,10 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, Menu, ipcMain } from 'electron';
 import * as path from 'node:path';
 
 import { CoreManager, type CoreStatus } from './core-manager';
 import { serveStatic, type StaticServer } from './static-server';
 import { openFile, saveFile, openExternal, loadLayout, saveLayout, type DialogFilter } from './file-manager';
+import { buildAppMenu } from './menu';
 
 // Match the product name so per-user data lands in %APPDATA%\LogosForge Pro\
 // (not the scoped package name @logosforge\pro-desktop). Must precede getPath.
@@ -79,6 +80,7 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(() => {
     registerIpc();
+    Menu.setApplicationMenu(buildAppMenu(() => mainWindow));
     core.onStatus((s: CoreStatus) => mainWindow?.webContents.send('core:status', s));
 
     void createWindow();

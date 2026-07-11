@@ -7,6 +7,8 @@ can finally be created through the API (not just test fixtures).
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends
 
 from logosforge.api import schemas
@@ -312,3 +314,191 @@ def psyke_series_memory_set(entry_id: int, body: schemas.SeriesMemoryDTO, projec
         current_status_by_episode=dict(body.current_status_by_episode or {}))
     broker.publish("psyke_changed", project_id=project.id)
     return psyke_series_memory_get(entry_id, project=project, db=db)
+
+
+# ---------------------------------------------------------------------------
+# Edit / delete for the format-structure entities (were create-only in the API,
+# though the DB layer has long supported update/delete). Thin wrappers over the
+# existing ``db.update_*`` (``_patch_row`` style) and ``db.delete_*`` methods so
+# a writer can correct or prune a wrong GN page/panel, season/episode/arc, or
+# stage cue/entrance from the app instead of only ever appending.
+# ---------------------------------------------------------------------------
+
+_RESERVED = {"id", "project_id", "page_id", "season_id", "episode_id", "scene_id"}
+
+
+def _patch_fields(body: dict[str, Any]) -> dict[str, Any]:
+    """Keep only real, provided column values (drop ids and unset Nones)."""
+    return {k: v for k, v in (body or {}).items() if k not in _RESERVED and v is not None}
+
+
+# --- Graphic novel -----------------------------------------------------------
+@router.patch("/projects/{project_id}/gn/pages/{page_id}")
+def gn_page_update(page_id: int, body: dict[str, Any], project=Depends(get_project),
+                   db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    db.update_gn_page(page_id, **_patch_fields(body))
+    broker.publish("project_data_changed", project_id=project.id)
+    return {"ok": True, "updated": page_id}
+
+
+@router.delete("/projects/{project_id}/gn/pages/{page_id}")
+def gn_page_delete(page_id: int, project=Depends(get_project),
+                   db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    db.delete_gn_page(page_id)
+    broker.publish("project_data_changed", project_id=project.id)
+    return {"ok": True, "deleted": page_id}
+
+
+@router.patch("/projects/{project_id}/gn/panels/{panel_id}")
+def gn_panel_update(panel_id: int, body: dict[str, Any], project=Depends(get_project),
+                    db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    db.update_gn_panel(panel_id, **_patch_fields(body))
+    broker.publish("project_data_changed", project_id=project.id)
+    return {"ok": True, "updated": panel_id}
+
+
+@router.delete("/projects/{project_id}/gn/panels/{panel_id}")
+def gn_panel_delete(panel_id: int, project=Depends(get_project),
+                    db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    db.delete_gn_panel(panel_id)
+    broker.publish("project_data_changed", project_id=project.id)
+    return {"ok": True, "deleted": panel_id}
+
+
+# --- Series ------------------------------------------------------------------
+@router.patch("/projects/{project_id}/series/seasons/{season_id}")
+def season_update(season_id: int, body: dict[str, Any], project=Depends(get_project),
+                  db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    db.update_season(season_id, **_patch_fields(body))
+    broker.publish("project_data_changed", project_id=project.id)
+    return {"ok": True, "updated": season_id}
+
+
+@router.delete("/projects/{project_id}/series/seasons/{season_id}")
+def season_delete(season_id: int, project=Depends(get_project),
+                  db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    db.delete_season(season_id)
+    broker.publish("project_data_changed", project_id=project.id)
+    return {"ok": True, "deleted": season_id}
+
+
+@router.patch("/projects/{project_id}/series/episodes/{episode_id}")
+def episode_update(episode_id: int, body: dict[str, Any], project=Depends(get_project),
+                   db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    db.update_episode(episode_id, **_patch_fields(body))
+    broker.publish("project_data_changed", project_id=project.id)
+    return {"ok": True, "updated": episode_id}
+
+
+@router.delete("/projects/{project_id}/series/episodes/{episode_id}")
+def episode_delete(episode_id: int, project=Depends(get_project),
+                   db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    db.delete_episode(episode_id)
+    broker.publish("project_data_changed", project_id=project.id)
+    return {"ok": True, "deleted": episode_id}
+
+
+@router.patch("/projects/{project_id}/series/arcs/{arc_id}")
+def series_arc_update(arc_id: int, body: dict[str, Any], project=Depends(get_project),
+                      db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    db.update_series_arc(arc_id, **_patch_fields(body))
+    broker.publish("project_data_changed", project_id=project.id)
+    return {"ok": True, "updated": arc_id}
+
+
+# --- Stage -------------------------------------------------------------------
+@router.delete("/projects/{project_id}/stage/entrances/{row_id}")
+def stage_entrance_delete(row_id: int, project=Depends(get_project),
+                          db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    db.delete_stage_entrance_exit(row_id)
+    broker.publish("project_data_changed", project_id=project.id)
+    return {"ok": True, "deleted": row_id}
+
+
+@router.delete("/projects/{project_id}/stage/cues/{row_id}")
+def stage_cue_delete(row_id: int, project=Depends(get_project),
+                     db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    db.delete_stage_cue(row_id)
+    broker.publish("project_data_changed", project_id=project.id)
+    return {"ok": True, "deleted": row_id}
+
+
+# --- Class-C feature completions: the update/delete the DB previously lacked --
+@router.patch("/projects/{project_id}/gn/continuity-items/{item_id}")
+def gn_continuity_item_update(item_id: int, body: dict[str, Any], project=Depends(get_project),
+                              db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    db.update_gn_continuity_item(item_id, **_patch_fields(body))
+    broker.publish("project_data_changed", project_id=project.id)
+    return {"ok": True, "updated": item_id}
+
+
+@router.delete("/projects/{project_id}/gn/continuity-items/{item_id}")
+def gn_continuity_item_delete(item_id: int, project=Depends(get_project),
+                              db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    db.delete_gn_continuity_item(item_id)
+    broker.publish("project_data_changed", project_id=project.id)
+    return {"ok": True, "deleted": item_id}
+
+
+@router.patch("/projects/{project_id}/gn/continuity-appearances/{appearance_id}")
+def gn_continuity_appearance_update(appearance_id: int, body: dict[str, Any], project=Depends(get_project),
+                                    db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    db.update_gn_continuity_appearance(appearance_id, **_patch_fields(body))
+    broker.publish("project_data_changed", project_id=project.id)
+    return {"ok": True, "updated": appearance_id}
+
+
+@router.delete("/projects/{project_id}/gn/continuity-appearances/{appearance_id}")
+def gn_continuity_appearance_delete(appearance_id: int, project=Depends(get_project),
+                                    db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    db.delete_gn_continuity_appearance(appearance_id)
+    broker.publish("project_data_changed", project_id=project.id)
+    return {"ok": True, "deleted": appearance_id}
+
+
+@router.patch("/projects/{project_id}/stage/entrances/{row_id}")
+def stage_entrance_update(row_id: int, body: dict[str, Any], project=Depends(get_project),
+                          db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    db.update_stage_entrance_exit(row_id, **_patch_fields(body))
+    broker.publish("project_data_changed", project_id=project.id)
+    return {"ok": True, "updated": row_id}
+
+
+@router.patch("/projects/{project_id}/stage/cues/{row_id}")
+def stage_cue_update(row_id: int, body: dict[str, Any], project=Depends(get_project),
+                     db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    db.update_stage_cue(row_id, **_patch_fields(body))
+    broker.publish("project_data_changed", project_id=project.id)
+    return {"ok": True, "updated": row_id}
+
+
+@router.delete("/projects/{project_id}/stage/business/{row_id}")
+def stage_business_delete(row_id: int, project=Depends(get_project),
+                          db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    db.delete_stage_business(row_id)
+    broker.publish("project_data_changed", project_id=project.id)
+    return {"ok": True, "deleted": row_id}
+
+
+@router.delete("/projects/{project_id}/series/arcs/{arc_id}")
+def series_arc_delete(arc_id: int, project=Depends(get_project),
+                      db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    db.delete_series_arc(arc_id)
+    broker.publish("project_data_changed", project_id=project.id)
+    return {"ok": True, "deleted": arc_id}
+
+
+@router.patch("/projects/{project_id}/series/plotlines/{plotline_id}")
+def episode_plotline_update(plotline_id: int, body: dict[str, Any], project=Depends(get_project),
+                            db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    db.update_episode_plotline(plotline_id, **_patch_fields(body))
+    broker.publish("project_data_changed", project_id=project.id)
+    return {"ok": True, "updated": plotline_id}
+
+
+@router.delete("/projects/{project_id}/series/plotlines/{plotline_id}")
+def episode_plotline_delete(plotline_id: int, project=Depends(get_project),
+                            db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    db.delete_episode_plotline(plotline_id)
+    broker.publish("project_data_changed", project_id=project.id)
+    return {"ok": True, "deleted": plotline_id}

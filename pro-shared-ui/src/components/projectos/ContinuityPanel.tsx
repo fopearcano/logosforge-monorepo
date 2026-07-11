@@ -7,7 +7,7 @@ const panelBox: CSSProperties = {
   position: "relative",
   width: "100%",
   height: "100%",
-  background: "linear-gradient(180deg,#080a0f,#05070b)",
+  background: "linear-gradient(180deg,var(--panel),var(--base))",
   border: "1px solid var(--line)",
   boxShadow: "0 16px 60px rgba(0,0,0,.6)",
   overflow: "hidden",
@@ -17,9 +17,9 @@ const panelBox: CSSProperties = {
 /** Severity → row palette (blocking→red, warning→amber, suggestion→cyan, info→muted). */
 const SEV: Record<string, { color: string; border: string; bg: string }> = {
   blocking: { color: "var(--blocking)", border: "rgba(255,82,96,.35)", bg: "rgba(255,82,96,.04)" },
-  warning: { color: "var(--warning)", border: "var(--line2)", bg: "rgba(11,14,21,.5)" },
-  suggestion: { color: "var(--cyan)", border: "var(--line2)", bg: "rgba(11,14,21,.5)" },
-  info: { color: "var(--txt3)", border: "var(--line2)", bg: "rgba(11,14,21,.5)" },
+  warning: { color: "var(--warning)", border: "var(--line2)", bg: "var(--tint)" },
+  suggestion: { color: "var(--cyan)", border: "var(--line2)", bg: "var(--tint)" },
+  info: { color: "var(--txt3)", border: "var(--line2)", bg: "var(--tint)" },
 };
 const sevOf = (s: string) => SEV[s] ?? SEV.info!;
 
@@ -47,12 +47,12 @@ function IssueCard({ issue }: { issue: ContinuityIssueDTO }) {
     <div style={{ border: `1px solid ${sev.border}`, background: sev.bg, padding: "9px 11px", marginBottom: 7 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
         {blocking
-          ? <span style={{ width: 9, height: 9, background: sev.color, display: "inline-grid", placeItems: "center", color: "#fff", fontSize: 6 }}>!</span>
+          ? <span style={{ width: 9, height: 9, background: sev.color, display: "inline-grid", placeItems: "center", color: "var(--strong)", fontSize: 6 }}>!</span>
           : <span style={{ width: 8, height: 8, transform: "rotate(45deg)", background: sev.color }} />}
         <span style={{ fontSize: 8, letterSpacing: ".12em", color: sev.color }}>{issue.severity.toUpperCase()} · {issue.issue_type}</span>
         <span style={{ fontSize: 7.5, color: "var(--txt3)" }}>conf {confOf(issue.confidence)}</span>
       </div>
-      <div style={{ fontSize: 10.5, color: blocking ? "#fff" : "var(--txt)", lineHeight: 1.4, marginBottom: issue.explanation ? 4 : 6 }}>{issue.title}</div>
+      <div style={{ fontSize: 10.5, color: blocking ? "var(--strong)" : "var(--txt)", lineHeight: 1.4, marginBottom: issue.explanation ? 4 : 6 }}>{issue.title}</div>
       {issue.explanation
         ? <div style={{ fontSize: 9, color: "var(--txt2)", lineHeight: 1.45, marginBottom: 6 }}>{issue.explanation}</div>
         : null}
@@ -141,7 +141,7 @@ export function ContinuityPanel(props: PanelProps) {
         {/* issues by dimension */}
         <div style={{ flex: 1, display: "flex", flexDirection: "column", borderRight: "1px solid var(--line)", minWidth: 0 }}>
           <div style={{ height: 42, flex: "none", display: "flex", alignItems: "center", gap: 11, padding: "0 16px", borderBottom: "1px solid var(--line)" }}>
-            <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".1em", color: "#fff" }}>CONTINUITY</span>
+            <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".1em", color: "var(--strong)" }}>CONTINUITY</span>
             <span style={{ fontSize: 8, color: "var(--txt3)" }}>
               SCOPE · PROJECT · {total} finding{total === 1 ? "" : "s"}
               {blockingCount > 0 ? <> · <span style={{ color: "var(--blocking)" }}>{blockingCount} blocking</span></> : null}
@@ -169,7 +169,7 @@ export function ContinuityPanel(props: PanelProps) {
         </div>
 
         {/* right: heat + radial breakdown */}
-        <div style={{ width: 440, flex: "none", background: "#06080c", display: "flex", flexDirection: "column", overflowY: "auto" }}>
+        <div style={{ width: 440, flex: "none", background: "var(--panel2)", display: "flex", flexDirection: "column", overflowY: "auto" }}>
           <div style={{ padding: "13px 14px", borderBottom: "1px solid var(--line2)" }}>
             <div style={{ fontSize: 8, letterSpacing: ".18em", color: "var(--txt3)", marginBottom: 9 }}>MOST-AFFECTED SCENES</div>
             {topScenes.length === 0
@@ -197,7 +197,7 @@ export function ContinuityPanel(props: PanelProps) {
               : (
                 <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
                   <div style={{ position: "relative", width: 74, height: 74, borderRadius: "50%", background: conic }}>
-                    <div style={{ position: "absolute", inset: 13, borderRadius: "50%", background: "#06080c", display: "grid", placeItems: "center", fontFamily: "'Chakra Petch'", fontSize: 16, color: "#fff" }}>{total}</div>
+                    <div style={{ position: "absolute", inset: 13, borderRadius: "50%", background: "var(--panel2)", display: "grid", placeItems: "center", fontFamily: "'Chakra Petch'", fontSize: 16, color: "var(--strong)" }}>{total}</div>
                   </div>
                   <div style={{ fontSize: 8.5, color: "var(--txt2)", lineHeight: 1.7 }}>
                     {breakdown.map((b) => (

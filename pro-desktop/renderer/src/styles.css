@@ -1,34 +1,97 @@
+/* Theme palettes — the source of truth for host chrome (body, rail, dock,
+   command palette). data-theme is set on <html> by App.tsx. The pro-shared-ui
+   panels inside .lf-shell also read these (WorkspaceShell mirrors them inline
+   per writing-mode for --accent). Keep in sync with shellVars.ts THEME_SURFACES. */
+:root, :root[data-theme="dark"] {
+  --void: #000000; --base: #04060a; --panel: #080a0f; --panel2: #0b0e15; --raised: #11151e;
+  --tint: rgba(11,14,21,.5); --tint2: rgba(255,255,255,.04);
+  --txt: #e4e8ef; --txt2: #8b95a5; --txt3: #525c6b; --strong: #ffffff;
+  --line: rgba(232,68,58,.28); --line2: rgba(150,162,180,.10); --line-cy: rgba(76,194,255,.30);
+  --on-accent: #04060a; --cyan: #4cc2ff; --crimson: #e8443a;
+}
+:root[data-theme="light"] {
+  --void: #dce1e8; --base: #eaeef3; --panel: #f7f9fc; --panel2: #eef2f7; --raised: #ffffff;
+  --tint: rgba(30,42,60,.05); --tint2: rgba(30,42,60,.03);
+  --txt: #1a222c; --txt2: #54606f; --txt3: #8b97a6; --strong: #0d141c;
+  --line: rgba(30,42,60,.16); --line2: rgba(30,42,60,.10); --line-cy: rgba(40,120,190,.35);
+  --on-accent: #0a0f16; --cyan: #2b83c9; --crimson: #d1362c;
+}
+:root[data-theme="warm"] {
+  /* "lamplit study": DARK aged wood, warm cream ink, amber hairlines (see shellVars.ts warm) */
+  --void: #140f08; --base: #1d1610; --panel: #241b12; --panel2: #2b2016; --raised: #362819;
+  --tint: rgba(247,224,168,.06); --tint2: rgba(247,224,168,.035);
+  --txt: #f0e3c8; --txt2: #c8b087; --txt3: #9c8760; --strong: #fdf4dc;
+  --line: rgba(201,150,80,.30); --line2: rgba(240,226,198,.11); --line-cy: rgba(120,160,205,.32);
+  --on-accent: #1d1610; --cyan: #6db2e0; --crimson: #e0705a;
+}
+
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
 body {
-  background: #05070b;
-  color: #e4e8ef;
+  background: var(--base);
+  color: var(--txt);
   font-family: 'JetBrains Mono', monospace;
   font-size: 12px;
   -webkit-font-smoothing: antialiased;
 }
 
-.boot { height: 100vh; display: grid; place-items: center; color: #8b95a5; letter-spacing: .12em; text-align: center; padding: 24px; }
-.boot .detail { display: block; margin-top: 8px; font-size: 10px; color: #525c6b; max-width: 520px; }
+.boot { height: 100vh; display: grid; place-items: center; color: var(--txt2); letter-spacing: .12em; text-align: center; padding: 24px; }
+.boot .detail { display: block; margin-top: 8px; font-size: 10px; color: var(--txt3); max-width: 520px; }
 
 .app { display: flex; height: 100vh; }
 
-.rail { width: 232px; flex: none; border-right: 1px solid #1c2430; background: #06080c; overflow-y: auto; display: flex; flex-direction: column; }
-.brand { padding: 14px 16px; font-family: 'Chakra Petch', sans-serif; font-weight: 700; font-size: 14px; letter-spacing: .12em; color: #fff; border-bottom: 1px solid #1c2430; }
-.brand span { color: #e8443a; }
+.rail { width: 232px; flex: none; border-right: 1px solid var(--line2); background: var(--panel2); overflow-y: auto; display: flex; flex-direction: column; }
+.brand { padding: 14px 16px; font-family: 'Chakra Petch', sans-serif; font-weight: 700; font-size: 14px; letter-spacing: .12em; color: var(--strong); border-bottom: 1px solid var(--line2); }
+.brand span { color: var(--crimson); }
 
-.badge { margin: 10px 14px 4px; padding: 6px 9px; border: 1px solid #1c2430; font-size: 8px; letter-spacing: .12em; display: flex; align-items: center; gap: 7px; color: #8b95a5; }
+.badge { margin: 10px 14px 4px; padding: 6px 9px; border: 1px solid var(--line2); font-size: 8px; letter-spacing: .12em; display: flex; align-items: center; gap: 7px; color: var(--txt2); }
 .badge .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
 
-.field { display: block; padding: 6px 14px; font-size: 8.5px; letter-spacing: .12em; color: #525c6b; text-transform: uppercase; }
-.field select, .field input { width: 100%; margin-top: 4px; background: #11151e; color: #e4e8ef; border: 1px solid #1c2430; font-size: 11px; padding: 4px 6px; font-family: inherit; }
+.field { display: block; padding: 6px 14px; font-size: 8.5px; letter-spacing: .12em; color: var(--txt3); text-transform: uppercase; }
+.field select, .field input { width: 100%; margin-top: 4px; background: var(--raised); color: var(--txt); border: 1px solid var(--line2); font-size: 11px; padding: 4px 6px; font-family: inherit; }
 
 nav { display: flex; flex-direction: column; padding: 8px 0 16px; }
-nav button { text-align: left; padding: 7px 16px; font-size: 11px; cursor: pointer; color: #8b95a5; background: none; border: none; border-left: 2px solid transparent; font-family: inherit; }
-nav button:hover { color: #cdd4de; }
-nav button.on { color: #4cc2ff; background: rgba(76, 194, 255, .08); border-left-color: #4cc2ff; }
+nav button { text-align: left; padding: 7px 16px; font-size: 11px; cursor: pointer; color: var(--txt2); background: none; border: none; border-left: 2px solid transparent; font-family: inherit; }
+nav button:hover { color: var(--txt); }
+nav button.on { color: var(--cyan); background: color-mix(in srgb, var(--cyan) 10%, transparent); border-left-color: var(--cyan); }
 .nav-group { display: flex; flex-direction: column; }
-.nav-group-label { font-size: 8px; letter-spacing: .22em; color: #4b5563; padding: 12px 16px 4px; }
+.nav-group-label { font-size: 8px; letter-spacing: .22em; color: var(--txt3); padding: 12px 16px 4px; }
 
-.stage { flex: 1; min-width: 0; padding: 14px; overflow: auto; }
-.panel-host { width: 100%; height: 100%; min-height: 560px; }
+/* The whole app is now the cockpit shell (WorkspaceShell) filling the viewport;
+   the sections rail, active section, and AI dock ride in its slots. */
+.cockpit-root { height: 100vh; overflow: hidden; }
+.cockpit-root .rail { border-right: none; background: transparent; }
+.stage { flex: 1; min-width: 0; overflow: hidden; display: flex; }
+.stage-inner { flex: 1; min-width: 0; display: flex; }
+.panel-host { flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: 12px; }
+
+/* --- AI companion dock (right side, works on the active section) --- */
+.ai-dock { flex: none; position: relative; border-left: 1px solid var(--line2); background: var(--panel2); display: flex; flex-direction: column; min-width: 0; }
+.ai-resize { position: absolute; left: -4px; top: 0; bottom: 0; width: 9px; cursor: col-resize; z-index: 6; display: flex; align-items: center; justify-content: center; touch-action: none; }
+/* always-visible grip so the drag-to-resize affordance is discoverable */
+.ai-resize::after { content: ""; width: 3px; height: 40px; border-radius: 3px; background: var(--line-cy); box-shadow: 0 0 0 1px rgba(0,0,0,.2); transition: background .12s, box-shadow .12s; }
+.ai-resize:hover { background: color-mix(in srgb, var(--cyan) 12%, transparent); }
+.ai-resize:hover::after { background: var(--cyan); box-shadow: 0 0 8px color-mix(in srgb, var(--cyan) 60%, transparent); }
+.ai-tabs { display: flex; align-items: stretch; height: 34px; flex: none; border-bottom: 1px solid var(--line2); background: var(--panel); }
+.ai-tabs button { background: none; border: none; color: var(--txt2); font: inherit; font-size: 10px; padding: 0 8px; cursor: pointer; display: flex; align-items: center; gap: 4px; border-bottom: 2px solid transparent; white-space: nowrap; }
+.ai-tabs button:hover { color: var(--txt); }
+.ai-tabs button.on { color: var(--cyan); border-bottom-color: var(--cyan); }
+.ai-tab-glyph { font-size: 12px; }
+.ai-collapse { color: var(--txt2); padding: 0 10px !important; font-size: 13px !important; }
+.ai-body { flex: 1; position: relative; min-height: 0; }
+.ai-strip { width: 44px; flex: none; border-left: 1px solid var(--line2); background: var(--panel2); display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 8px 0; }
+.ai-strip-toggle { writing-mode: vertical-rl; background: none; border: none; color: var(--cyan); font: inherit; font-size: 10px; cursor: pointer; letter-spacing: .12em; padding: 6px 0; }
+.ai-strip-btn { background: none; border: 1px solid var(--line2); color: var(--txt2); width: 30px; height: 30px; cursor: pointer; font-size: 13px; border-radius: 2px; }
+.ai-strip-btn:hover { color: var(--cyan); border-color: var(--line-cy); }
+
+/* --- Command palette (⌘K) --- */
+.cmdk-backdrop { position: fixed; inset: 0; z-index: 9999; display: flex; align-items: flex-start; justify-content: center; padding-top: 13vh; background: rgba(2, 4, 8, .5); backdrop-filter: blur(2px); }
+.cmdk { width: min(620px, 92vw); background: var(--raised); border: 1px solid var(--line-cy); border-radius: 4px; box-shadow: 0 24px 80px rgba(0, 0, 0, .35); overflow: hidden; }
+.cmdk input { width: 100%; padding: 14px 16px; background: transparent; border: none; border-bottom: 1px solid var(--line2); color: var(--txt); font: inherit; font-size: 14px; letter-spacing: .02em; outline: none; }
+.cmdk input::placeholder { color: var(--txt3); }
+.cmdk-list { max-height: 46vh; overflow: auto; padding: 6px; }
+.cmdk-list button { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; padding: 9px 12px; background: transparent; border: none; border-radius: 3px; color: var(--txt); font: inherit; font-size: 12.5px; letter-spacing: .02em; cursor: pointer; }
+.cmdk-list button.on { background: color-mix(in srgb, var(--cyan) 16%, transparent); color: var(--strong); }
+.cmdk-kind { flex: none; min-width: 38px; font-size: 8.5px; letter-spacing: .18em; color: var(--cyan); border: 1px solid var(--line-cy); border-radius: 2px; padding: 2px 5px; text-align: center; text-transform: uppercase; }
+.cmdk-list button.on .cmdk-kind { border-color: var(--cyan); }
+.cmdk-empty { padding: 20px 16px; color: var(--txt3); font-size: 12px; text-align: center; }

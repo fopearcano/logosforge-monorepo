@@ -34,15 +34,45 @@ class DecisionCard:
         return _SEV_RANK.get(self.severity, 5)
 
     def to_dict(self) -> dict[str, Any]:
+        # Give every card a navigable destination: explicit section wins; else a
+        # per-card override (the panel that actually resolves THAT card); else a
+        # per-category fallback; else the Dashboard.
+        section = (self.related_section
+                   or _CARD_SECTION.get(self.id)
+                   or ("Health" if self.id.startswith("health_") else "")
+                   or _CATEGORY_SECTION.get(self.category, "Dashboard"))
         return {
             "id": self.id, "category": self.category, "severity": self.severity,
             "confidence": self.confidence, "title": self.title,
             "explanation": self.explanation, "suggested_action": self.suggested_action,
-            "related_section": self.related_section,
-            "related_target_type": self.related_target_type,
+            "related_section": section,
+            "related_target_type": self.related_target_type or ("section" if section else ""),
             "related_target_id": self.related_target_id,
             "created_from": self.created_from,
         }
+
+
+# Category -> the workspace section (nav label) that resolves that kind of card.
+_CATEGORY_SECTION = {
+    "structure": "Structure", "graph": "Graph", "psyke": "PSYKE",
+    "rewrite": "Manuscript", "apply": "Manuscript", "continuity": "Continuity",
+    "production": "Export", "export": "Export",
+}
+
+# Per-card override: the exact panel that resolves a specific card (sharper than
+# the category default — e.g. a missing logline is fixed in Projects, not the
+# generic Structure panel).
+_CARD_SECTION = {
+    "missing_title": "Projects", "missing_description": "Projects",
+    "scenes_no_summary": "Manuscript", "scenes_no_chapter": "Manuscript",
+    "graph_isolated": "Graph",
+    "psyke_empty": "PSYKE", "psyke_no_relations": "PSYKE", "psyke_empty_project": "PSYKE",
+    "rewrite_preferred": "Manuscript", "rewrite_stale": "Manuscript",
+    "apply_pending": "Manuscript",
+    "revision_high": "Continuity",
+    "prod_numbering": "Export", "prod_no_revset": "Export",
+    "export_blocked": "Export", "export_warn": "Export",
+}
 
 
 def build_decision_radar(overview: dict, psyke: dict, structure: dict,

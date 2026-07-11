@@ -8,7 +8,7 @@ const panelBox: CSSProperties = {
   position: "relative",
   width: "100%",
   height: "100%",
-  background: "linear-gradient(180deg,#080a0f,#05070b)",
+  background: "linear-gradient(180deg,var(--panel),var(--base))",
   border: "1px solid var(--line)",
   boxShadow: "0 16px 60px rgba(0,0,0,.6)",
   overflow: "hidden",
@@ -16,13 +16,13 @@ const panelBox: CSSProperties = {
   flexDirection: "column",
 };
 
-function Card({ left, leftDashed = false, code, codeColor = "var(--txt3)", status, statusColor, statusBorder, flag, title, titleColor = "#fff", desc, dots, meta, energy, active = false, onClick }: {
+function Card({ left, leftDashed = false, code, codeColor = "var(--txt3)", status, statusColor, statusBorder, flag, title, titleColor = "var(--strong)", desc, dots, meta, energy, active = false, onClick }: {
   left: string; leftDashed?: boolean; code: string; codeColor?: string;
   status?: string; statusColor?: string; statusBorder?: string; flag?: string;
   title: string; titleColor?: string; desc: ReactNode; dots?: ReactNode; meta?: string; energy?: string; active?: boolean; onClick?: () => void;
 }) {
   const border = active ? "1px solid var(--accent)" : flag ? "1px solid rgba(255,82,96,.4)" : "1px solid var(--line2)";
-  const bg = active ? "rgba(76,194,255,.1)" : flag ? "rgba(255,82,96,.05)" : "rgba(11,14,21,.55)";
+  const bg = active ? "rgba(76,194,255,.1)" : flag ? "rgba(255,82,96,.05)" : "var(--tint)";
   return (
     <div onClick={onClick} title={onClick ? "Open in the Manuscript editor" : undefined} style={{ position: "relative", border, borderLeft: `3px ${leftDashed ? "dashed" : "solid"} ${left}`, background: bg, padding: "9px 10px", boxShadow: active ? "0 0 16px rgba(76,194,255,.18)" : undefined, cursor: onClick ? "pointer" : undefined }}>
       {flag && <div style={{ position: "absolute", top: 7, right: 9, fontSize: 7, color: "var(--blocking)", letterSpacing: ".1em" }}>⚑ {flag}</div>}
@@ -110,11 +110,11 @@ export function StoryGrid(props: PanelProps) {
       <div data-screen-label="Story Grid" style={panelBox}>
         <Corners />
         <div style={{ height: 40, flex: "none", display: "flex", alignItems: "center", gap: 13, padding: "0 16px", borderBottom: "1px solid var(--line)" }}>
-          <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".12em", color: "#fff" }}>STORY GRID</span>
+          <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".12em", color: "var(--strong)" }}>STORY GRID</span>
           <span style={{ fontSize: 9, color: "var(--txt3)", letterSpacing: ".1em" }}>GROUPED BY ACT</span>
           <div style={{ flex: 1 }} />
           <span style={{ fontSize: 8, color: "var(--txt3)", letterSpacing: ".06em" }}>DRAFT · EDITED</span>
-          <button type="button" onClick={addScene} disabled={busy || projectId == null} style={{ fontSize: 9, color: "#04060a", background: "var(--accent)", padding: "5px 11px", fontWeight: 600, letterSpacing: ".08em", border: "none", cursor: busy ? "default" : "pointer", opacity: busy || projectId == null ? 0.5 : 1 }}>＋ SCENE</button>
+          <button type="button" onClick={addScene} disabled={busy || projectId == null} style={{ fontSize: 9, color: "var(--on-accent)", background: "var(--accent)", padding: "5px 11px", fontWeight: 600, letterSpacing: ".08em", border: "none", cursor: busy ? "default" : "pointer", opacity: busy || projectId == null ? 0.5 : 1 }}>＋ SCENE</button>
         </div>
         <div style={{ flex: 1, display: "flex", gap: 14, padding: "14px 16px", minHeight: 0 }}>
           {loading

@@ -85,6 +85,7 @@ def outline_tree(db: Database, project_id: int) -> list[schemas.OutlineNodeDTO]:
                 title=n.title,
                 description=n.description or "",
                 sort_order=n.sort_order or 0,
+                scene_id=n.scene_id,
                 children=build(n.id),
             )
             for n in kids
@@ -100,6 +101,7 @@ def outline_node_to_dto(node) -> schemas.OutlineNodeDTO:
         title=node.title,
         description=node.description or "",
         sort_order=node.sort_order or 0,
+        scene_id=node.scene_id,
         children=[],
     )
 

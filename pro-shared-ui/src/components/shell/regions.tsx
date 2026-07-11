@@ -31,9 +31,9 @@ const gutterDot = (top: number, color: string, size = 7, glow = false, diamond =
 
 export function ManuscriptRegion() {
   return (
-    <div data-screen-label="Manuscript editor (center)" style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", background: "radial-gradient(120% 80% at 50% 0%,#080a10,#040609)", position: "relative" }}>
+    <div data-screen-label="Manuscript editor (center)" style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", background: "radial-gradient(120% 80% at 50% 0%,var(--panel),var(--base))", position: "relative" }}>
       {/* editor toolbar */}
-      <div style={{ height: 36, flex: "none", display: "flex", alignItems: "center", gap: 12, padding: "0 16px", borderBottom: "1px solid var(--line2)", background: "rgba(6,8,12,.6)" }}>
+      <div style={{ height: 36, flex: "none", display: "flex", alignItems: "center", gap: 12, padding: "0 16px", borderBottom: "1px solid var(--line2)", background: "var(--tint)" }}>
         <span style={{ fontSize: 10, color: "var(--txt2)", letterSpacing: ".05em" }}>3,214 <span style={{ color: "var(--txt3)" }}>WORDS</span></span>
         <span style={{ width: 1, height: 14, background: "var(--line2)" }} />
         <div style={{ display: "flex", alignItems: "center", gap: 7, height: 22, padding: "0 9px", border: "1px solid var(--line2)", fontSize: 9, letterSpacing: ".12em", color: "var(--txt2)" }}>ELEMENT <span style={{ color: "var(--accent)", fontWeight: 600 }}>DIALOGUE</span> <span style={{ color: "var(--txt3)" }}>▾</span></div>
@@ -60,7 +60,7 @@ export function ManuscriptRegion() {
         </div>
 
         {/* review metrics overlay */}
-        <div style={{ position: "absolute", top: 18, right: 26, width: 236, background: "rgba(8,11,17,.94)", border: "1px solid var(--line)", padding: "11px 12px", zIndex: 5, boxShadow: "0 8px 30px rgba(0,0,0,.6)" }}>
+        <div style={{ position: "absolute", top: 18, right: 26, width: 236, background: "var(--tint)", border: "1px solid var(--line)", padding: "11px 12px", zIndex: 5, boxShadow: "0 8px 30px rgba(0,0,0,.6)" }}>
           <div style={{ position: "absolute", top: -1, right: -1, width: 8, height: 8, borderTop: "1px solid var(--crimson)", borderRight: "1px solid var(--crimson)" }} />
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid var(--line2)", paddingBottom: 6, marginBottom: 8 }}>
             <span style={{ fontSize: 8.5, letterSpacing: ".24em", color: "var(--crimson)" }}>REVIEW METRICS</span>
@@ -86,7 +86,7 @@ export function ManuscriptRegion() {
           </div>
           <div style={{ display: "flex", gap: 12, alignItems: "baseline", margin: "14px 0 16px", opacity: 0.92 }}>
             <span style={{ fontFamily: "'Chakra Petch'", color: "var(--txt3)", fontSize: 13 }}>12</span>
-            <span style={{ fontWeight: 700, letterSpacing: ".04em", color: "#fff" }}>INT. <span style={{ color: "var(--accent)", borderBottom: "1px dotted var(--accent)" }}>HELIOS-9</span> — OBSERVATION RING — NIGHT CYCLE</span>
+            <span style={{ fontWeight: 700, letterSpacing: ".04em", color: "var(--strong)" }}>INT. <span style={{ color: "var(--accent)", borderBottom: "1px dotted var(--accent)" }}>HELIOS-9</span> — OBSERVATION RING — NIGHT CYCLE</span>
           </div>
           <p style={{ margin: "0 0 14px", opacity: 0.72 }}>The corridor breathes. Somewhere below, the reactor drops a half-step and holds. <span style={{ color: "var(--accent)", borderBottom: "1px dotted rgba(76,194,255,.6)" }}>MARLOW</span> floats at the viewport, watching a dead planet turn through the glass.</p>
           <div style={{ textAlign: "center", margin: "18px 0 0", fontWeight: 700, letterSpacing: ".06em", opacity: 0.78 }}>MARLOW</div>
@@ -96,7 +96,7 @@ export function ManuscriptRegion() {
 
           {/* active block + floating format toolbar */}
           <div style={{ position: "relative", background: "linear-gradient(90deg,rgba(76,194,255,.07),transparent 80%)", boxShadow: "inset 2px 0 0 var(--accent)", padding: "6px 0 6px 4px", margin: "46px 0 10px" }}>
-            <div style={{ position: "absolute", top: -34, left: "50%", transform: "translateX(-50%)", display: "flex", alignItems: "center", gap: 2, height: 28, padding: "0 6px", background: "#0a0d14", border: "1px solid var(--line)", boxShadow: "0 6px 22px rgba(0,0,0,.7)", fontFamily: "'JetBrains Mono'", zIndex: 6 }}>
+            <div style={{ position: "absolute", top: -34, left: "50%", transform: "translateX(-50%)", display: "flex", alignItems: "center", gap: 2, height: 28, padding: "0 6px", background: "var(--raised)", border: "1px solid var(--line)", boxShadow: "0 6px 22px rgba(0,0,0,.7)", fontFamily: "'JetBrains Mono'", zIndex: 6 }}>
               <span style={{ padding: "0 7px", fontWeight: 700, color: "var(--txt)", fontSize: 11 }}>B</span>
               <span style={{ padding: "0 7px", fontStyle: "italic", color: "var(--txt2)", fontSize: 11 }}>I</span>
               <span style={{ padding: "0 7px", color: "var(--txt2)", fontSize: 11 }}>H</span>
@@ -107,7 +107,7 @@ export function ManuscriptRegion() {
               <span style={{ padding: "0 8px", color: "var(--txt2)", fontSize: 9, letterSpacing: ".1em" }}>DIALOGUE</span>
               <span style={{ padding: "0 8px", color: "var(--amber)", fontSize: 9, letterSpacing: ".1em" }}>TENSION</span>
             </div>
-            <div style={{ textAlign: "center", fontWeight: 700, letterSpacing: ".06em", color: "#fff" }}>VESPER</div>
+            <div style={{ textAlign: "center", fontWeight: 700, letterSpacing: ".06em", color: "var(--strong)" }}>VESPER</div>
             <p style={{ margin: "2px auto 0", width: "64%", textAlign: "center", color: "#eef1f6" }}>Neither should you. The Warden is counting heartbeats tonight<span style={{ display: "inline-block", width: 2, height: 16, background: "var(--accent)", verticalAlign: -3, marginLeft: 1, animation: "lf-blink 1.1s step-end infinite", boxShadow: "0 0 6px var(--accent)" }} /></p>
           </div>
 
@@ -162,13 +162,13 @@ function RadarCard({
   lastMargin?: number;
 }) {
   return (
-    <div style={{ position: "relative", border: emphatic ? "1px solid rgba(255,82,96,.4)" : "1px solid var(--line2)", background: emphatic ? "linear-gradient(180deg,rgba(255,82,96,.07),transparent)" : "rgba(11,14,21,.5)", padding: "10px 11px 11px", marginBottom: lastMargin, boxShadow: emphatic ? "0 0 16px rgba(255,82,96,.07)" : undefined }}>
+    <div style={{ position: "relative", border: emphatic ? "1px solid rgba(255,82,96,.4)" : "1px solid var(--line2)", background: emphatic ? "linear-gradient(180deg,rgba(255,82,96,.07),transparent)" : "var(--tint)", padding: "10px 11px 11px", marginBottom: lastMargin, boxShadow: emphatic ? "0 0 16px rgba(255,82,96,.07)" : undefined }}>
       <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 2, background: severity, boxShadow: emphatic ? `0 0 8px ${severity}` : undefined }} />
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
         <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 8, letterSpacing: ".18em", color: severity }}>{icon}{label}</span>
         <ConfidenceBars level={confidence} />
       </div>
-      <div style={{ fontSize: 11.5, color: emphatic ? "#fff" : "var(--txt)", lineHeight: 1.4, marginBottom: desc ? 5 : 8 }}>{title}</div>
+      <div style={{ fontSize: 11.5, color: emphatic ? "var(--strong)" : "var(--txt)", lineHeight: 1.4, marginBottom: desc ? 5 : 8 }}>{title}</div>
       {desc && <div style={{ fontSize: 9.5, color: "var(--txt2)", lineHeight: 1.4, marginBottom: 8 }}>{desc}</div>}
       <div style={{ display: "flex", gap: 6 }}>
         {chips.map((c, i) => (
@@ -181,8 +181,8 @@ function RadarCard({
 
 function HealthGauge({ value, label, status, color, pct, problem = false }: { value: number; label: string; status: string; color: string; pct: number; problem?: boolean }) {
   return (
-    <div style={{ border: problem ? "1px solid rgba(255,82,96,.3)" : "1px solid var(--line2)", padding: 9, display: "flex", alignItems: "center", gap: 10, background: problem ? "rgba(255,82,96,.04)" : "rgba(11,14,21,.4)" }}>
-      <div style={{ position: "relative", width: 34, height: 34, borderRadius: "50%", background: `conic-gradient(${color} 0 ${pct}%,rgba(255,255,255,.07) ${pct}%)`, display: "grid", placeItems: "center" }}>
+    <div style={{ border: problem ? "1px solid rgba(255,82,96,.3)" : "1px solid var(--line2)", padding: 9, display: "flex", alignItems: "center", gap: 10, background: problem ? "rgba(255,82,96,.04)" : "var(--tint)" }}>
+      <div style={{ position: "relative", width: 34, height: 34, borderRadius: "50%", background: `conic-gradient(${color} 0 ${pct}%,var(--tint2) ${pct}%)`, display: "grid", placeItems: "center" }}>
         <div style={{ width: 24, height: 24, borderRadius: "50%", background: "var(--base)", display: "grid", placeItems: "center", fontFamily: "'Chakra Petch'", fontSize: 11, color }}>{value}</div>
       </div>
       <div><div style={{ fontSize: 9, color: "var(--txt)" }}>{label}</div><div style={{ fontSize: 7.5, letterSpacing: ".1em", color }}>{status}</div></div>
@@ -192,12 +192,12 @@ function HealthGauge({ value, label, status, color, pct, problem = false }: { va
 
 export function IntelligenceDock() {
   return (
-    <div data-screen-label="Intelligence dock (right)" style={{ width: 372, flex: "none", display: "flex", flexDirection: "column", background: "linear-gradient(180deg,#07090e,#05070b)", borderLeft: "1px solid var(--line)" }}>
+    <div data-screen-label="Intelligence dock (right)" style={{ width: 372, flex: "none", display: "flex", flexDirection: "column", background: "linear-gradient(180deg,var(--panel2),var(--base))", borderLeft: "1px solid var(--line)" }}>
       {/* dock tabs */}
       <div style={{ height: 34, flex: "none", display: "flex", alignItems: "stretch", borderBottom: "1px solid var(--line)" }}>
         <div className="lf-hov" style={{ display: "flex", alignItems: "center", gap: 6, padding: "0 12px", color: "var(--txt3)", fontSize: 9, letterSpacing: ".14em", cursor: "pointer", borderRight: "1px solid var(--line2)" }}>⠿ ASSISTANT</div>
         <div style={{ position: "relative", display: "flex", alignItems: "center", gap: 6, padding: "0 13px", color: "var(--crimson)", fontSize: 9, letterSpacing: ".14em", background: "rgba(232,68,58,.06)", borderRight: "1px solid var(--line2)" }}>
-          <div style={{ position: "absolute", left: 0, right: 0, bottom: -1, height: 2, background: "var(--crimson)", boxShadow: "0 0 8px var(--crimson)" }} />RADAR <span style={{ background: "var(--blocking)", color: "#fff", fontSize: 7.5, padding: "0 4px", borderRadius: 6, animation: "lf-glow 2.2s ease-in-out infinite" }}>1</span>
+          <div style={{ position: "absolute", left: 0, right: 0, bottom: -1, height: 2, background: "var(--crimson)", boxShadow: "0 0 8px var(--crimson)" }} />RADAR <span style={{ background: "var(--blocking)", color: "var(--strong)", fontSize: 7.5, padding: "0 4px", borderRadius: 6, animation: "lf-glow 2.2s ease-in-out infinite" }}>1</span>
         </div>
         <div className="lf-hov" style={{ display: "flex", alignItems: "center", gap: 6, padding: "0 12px", color: "var(--txt3)", fontSize: 9, letterSpacing: ".14em", cursor: "pointer", borderRight: "1px solid var(--line2)" }}>HEALTH</div>
         <div className="lf-hov" style={{ display: "flex", alignItems: "center", gap: 6, padding: "0 12px", color: "var(--txt3)", fontSize: 9, letterSpacing: ".14em", cursor: "pointer" }}>CONTINUITY</div>
@@ -214,7 +214,7 @@ export function IntelligenceDock() {
               <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", color: "var(--crimson)", fontSize: 9 }}>◎</div>
             </div>
             <div>
-              <div style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".1em", color: "#fff" }}>DECISION RADAR</div>
+              <div style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".1em", color: "var(--strong)" }}>DECISION RADAR</div>
               <div style={{ fontSize: 8, letterSpacing: ".1em", color: "var(--txt3)" }}>10 SIGNALS · RANKED · ADVISORY ONLY</div>
             </div>
           </div>
@@ -227,7 +227,7 @@ export function IntelligenceDock() {
           severity="var(--blocking)"
           label="BLOCKING"
           emphatic
-          icon={<span style={{ width: 10, height: 10, background: "var(--blocking)", display: "inline-grid", placeItems: "center", color: "#fff", fontSize: 7 }}>!</span>}
+          icon={<span style={{ width: 10, height: 10, background: "var(--blocking)", display: "inline-grid", placeItems: "center", color: "var(--strong)", fontSize: 7 }}>!</span>}
           confidence="HIGH"
           title={"Unpaid setup — the “black box” planted in Scene 04 has no payoff."}
           desc="A promise this strong left open reads as a plot hole by the climax."
@@ -266,7 +266,7 @@ export function IntelligenceDock() {
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderTop: "1px solid var(--line)", paddingTop: 11, marginBottom: 11 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ color: "var(--txt3)" }}>⠿</span>
-            <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".1em", color: "#fff" }}>STORY HEALTH</span>
+            <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".1em", color: "var(--strong)" }}>STORY HEALTH</span>
           </div>
           <span style={{ fontSize: 8, letterSpacing: ".1em", color: "var(--txt3)" }}>DETERMINISTIC ▾</span>
         </div>
@@ -310,7 +310,7 @@ function LaneLabel({ color, text }: { color: string; text: string }) {
 
 export function BottomDock() {
   return (
-    <div data-screen-label="Analysis dock (bottom)" style={{ position: "relative", zIndex: 20, height: 200, flex: "none", display: "flex", flexDirection: "column", background: "linear-gradient(180deg,#07090e,#040609)", borderTop: "1px solid var(--line)" }}>
+    <div data-screen-label="Analysis dock (bottom)" style={{ position: "relative", zIndex: 20, height: 200, flex: "none", display: "flex", flexDirection: "column", background: "linear-gradient(180deg,var(--panel2),var(--base))", borderTop: "1px solid var(--line)" }}>
       <div style={{ position: "absolute", top: -1, left: 232, width: 10, height: 10, borderTop: "1px solid var(--crimson)", borderLeft: "1px solid var(--crimson)" }} />
       {/* dock tabs */}
       <div style={{ height: 30, flex: "none", display: "flex", alignItems: "stretch", borderBottom: "1px solid var(--line2)" }}>
@@ -347,8 +347,8 @@ export function BottomDock() {
           <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 7, padding: "0 14px", overflow: "hidden" }}>
             <LaneChip w={78} border="var(--line-cy)" bg="rgba(76,194,255,.07)" color="var(--txt2)" text="08 · Drift" />
             <LaneChip w={78} border="var(--line-cy)" bg="rgba(76,194,255,.07)" color="var(--txt2)" text="10 · Signal" />
-            <LaneChip w={88} border="var(--accent)" bg="rgba(76,194,255,.16)" color="#fff" text="12 · Obs. Ring ●" glow />
-            <LaneChip w={78} border="var(--line2)" bg="rgba(255,255,255,.02)" color="var(--txt3)" text="15 · Descent" />
+            <LaneChip w={88} border="var(--accent)" bg="rgba(76,194,255,.16)" color="var(--strong)" text="12 · Obs. Ring ●" glow />
+            <LaneChip w={78} border="var(--line2)" bg="var(--tint2)" color="var(--txt3)" text="15 · Descent" />
             <LaneChip border="var(--line2)" bg="transparent" color="var(--txt3)" text="＋ 9 SCENES OFF TIMELINE" dashed />
           </div>
         </div>
@@ -364,7 +364,7 @@ export function BottomDock() {
           <LaneLabel color="var(--crimson)" text="C · WARDEN" />
           <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 7, padding: "0 14px", overflow: "hidden" }}>
             <LaneChip w={78} border="rgba(232,68,58,.3)" bg="rgba(232,68,58,.06)" color="var(--txt2)" text="16 · Watch" ml={300} />
-            <LaneChip w={104} border="var(--blocking)" bg="rgba(255,82,96,.12)" color="#fff" text="21 · All Is Lost ◆" />
+            <LaneChip w={104} border="var(--blocking)" bg="rgba(255,82,96,.12)" color="var(--strong)" text="21 · All Is Lost ◆" />
           </div>
         </div>
         {/* amber numbered ruler */}

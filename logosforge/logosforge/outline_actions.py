@@ -498,6 +498,20 @@ def build_outline_generation_prompt(
     return "\n\n".join(parts)
 
 
+def outline_messages(prompt: str) -> list[dict]:
+    """System+user message pair for an outline-generation request.
+
+    Qt-free so the API route and the desktop UI share one definition (the Qt
+    worker in ``ui/outline_ai.py`` re-exports this).
+    """
+    return [
+        {"role": "system",
+         "content": "You are a story-structure assistant. Produce a clean, "
+                    "structured outline only — no prose."},
+        {"role": "user", "content": prompt},
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Scene-based application (the model the Outline / Plot / Timeline UI reads)
 # ---------------------------------------------------------------------------

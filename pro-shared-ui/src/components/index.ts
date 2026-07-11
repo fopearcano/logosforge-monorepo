@@ -6,3 +6,4 @@ export * from "./psyke";
 export * from "./ai";
 export * from "./intelligence";
 export * from "./formats";
+export * from "./help";

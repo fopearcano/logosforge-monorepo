@@ -33,6 +33,40 @@ def list_characters(project=Depends(get_project), db: Database = Depends(get_db)
     return [serializers.character_to_dto(db, c) for c in db.get_all_characters(project.id)]
 
 
+@router.post(
+    "/projects/{project_id}/characters",
+    response_model=schemas.CharacterDTO, status_code=201,
+)
+def create_character(
+    body: schemas.CharacterCreateDTO,
+    project=Depends(get_project),
+    db: Database = Depends(get_db),
+    broker: ApiEventBroker = Depends(get_broker),
+):
+    """Create a manuscript character. (The cast is usually scene-derived; this is
+    the manual/correction path for a character the parser missed.)"""
+    if not (body.name or "").strip():
+        raise bad_request("A character needs a name")
+    character = db.create_character(project.id, name=body.name.strip(), description=body.description)
+    broker.publish("characters_changed", project_id=project.id)
+    return serializers.character_to_dto(db, character)
+
+
+@router.delete("/projects/{project_id}/characters/{character_id}")
+def delete_character(
+    character_id: int,
+    project=Depends(get_project),
+    db: Database = Depends(get_db),
+    broker: ApiEventBroker = Depends(get_broker),
+):
+    """Delete a character (cascades its scene links). For correcting a mis-parsed
+    or duplicate cast member."""
+    _char_or_404(db, project.id, character_id)
+    db.delete_character(character_id)
+    broker.publish("characters_changed", project_id=project.id)
+    return {"ok": True, "deleted": character_id}
+
+
 @router.patch(
     "/projects/{project_id}/characters/{character_id}",
     response_model=schemas.CharacterDTO,

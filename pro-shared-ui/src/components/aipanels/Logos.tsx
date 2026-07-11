@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import type { LogosActionDTO, LogosResultDTO, LogosSuggestionDTO } from "@logosforge/ui-contracts";
 import { PanelShell, Corners, type PanelProps } from "../shell/PanelShell";
 import { useStudio } from "../../adapters/StudioProvider";
 import { useSelection } from "../../adapters/selection";
+import { useApplyToScene, ApplyDiffModal } from "./applyToScene";
 
 /**
  * Logos — the inline/contextual action panel on the core `logosforge.logos` engine.
@@ -17,7 +18,7 @@ const SEV_COLOR: Record<string, string> = { important: "var(--crimson)", warning
 
 const panelBox: CSSProperties = {
   position: "relative", width: "100%", height: "100%",
-  background: "linear-gradient(180deg,#080a0f,#05070b)",
+  background: "linear-gradient(180deg,var(--panel),var(--base))",
   border: "1px solid var(--line)", boxShadow: "0 16px 60px rgba(0,0,0,.6)",
   overflow: "hidden", display: "flex", flexDirection: "column",
 };
@@ -49,6 +50,7 @@ function CatalogBtn({ a, on, disabled, busy }: { a: LogosActionDTO; on: () => vo
 export function Logos(props: PanelProps) {
   const { api, projectId, writingMode } = useStudio();
   const { selection } = useSelection();
+  const { target, apply } = useApplyToScene();
   const mode = typeof writingMode === "string" ? writingMode : (writingMode ?? "");
   const [section, setSection] = useState("Inline");
   const [actions, setActions] = useState<LogosActionDTO[]>([]);
@@ -58,6 +60,21 @@ export function Logos(props: PanelProps) {
   const [err, setErr] = useState("");
   const [copied, setCopied] = useState(false);
   const [suggestions, setSuggestions] = useState<LogosSuggestionDTO[]>([]);
+  const [ranPassage, setRanPassage] = useState("");
+  const [applyOpen, setApplyOpen] = useState(false);
+
+  // A generative result is a replacement for the PASSAGE that was transformed,
+  // not the whole scene. Apply it surgically: splice the replacement in place of
+  // that passage inside the active scene's content. If the passage isn't found in
+  // the scene (e.g. a hand-pasted excerpt), applying precisely isn't possible.
+  const applyProposed = useMemo<string | null>(() => {
+    if (!target || !result?.generative || !result.message) return null;
+    const passage = ranPassage;
+    if (!passage) return null;
+    const idx = target.content.indexOf(passage);
+    if (idx < 0) return null;
+    return target.content.slice(0, idx) + result.message + target.content.slice(idx + passage.length);
+  }, [target, result, ranPassage]);
 
   useEffect(() => {
     if (projectId == null) { setActions([]); return; }
@@ -108,7 +125,7 @@ export function Logos(props: PanelProps) {
 
   const run = async (actionName: string, sectionOverride?: string) => {
     if (projectId == null || running) return;
-    setRunning(actionName); setErr(""); setResult(null); setCopied(false);
+    setRunning(actionName); setErr(""); setResult(null); setCopied(false); setApplyOpen(false); setRanPassage(text);
     try {
       const r = await api.runLogos(projectId, {
         // a proactive suggested-action can belong to any section, so it runs with an
@@ -140,7 +157,7 @@ export function Logos(props: PanelProps) {
       <div data-screen-label="Logos" style={panelBox}>
         <Corners />
         <div style={{ height: 42, flex: "none", display: "flex", alignItems: "center", gap: 11, padding: "0 16px", borderBottom: "1px solid var(--line)" }}>
-          <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".1em", color: "#fff" }}>LOGOS</span>
+          <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".1em", color: "var(--strong)" }}>LOGOS</span>
           <span style={{ fontSize: 9, color: "var(--txt2)" }}>{actions.length} {section} actions{mode ? ` · ${mode}` : ""}</span>
           <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 8, color: "var(--green)", border: "1px solid rgba(98,217,154,.3)", padding: "2px 7px", letterSpacing: ".1em" }}>
             <span style={{ width: 5, height: 5, background: "var(--green)" }} />CORE ENGINE
@@ -152,14 +169,14 @@ export function Logos(props: PanelProps) {
         {projectId == null ? (
           <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--txt3)", fontSize: 12 }}>Open a project to use Logos.</div>
         ) : (
-          <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
+          <div style={{ flex: 1, display: "flex", flexWrap: "wrap", minHeight: 0 }}>
             {/* section + passage + catalog */}
-            <div style={{ flex: 1, borderRight: "1px solid var(--line)", overflowY: "auto", padding: "13px 15px", display: "flex", flexDirection: "column", gap: 12 }}>
+            <div style={{ flex: "1 1 300px", minWidth: 0, borderRight: "1px solid var(--line)", overflowY: "auto", padding: "13px 15px", display: "flex", flexDirection: "column", gap: 12 }}>
               {/* section switcher */}
               <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
                 {SECTIONS.map((s) => (
                   <button key={s} type="button" onClick={() => { setSection(s); setResult(null); setErr(""); setCopied(false); }} aria-pressed={section === s}
-                    style={{ ...actionBtn, width: "auto", padding: "3px 8px", fontSize: 8.5, color: section === s ? "#04060a" : "var(--txt2)", background: section === s ? "var(--accent)" : "transparent", fontWeight: section === s ? 600 : 400, cursor: "pointer" }}>{s}</button>
+                    style={{ ...actionBtn, width: "auto", padding: "3px 8px", fontSize: 8.5, color: section === s ? "var(--on-accent)" : "var(--txt2)", background: section === s ? "var(--accent)" : "transparent", fontWeight: section === s ? 600 : 400, cursor: "pointer" }}>{s}</button>
                 ))}
               </div>
 
@@ -169,7 +186,7 @@ export function Logos(props: PanelProps) {
                   {canPull && <button type="button" onClick={() => setText(selection.text)} style={{ ...actionBtn, width: "auto", padding: "1px 7px", fontSize: 8, color: "var(--accent)", cursor: "pointer" }}>↩ USE SELECTION ({busSel.split(/\s+/).length}w)</button>}
                 </div>
                 <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="Paste/write the passage, or select text in the Manuscript and pull it in…" spellCheck
-                  style={{ width: "100%", minHeight: 84, resize: "vertical", background: "rgba(11,14,21,.5)", border: "1px solid var(--line2)", outline: "none", color: "var(--txt)", fontFamily: "'Courier Prime',monospace", fontSize: 11, lineHeight: 1.5, padding: "8px 9px", caretColor: "var(--accent)" }} />
+                  style={{ width: "100%", minHeight: 84, resize: "vertical", background: "var(--tint)", border: "1px solid var(--line2)", outline: "none", color: "var(--txt)", fontFamily: "'Courier Prime',monospace", fontSize: 11, lineHeight: 1.5, padding: "8px 9px", caretColor: "var(--accent)" }} />
               </div>
 
               {generative.length > 0 && (
@@ -183,8 +200,8 @@ export function Logos(props: PanelProps) {
               {actions.length === 0 && <div style={{ fontSize: 9.5, color: "var(--txt3)", fontStyle: "italic" }}>No actions in {section} for this mode.</div>}
             </div>
 
-            {/* result + proactive */}
-            <div style={{ width: 440, flex: "none", display: "flex", flexDirection: "column", background: "#06080c" }}>
+            {/* result + proactive — wraps below the actions column when narrow */}
+            <div style={{ flex: "1 1 300px", minWidth: 0, display: "flex", flexDirection: "column", background: "var(--panel2)" }}>
               <div style={{ flex: "none", padding: "12px 14px", borderBottom: "1px solid var(--line2)", display: "flex", alignItems: "center", gap: 8 }}>
                 <span style={{ fontSize: 7.5, letterSpacing: ".2em", color: "var(--txt3)" }}>RESULT</span>
                 {result && <span style={{ fontSize: 8.5, color: "var(--txt2)" }}>· {result.title || result.action}</span>}
@@ -201,6 +218,9 @@ export function Logos(props: PanelProps) {
                           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                             <span style={{ fontSize: 7.5, letterSpacing: ".12em", color: "var(--cyan)" }}>SUGGESTED REPLACEMENT</span>
                             <div style={{ flex: 1 }} />
+                            <button type="button" onClick={() => setApplyOpen(true)} disabled={applyProposed == null}
+                              title={applyProposed != null ? `Apply to ${target?.title} (diff + confirm)` : target == null ? "Open a scene in the Manuscript to apply" : "Pull the passage from the open scene to apply it precisely"}
+                              style={{ ...actionBtn, width: "auto", fontSize: 8, padding: "2px 9px", color: applyProposed != null ? "var(--green)" : "var(--txt3)", cursor: applyProposed != null ? "pointer" : "default", opacity: applyProposed != null ? 1 : 0.5, marginRight: 6 }}>✎ APPLY</button>
                             <button type="button" onClick={copyReplacement} style={{ ...actionBtn, width: "auto", fontSize: 8, padding: "2px 9px", color: copied ? "var(--green)" : "var(--accent)", cursor: "pointer" }}>{copied ? "✓ COPIED" : "⧉ COPY"}</button>
                           </div>
                           <div style={{ fontSize: 11, color: "var(--txt)", lineHeight: 1.55, whiteSpace: "pre-wrap", fontFamily: "'Courier Prime',monospace" }}>{result.message}</div>
@@ -208,7 +228,7 @@ export function Logos(props: PanelProps) {
                       ) : <div style={{ fontSize: 10.5, color: "var(--txt)", lineHeight: 1.55, whiteSpace: "pre-wrap" }}>{result.message}</div>}
                       {result.suggestions.length > 0 && (
                         <div style={{ marginTop: 10 }}><div style={groupLabel}>SUGGESTIONS</div>
-                          {result.suggestions.map((s, i) => <div key={i} style={{ fontSize: 9.5, color: "var(--txt2)", borderLeft: "2px solid var(--line-cy,#2b6f8f)", padding: "3px 9px", marginBottom: 4, background: "rgba(11,14,21,.4)" }}>{s}</div>)}</div>
+                          {result.suggestions.map((s, i) => <div key={i} style={{ fontSize: 9.5, color: "var(--txt2)", borderLeft: "2px solid var(--line-cy,#2b6f8f)", padding: "3px 9px", marginBottom: 4, background: "var(--tint)" }}>{s}</div>)}</div>
                       )}
                     </>
                   )}
@@ -223,7 +243,7 @@ export function Logos(props: PanelProps) {
                 </div>
                 {suggestions.length === 0 ? <div style={{ fontSize: 9, color: "var(--txt3)", fontStyle: "italic" }}>No proactive signals right now.</div>
                   : suggestions.map((s) => (
-                    <div key={s.id} style={{ border: "1px solid var(--line2)", borderLeft: `2px solid ${SEV_COLOR[s.severity] || "var(--cyan)"}`, background: "rgba(11,14,21,.5)", padding: "7px 9px", marginBottom: 7 }}>
+                    <div key={s.id} style={{ border: "1px solid var(--line2)", borderLeft: `2px solid ${SEV_COLOR[s.severity] || "var(--cyan)"}`, background: "var(--tint)", padding: "7px 9px", marginBottom: 7 }}>
                       <div style={{ fontSize: 9, color: "var(--txt2)", lineHeight: 1.4 }}><span style={{ color: SEV_COLOR[s.severity] || "var(--cyan)" }}>{s.title}</span> — {s.message}</div>
                       {s.evidence && <div style={{ fontSize: 8, color: "var(--txt3)", marginTop: 3 }}>{s.evidence}</div>}
                       {s.suggested_actions.length > 0 && (
@@ -244,6 +264,17 @@ export function Logos(props: PanelProps) {
               </div>
             </div>
           </div>
+        )}
+
+        {applyOpen && target && applyProposed != null && (
+          <ApplyDiffModal
+            title={target.title.toUpperCase()}
+            badge="REWRITE"
+            original={target.content}
+            proposed={applyProposed}
+            onConfirm={() => apply(applyProposed)}
+            onClose={() => setApplyOpen(false)}
+          />
         )}
       </div>
     </PanelShell>

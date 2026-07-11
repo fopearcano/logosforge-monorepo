@@ -8,7 +8,17 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from logosforge import character_balance, pacing_insights, story_health, structural_intelligence
+from logosforge import (
+    character_balance,
+    graphic_novel_review,
+    mode_suggestions,
+    pacing_insights,
+    screenplay_review,
+    series_review,
+    stage_script_review,
+    story_health,
+    structural_intelligence,
+)
 from logosforge.api import schemas, serializers
 from logosforge.api.deps import get_db, get_project
 from logosforge.continuity import collector as continuity_collector
@@ -92,6 +102,84 @@ def get_decision_radar(project=Depends(get_project), db: Database = Depends(get_
     """Ranked decision cards (blocking→info) from the project intelligence report."""
     report = build_project_intelligence_report(db, project.id)
     return serializers.decision_radar_to_dto(report)
+
+
+@router.get(
+    "/projects/{project_id}/adapt",
+    response_model=schemas.AdaptDTO,
+)
+def get_adapt(project=Depends(get_project), db: Database = Depends(get_db)):
+    """Adaptive-AI mode (stage × health) + up to 5 actionable suggestions."""
+    result, suggestions = mode_suggestions.generate_mode_suggestions(db, project.id)
+    from logosforge.settings import get_manager
+    return schemas.AdaptDTO(
+        mode=str(result.mode.value),
+        stage=str(result.stage.value),
+        health=str(result.health.value),
+        description=result.description,
+        suggestions=[schemas.ModeSuggestionDTO(text=s.text, category=s.category) for s in suggestions],
+        override=str(get_manager().get("adaptive_mode_override") or ""),
+    )
+
+
+@router.get(
+    "/projects/{project_id}/review",
+    response_model=schemas.ReviewReportDTO,
+)
+def get_review(project=Depends(get_project), db: Database = Depends(get_db)):
+    """Screenplay review dashboard — per-scene readiness + summary metrics."""
+    r = screenplay_review.build_screenplay_review(db, project.id)
+    return schemas.ReviewReportDTO(
+        format="screenplay",
+        project_title=r.project_title,
+        total_scenes=r.total_scenes, written=r.written, planned=r.planned, needs_work=r.needs_work,
+        with_health_warnings=r.with_health_warnings, with_continuity_warnings=r.with_continuity_warnings,
+        with_export_warnings=r.with_export_warnings, timeline_linked=r.timeline_linked,
+        with_psyke_links=r.with_psyke_links, export_ready=r.export_ready,
+        rows=[schemas.ReviewRowDTO(
+            scene_id=row.scene_id, number=row.number, title=row.title, word_count=row.word_count,
+            overall_status=row.overall_status, next_action=row.next_action,
+            health_severity=row.health_severity, continuity_severity=row.continuity_severity,
+            has_rewrite_candidate=row.has_rewrite_candidate,
+        ) for row in r.rows],
+    )
+
+
+@router.get(
+    "/projects/{project_id}/format-review",
+    response_model=schemas.FormatReviewDTO,
+)
+def get_format_review(project=Depends(get_project), db: Database = Depends(get_db)):
+    """Format-specific review checks — graphic novel / stage script / series."""
+    fmt = (getattr(project, "narrative_engine", "") or getattr(project, "format_mode", "") or "").lower()
+    rows: list[tuple[str, str, str, int | None]] = []
+    if fmt == "graphic_novel":
+        rows = [(c.check_type, c.message, c.severity, c.page_id) for c in graphic_novel_review.review_graphic_novel(db, project.id)]
+    elif fmt == "stage_script":
+        rows = [(c.check_type, c.message, c.severity, c.scene_id) for c in stage_script_review.review_stage_script(db, project.id)]
+    elif fmt == "series":
+        rows = [(c.check_type, c.message, c.severity, c.episode_id) for c in series_review.review_series(db, project.id)]
+    return schemas.FormatReviewDTO(
+        format=fmt,
+        checks=[schemas.FormatReviewCheckDTO(check_type=t, message=m, severity=s, ref_id=r) for (t, m, s, r) in rows],
+    )
+
+
+@router.get("/plugins", response_model=list[schemas.PluginDTO])
+def list_plugins():
+    """Installed analysis plugins (name / description / category)."""
+    try:
+        import logosforge.plugins  # noqa: F401 — importing registers the built-ins
+    except Exception:
+        pass
+    from logosforge import plugin_registry
+    return [
+        schemas.PluginDTO(
+            name=p.get("name", ""), description=p.get("description", ""),
+            category=p.get("category", ""), requires_scene=str(p.get("requires_scene", "")) == "True",
+        )
+        for p in plugin_registry.describe_all_plugins()
+    ]
 
 
 @router.get(

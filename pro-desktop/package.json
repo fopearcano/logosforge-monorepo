@@ -21,6 +21,11 @@
   "dependencies": {
     "@logosforge/pro-shared-ui": "file:../pro-shared-ui",
     "@logosforge/ui-contracts": "file:../logosforge-ui-contracts",
+    "@tiptap/core": "^2.27.2",
+    "@tiptap/extension-placeholder": "^2.27.2",
+    "@tiptap/pm": "^2.27.2",
+    "@tiptap/react": "^2.27.2",
+    "@tiptap/starter-kit": "^2.27.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
@@ -58,9 +63,20 @@
       }
     ],
     "win": {
+      "icon": "build/icon.ico",
       "target": [
-        { "target": "nsis", "arch": ["x64"] },
-        { "target": "portable", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "artifactName": "${productName}-${version}-${arch}.${ext}"
     },
@@ -70,7 +86,9 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "LogosForge Pro"
+      "shortcutName": "LogosForge Pro",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico"
     },
     "portable": {
       "artifactName": "${productName}-${version}-${arch}-portable.${ext}"

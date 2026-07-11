@@ -7,7 +7,7 @@ const panelBox: CSSProperties = {
   position: "relative",
   width: "100%",
   height: "100%",
-  background: "#070a0e",
+  background: "var(--panel2)",
   border: "1px solid var(--line)",
   boxShadow: "0 16px 60px rgba(0,0,0,.6)",
   overflow: "hidden",
@@ -23,10 +23,10 @@ const colorOf = (i: number) => PALETTE[i % PALETTE.length] ?? PALETTE[0]!;
 function Block({ left, top, width, topColor, title, badge, badgeColor, body, selected = false, onClick }: { left: number; top: number; width: number; topColor: string; title: string; badge: string; badgeColor: string; body: string; selected?: boolean; onClick?: () => void }) {
   const handle = (s: CSSProperties): CSSProperties => ({ position: "absolute", width: 6, height: 6, background: "var(--accent)", ...s });
   return (
-    <div onClick={onClick} style={{ position: "absolute", left, top, width, zIndex: selected ? 5 : 4, cursor: "pointer", border: selected ? "1px solid var(--accent)" : "1px solid var(--line2)", borderTop: `2px solid ${topColor}`, background: selected ? "#0c1018" : "#0b0e15", boxShadow: selected ? "0 0 18px rgba(76,194,255,.25)" : "0 8px 24px rgba(0,0,0,.5)" }}>
+    <div onClick={onClick} style={{ position: "absolute", left, top, width, zIndex: selected ? 5 : 4, cursor: "pointer", border: selected ? "1px solid var(--accent)" : "1px solid var(--line2)", borderTop: `2px solid ${topColor}`, background: selected ? "var(--raised)" : "var(--raised)", boxShadow: selected ? "0 0 18px rgba(76,194,255,.25)" : "0 8px 24px rgba(0,0,0,.5)" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 8px", borderBottom: "1px solid var(--line2)" }}>
         <span style={{ color: selected ? "var(--accent)" : "var(--txt3)", fontSize: 9 }}>⠿</span>
-        <span title={title} style={{ fontSize: 9, color: "#fff", flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{title}</span>
+        <span title={title} style={{ fontSize: 9, color: "var(--strong)", flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{title}</span>
         <span style={{ fontSize: 7, color: badgeColor, whiteSpace: "nowrap" }}>{badge}</span>
       </div>
       <div style={{ padding: 8, fontSize: 9, color: "var(--txt2)", lineHeight: 1.4, height: 52, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical" }}>{body}</div>
@@ -61,8 +61,8 @@ export function CanvasPlot(props: PanelProps) {
         <div style={{ position: "absolute", top: -1, left: -1, width: 14, height: 14, borderTop: "1px solid var(--crimson)", borderLeft: "1px solid var(--crimson)", zIndex: 9 }} />
         <div style={{ position: "absolute", top: 3, left: 3, width: 5, height: 5, background: "var(--crimson)", zIndex: 9 }} />
         {/* toolbar */}
-        <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 40, display: "flex", alignItems: "center", gap: 13, padding: "0 14px", borderBottom: "1px solid var(--line)", background: "rgba(6,8,12,.8)", zIndex: 6 }}>
-          <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".12em", color: "#fff" }}>CANVAS PLOT</span>
+        <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 40, display: "flex", alignItems: "center", gap: 13, padding: "0 14px", borderBottom: "1px solid var(--line)", background: "var(--tint)", zIndex: 6 }}>
+          <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".12em", color: "var(--strong)" }}>CANVAS PLOT</span>
           <span style={{ fontSize: 8, color: "var(--accent)", border: "1px solid var(--line-cy)", padding: "2px 7px", letterSpacing: ".1em" }}>{plot.length} PLOTLINES · {totalScenes} SCENES</span>
           <div style={{ flex: 1 }} />
           <span style={{ fontSize: 7.5, color: "var(--txt3)", border: "1px solid var(--line2)", padding: "2px 7px", letterSpacing: ".12em" }}>DERIVED FROM SCENES</span>

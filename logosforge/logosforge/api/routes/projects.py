@@ -40,6 +40,20 @@ def get_project_detail(project=Depends(get_project)):
     return serializers.project_to_dto(project)
 
 
+@router.patch("/projects/{project_id}", response_model=schemas.ProjectDTO)
+def update_project(
+    body: schemas.ProjectUpdateDTO,
+    project=Depends(get_project),
+    db: Database = Depends(get_db),
+    broker: ApiEventBroker = Depends(get_broker),
+):
+    """Rename / re-describe a project (fields left None are unchanged)."""
+    db.update_project(project.id, title=body.title, description=body.description)
+    updated = db.get_project_by_id(project.id)
+    broker.publish("project_data_changed", project_id=project.id)
+    return serializers.project_to_dto(updated)
+
+
 @router.post("/projects/{project_id}/open", response_model=schemas.ProjectDTO)
 def open_project(
     project=Depends(get_project),

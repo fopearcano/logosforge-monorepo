@@ -16,6 +16,8 @@ export interface OpenFileResult {
   canceled: boolean;
   path?: string;
   content?: string;
+  /** raw file bytes base64-encoded — for binary imports (.docx) a utf8 read corrupts. */
+  contentBase64?: string;
 }
 export interface SaveFileResult {
   canceled: boolean;
@@ -30,8 +32,10 @@ export async function openFile(win: BrowserWindow | null, filters?: DialogFilter
   const fp = r.filePaths[0];
   if (r.canceled || !fp) return { canceled: true };
   try {
-    const content = await fs.readFile(fp, 'utf8');
-    return { canceled: false, path: fp, content };
+    // Read once as raw bytes, then expose BOTH a utf8 view (text imports) and a
+    // base64 view (binary imports like .docx a utf8 read would corrupt).
+    const buf = await fs.readFile(fp);
+    return { canceled: false, path: fp, content: buf.toString('utf8'), contentBase64: buf.toString('base64') };
   } catch {
     return { canceled: false, path: fp };
   }

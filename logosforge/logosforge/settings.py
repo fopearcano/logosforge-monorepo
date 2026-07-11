@@ -25,6 +25,15 @@ DEFAULTS: dict[str, object] = {
     "assistant_include_bible": False,
     "assistant_include_notes": True,
     "assistant_irrational": False,
+    # -- API/Studio chat context toggles (honoured by build_chat_context on the
+    # headless API path — distinct from the Qt-only assistant_include_* above).
+    # Default ON so Billy stays fully grounded unless the writer opts a source out.
+    "assistant_ctx_outline": True,
+    "assistant_ctx_bible": True,
+    "assistant_ctx_memory": True,
+    # Adaptive AI coaching mode override ("" = auto by stage×health; else
+    # Structure|Balance|Refinement). Honoured in adaptive_mode.compute_mode.
+    "adaptive_mode_override": "",
     # -- Logos inline contextual layer (left-panel ON/OFF toggle) ------------
     # Master switch for the ambient inline Logos layer (toolbar + contextual
     # suggestions). Off by default — non-intrusive until the user turns it on.

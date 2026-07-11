@@ -20,6 +20,228 @@ export interface ProjectCreateDTO {
   narrative_engine?: string;
   default_writing_format?: string;
 }
+export interface ProjectUpdateDTO {
+  title?: string;
+  description?: string;
+}
+
+// -- Free-tier Whiteboard document import (blocks -> a new Pro project) -------
+export interface WhiteboardImportBlockDTO {
+  id?: string;
+  type?: string;            // 'paragraph' | 'heading'
+  text?: string;
+  level?: number | null;
+  sp?: string | null;
+  marks?: Array<{ type: string; from: number; to: number }> | null;
+}
+export interface WhiteboardImportDTO {
+  title?: string;
+  mode?: string;            // novel | screenplay | graphic_novel | stage_script
+  blocks: WhiteboardImportBlockDTO[];
+}
+export interface WhiteboardImportResultDTO {
+  project_id: number;
+  title: string;
+  mode: string;
+  scenes_created: number;
+  scene_titles: string[];
+  // block index (0-based) → the id of the scene that block landed in (-1 = none).
+  scene_ids_by_block: number[];
+}
+
+/** A raw, unformatted manuscript file (.txt/.md/.docx) to import into a new
+ *  project. `content_base64` is the raw file bytes, base64-encoded. */
+export interface ManuscriptImportDTO {
+  title?: string;
+  mode?: string;            // novel | screenplay | graphic_novel | stage_script | series
+  strategy?: string;        // smart | chapter | scene_break | single
+  filename?: string;        // used to sniff .docx vs plain text
+  content_base64: string;
+}
+export interface ManuscriptImportResultDTO {
+  project_id: number;
+  title: string;
+  mode: string;
+  scenes_created: number;
+  scene_titles: string[];
+}
+export interface VoiceStatusDTO {
+  available: boolean;
+  message: string;
+  model_configured: boolean;
+  device: string;
+}
+export interface VoiceTranscribeDTO {
+  /** base64 of int16 mono little-endian PCM. */
+  audio_base64: string;
+  sample_rate?: number;
+  language?: string | null;
+}
+export interface VoiceTranscriptDTO {
+  text: string;
+  language: string;
+  error: string;
+}
+
+// --- Full Dexter's Room facade (VoiceRoomService) -------------------------
+/** Serializable commit-context the frontend knows; runtime callables stay server-side. */
+export interface VoiceCtx {
+  has_active_editor?: boolean;
+  writing_mode?: string;
+  psyke_entry_type?: string;
+  character_name?: string;
+  gn_field_choice?: string;
+  gn_panel_ref?: number[] | null;
+}
+export interface VoiceHistoryEntryDTO {
+  id: string;
+  text: string;
+  preview: string;
+  status: string;
+  committed_target: string;
+  error: string;
+  sent_to_billy: boolean;
+  billy_state: string;
+  billy_proposal_id: string;
+  language: string;
+}
+export interface VoiceHistoryDTO { entries: VoiceHistoryEntryDTO[] }
+export interface VoiceIntentDTO {
+  id: string;
+  type: string;
+  label: string;
+  enabled: boolean;
+  requires_ai: boolean;
+  requires_confirmation: boolean;
+  reason_if_disabled: string;
+  target_type: string;
+}
+export interface VoiceIntentsDTO { intents: VoiceIntentDTO[] }
+export interface VoiceIntentPreviewDTO {
+  id: string;
+  intent_id: string;
+  intent_type: string;
+  target_summary: string;
+  before_text: string;
+  after_text: string;
+  diff: string;
+  risk_level: string;
+  can_apply: boolean;
+  reason_if_blocked: string;
+}
+export interface VoiceBillyOperationDTO {
+  id: string;
+  label: string;
+  enabled: boolean;
+  reason_if_disabled: string;
+}
+export interface VoiceBillyOpsDTO { operations: VoiceBillyOperationDTO[] }
+export interface VoiceBillyProposalDTO {
+  id: string;
+  proposal_type: string;
+  operation: string;
+  response_text: string;
+  target_summary: string;
+  before_text: string;
+  after_text: string;
+  diff: string;
+  can_apply: boolean;
+  reason_if_blocked: string;
+  applied: boolean;
+}
+export interface VoiceCommitTargetDTO {
+  id: string;
+  label: string;
+  mode: string;
+  enabled: boolean;
+  target_type: string;
+  reason_if_disabled: string;
+}
+export interface VoiceCommitTargetsDTO { targets: VoiceCommitTargetDTO[] }
+/** Apply/commit result. `inserted_text` present ⇒ frontend inserts it at the cursor. */
+export interface VoiceApplyResultDTO {
+  applied: boolean;
+  message: string;
+  inserted_text?: string;
+  cleaned_text?: string;
+}
+export interface VoiceUndoStateDTO { can_undo: boolean; reason: string }
+export interface VoiceUndoResultDTO { undone: boolean; message: string }
+// request bodies
+export interface VoiceSegmentReqDTO { audio_base64: string; sample_rate?: number }
+export interface VoiceCtxReqDTO { ctx?: VoiceCtx | null }
+export interface VoiceIntentPreviewReqDTO {
+  intent_id: string;
+  source_text: string;
+  commit_target_id?: string;
+  source_segment_ids?: string[];
+  ctx?: VoiceCtx | null;
+}
+export interface VoiceIntentApplyReqDTO { preview_id: string; ctx?: VoiceCtx | null }
+export interface VoiceBillyGenReqDTO {
+  operation: string;
+  transcript_text: string;
+  source_segment_ids?: string[];
+  ctx?: VoiceCtx | null;
+}
+export interface VoiceBillyApplyReqDTO { proposal_id: string; ctx?: VoiceCtx | null }
+export interface VoiceCommitReqDTO { text: string; target_id: string; ctx?: VoiceCtx | null }
+
+export interface ModeSuggestionDTO {
+  text: string;
+  category: string;
+}
+export interface AdaptDTO {
+  mode: string;
+  stage: string;
+  health: string;
+  description: string;
+  suggestions: ModeSuggestionDTO[];
+  /** "" = auto (mode from stage×health); else the forced mode name. */
+  override?: string;
+}
+export interface ReviewRowDTO {
+  scene_id: number;
+  number: string;
+  title: string;
+  word_count: number;
+  overall_status: string;
+  next_action: string;
+  health_severity: string;
+  continuity_severity: string;
+  has_rewrite_candidate: boolean;
+}
+export interface ReviewReportDTO {
+  format: string;
+  project_title: string;
+  total_scenes: number;
+  written: number;
+  planned: number;
+  needs_work: number;
+  with_health_warnings: number;
+  with_continuity_warnings: number;
+  with_export_warnings: number;
+  timeline_linked: number;
+  with_psyke_links: number;
+  export_ready: boolean;
+  rows: ReviewRowDTO[];
+}
+export interface FormatReviewCheckDTO {
+  check_type: string;
+  message: string;
+  severity: string;
+  ref_id: number | null;
+}
+export interface FormatReviewDTO {
+  format: string;
+  checks: FormatReviewCheckDTO[];
+}
+export interface PluginDTO {
+  name: string;
+  description: string;
+  category: string;
+  requires_scene: boolean;
+}
 export interface SettingsDTO {
   settings: Record<string, unknown>;
 }
@@ -116,6 +338,7 @@ export interface OutlineNodeDTO {
   title: string;
   description: string;
   sort_order: number;
+  scene_id: number | null;   // optional hard link to a manuscript scene
   children: OutlineNodeDTO[];
 }
 export interface OutlineNodeCreateDTO {
@@ -123,11 +346,29 @@ export interface OutlineNodeCreateDTO {
   description?: string;
   parent_id?: number | null;
   sort_order?: number;
+  scene_id?: number | null;
 }
 export interface OutlineNodeUpdateDTO {
   title?: string;
   description?: string;
   sort_order?: number;
+  // Present (even null) => set/clear the scene link; omitted => leave unchanged.
+  scene_id?: number | null;
+}
+
+// AI outline generation. scope ∈ full | act | chapter | scene; parent_id nests
+// the result under an existing node.
+export interface OutlineGenerateRequestDTO {
+  scope?: string;
+  parent_id?: number | null;
+  instructions?: string;
+}
+export interface OutlineGenerateResultDTO {
+  ok: boolean;
+  created: number;
+  node_ids: number[];
+  warnings: string[];
+  errors: string[];
 }
 
 // ── Plot (plot-lane blocks) ────────────────────────────────────────────────
@@ -241,6 +482,10 @@ export interface PsykeProgressionCreateDTO {
   text: string;
   scene_id?: number | null;
 }
+export interface PsykeProgressionUpdateDTO {
+  text: string;
+  scene_id?: number | null;
+}
 
 // ── Notes ──────────────────────────────────────────────────────────────────
 export interface NoteDTO {
@@ -280,6 +525,10 @@ export interface CharacterUpdateDTO {
   /** An explicit null clears the link. */
   psyke_entry_id?: number | null;
 }
+export interface CharacterCreateDTO {
+  name: string;
+  description?: string;
+}
 
 /** The scenes a theme (PSYKE 'theme' entry) is structurally tagged in. */
 export interface ThemeScenesDTO {
@@ -306,6 +555,8 @@ export interface AssistantRequestDTO {
   selected_text?: string;
   nearby_text?: string;
   document_title?: string;
+  /** "Go Irrational" — surreal creative provocations for this reply (needs active_scene_id). */
+  irrational?: boolean;
 }
 export interface AssistantResponseDTO {
   reply: string;
@@ -621,6 +872,9 @@ export interface QuantumOutlineRequestDTO {
   n?: number;
   source_scene_id?: number | null;
   structure_mode?: string | null;
+  /** Request the LLM-backed generative branches (LAMBDA). Default false = the
+   *  classical beat-sheet (no branches). Mirrors the core schema. */
+  generative?: boolean;
 }
 export interface QuantumBranchesRequestDTO {
   situation: string;
@@ -628,6 +882,64 @@ export interface QuantumBranchesRequestDTO {
   extra_context?: string;
   source_scene_id?: number | null;
   structure_mode?: string | null;
+  /** Request the LLM-backed generative branches (LAMBDA). Default false. */
+  generative?: boolean;
+}
+/** Per-project Lambda-mode scoring config (read by the generate path). */
+export interface QuantumSettingsDTO {
+  preset: string;
+  weights: Record<string, number>;
+  selection_mode: string;   // weighted | pareto
+  show_tradeoffs: boolean;
+  ensemble_alpha: number;
+  weight_learning: boolean;
+  preset_names: string[];   // read-only (UI)
+  weight_keys: string[];    // read-only (UI, canonical order)
+}
+export interface QuantumSettingsUpdateDTO {
+  preset?: string;
+  weights?: Record<string, number>;
+  selection_mode?: string;
+  show_tradeoffs?: boolean;
+  ensemble_alpha?: number;
+  weight_learning?: boolean;
+}
+/** Global AI behaviour the headless API honours: chat grounding + connector governance. */
+export interface AiBehaviorDTO {
+  ctx_outline: boolean;
+  ctx_bible: boolean;
+  ctx_memory: boolean;
+  connector_enabled: boolean;
+  connector_allow_writes: boolean;
+  connector_confirm_writes: boolean;
+  connector_disabled_actions: string[];
+  adaptive_override: string;
+}
+export interface AiBehaviorUpdateDTO {
+  ctx_outline?: boolean;
+  ctx_bible?: boolean;
+  ctx_memory?: boolean;
+  connector_enabled?: boolean;
+  connector_allow_writes?: boolean;
+  connector_confirm_writes?: boolean;
+  connector_disabled_actions?: string[];
+  adaptive_override?: string;
+}
+/** Grammar / spelling / style check (stateless, rule-based). */
+export interface GrammarCheckRequestDTO {
+  text: string;
+  language?: string;   // "" = auto-detect
+}
+export interface GrammarIssueDTO {
+  start: number;
+  end: number;
+  issue_type: string;  // spelling | grammar | style
+  message: string;
+  suggestions: string[];
+}
+export interface GrammarCheckResultDTO {
+  language: string;
+  issues: GrammarIssueDTO[];
 }
 
 // ── Story gravity (graph node weights) + Counterpart (reflective AI) ─────────

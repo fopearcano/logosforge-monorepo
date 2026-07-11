@@ -2,7 +2,7 @@ import type { CSSProperties, ReactNode } from "react";
 import type { WritingMode } from "@logosforge/ui-contracts";
 import { useWritingMode } from "../../adapters/StudioProvider";
 import { ShellStyles } from "./ShellStyles";
-import { shellThemeVars, resolveMode } from "./shellVars";
+import { panelScopeVars, resolveMode } from "./shellVars";
 
 /** Props every standalone Studio panel accepts. */
 export interface PanelProps {
@@ -23,7 +23,7 @@ export function PanelShell({ writingMode, style, children }: PanelProps & { chil
   return (
     <div
       className="lf-shell"
-      style={{ fontFamily: "'JetBrains Mono',monospace", color: "var(--txt)", height: "100%", ...shellThemeVars(mode), ...style }}
+      style={{ fontFamily: "'JetBrains Mono',monospace", color: "var(--txt)", height: "100%", ...panelScopeVars(mode), ...style }}
     >
       <ShellStyles />
       {children}

@@ -5,7 +5,7 @@ const panelBox: CSSProperties = {
   position: "relative",
   width: "100%",
   height: "100%",
-  background: "linear-gradient(180deg,#080a0f,#05070b)",
+  background: "linear-gradient(180deg,var(--panel),var(--base))",
   border: "1px solid var(--line)",
   boxShadow: "0 16px 60px rgba(0,0,0,.6)",
   overflow: "hidden",
@@ -15,7 +15,7 @@ const panelBox: CSSProperties = {
 const ACCENT = { ["--accent"]: "#4cc2ff" } as CSSProperties;
 
 /** A stat cell in the 3-col review grid. */
-function StatCard({ value, label, valueColor = "#fff", border = "1px solid var(--line2)" }: { value: string; label: string; valueColor?: string; border?: string }) {
+function StatCard({ value, label, valueColor = "var(--strong)", border = "1px solid var(--line2)" }: { value: string; label: string; valueColor?: string; border?: string }) {
   return (
     <div style={{ border, padding: 9, textAlign: "center" }}>
       <div style={{ fontFamily: "'Chakra Petch'", fontSize: 20, color: valueColor }}>{value}</div>
@@ -27,7 +27,7 @@ function StatCard({ value, label, valueColor = "#fff", border = "1px solid var(-
 /** A per-scene status row with a colored left border. */
 function SceneStatus({ scene, title, status, color }: { scene: string; title: string; status: string; color: string }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 9, color: "var(--txt2)", padding: "4px 8px", borderLeft: `2px solid ${color}`, background: "rgba(11,14,21,.4)" }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 9, color: "var(--txt2)", padding: "4px 8px", borderLeft: `2px solid ${color}`, background: "var(--tint)" }}>
       <span style={{ color: "var(--cyan)" }}>{scene}</span>
       <span style={{ flex: 1 }}>{title}</span>
       <span style={{ color }}>{status}</span>
@@ -64,7 +64,7 @@ export function ModeReviewDashboard(props: PanelProps) {
         {/* review dashboard */}
         <div style={{ flex: 1, borderRight: "1px solid var(--line)", display: "flex", flexDirection: "column", minWidth: 0 }}>
           <div style={{ height: 40, flex: "none", display: "flex", alignItems: "center", gap: 10, padding: "0 16px", borderBottom: "1px solid var(--line)" }}>
-            <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".1em", color: "#fff" }}>MODE REVIEW</span>
+            <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".1em", color: "var(--strong)" }}>MODE REVIEW</span>
             <span style={{ fontSize: 8, color: "var(--cyan)", border: "1px solid var(--line-cy)", padding: "2px 7px" }}>SCREENPLAY</span>
           </div>
           <div style={{ flex: 1, overflowY: "auto", padding: "13px 16px" }}>
@@ -89,12 +89,12 @@ export function ModeReviewDashboard(props: PanelProps) {
         </div>
 
         {/* pipeline confirm */}
-        <div style={{ width: 430, flex: "none", display: "flex", flexDirection: "column", background: "#06080c" }}>
+        <div style={{ width: 430, flex: "none", display: "flex", flexDirection: "column", background: "var(--panel2)" }}>
           <div style={{ height: 40, flex: "none", display: "flex", alignItems: "center", gap: 8, padding: "0 14px", borderBottom: "1px solid var(--line2)" }}>
             <span style={{ fontSize: 9, letterSpacing: ".14em", color: "var(--amber)" }}>PLANNING PIPELINE · CONFIRM</span>
           </div>
           <div style={{ flex: 1, overflowY: "auto", padding: "13px 14px" }}>
-            <div style={{ fontSize: 9, color: "var(--txt2)", lineHeight: 1.5, marginBottom: 11 }}>Generate <span style={{ color: "#fff" }}>Beat Plan</span> → preview → per-beat accept → <span style={{ color: "var(--amber)" }}>additive apply (separate artifact, never the body)</span></div>
+            <div style={{ fontSize: 9, color: "var(--txt2)", lineHeight: 1.5, marginBottom: 11 }}>Generate <span style={{ color: "var(--strong)" }}>Beat Plan</span> → preview → per-beat accept → <span style={{ color: "var(--amber)" }}>additive apply (separate artifact, never the body)</span></div>
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               <BeatRow icon="✓" iconColor="var(--green)" title="B1 · Catalyst — the signal returns" titleColor="var(--txt)" />
               <BeatRow icon="✓" iconColor="var(--green)" title="B2 · Debate — should they answer?" titleColor="var(--txt)" />
@@ -102,7 +102,7 @@ export function ModeReviewDashboard(props: PanelProps) {
             </div>
             <div style={{ border: "1px solid rgba(98,217,154,.25)", background: "rgba(98,217,154,.04)", padding: "8px 10px", marginTop: 11, fontSize: 8, color: "var(--green)", lineHeight: 1.5 }}>✓ STAGE checkpoint · additive · 2 of 3 beats · stored in screenplay_beat_plans</div>
             <div style={{ display: "flex", gap: 8, marginTop: 11 }}>
-              <span style={{ fontSize: 9, color: "#04060a", background: "var(--green)", padding: "7px 13px", fontWeight: 600 }}>APPLY 2 BEATS</span>
+              <span style={{ fontSize: 9, color: "var(--on-accent)", background: "var(--green)", padding: "7px 13px", fontWeight: 600 }}>APPLY 2 BEATS</span>
               <span style={{ fontSize: 9, color: "var(--txt2)", border: "1px solid var(--line2)", padding: "7px 13px" }}>CANCEL</span>
             </div>
           </div>

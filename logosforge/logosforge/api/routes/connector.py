@@ -53,8 +53,32 @@ def execute(
     db: Database = Depends(get_db),
     broker: ApiEventBroker = Depends(get_broker),
 ):
+    # Governance gate (the same flags the Qt Preferences expose) — enforced here
+    # so the settings are REAL controls, not decoration: the connector must be
+    # enabled, write actions require allow-writes, and disabled actions are blocked.
+    from logosforge.settings import get_manager
+
+    s = get_manager()
+    category = _action_category(body.action)
+    if not s.get("connector_enabled"):
+        return schemas.ConnectorResultDTO(
+            ok=False, action=body.action, result=None,
+            error="Connector is disabled. Enable it in AI Behaviour settings to let the AI run actions.",
+        )
+    disabled = s.get("connector_disabled_actions")
+    if isinstance(disabled, list) and body.action in disabled:
+        return schemas.ConnectorResultDTO(
+            ok=False, action=body.action, result=None,
+            error=f"Action '{body.action}' is disabled in AI Behaviour settings.",
+        )
+    if category == "write" and not s.get("connector_allow_writes"):
+        return schemas.ConnectorResultDTO(
+            ok=False, action=body.action, result=None,
+            error="Write actions are turned off. Enable 'Allow write actions' in AI Behaviour settings.",
+        )
+
     result = run_action(db, project.id, body.action, body.args)
-    if result.get("ok") and _action_category(body.action) == "write":
+    if result.get("ok") and category == "write":
         broker.publish("project_data_changed", project_id=project.id)
     return schemas.ConnectorResultDTO(
         ok=bool(result.get("ok")),

@@ -5,7 +5,7 @@ const panelBox: CSSProperties = {
   position: "relative",
   width: "100%",
   height: "100%",
-  background: "linear-gradient(180deg,#080a0f,#05070b)",
+  background: "linear-gradient(180deg,var(--panel),var(--base))",
   border: "1px solid var(--line)",
   boxShadow: "0 16px 60px rgba(0,0,0,.6)",
   overflow: "hidden",
@@ -18,7 +18,7 @@ function Lane({ name, nameColor, segs, right, rightColor }: { name: string; name
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
       <span style={{ width: 68, flex: "none", fontSize: 9, color: nameColor, textAlign: "right" }}>{name}</span>
-      <div style={{ flex: 1, height: 18, position: "relative", background: "rgba(255,255,255,.02)" }}>
+      <div style={{ flex: 1, height: 18, position: "relative", background: "var(--tint2)" }}>
         {segs.map((s, i) => (
           <div key={i} style={{ position: "absolute", left: s.left, width: s.width, top: 2, bottom: 2, background: s.bg, borderLeft: `2px solid ${s.border}` }} />
         ))}
@@ -48,7 +48,7 @@ export function PsykeInspector(props: PanelProps) {
         {/* temporal piano-roll */}
         <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", borderRight: "1px solid var(--line)" }}>
           <div style={{ height: 36, display: "flex", alignItems: "center", gap: 11, padding: "0 14px", borderBottom: "1px solid var(--line2)" }}>
-            <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 12, letterSpacing: ".1em", color: "#fff" }}>STATE-AT-SCENE SCRUBBER</span>
+            <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 12, letterSpacing: ".1em", color: "var(--strong)" }}>STATE-AT-SCENE SCRUBBER</span>
             <span style={{ fontSize: 8, color: "var(--txt3)" }}>get_entry_state_at() · sort_order</span>
             <div style={{ flex: 1 }} />
             <span style={{ fontSize: 9, color: "var(--accent)" }}>▮ PLAYHEAD @ SC.12</span>
@@ -80,9 +80,9 @@ export function PsykeInspector(props: PanelProps) {
         </div>
 
         {/* docked inspector */}
-        <div style={{ width: 440, flex: "none", display: "flex", flexDirection: "column", background: "#06080c" }}>
+        <div style={{ width: 440, flex: "none", display: "flex", flexDirection: "column", background: "var(--panel2)" }}>
           <div style={{ height: 36, display: "flex", alignItems: "center", gap: 8, padding: "0 13px", borderBottom: "1px solid var(--line2)" }}>
-            <span style={{ color: "var(--txt3)" }}>⠿</span><span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 12, letterSpacing: ".1em", color: "#fff" }}>INSPECTOR · VESPER</span>
+            <span style={{ color: "var(--txt3)" }}>⠿</span><span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 12, letterSpacing: ".1em", color: "var(--strong)" }}>INSPECTOR · VESPER</span>
             <div style={{ flex: 1 }} />
             <span style={{ fontSize: 8, color: "var(--accent)" }}>QUICK EDIT ✎</span>
           </div>
@@ -92,7 +92,7 @@ export function PsykeInspector(props: PanelProps) {
               <div style={{ position: "absolute", left: 3, top: 4, bottom: 4, width: 1, background: "var(--line2)" }} />
               <Prog sc="SC.02" scColor="var(--green)" text="Recognizes the looping voice." textColor="var(--txt)" dotColor="var(--green)" dotGlow />
               <Prog sc="SC.08" scColor="var(--amber)" text="Starts deflecting with logistics." textColor="var(--txt)" dotColor="var(--amber)" />
-              <Prog sc="SC.12 · NOW" scColor="var(--accent)" text="Confesses, but only half of it." textColor="#fff" dotColor="var(--accent)" dotSize={8} dotGlow />
+              <Prog sc="SC.12 · NOW" scColor="var(--accent)" text="Confesses, but only half of it." textColor="var(--strong)" dotColor="var(--accent)" dotSize={8} dotGlow />
               <Prog sc="SC.21 · future" scColor="var(--blocking)" text="Goes silent. Pays off the motif." textColor="var(--txt2)" dotColor="var(--blocking)" dim last />
             </div>
             <div style={{ marginTop: 13, display: "flex", gap: 7 }}>
