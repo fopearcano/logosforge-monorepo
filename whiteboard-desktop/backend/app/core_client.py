@@ -21,6 +21,42 @@ from logosforge.api import ApiConfig, create_api
 WHITEBOARD_PROJECT_TITLE = "Whiteboard Session"
 
 
+def core_error_message(exc: httpx.HTTPStatusError, *, fallback: str = "Core request failed") -> str:
+    """Return the useful message from the core's structured error envelope.
+
+    The LogosForge API uses ``{"error": {"code", "message"}}`` rather than
+    FastAPI's legacy ``{"detail": ...}`` shape.  Falling back to ``str(exc)``
+    leaks the in-process transport URL (``http://logosforge-core/...``) and hides
+    the provider's real 401/404/model error behind an opaque 502.  Keep this
+    parser at the API boundary so every Whiteboard route can surface the actual,
+    actionable core message without knowing core internals.
+    """
+    response = exc.response
+    try:
+        data = response.json()
+    except Exception:
+        data = None
+
+    if isinstance(data, dict):
+        error = data.get("error")
+        if isinstance(error, dict) and isinstance(error.get("message"), str):
+            message = error["message"].strip()
+            if message:
+                return message
+        if isinstance(error, str) and error.strip():
+            return error.strip()
+        detail = data.get("detail")
+        if isinstance(detail, str) and detail.strip():
+            return detail.strip()
+        if isinstance(detail, dict) and isinstance(detail.get("message"), str):
+            message = detail["message"].strip()
+            if message:
+                return message
+
+    status = response.status_code if response is not None else None
+    return f"{fallback} (HTTP {status})" if status else fallback
+
+
 def _default_db_path() -> str:
     """Stable per-user DB for the Whiteboard, separate from the Qt app's DB."""
     return os.environ.get("LOGOSFORGE_DB_PATH") or str(

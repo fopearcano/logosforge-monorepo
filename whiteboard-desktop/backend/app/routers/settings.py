@@ -14,7 +14,7 @@ import httpx
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
-from app.core_client import resolve_pid
+from app.core_client import core_error_message, resolve_pid
 
 router = APIRouter()
 
@@ -89,11 +89,7 @@ async def test_ai_connection(request: Request) -> AiTestResult:
         reply = (r.json().get("reply") or "").strip()
         return AiTestResult(ok=True, provider=provider, reply=reply[:200])
     except httpx.HTTPStatusError as exc:
-        detail = str(exc)
-        try:
-            detail = exc.response.json().get("detail", detail)
-        except Exception:
-            pass
-        return AiTestResult(ok=False, provider=provider, error=str(detail)[:300])
+        detail = core_error_message(exc, fallback="AI provider test failed")
+        return AiTestResult(ok=False, provider=provider, error=detail[:500])
     except Exception as exc:  # transport / unexpected
         return AiTestResult(ok=False, provider=provider, error=str(exc)[:300])

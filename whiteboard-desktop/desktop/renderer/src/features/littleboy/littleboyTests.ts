@@ -87,6 +87,7 @@ const wbDoc = (texts: string[]): WhiteboardBlock[] =>
   );
   check('project context lists the cast', /Cast:.*ALICE.*BOB/.test(pc));
   check('project context lists the scene heading', /INT\. KITCHEN/.test(pc));
+  check('derived structure is labelled as manuscript, not manual outline', /Manuscript structure already drafted:/.test(pc));
   check('empty doc -> empty project context', buildProjectContext(wbDoc(['']), 'screenplay') === '');
   // prepend join + fallbacks
   check('prepend joins project then nearby', prependProjectContext('PROJ', 'NEAR') === 'PROJ\n\nNEAR');

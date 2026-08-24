@@ -69,7 +69,8 @@ export function LittleBoyProvider({ editor, mode, baseUrl, documentTitle, screen
       documentTitle: c.documentTitle,
       screenplayElement: c.screenplayElement,
     });
-    // Prepend the document's outline + cast so Logos isn't project-blind.
+    // Prepend drafted manuscript structure + cast. The backend adds the
+    // separate writer-authored manual Outline and core PSYKE context.
     const project = buildProjectContext(docToBlocks(editor.getJSON()), c.mode);
     setLogosContext({ ...ctx, nearby: prependProjectContext(project, ctx.nearby) });
   }, [editor]);
@@ -135,7 +136,8 @@ export function LittleBoyProvider({ editor, mode, baseUrl, documentTitle, screen
         documentTitle: c.documentTitle,
         screenplayElement: c.screenplayElement,
       });
-      // Ground Billy in the whole document (outline + cast), not just nearby text.
+      // Ground Billy in drafted manuscript structure + cast, not just nearby
+      // text. The backend adds manual Outline + core PSYKE grounding.
       const project = buildProjectContext(docToBlocks(editor.getJSON()), c.mode);
       billy.send(text, {
         selected_text: ctx.selection || undefined,

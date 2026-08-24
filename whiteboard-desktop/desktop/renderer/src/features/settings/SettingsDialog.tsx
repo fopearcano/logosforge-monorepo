@@ -13,7 +13,9 @@ import {
   PROVIDER_DEFAULT_URL,
   getAiSettings,
   saveAiSettings,
+  settingsAfterProviderChange,
   testAiConnection,
+  validateAiSettings,
   type AiSettings,
 } from './settingsApi';
 
@@ -34,6 +36,7 @@ export function SettingsDialog({ open, baseUrl, onClose }: Props) {
   const [status, setStatus] = useState<string | null>(null);
   const [test, setTest] = useState<{ ok: boolean; msg: string } | null>(null);
   const firstRef = useRef<HTMLSelectElement>(null);
+  const loadedProviderRef = useRef(EMPTY.provider);
 
   // Load current settings when opened.
   useEffect(() => {
@@ -44,14 +47,16 @@ export function SettingsDialog({ open, baseUrl, onClose }: Props) {
     setLoading(true);
     const ctrl = new AbortController();
     getAiSettings(baseUrl, ctrl.signal)
-      .then((s) =>
+      .then((s) => {
+        const provider = s.provider || 'LM Studio';
+        loadedProviderRef.current = provider;
         setForm({
-          provider: s.provider || 'LM Studio',
+          provider,
           model: s.model || '',
           base_url: s.base_url || '',
           timeout: s.timeout || 0,
-        }),
-      )
+        });
+      })
       .catch(() => setStatus('Couldn’t load settings.'))
       .finally(() => setLoading(false));
     return () => ctrl.abort();
@@ -75,6 +80,20 @@ export function SettingsDialog({ open, baseUrl, onClose }: Props) {
 
   const set = (patch: Partial<AiSettings>) => setForm((f) => ({ ...f, ...patch }));
 
+  const selectProvider = (provider: string) => {
+    // Provider transports are not interchangeable: carrying OpenAI's URL/model
+    // into Anthropic produces /v1/v1/messages, while the reverse calls
+    // api.anthropic.com/chat/completions. Reset all provider-specific fields and
+    // require a fresh cloud key instead of silently reusing the prior key.
+    setForm((current) => settingsAfterProviderChange(current, provider));
+    setApiKey('');
+    setStatus(null);
+    setTest(null);
+  };
+
+  const validationError = (): string | null =>
+    validateAiSettings(form, apiKey, loadedProviderRef.current);
+
   const buildPatch = (): Partial<AiSettings> => {
     const patch: Partial<AiSettings> = {
       provider: form.provider,
@@ -87,32 +106,45 @@ export function SettingsDialog({ open, baseUrl, onClose }: Props) {
   };
 
   const save = async () => {
+    const invalid = validationError();
+    if (invalid) {
+      setStatus(invalid);
+      return;
+    }
     setSaving(true);
     setStatus(null);
     try {
       await saveAiSettings(baseUrl, buildPatch());
+      loadedProviderRef.current = form.provider;
       setApiKey('');
       setStatus('Saved.');
-    } catch {
-      setStatus('Save failed.');
+    } catch (err: unknown) {
+      setStatus(err instanceof Error ? err.message : 'Save failed.');
     } finally {
       setSaving(false);
     }
   };
 
   const runTest = async () => {
+    const invalid = validationError();
+    if (invalid) {
+      setTest({ ok: false, msg: invalid });
+      return;
+    }
     setTesting(true);
     setTest(null);
     try {
       await saveAiSettings(baseUrl, buildPatch()); // test what's on screen
+      loadedProviderRef.current = form.provider;
+      setApiKey('');
       const r = await testAiConnection(baseUrl);
       setTest(
         r.ok
           ? { ok: true, msg: `Connected — ${r.provider} responded.` }
           : { ok: false, msg: r.error || 'No response from the provider.' },
       );
-    } catch {
-      setTest({ ok: false, msg: 'Test failed.' });
+    } catch (err: unknown) {
+      setTest({ ok: false, msg: err instanceof Error ? err.message : 'Test failed.' });
     } finally {
       setTesting(false);
     }
@@ -146,7 +178,7 @@ export function SettingsDialog({ open, baseUrl, onClose }: Props) {
           <div className="settings-form">
             <label className="settings-field">
               <span>Provider</span>
-              <select ref={firstRef} value={form.provider} onChange={(e) => set({ provider: e.target.value })}>
+              <select ref={firstRef} value={form.provider} onChange={(e) => selectProvider(e.target.value)}>
                 {AI_PROVIDERS.map((p) => (
                   <option key={p} value={p}>
                     {p}

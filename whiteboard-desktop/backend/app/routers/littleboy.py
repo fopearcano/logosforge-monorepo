@@ -22,7 +22,7 @@ import httpx
 from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel
 
-from app.core_client import resolve_pid
+from app.core_client import core_error_message, resolve_pid
 
 router = APIRouter()
 
@@ -47,6 +47,152 @@ _NO_PROVIDER_NOTE = (
     "Placeholder — configure an AI provider in LogosForge "
     "(ai_provider / ai_model / ai_base_url) to enable real AI."
 )
+
+MANUAL_OUTLINE_MAX_NODES = 80
+MANUAL_OUTLINE_MAX_CHARS = 2600
+LOGOS_NEARBY_MAX_CHARS = 600  # mirrors logosforge.logos.context._EXCERPT_LIMIT
+
+
+def _outline_sort_key(node: dict) -> tuple[float, str]:
+    order = node.get("order")
+    return (
+        float(order) if isinstance(order, (int, float)) else 0.0,
+        str(node.get("title") or "").casefold(),
+    )
+
+
+def build_manual_outline_context(items: list[dict]) -> str:
+    """Build a bounded hierarchy from Whiteboard's frontend-owned outline.
+
+    The core project used by a Whiteboard document owns PSYKE, but Whiteboard's
+    manual outline intentionally lives in a local JSON store rather than the
+    core's Pro outline tables.  Consequently the core's normal chat context can
+    see the bible but not this writer-authored plan.  Serialize it here at the
+    Whiteboard API boundary and label it as authoritative planned structure.
+
+    Malformed/orphaned/cyclic rows are tolerated and emitted once; a corrupt
+    outline must never break an AI request.
+    """
+    raw_nodes = [n for n in items if isinstance(n, dict) and isinstance(n.get("id"), str) and n["id"]]
+    if not raw_nodes:
+        return ""
+
+    # Duplicate ids are malformed; keep the last row just like a normal keyed
+    # frontend store would, so counts/omission labels remain truthful.
+    by_id = {n["id"]: n for n in raw_nodes}
+    nodes = list(by_id.values())
+    children: dict[str | None, list[dict]] = {}
+    for node in nodes:
+        parent = node.get("parentId")
+        parent_id = parent if isinstance(parent, str) and parent in by_id and parent != node["id"] else None
+        children.setdefault(parent_id, []).append(node)
+    for rows in children.values():
+        rows.sort(key=_outline_sort_key)
+
+    lines = [
+        "[Writer's Manual Outline — authoritative planned structure]",
+        "Use this hierarchy as the writer's intended story plan; manuscript headings may reflect only drafted text.",
+    ]
+    seen: set[str] = set()
+
+    def visit(node: dict, depth: int) -> None:
+        if len(seen) >= MANUAL_OUTLINE_MAX_NODES or node["id"] in seen:
+            return
+        seen.add(node["id"])
+        title = str(node.get("title") or "").strip()
+        node_type = str(node.get("type") or "item").replace("_", " ").strip()
+        if not title:
+            title = f"(untitled {node_type})"
+
+        meta: list[str] = []
+        if node_type and node_type != "item":
+            meta.append(node_type)
+        status = str(node.get("status") or "").strip()
+        if status and status != "none":
+            meta.append(status)
+        if node.get("completed") is True:
+            meta.append("completed")
+        tags = node.get("tags")
+        if isinstance(tags, list):
+            clean_tags = [str(t).strip() for t in tags if str(t).strip()][:8]
+            meta.extend(f"#{t}" for t in clean_tags)
+        link = node.get("link")
+        if isinstance(link, dict):
+            quote = str(link.get("quote") or "").replace("\n", " ").strip()
+            if quote:
+                meta.append(f'linked: "{quote[:80]}"')
+
+        suffix = f" [{'; '.join(meta)}]" if meta else ""
+        lines.append(f"{'  ' * min(depth, 8)}- {title}{suffix}")
+        for child in children.get(node["id"], []):
+            visit(child, depth + 1)
+
+    for root in children.get(None, []):
+        visit(root, 0)
+    # Cycle/orphan safety: include every valid row exactly once even if its
+    # parent chain was malformed and therefore never reachable from a root.
+    for node in sorted(nodes, key=_outline_sort_key):
+        if node["id"] not in seen:
+            visit(node, 0)
+
+    omitted = len(nodes) - len(seen)
+    if omitted > 0:
+        lines.append(f"… (+{omitted} more outline items omitted)")
+    context = "\n".join(lines)
+    if len(context) > MANUAL_OUTLINE_MAX_CHARS:
+        suffix = (
+            f"\n[…outline truncated; +{omitted} items omitted]"
+            if omitted > 0
+            else "\n[…outline text truncated]"
+        )
+        context = context[: MANUAL_OUTLINE_MAX_CHARS - len(suffix)].rstrip() + suffix
+    return context
+
+
+def _manual_outline_context(pid: int) -> str:
+    try:
+        from app.local_state import outline_items_store
+        return build_manual_outline_context(outline_items_store.get(str(pid)))
+    except Exception:
+        return ""
+
+
+def _with_manual_outline(pid: int, nearby: str = "") -> str:
+    outline = _manual_outline_context(pid)
+    text = (nearby or "").strip()
+    if outline and text:
+        return f"{outline}\n\n{text}"
+    return outline or text
+
+
+def _clip_head(text: str, limit: int) -> str:
+    value = (text or "").strip()
+    if len(value) <= limit:
+        return value
+    return value[: max(0, limit - 2)].rstrip() + " …"
+
+
+def _clip_tail(text: str, limit: int) -> str:
+    value = (text or "").strip()
+    if len(value) <= limit:
+        return value
+    return "… " + value[-max(0, limit - 2):].lstrip()
+
+
+def _logos_nearby_context(pid: int, nearby: str = "", comments: str = "") -> str:
+    """Fit all Whiteboard-only grounding into Logos's 600-char excerpt.
+
+    Manual structure goes first, open writer comments retain a middle budget,
+    and the TAIL of renderer context is kept because the actual cursor paragraph
+    follows its manuscript-heading digest. This prevents any one source from
+    silently crowding the others out when the core builds LogosContext.
+    """
+    outline = _clip_head(_manual_outline_context(pid), 300)
+    comment_text = _clip_head(comments, 140)
+    fixed = "\n\n".join(p for p in (outline, comment_text) if p)
+    remaining = max(0, LOGOS_NEARBY_MAX_CHARS - len(fixed) - (2 if fixed and nearby.strip() else 0))
+    cursor_text = _clip_tail(nearby, remaining)
+    return "\n\n".join(p for p in (fixed, cursor_text) if p)[:LOGOS_NEARBY_MAX_CHARS]
 
 
 # -- DTOs (mirror the frontend littleboy contract) ---------------------------
@@ -107,7 +253,7 @@ async def _core_chat(core, pid: int, system_prompt: str, message: str,
         "system_prompt": system_prompt,
         "history": [{"role": m.role, "content": m.content} for m in (history or [])],
         "selected_text": selected_text,
-        "nearby_text": nearby_text,
+        "nearby_text": _with_manual_outline(pid, nearby_text),
         "document_title": document_title,
     }
     r = await core.request("POST", f"/api/projects/{pid}/assistant/chat", json=body)
@@ -247,17 +393,22 @@ async def billy_chat(request: Request, body: BillyChatRequest, doc: int | None =
             ok=True, conversation_id=conversation_id,
             message=ChatMessage(role="assistant", content=content),
             provider=await _provider_name(core, pid))
-    except httpx.HTTPStatusError:
+    except httpx.HTTPStatusError as exc:
+        provider = await _provider_name(core, pid)
+        detail = core_error_message(exc, fallback=f"{provider} request failed")
         if body.selected_text and body.selected_text.strip():
             extra = f" I can see your {len(body.selected_text.strip())}-character selection in {mode} mode."
         else:
             extra = f" I'd help with your {mode} writing here."
         return BillyChatResponse(
-            ok=True, conversation_id=conversation_id,
+            ok=False, conversation_id=conversation_id,
             message=ChatMessage(
                 role="assistant",
-                content="Billy placeholder response. AI provider not configured yet." + extra),
-            provider="stub", note=_NO_PROVIDER_NOTE)
+                content=(
+                    f"Billy couldn’t reach {provider}. Open Settings → AI provider and run "
+                    f"Test connection.\n\n{detail}" + extra
+                )),
+            provider=provider, note=detail)
 
 
 @router.post("/api/littleboy/logos/inline", response_model=LogosResponse)
@@ -277,9 +428,11 @@ async def logos_inline(request: Request, body: LogosRequest, doc: int | None = Q
     selected = (body.selected_text or "").strip()
 
     comments_ctx = _comments_context(pid)
-    nearby = (body.nearby_context or "").strip()
-    if comments_ctx:
-        nearby = f"{nearby}\n\n{comments_ctx}".strip()
+    nearby = _logos_nearby_context(
+        pid,
+        (body.nearby_context or "").strip(),
+        comments_ctx,
+    )
     run_body = {
         "action": core_action,
         "section": "Inline",
