@@ -30,13 +30,13 @@ export type SynPalette = Record<SynToken, string> & {
   noteInk: string;
 };
 
-/* Manuscript — calm, low-saturation ink on chalk. */
-/* comment/number darkened from #a3a098/#9a7d3a so parentheticals, synopses and
- * transitions clear WCAG AA (~4.5:1) on the white page instead of ghosting out. */
+/* Manuscript — restrained editorial colour on white paper. Major structural
+ * tokens must NOT equal ordinary ink: that made Novel/Stage/Screenplay appear
+ * completely uncoloured even while the syntax engine was active. */
 const MANUSCRIPT_SYN: SynPalette = {
-  keyword: '#2b2a2e', string: '#7a6a3e', comment: '#6f6c63', heading: '#2b2a2e',
-  emphasis: '#2b2a2e', number: '#8a6f2e', tag: '#5181a8', note: '#8a5a38',
-  todo: '#b0653f', link: '#5181a8', function: '#8a5a38', punct: '#b8b4ab',
+  keyword: '#8a4f34', string: '#72591f', comment: '#68655e', heading: '#365f86',
+  emphasis: '#6a4c78', number: '#80651f', tag: '#3f7399', note: '#8a4c62',
+  todo: '#a84f32', link: '#356f9a', function: '#7d3f63', punct: '#9b978e',
   noteBg: 'rgba(176,101,63,0.14)', noteInk: '#6e3c22',
 };
 

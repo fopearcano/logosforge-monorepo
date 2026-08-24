@@ -104,6 +104,8 @@ def build_manual_outline_context(items: list[dict]) -> str:
         if not title:
             title = f"(untitled {node_type})"
 
+        summary = str(node.get("summary") or "").replace("\n", " ").strip()
+
         meta: list[str] = []
         if node_type and node_type != "item":
             meta.append(node_type)
@@ -123,7 +125,8 @@ def build_manual_outline_context(items: list[dict]) -> str:
                 meta.append(f'linked: "{quote[:80]}"')
 
         suffix = f" [{'; '.join(meta)}]" if meta else ""
-        lines.append(f"{'  ' * min(depth, 8)}- {title}{suffix}")
+        summary_suffix = f" — {summary[:180]}" if summary else ""
+        lines.append(f"{'  ' * min(depth, 8)}- {title}{suffix}{summary_suffix}")
         for child in children.get(node["id"], []):
             visit(child, depth + 1)
 

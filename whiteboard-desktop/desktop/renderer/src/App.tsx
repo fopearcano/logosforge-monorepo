@@ -16,7 +16,6 @@ import { OutlinePanel } from './features/outline/OutlinePanel';
 import type { OutlineItem } from './features/outline/types';
 import { PsykeWindow } from './features/psyke/PsykeWindow';
 import { HelpDialog } from './features/help/HelpDialog';
-import { SettingsDialog } from './features/settings/SettingsDialog';
 import {
   toggleCommentsPanel,
   useCommentsPanelOpen,
@@ -558,6 +557,8 @@ export function App() {
         <WhiteboardPage
           baseUrl={baseUrl}
           ready={ready}
+          settingsOpen={settingsOpen}
+          onCloseSettings={() => setSettingsOpen(false)}
           onOutlineChange={setOutlineItems}
           onModeChange={setDocMode}
           onTitleChange={(name, dirty) => setProject({ name, dirty })}
@@ -572,7 +573,6 @@ export function App() {
       {psykeOpen && (
         <PsykeWindow baseUrl={baseUrl} initialQuery={psykeQuery} onClose={() => setPsykeOpen(false)} />
       )}
-      <SettingsDialog open={settingsOpen} baseUrl={baseUrl} onClose={() => setSettingsOpen(false)} />
       <HelpDialog open={helpOpen} onClose={() => setHelpOpen(false)} />
       {ui.statusBarVisible && <StatusBar status={status} />}
       {focusHint && <div className="focus-hint">Focus Mode — press Esc to exit</div>}

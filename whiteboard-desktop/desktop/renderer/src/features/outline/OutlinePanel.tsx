@@ -109,6 +109,22 @@ export function OutlinePanel({
   const [view, setView] = useState<View>(loadView);
   const store = useOutline({ baseUrl, ready, mode });
 
+  // A selected outline row is an editing focus, not a permanent app state.
+  // Clicking the manuscript, title bar, story map, or any other surface closes
+  // its details and selection. Capture phase makes this reliable even when the
+  // destination stops propagation (TipTap and popovers commonly do).
+  const hasOutlineSelection = !!store.selectedId || store.selectedIds.length > 0 || !!store.detailsOpenId;
+  useEffect(() => {
+    if (!hasOutlineSelection) return undefined;
+    const onOutsidePointer = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest('.outline-panel')) return;
+      store.clearSelection();
+    };
+    document.addEventListener('pointerdown', onOutsidePointer, true);
+    return () => document.removeEventListener('pointerdown', onOutsidePointer, true);
+  }, [hasOutlineSelection, store.clearSelection]);
+
   const selectView = (next: View) => {
     setView(next);
     try {

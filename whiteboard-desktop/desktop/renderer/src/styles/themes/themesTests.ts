@@ -44,6 +44,11 @@ check(
   'ui text contrasts panel bg',
   PREDEFINED_THEMES.every((t) => isDark(t.panelBg) !== isDark(t.text)),
 );
+const selectionAlpha = (value: string): number => Number(value.match(/rgba\([^,]+,[^,]+,[^,]+,\s*([\d.]+)\)/)?.[1] ?? 1);
+check(
+  'editor text selection remains visibly highlighted',
+  PREDEFINED_THEMES.every((t) => selectionAlpha(t.editorSelection) >= 0.24),
+);
 
 // 4. resolveTheme
 check('resolve predefined', resolveTheme('violet', DEFAULT_CUSTOM_FIELDS).id === 'violet');

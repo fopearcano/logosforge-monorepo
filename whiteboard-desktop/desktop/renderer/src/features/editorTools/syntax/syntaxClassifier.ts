@@ -13,6 +13,8 @@ import type { FountainBlock } from '../../screenplay/fountainTypes';
 import { detectBoneyard } from '../../screenplay/screenplayBoneyard';
 import { classify } from '../../screenplay/screenplayClassifier';
 import { parseTitlePage } from '../../screenplay/screenplayTitlePage';
+import { classifyGn } from '../../graphicNovel/graphicNovelClassifier';
+import { classifyStage } from '../../stage/stageClassifier';
 import { headingLevel } from '../folding/foldingModel';
 
 export type BlockToken =
@@ -122,6 +124,27 @@ const FOUNTAIN_TO_TOKEN: Record<string, BlockToken> = {
   empty: 'plain',
 };
 
+const STAGE_TO_TOKEN: Record<string, BlockToken> = {
+  scene_heading: 'scene_heading',
+  character: 'character',
+  parenthetical: 'parenthetical',
+  dialogue: 'dialogue',
+  action: 'action',
+  empty: 'plain',
+};
+
+const GN_TO_TOKEN: Record<string, BlockToken> = {
+  page: 'chapter',
+  panel: 'subheading',
+  cue: 'character',
+  paren: 'parenthetical',
+  dialogue: 'dialogue',
+  caption: 'note',
+  sfx: 'transition',
+  description: 'plain',
+  empty: 'plain',
+};
+
 function proseBlockToken(b: FountainBlock): BlockToken {
   const level = headingLevel(b);
   if (level === 1) return 'chapter';
@@ -145,6 +168,18 @@ export function classifySyntax(blocks: FountainBlock[], mode: string): BlockSynt
       else token = FOUNTAIN_TO_TOKEN[types[i]] ?? 'action';
       return { token, inline: scanInline(b.text, mode) };
     });
+  }
+  if (mode === 'stage_script') {
+    return classifyStage(blocks).map((token, i) => ({
+      token: STAGE_TO_TOKEN[token] ?? 'plain',
+      inline: scanInline(blocks[i].text, mode),
+    }));
+  }
+  if (mode === 'graphic_novel') {
+    return classifyGn(blocks).map((token, i) => ({
+      token: GN_TO_TOKEN[token] ?? 'plain',
+      inline: scanInline(blocks[i].text, mode),
+    }));
   }
   return blocks.map((b) => ({ token: proseBlockToken(b), inline: scanInline(b.text, mode) }));
 }

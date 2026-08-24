@@ -393,7 +393,7 @@ body.is-col-resizing * { cursor: col-resize !important; }
 .outline-node { list-style: none; }
 .outline-row { position: relative; display: flex; align-items: center; gap: 6px; padding: 6px 30px 6px 6px; border-radius: var(--r-sm); transition: background var(--dur) var(--ease); }
 .outline-row:hover { background: var(--hover); }
-.outline-node.is-selected > .outline-row { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
+.outline-row.is-selected { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
 .outline-row.is-multi { background: color-mix(in oklab, var(--accent-soft) 70%, transparent); box-shadow: inset 2px 0 0 color-mix(in oklab, var(--accent) 55%, transparent); }
 .outline-row.is-dragging { opacity: .45; }
 
@@ -415,7 +415,7 @@ body.is-col-resizing * { cursor: col-resize !important; }
 .outline-disclosure-leaf { color: color-mix(in oklab, var(--paper-muted) 60%, var(--text)); }
 .outline-check { width: 13px; height: 13px; flex: none; appearance: none; border: 1.5px solid var(--border); border-radius: 3px; background: var(--bg); }
 .outline-check:checked { background: var(--accent); border-color: var(--accent); }
-.outline-node.is-completed > .outline-row .outline-title { color: var(--paper-muted); text-decoration: line-through; opacity: .7; }
+.outline-row.is-completed .outline-title { color: var(--paper-muted); text-decoration: line-through; opacity: .7; }
 
 /* inline colour trigger (the dot) + swatch picker. Base rules come BEFORE the
    colour variants so an element carrying both (trigger/swatch + colour) resolves
@@ -481,10 +481,13 @@ body.is-col-resizing * { cursor: col-resize !important; }
 .outline-tags { display: flex; flex-wrap: wrap; gap: 4px; padding: 2px 6px 4px 26px; }
 .outline-tag-chip { font: 500 9px/1 var(--font-mono); color: var(--syn-tag); background: color-mix(in oklab, var(--syn-tag) 14%, transparent); border-radius: var(--r-pill); padding: 2px 7px; border: 0; }
 .outline-tag-edit { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.outline-summary { margin: -1px 8px 5px 0; color: var(--muted); font: 400 11px/1.4 var(--font-ui); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 
 .outline-details { margin: 2px 6px 8px 26px; padding: 10px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-md); display: flex; flex-direction: column; gap: 8px; }
 .outline-details-grid { display: flex; flex-direction: column; gap: 7px; }
 .outline-field-block { display: flex; flex-direction: column; gap: 5px; font: 500 10px/1 var(--font-mono); letter-spacing: .04em; color: var(--muted); }
+.outline-summary-input { width: 100%; min-height: 58px; resize: vertical; box-sizing: border-box; background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--text); padding: 7px 8px; font: 400 11.5px/1.45 var(--font-ui); letter-spacing: 0; }
+.outline-summary-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .outline-details-actions { display: flex; justify-content: flex-end; }
 .outline-details-done { font: 500 10px/1 var(--font-mono); letter-spacing: .04em; text-transform: uppercase; color: var(--muted); background: none; border: 1px solid var(--border); border-radius: var(--r-sm); padding: 4px 10px; cursor: pointer; }
 .outline-details-done:hover { color: var(--text); background: var(--hover); }
@@ -585,7 +588,7 @@ body.is-col-resizing * { cursor: col-resize !important; }
 
 .wb-editor[data-writing-mode="novel"] h1,
 .wb-editor[data-writing-mode="novel"] h2,
-.wb-editor[data-writing-mode="graphic_novel"] h2 { font-family: var(--font-prose); font-weight: 600; letter-spacing: -.01em; color: var(--ink); }
+.wb-editor[data-writing-mode="graphic_novel"] h2 { font-family: var(--font-prose); font-weight: 600; letter-spacing: -.01em; }
 
 /* loading / empty / error hints */
 .wb-hint { color: var(--muted); font: 400 14px/1.6 var(--font-ui); text-align: center; padding: 18vh 0; }
@@ -711,6 +714,19 @@ body.is-col-resizing * { cursor: col-resize !important; }
 .wb-syn-quote      { color: var(--syn-string); }
 .wb-syn-chapter    { color: var(--syn-heading); font-weight: 600; }
 .wb-syn-subheading { color: var(--syn-heading); }
+/* Block-level semantic colours. The .wb-editor prefix intentionally outranks
+   the mode-formatting classes (.sp-*) that own layout but previously painted
+   headings/dialogue back to ordinary ink. */
+.wb-editor .wb-syn-scene_heading,
+.wb-editor .wb-syn-section,
+.wb-editor .wb-syn-title_field { color: var(--syn-keyword); }
+.wb-editor .wb-syn-character { color: var(--syn-string); }
+.wb-editor .wb-syn-dialogue { color: var(--syn-function); }
+.wb-editor .wb-syn-parenthetical,
+.wb-editor .wb-syn-synopsis,
+.wb-editor .wb-syn-boneyard { color: var(--syn-comment); }
+.wb-editor .wb-syn-transition,
+.wb-editor .wb-syn-page_break { color: var(--syn-number); }
 .wb-field-hint { margin: -2px 2px 8px; font: 400 10.5px/1.45 var(--font-ui); color: var(--muted); }
 
 /* ===== Comments (inline notes) ============================================ */
@@ -949,12 +965,14 @@ body.is-col-resizing * { cursor: col-resize !important; }
 .help-syntax { font: 500 11px/1.4 var(--font-mono); color: var(--accent); background: var(--accent-soft); border-radius: 4px; padding: 2px 6px; white-space: nowrap; justify-self: start; }
 
 /* AI provider settings dialog */
-.settings-dialog { width: min(460px, calc(100vw - 32px)); background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: 0 24px 60px rgba(0, 0, 0, .4); padding: 18px 20px 16px; }
+.settings-dialog { width: min(460px, calc(100vw - 32px)); max-height: calc(100vh - 40px); overflow-y: auto; background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: 0 24px 60px rgba(0, 0, 0, .4); padding: 18px 20px 16px; }
 .settings-head { display: flex; align-items: center; justify-content: space-between; }
 .settings-title { margin: 0; font: 600 15px/1.3 var(--font-ui); color: var(--text); }
 .settings-close { border: 0; background: none; color: var(--muted); font-size: 20px; line-height: 1; cursor: pointer; padding: 0 4px; }
 .settings-close:hover { color: var(--text); }
 .settings-sub { margin: 4px 0 14px; font: 400 12px/1.5 var(--font-ui); color: var(--muted); }
+.settings-section-title { margin: 16px 0 5px; padding-bottom: 6px; border-bottom: 1px solid var(--border-soft); font: 600 10px/1 var(--font-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--accent); }
+.settings-section-note { margin: 0 0 10px; font: 400 11px/1.45 var(--font-ui); color: var(--muted); }
 .settings-hint { font: 400 12px/1.5 var(--font-ui); color: var(--muted); padding: 12px 0; }
 .settings-form { display: flex; flex-direction: column; gap: 11px; }
 .settings-field { display: grid; grid-template-columns: 86px 1fr; align-items: center; gap: 10px; font: 500 11px/1.2 var(--font-mono); letter-spacing: .02em; color: var(--muted); }
@@ -1115,6 +1133,8 @@ body.is-col-resizing * { cursor: col-resize !important; }
 .wb-editor[data-writing-mode="graphic_novel"] .gn-paren { text-align: center; font-style: italic; color: var(--syn-comment); margin: 0; }
 .wb-editor[data-writing-mode="graphic_novel"] .gn-dialogue { text-align: center; max-width: 46ch; margin: .12em auto .95em; color: var(--ink); }
 .wb-editor[data-writing-mode="graphic_novel"] .gn-caption { text-align: center; max-width: 54ch; margin: .2em auto 1em; color: var(--ink); }
+.wb-surface[data-syntax="on"] .wb-editor[data-writing-mode="graphic_novel"] .gn-dialogue.wb-syn-dialogue { color: var(--syn-function); }
+.wb-surface[data-syntax="on"] .wb-editor[data-writing-mode="graphic_novel"] .gn-caption.wb-syn-note { color: var(--syn-note); }
 .wb-editor[data-writing-mode="graphic_novel"] .gn-sfx { text-align: center; margin: .35em auto 1.1em; }
 /* plain-text PAGE / PANEL markers — mirror the h2/h3 header look (page = accent, panel = muted) */
 .wb-editor[data-writing-mode="graphic_novel"] .gn-page { font: 700 .96em/1.3 var(--font-screenplay); text-transform: uppercase; letter-spacing: .06em; color: var(--accent); margin: 1.7em 0 .5em; }

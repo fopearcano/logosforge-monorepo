@@ -126,6 +126,18 @@ check('inline link', inlineOf('see [t](http://x.com) here', 'notes').includes('l
 check('inline checkbox (notes)', inlineOf('- [x] done', 'notes').includes('checkbox'));
 check('no tags in screenplay', !inlineOf('a #idea here', 'screenplay').includes('tag'));
 
+// 9. Stage / Graphic Novel reuse their real mode classifiers for semantic colour.
+check(
+  'stage syntax categories',
+  json(tokens(lines('ACT I', 'MARA', 'Hello.', '(quietly)'), 'stage_script')) ===
+    json(['scene_heading', 'character', 'dialogue', 'parenthetical']),
+);
+check(
+  'graphic novel syntax categories',
+  json(tokens(lines('PAGE ONE', 'PANEL 1', 'CAPTION: Later', 'SFX: BOOM', 'MARA: Go.'), 'graphic_novel')) ===
+    json(['chapter', 'subheading', 'note', 'transition', 'dialogue']),
+);
+
 // --- report ---
 console.log(`Editor tools tests: ${passed} passed, ${failures.length} failed`);
 for (const f of failures) console.log('  FAIL: ' + f);

@@ -426,6 +426,12 @@ export function OutlineRow({
         </div>
       )}
 
+      {!detailsOpen && node.summary.trim() && (
+        <div className="outline-summary" style={{ paddingLeft: pad + INDENT_STEP }} title={node.summary}>
+          {node.summary}
+        </div>
+      )}
+
       {detailsOpen && (
         <div className="outline-details" style={{ paddingLeft: pad + INDENT_STEP }}>
           <div className="outline-details-grid">
@@ -454,6 +460,17 @@ export function OutlineRow({
               </select>
             </label>
           </div>
+
+          <label className="outline-field-block">
+            <span>Summary</span>
+            <textarea
+              className="outline-summary-input"
+              rows={3}
+              placeholder="What happens here? What changes?"
+              value={node.summary}
+              onChange={(e) => store.setSummary(node.id, e.target.value)}
+            />
+          </label>
 
           <div className="outline-field-block">
             <span>Tags</span>

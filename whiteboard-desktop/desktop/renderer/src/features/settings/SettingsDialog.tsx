@@ -18,16 +18,52 @@ import {
   validateAiSettings,
   type AiSettings,
 } from './settingsApi';
+import type {
+  NarrativePerson,
+  NarrativeRegister,
+  NarrativeStyle,
+  SlangLevel,
+} from '../whiteboard/documentSettings';
+import type { DocumentSettingsApi } from '../whiteboard/useDocumentSettings';
 
 interface Props {
   open: boolean;
   baseUrl: string;
+  writingSettingsApi: DocumentSettingsApi;
   onClose: () => void;
 }
 
+const PERSONS: { value: NarrativePerson; label: string }[] = [
+  { value: 'unspecified', label: 'Not specified' },
+  { value: 'first', label: 'First person' },
+  { value: 'third-limited', label: 'Third person — limited' },
+  { value: 'third-omniscient', label: 'Third person — omniscient' },
+];
+const STYLES: { value: NarrativeStyle; label: string }[] = [
+  { value: 'neutral', label: 'Neutral' },
+  { value: 'literary', label: 'Literary' },
+  { value: 'commercial', label: 'Commercial' },
+  { value: 'cinematic', label: 'Cinematic' },
+  { value: 'minimalist', label: 'Minimalist' },
+  { value: 'lyrical', label: 'Lyrical' },
+];
+const REGISTERS: { value: NarrativeRegister; label: string }[] = [
+  { value: 'neutral', label: 'Neutral' },
+  { value: 'formal', label: 'Formal' },
+  { value: 'standard', label: 'Standard' },
+  { value: 'colloquial', label: 'Colloquial' },
+  { value: 'vernacular', label: 'Vernacular' },
+];
+const SLANG_LEVELS: { value: SlangLevel; label: string }[] = [
+  { value: 'none', label: 'None' },
+  { value: 'light', label: 'Light' },
+  { value: 'moderate', label: 'Moderate' },
+  { value: 'heavy', label: 'Heavy' },
+];
+
 const EMPTY: AiSettings = { provider: 'LM Studio', model: '', base_url: '', timeout: 0 };
 
-export function SettingsDialog({ open, baseUrl, onClose }: Props) {
+export function SettingsDialog({ open, baseUrl, writingSettingsApi, onClose }: Props) {
   const [form, setForm] = useState<AiSettings>(EMPTY);
   const [apiKey, setApiKey] = useState('');
   const [loading, setLoading] = useState(false);
@@ -151,6 +187,8 @@ export function SettingsDialog({ open, baseUrl, onClose }: Props) {
   };
 
   const busy = saving || loading || testing;
+  const writing = writingSettingsApi.settings;
+  const updateWriting = writingSettingsApi.update;
 
   return (
     <div
@@ -162,15 +200,45 @@ export function SettingsDialog({ open, baseUrl, onClose }: Props) {
       <div className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="set-title">
         <div className="settings-head">
           <h2 id="set-title" className="settings-title">
-            AI provider
+            Settings
           </h2>
           <button type="button" className="settings-close" aria-label="Close settings" onClick={onClose}>
             ×
           </button>
         </div>
-        <p className="settings-sub">
-          Point the Whiteboard’s AI (Billy &amp; Logos) at your endpoint. Stored locally on this machine.
-        </p>
+        <p className="settings-sub">General writing defaults and the AI connection used by Billy &amp; Logos.</p>
+
+        <h3 className="settings-section-title">Narrative voice</h3>
+        <p className="settings-section-note">Used as general guidance by Billy and Logos. Saved immediately on this machine.</p>
+        <div className="settings-form">
+          <label className="settings-field">
+            <span>Person</span>
+            <select value={writing.narrativePerson} onChange={(e) => updateWriting('narrativePerson', e.target.value as NarrativePerson)}>
+              {PERSONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </label>
+          <label className="settings-field">
+            <span>Style</span>
+            <select value={writing.narrativeStyle} onChange={(e) => updateWriting('narrativeStyle', e.target.value as NarrativeStyle)}>
+              {STYLES.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </label>
+          <label className="settings-field">
+            <span>Register</span>
+            <select value={writing.narrativeRegister} onChange={(e) => updateWriting('narrativeRegister', e.target.value as NarrativeRegister)}>
+              {REGISTERS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </label>
+          <label className="settings-field">
+            <span>Slang</span>
+            <select value={writing.slangLevel} onChange={(e) => updateWriting('slangLevel', e.target.value as SlangLevel)}>
+              {SLANG_LEVELS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </label>
+        </div>
+
+        <h3 className="settings-section-title">AI provider</h3>
+        <p className="settings-section-note">Stored locally. A blank API-key field keeps the saved key for the current provider.</p>
 
         {loading ? (
           <p className="settings-hint">Loading…</p>

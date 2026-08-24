@@ -44,6 +44,7 @@ import {
   setCollapsed,
   setColorLabel,
   setNodeType,
+  setSummary,
   setStatus,
   setTags,
   toggleCompleted,
@@ -306,13 +307,15 @@ check('childType beat -> custom fallback', childType('screenplay', 'beat') === '
 // 14. New fields default + setters (status / color / completed / tags)
 {
   const c = createNode('x', 'beat', null, NOW);
-  check('createNode new defaults', c.completed === false && c.status === 'none' && c.colorLabel === 'none' && c.tags.length === 0);
+  check('createNode new defaults', c.completed === false && c.status === 'none' && c.colorLabel === 'none' && c.tags.length === 0 && c.summary === '');
   let items = insertRoot([], mk('scene'));
   const id = items[0].id;
   items = setStatus(items, id, 'drafting', NOW);
   check('setStatus', getNode(items, id)?.status === 'drafting');
   items = setColorLabel(items, id, 'purple', NOW);
   check('setColorLabel', getNode(items, id)?.colorLabel === 'purple');
+  items = setSummary(items, id, 'The clue changes hands.', NOW);
+  check('setSummary', getNode(items, id)?.summary === 'The clue changes hands.');
   items = toggleCompleted(items, id, NOW);
   check('toggleCompleted on', getNode(items, id)?.completed === true);
   items = toggleCompleted(items, id, NOW);
@@ -335,12 +338,14 @@ check('extractHashtags from title', JSON.stringify(extractHashtags('fix #motivat
   const n: OutlineNode = {
     ...createNode('x', 'scene', null, NOW),
     title: 'Opening on the beach',
+    summary: 'The protagonist finds a broken compass.',
     status: 'todo',
     colorLabel: 'blue',
     tags: ['revision'],
   };
   check('match query title', matchesFilter(n, { ...EMPTY_FILTER, query: 'beach' }));
   check('match query tag', matchesFilter(n, { ...EMPTY_FILTER, query: 'revision' }));
+  check('match query summary', matchesFilter(n, { ...EMPTY_FILTER, query: 'broken compass' }));
   check('no match query', !matchesFilter(n, { ...EMPTY_FILTER, query: 'spaceship' }));
   check('match type', matchesFilter(n, { ...EMPTY_FILTER, type: 'scene' }));
   check('no match type', !matchesFilter(n, { ...EMPTY_FILTER, type: 'beat' }));

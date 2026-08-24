@@ -105,7 +105,7 @@ throws('binary import rejected', () => parseImport('txt', 'PNG\u0000binary'));
 
 // 5. LogosForge envelope round-trip (content + mode + settings + title).
 {
-  const env = buildLogosforgeEnvelope(payload({ outline: [{ id: 'n1', parentId: null, type: 'act', title: 'Act One', order: 0, collapsed: false, completed: false, status: 'none', tags: [], colorLabel: 'none', createdAt: 't', updatedAt: 't' }] }));
+  const env = buildLogosforgeEnvelope(payload({ outline: [{ id: 'n1', parentId: null, type: 'act', title: 'Act One', summary: 'The setup and inciting incident.', order: 0, collapsed: false, completed: false, status: 'none', tags: [], colorLabel: 'none', createdAt: 't', updatedAt: 't' }] }));
   check('envelope format', env.format === LOGOSFORGE_FORMAT);
   check('envelope version', env.version === '1.0');
   const json = JSON.stringify(env);
@@ -116,6 +116,7 @@ throws('binary import rejected', () => parseImport('txt', 'PNG\u0000binary'));
   check('envelope round-trips content', texts(r.blocks).includes('INT. HOUSE - DAY'));
   check('envelope round-trips settings', r.settings?.typeface === 'courier-prime');
   check('envelope round-trips outline', (r.outline?.length ?? 0) === 1 && r.outline?.[0].title === 'Act One');
+  check('envelope round-trips outline summary', r.outline?.[0].summary === 'The setup and inciting incident.');
 }
 
 // 6. LogosForge tolerates the raw JSON export shape ({title, mode, blocks}).

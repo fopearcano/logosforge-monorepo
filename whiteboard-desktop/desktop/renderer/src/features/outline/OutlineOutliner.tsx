@@ -139,8 +139,7 @@ export function OutlineOutliner({
     if (e.key === 'Escape') {
       e.preventDefault();
       e.stopPropagation();
-      store.setSelectedId(null);
-      store.clearMulti();
+      store.clearSelection();
       e.currentTarget.blur();
     }
   };

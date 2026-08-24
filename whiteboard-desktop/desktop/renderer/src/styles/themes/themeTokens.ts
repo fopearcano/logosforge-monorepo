@@ -180,8 +180,8 @@ export function customToTheme(c: CustomThemeFields): WhiteboardTheme {
     border: c.border,
     accent: c.accent,
     accentSoft: rgba(c.accent, 0.16),
-    selectionBg: rgba(c.accent, 0.18),
-    editorSelection: rgba(c.accent, dark ? 0.18 : 0.14),
+    selectionBg: rgba(c.accent, 0.25),
+    editorSelection: rgba(c.accent, dark ? 0.30 : 0.26),
     caret: c.accent,
     shadow: dark ? '0 30px 70px -24px rgba(0,0,0,0.8)' : '0 30px 70px -30px rgba(40,38,34,0.3)',
   };

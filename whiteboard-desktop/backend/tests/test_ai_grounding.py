@@ -109,6 +109,7 @@ outline = [
         "parentId": "act",
         "type": "scene",
         "title": "The Locked Observatory",
+        "summary": "Mara finds the false star chart and loses her only key.",
         "order": 1,
         "status": "drafting",
         "tags": ["midpoint"],
@@ -139,6 +140,7 @@ check("manual outline is explicitly authoritative", "authoritative planned struc
 check("manual outline preserves parent before child", manual.index("Act Two") < manual.index("Locked Observatory"))
 check("manual outline preserves hierarchy indentation", "\n  - The Locked Observatory" in manual)
 check("manual outline includes status/tags/link", "drafting" in manual and "#midpoint" in manual and "linked:" in manual)
+check("manual outline includes item summary", "false star chart" in manual)
 check("manual outline keeps malformed orphan once", manual.count("A clue is lost") == 1)
 large_outline = [
     {

@@ -86,6 +86,7 @@ export interface OutlineStore {
   /** Instantiate a writing-method template — append after the outline, or replace it. */
   applyTemplate: (tpl: OutlineTemplate, replace: boolean) => void;
   rename: (id: string, title: string) => void;
+  setSummary: (id: string, summary: string) => void;
   setType: (id: string, type: OutlineItemType) => void;
   setStatus: (id: string, status: OutlineStatus) => void;
   setColorLabel: (id: string, color: OutlineColor) => void;
@@ -112,6 +113,7 @@ export interface OutlineStore {
   expandAll: () => void;
   // multi-select + batch actions
   selectOnly: (id: string) => void;
+  clearSelection: () => void;
   toggleMulti: (id: string) => void;
   selectRange: (id: string) => void;
   clearMulti: () => void;
@@ -414,6 +416,10 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
     (id: string, title: string) => mutate((list) => M.rename(list, id, title, now())),
     [mutate],
   );
+  const setSummary = useCallback(
+    (id: string, summary: string) => mutate((list) => M.setSummary(list, id, summary, now())),
+    [mutate],
+  );
   const setType = useCallback(
     (id: string, type: OutlineItemType) => mutate((list) => M.setNodeType(list, id, type, now())),
     [mutate],
@@ -524,6 +530,12 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
     setSelectedIds([]);
     anchorRef.current = id;
   }, []);
+  const clearSelection = useCallback(() => {
+    setSelectedId(null);
+    setSelectedIds([]);
+    setDetailsOpenId(null);
+    anchorRef.current = null;
+  }, []);
   const toggleMulti = useCallback((id: string) => {
     setSelectedIds((prev) => {
       const base = prev.length ? prev : selectedIdRef.current ? [selectedIdRef.current] : [];
@@ -620,6 +632,7 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
     addTyped,
     applyTemplate,
     rename,
+    setSummary,
     setType,
     setStatus,
     setColorLabel,
@@ -641,6 +654,7 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
     collapseAll,
     expandAll,
     selectOnly,
+    clearSelection,
     toggleMulti,
     selectRange,
     clearMulti,

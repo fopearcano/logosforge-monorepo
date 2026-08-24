@@ -34,6 +34,7 @@ interface Props {
   baseUrl: string;
   documentTitle?: string;
   screenplayElement?: string | null;
+  narrativeProfile?: string;
 }
 
 function defaultBillyPos(): { x: number; y: number } {
@@ -41,7 +42,7 @@ function defaultBillyPos(): { x: number; y: number } {
   return { x, y: 84 };
 }
 
-export function LittleBoyProvider({ editor, mode, baseUrl, documentTitle, screenplayElement }: Props) {
+export function LittleBoyProvider({ editor, mode, baseUrl, documentTitle, screenplayElement, narrativeProfile = '' }: Props) {
   const billy = useBillyChat({ baseUrl });
 
   const [billyOpen, setBillyOpen] = useState(false);
@@ -49,8 +50,8 @@ export function LittleBoyProvider({ editor, mode, baseUrl, documentTitle, screen
   const [logosContext, setLogosContext] = useState<EditorContext | null>(null);
 
   // Live refs so the capture-phase key handler subscribes once but sees current values.
-  const ctxRef = useRef({ mode, documentTitle, screenplayElement });
-  ctxRef.current = { mode, documentTitle, screenplayElement };
+  const ctxRef = useRef({ mode, documentTitle, screenplayElement, narrativeProfile });
+  ctxRef.current = { mode, documentTitle, screenplayElement, narrativeProfile };
   const billyOpenRef = useRef(billyOpen);
   billyOpenRef.current = billyOpen;
   const logosOpenRef = useRef(logosContext !== null);
@@ -71,7 +72,7 @@ export function LittleBoyProvider({ editor, mode, baseUrl, documentTitle, screen
     });
     // Prepend drafted manuscript structure + cast. The backend adds the
     // separate writer-authored manual Outline and core PSYKE context.
-    const project = buildProjectContext(docToBlocks(editor.getJSON()), c.mode);
+    const project = prependProjectContext(c.narrativeProfile, buildProjectContext(docToBlocks(editor.getJSON()), c.mode));
     setLogosContext({ ...ctx, nearby: prependProjectContext(project, ctx.nearby) });
   }, [editor]);
   const closeLogos = useCallback(() => setLogosContext(null), []);
@@ -138,7 +139,7 @@ export function LittleBoyProvider({ editor, mode, baseUrl, documentTitle, screen
       });
       // Ground Billy in drafted manuscript structure + cast, not just nearby
       // text. The backend adds manual Outline + core PSYKE grounding.
-      const project = buildProjectContext(docToBlocks(editor.getJSON()), c.mode);
+      const project = prependProjectContext(c.narrativeProfile, buildProjectContext(docToBlocks(editor.getJSON()), c.mode));
       billy.send(text, {
         selected_text: ctx.selection || undefined,
         nearby_context: prependProjectContext(project, ctx.nearby) || undefined,

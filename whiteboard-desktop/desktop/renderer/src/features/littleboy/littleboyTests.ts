@@ -20,6 +20,7 @@ import {
 import { buildProjectContext, prependProjectContext, PROJECT_MAX } from './context/projectContext';
 import { parseBillyMessage, stripActionBlocks } from './billy/billyText';
 import type { WhiteboardBlock } from '../whiteboard/types';
+import { DEFAULT_SETTINGS, narrativeProfileContext } from '../whiteboard/documentSettings';
 
 let passed = 0;
 const failures: string[] = [];
@@ -100,7 +101,21 @@ const wbDoc = (texts: string[]): WhiteboardBlock[] =>
   }
   const bigPc = buildProjectContext(wbDoc(big), 'screenplay');
   check('project context stays within PROJECT_MAX', bigPc.length <= PROJECT_MAX);
-  check('over-long cast/outline shows a "+N more" cap', /\(\+\d+ more\)/.test(bigPc));
+check('over-long cast/outline shows a "+N more" cap', /\(\+\d+ more\)/.test(bigPc));
+}
+
+// Narrative voice defaults are explicit AI grounding, but empty defaults add no noise.
+check('default narrative profile is empty', narrativeProfileContext(DEFAULT_SETTINGS) === '');
+{
+  const voice = narrativeProfileContext({
+    ...DEFAULT_SETTINGS,
+    narrativePerson: 'first',
+    narrativeStyle: 'literary',
+    narrativeRegister: 'colloquial',
+    slangLevel: 'light',
+  });
+  check('narrative profile includes person', /first person/.test(voice));
+  check('narrative profile includes style/register/slang', /literary/.test(voice) && /colloquial/.test(voice) && /Slang: light/.test(voice));
 }
 
 // 6. stripActionBlocks — keep Billy's machine <action> directive out of the transcript

@@ -20,6 +20,7 @@ import { useFileActions } from '../files/useFileActions';
 import { useImportExport } from '../files/useImportExport';
 import { setDocumentMenuApi } from '../../state/documentMenu';
 import { LittleBoyProvider } from '../littleboy/LittleBoyProvider';
+import { SettingsDialog } from '../settings/SettingsDialog';
 import { PreviewView } from '../screenplay/PreviewView';
 import { printScreenplayPdf } from '../screenplay/printScreenplay';
 import { toFountainBlocks } from '../screenplay/screenplayExport';
@@ -28,7 +29,7 @@ import { paginateScreenplay } from '../screenplay/screenplayPaginate';
 import { screenplayLabel } from '../screenplay/screenplayClassifier';
 import { useWritingModes } from '../writingModes/useWritingModes';
 import { WritingModeSelector } from '../writingModes/WritingModeSelector';
-import { surfaceDataAttrs } from './documentSettings';
+import { narrativeProfileContext, surfaceDataAttrs } from './documentSettings';
 import { modeBehavior } from './modes';
 import { ProseToolbar } from './ProseToolbar';
 import { ScreenplayToolbar } from './ScreenplayToolbar';
@@ -55,6 +56,8 @@ const DRAFT_LABEL: Record<SaveStatus, string> = {
 interface Props {
   baseUrl: string;
   ready: boolean;
+  settingsOpen: boolean;
+  onCloseSettings: () => void;
   onOutlineChange?: (items: OutlineItem[]) => void;
   /** Notifies the shell of the current writing mode (for outline defaults). */
   onModeChange?: (mode: string) => void;
@@ -70,6 +73,8 @@ interface Props {
 export function WhiteboardPage({
   baseUrl,
   ready,
+  settingsOpen,
+  onCloseSettings,
   onOutlineChange,
   onModeChange,
   onTitleChange,
@@ -686,8 +691,15 @@ export function WhiteboardPage({
           baseUrl={baseUrl}
           documentTitle={fileDoc.fileName}
           screenplayElement={element}
+          narrativeProfile={narrativeProfileContext(settingsApi.settings)}
         />
       )}
+      <SettingsDialog
+        open={settingsOpen}
+        baseUrl={baseUrl}
+        writingSettingsApi={settingsApi}
+        onClose={onCloseSettings}
+      />
       {editor && doc && (
         <CommentsLayer
           editor={editor}

@@ -107,6 +107,8 @@ export interface OutlineNode {
   parentId: string | null;
   type: OutlineItemType;
   title: string;
+  /** Short planning note: what happens / why this item matters. */
+  summary: string;
   order: number;
   collapsed: boolean;
   completed: boolean;
@@ -131,6 +133,7 @@ export function createNode(
     parentId,
     type,
     title: '',
+    summary: '',
     order: 0,
     collapsed: false,
     completed: false,
@@ -481,6 +484,11 @@ export function setColorLabel(items: OutlineNode[], id: string, colorLabel: Outl
   return items.map((i) => (i.id === id ? { ...i, colorLabel, updatedAt: now } : i));
 }
 
+/** Update the writer-facing synopsis/intent of one outline node. */
+export function setSummary(items: OutlineNode[], id: string, summary: string, now: string): OutlineNode[] {
+  return items.map((i) => (i.id === id ? { ...i, summary, updatedAt: now } : i));
+}
+
 // --- manuscript hard link ---------------------------------------------------
 
 /** Bind (or, with null, unbind) a node to a manuscript block. */
@@ -640,7 +648,7 @@ export function matchesFilter(node: OutlineNode, f: OutlineFilter): boolean {
   if (f.tag && !tags.includes(f.tag)) return false;
   const q = f.query.trim().toLowerCase();
   if (q) {
-    const hay = `${node.title}\n${tags.map((t) => '#' + t).join(' ')}`.toLowerCase();
+    const hay = `${node.title}\n${node.summary}\n${tags.map((t) => '#' + t).join(' ')}`.toLowerCase();
     if (!hay.includes(q)) return false;
   }
   return true;

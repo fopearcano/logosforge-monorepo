@@ -57,6 +57,7 @@ function normalize(raw: unknown): OutlineNode | null {
     parentId: typeof r.parentId === 'string' ? r.parentId : null,
     type,
     title: asString(r.title),
+    summary: asString(r.summary),
     order: typeof r.order === 'number' ? r.order : 0,
     collapsed: r.collapsed === true,
     completed: r.completed === true,
