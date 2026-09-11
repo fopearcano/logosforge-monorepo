@@ -26,6 +26,14 @@ const json = (value: unknown) => new Response(JSON.stringify(value), {
   status: 200,
   headers: { "content-type": "application/json" },
 });
+const project = (id: number, title: string) => ({
+  id,
+  title,
+  description: "",
+  narrative_engine: "novel",
+  default_writing_format: "prose",
+  format_mode: "novel",
+});
 
 try {
   installPendingFetch();
@@ -70,19 +78,19 @@ try {
   const postMutationRead = client.listProjects();
   check("starting a mutation prevents reuse of an older GET", calls.length === 3 && calls[1]!.method === "POST");
   calls[0]!.resolve(json([]));
-  calls[1]!.resolve(json({ id: 1, title: "Created" }));
-  calls[2]!.resolve(json([{ id: 1, title: "Created" }]));
+  calls[1]!.resolve(json(project(1, "Created")));
+  calls[2]!.resolve(json([project(1, "Created")]));
   await Promise.all([staleRead, mutation, postMutationRead]);
 
   installPendingFetch();
   const mutation2 = client.createProject({ title: "Second", narrative_engine: "novel" });
   const duringMutation = client.listProjects();
-  calls[0]!.resolve(json({ id: 2, title: "Second" }));
+  calls[0]!.resolve(json(project(2, "Second")));
   await mutation2;
   const afterMutation = client.listProjects();
   check("mutation settlement evicts GETs started before commit", calls.length === 3);
-  calls[1]!.resolve(json([{ id: 1, title: "Created" }]));
-  calls[2]!.resolve(json([{ id: 1, title: "Created" }, { id: 2, title: "Second" }]));
+  calls[1]!.resolve(json([project(1, "Created")]));
+  calls[2]!.resolve(json([project(1, "Created"), project(2, "Second")]));
   await Promise.all([duringMutation, afterMutation]);
   client.dispose?.();
 } finally {

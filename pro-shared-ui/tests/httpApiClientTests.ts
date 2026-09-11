@@ -3,6 +3,14 @@ import { flushPendingProjectSaves } from '../src/adapters/projectSaveCoordinator
 
 const originalFetch = globalThis.fetch;
 const requests: Array<{ input: string; init: RequestInit }> = [];
+const project = (id: number, title: string) => ({
+  id,
+  title,
+  description: "",
+  narrative_engine: "novel",
+  default_writing_format: "prose",
+  format_mode: "novel",
+});
 globalThis.fetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
   requests.push({ input: String(input), init });
   return new Response(JSON.stringify({ status: 'ok' }), {
@@ -70,7 +78,7 @@ try {
   for (let i = 0; i < 6; i++) await Promise.resolve();
   if (writeBarrierDone) throw new Error('Save barrier did not wait for a mutating HTTP request');
   if (!releaseWrite) throw new Error('Queued mutating request did not start');
-  releaseWrite(new Response(JSON.stringify({ id: 7 }), {
+  releaseWrite(new Response(JSON.stringify(project(7, "Tracked")), {
     status: 200, headers: { 'content-type': 'application/json' },
   }));
   await Promise.all([pendingWrite, writeBarrier]);
@@ -99,14 +107,14 @@ try {
   queuedBody.title = 'Mutated after enqueue';
   for (let i = 0; i < 6; i++) await Promise.resolve();
   if (startedPatches !== 1) throw new Error(`Same-resource PATCHes were not serialized: ${startedPatches} started`);
-  patchResolvers[0]!(new Response(JSON.stringify({ id: 11, title: 'First' }), {
+  patchResolvers[0]!(new Response(JSON.stringify(project(11, "First")), {
     status: 200, headers: { 'content-type': 'application/json' },
   }));
   await firstPatch;
   for (let i = 0; i < 6; i++) await Promise.resolve();
   if (startedPatches !== 2) throw new Error('Second PATCH did not start after the first settled');
   if (JSON.parse(patchBodies[1]!).title !== 'Second') throw new Error('Queued PATCH body was not captured at invocation time');
-  patchResolvers[1]!(new Response(JSON.stringify({ id: 11, title: 'Second' }), {
+  patchResolvers[1]!(new Response(JSON.stringify(project(11, "Second")), {
     status: 200, headers: { 'content-type': 'application/json' },
   }));
   await secondPatch;
@@ -116,7 +124,7 @@ try {
     failureCalls += 1;
     return failureCalls === 1
       ? new Response('first failed', { status: 500 })
-      : new Response(JSON.stringify({ id: 12, title: 'Recovered' }), {
+      : new Response(JSON.stringify(project(12, "Recovered")), {
           status: 200, headers: { 'content-type': 'application/json' },
         });
   };

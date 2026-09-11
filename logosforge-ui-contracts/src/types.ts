@@ -1132,7 +1132,7 @@ export interface ExtractionJobDTO {
   done: number;
   total: number;
   error?: string;
-  result?: ExtractionResultDTO;
+  result?: ExtractionResultDTO | null;
 }
 /** Models the active AI provider exposes, for the per-run model override picker. */
 /** Best-effort: `models` is empty when the provider is unreachable/non-OpenAI. */
