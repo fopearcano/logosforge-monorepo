@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 
 import httpx
+from fastapi import HTTPException, status
 from logosforge.api import ApiConfig, create_api
 
 WHITEBOARD_PROJECT_TITLE = "Whiteboard Session"
@@ -70,7 +71,10 @@ class CoreClient:
     def __init__(self) -> None:
         db_path = _default_db_path()
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        config = ApiConfig.from_env(mode="desktop", db_path=db_path)
+        # The core is in-process and unreachable from the network; the wrapper's
+        # own per-process Bearer middleware is the external boundary. Ignore an
+        # inherited API_AUTH_TOKEN so internal ASGI calls cannot lock themselves out.
+        config = ApiConfig.from_env(mode="desktop", db_path=db_path, auth_token="")
         self.app = create_api(config=config)
         self._client = httpx.AsyncClient(
             transport=httpx.ASGITransport(app=self.app),
@@ -89,23 +93,34 @@ class CoreClient:
     async def health(self) -> dict:
         return (await self.request("GET", "/api/health")).json()
 
-    async def ensure_project(self) -> int:
+    async def ensure_project_with_status(self) -> tuple[int, bool]:
         """Resolve the DEFAULT document's project (the legacy single 'Whiteboard
         Session'), creating it once if absent. Used to seed the first document and
         as the fallback when a request omits an explicit document id (back-compat).
         Does NOT adopt an arbitrary existing project — that would cross-wire a
-        document to the wrong PSYKE bible now that multiple projects coexist."""
+        document to the wrong PSYKE bible now that multiple projects coexist.
+
+        The boolean reports whether this call allocated the core project. Callers
+        that may create must hold the document identity-publication gate until the
+        matching local incarnation has been installed.
+        """
         if self.project_id is not None:
-            return self.project_id
+            return self.project_id, False
         projects = (await self.request("GET", "/api/projects")).json()
         chosen = next(
             (p for p in projects if p.get("title") == WHITEBOARD_PROJECT_TITLE),
             None,
         )
+        created = chosen is None
         if chosen is None:
             chosen = await self.create_project(WHITEBOARD_PROJECT_TITLE)
         self.project_id = int(chosen["id"])
-        return self.project_id
+        return self.project_id, created
+
+    async def ensure_project(self) -> int:
+        """Compatibility resolver; allocation-aware app paths use the status API."""
+        project_id, _created = await self.ensure_project_with_status()
+        return project_id
 
     # -- Document <-> project CRUD (each whiteboard document = one core project) --
 
@@ -126,5 +141,24 @@ class CoreClient:
 
 async def resolve_pid(core: "CoreClient", doc: int | None) -> int:
     """A whiteboard document id IS its core project id. Fall back to the default
-    document's project when a request omits ``doc`` (back-compat)."""
-    return doc if doc is not None else await core.ensure_project()
+    document's project when a request omits ``doc`` (back-compat). Explicit ids
+    must resolve before a local JSON path is touched, preventing orphan files for
+    projects that do not exist in the authoritative core database.
+    """
+    if doc is None:
+        return await core.ensure_project()
+    if doc < 1:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document {doc} not found",
+        )
+    try:
+        await core.request("GET", f"/api/projects/{doc}")
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == status.HTTP_404_NOT_FOUND:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Document {doc} not found",
+            ) from exc
+        raise
+    return doc

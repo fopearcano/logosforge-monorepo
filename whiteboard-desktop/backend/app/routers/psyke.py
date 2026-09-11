@@ -13,7 +13,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from app.core_client import resolve_pid
+from app.document_lifecycle import locked_document_request
 
 router = APIRouter()
 
@@ -55,33 +55,33 @@ def _to_frontend(entry: dict) -> dict:
 @router.get("/api/psyke/search")
 async def search(request: Request, q: str = Query(""), doc: int | None = Query(None)):
     core = request.app.state.core
-    pid = await resolve_pid(core, doc)
-    entries = (
-        await core.request(
-            "GET", f"/api/projects/{pid}/psyke/search", params={"q": q}
-        )
-    ).json()
-    return {"query": q, "results": [_to_frontend(e) for e in entries]}
+    async with locked_document_request(request, doc) as locked:
+        entries = (
+            await core.request(
+                "GET", f"/api/projects/{locked.project_id}/psyke/search", params={"q": q}
+            )
+        ).json()
+        return {"query": q, "results": [_to_frontend(e) for e in entries]}
 
 
 @router.post("/api/psyke/elements")
 async def create_element(request: Request, body: PsykeElementCreate, doc: int | None = Query(None)):
     core = request.app.state.core
-    pid = await resolve_pid(core, doc)
-    payload = {
-        "name": body.name,
-        "type": body.type if body.type in ALLOWED_TYPES else "other",
-        "notes": body.notes,
-        "aliases": [],
-        "is_global": False,
-        "details": {"description": body.description} if body.description else {},
-    }
-    created = (
-        await core.request(
-            "POST", f"/api/projects/{pid}/psyke/entries", json=payload
-        )
-    ).json()
-    return {"ok": True, "element": _to_frontend(created)}
+    async with locked_document_request(request, doc, mutation=True) as locked:
+        payload = {
+            "name": body.name,
+            "type": body.type if body.type in ALLOWED_TYPES else "other",
+            "notes": body.notes,
+            "aliases": [],
+            "is_global": False,
+            "details": {"description": body.description} if body.description else {},
+        }
+        created = (
+            await core.request(
+                "POST", f"/api/projects/{locked.project_id}/psyke/entries", json=payload
+            )
+        ).json()
+        return {"ok": True, "element": _to_frontend(created)}
 
 
 @router.patch("/api/psyke/elements/{element_id}")
@@ -92,27 +92,29 @@ async def update_element(
     core's PATCH; the frontend ``description`` maps to the entry's
     ``details['description']``. A missing id (core 404) is translated, not a 500."""
     core = request.app.state.core
-    pid = await resolve_pid(core, doc)
-    payload: dict = {}
-    if body.name is not None:
-        payload["name"] = body.name
-    if body.type is not None:
-        payload["type"] = body.type if body.type in ALLOWED_TYPES else "other"
-    if body.notes is not None:
-        payload["notes"] = body.notes
-    if body.description is not None:
-        payload["details"] = {"description": body.description} if body.description else {}
-    try:
-        updated = (
-            await core.request(
-                "PATCH", f"/api/projects/{pid}/psyke/entries/{element_id}", json=payload
-            )
-        ).json()
-    except httpx.HTTPStatusError as exc:
-        if exc.response.status_code == 404:
-            raise HTTPException(status_code=404, detail=f"PSYKE element {element_id} not found")
-        raise
-    return {"ok": True, "element": _to_frontend(updated)}
+    async with locked_document_request(request, doc, mutation=True) as locked:
+        payload: dict = {}
+        if body.name is not None:
+            payload["name"] = body.name
+        if body.type is not None:
+            payload["type"] = body.type if body.type in ALLOWED_TYPES else "other"
+        if body.notes is not None:
+            payload["notes"] = body.notes
+        if body.description is not None:
+            payload["details"] = {"description": body.description} if body.description else {}
+        try:
+            updated = (
+                await core.request(
+                    "PATCH",
+                    f"/api/projects/{locked.project_id}/psyke/entries/{element_id}",
+                    json=payload,
+                )
+            ).json()
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                raise HTTPException(status_code=404, detail=f"PSYKE element {element_id} not found")
+            raise
+        return {"ok": True, "element": _to_frontend(updated)}
 
 
 @router.delete("/api/psyke/elements/{element_id}")
@@ -123,13 +125,13 @@ async def delete_element(request: Request, element_id: int, doc: int | None = Qu
     is a clean 422 here; a missing id (core 404) is translated rather than surfacing
     as an opaque 500 from the in-process transport's raise_for_status."""
     core = request.app.state.core
-    pid = await resolve_pid(core, doc)
-    try:
-        await core.request(
-            "DELETE", f"/api/projects/{pid}/psyke/entries/{element_id}"
-        )
-    except httpx.HTTPStatusError as exc:
-        if exc.response.status_code == 404:
-            raise HTTPException(status_code=404, detail=f"PSYKE element {element_id} not found")
-        raise
-    return {"ok": True, "deleted": element_id}
+    async with locked_document_request(request, doc, mutation=True) as locked:
+        try:
+            await core.request(
+                "DELETE", f"/api/projects/{locked.project_id}/psyke/entries/{element_id}"
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                raise HTTPException(status_code=404, detail=f"PSYKE element {element_id} not found")
+            raise
+        return {"ok": True, "deleted": element_id}

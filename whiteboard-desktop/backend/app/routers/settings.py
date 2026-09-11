@@ -14,7 +14,8 @@ import httpx
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
-from app.core_client import core_error_message, resolve_pid
+from app.core_client import core_error_message
+from app.document_lifecycle import locked_default_project
 
 router = APIRouter()
 
@@ -34,15 +35,11 @@ class AiTestResult(BaseModel):
     error: Optional[str] = None
 
 
-async def _settings_path(core) -> str:
-    pid = await resolve_pid(core, None)
+def _settings_path(pid: int) -> str:
     return f"/api/projects/{pid}/assistant/settings"
 
 
-@router.get("/api/settings/ai", response_model=AiSettings)
-async def get_ai_settings(request: Request) -> AiSettings:
-    core = request.app.state.core
-    data = (await core.request("GET", await _settings_path(core))).json()
+def _settings_model(data: dict) -> AiSettings:
     return AiSettings(
         provider=data.get("provider") or "",
         model=data.get("model") or "",
@@ -52,6 +49,14 @@ async def get_ai_settings(request: Request) -> AiSettings:
     )
 
 
+@router.get("/api/settings/ai", response_model=AiSettings)
+async def get_ai_settings(request: Request) -> AiSettings:
+    core = request.app.state.core
+    async with locked_default_project(core) as pid:
+        data = (await core.request("GET", _settings_path(pid))).json()
+        return _settings_model(data)
+
+
 @router.patch("/api/settings/ai", response_model=AiSettings)
 async def patch_ai_settings(request: Request, body: AiSettings) -> AiSettings:
     core = request.app.state.core
@@ -59,8 +64,11 @@ async def patch_ai_settings(request: Request, body: AiSettings) -> AiSettings:
     # Never forward an empty/blank api_key — that would wipe a stored key.
     if not (patch.get("api_key") or "").strip():
         patch.pop("api_key", None)
-    await core.request("PATCH", await _settings_path(core), json=patch)
-    return await get_ai_settings(request)
+    async with locked_default_project(core) as pid:
+        path = _settings_path(pid)
+        await core.request("PATCH", path, json=patch)
+        data = (await core.request("GET", path)).json()
+        return _settings_model(data)
 
 
 @router.post("/api/settings/ai/test", response_model=AiTestResult)
@@ -69,27 +77,27 @@ async def test_ai_connection(request: Request) -> AiTestResult:
     configured provider actually responds. Returns ok=false + a short error
     (e.g. the core's 502 detail) when no/failed provider."""
     core = request.app.state.core
-    pid = await resolve_pid(core, None)
-    try:
-        s = (await core.request("GET", f"/api/projects/{pid}/assistant/settings")).json()
-        provider = s.get("provider") or "logosforge"
-    except Exception:
-        provider = "logosforge"
+    async with locked_default_project(core) as pid:
+        try:
+            s = (await core.request("GET", _settings_path(pid))).json()
+            provider = s.get("provider") or "logosforge"
+        except Exception:
+            provider = "logosforge"
 
-    body = {
-        "message": "Reply with the single word: ok",
-        "system_prompt": "You are a connection test. Reply with exactly: ok",
-        "history": [],
-        "selected_text": "",
-        "nearby_text": "",
-        "document_title": "",
-    }
-    try:
-        r = await core.request("POST", f"/api/projects/{pid}/assistant/chat", json=body)
-        reply = (r.json().get("reply") or "").strip()
-        return AiTestResult(ok=True, provider=provider, reply=reply[:200])
-    except httpx.HTTPStatusError as exc:
-        detail = core_error_message(exc, fallback="AI provider test failed")
-        return AiTestResult(ok=False, provider=provider, error=detail[:500])
-    except Exception as exc:  # transport / unexpected
-        return AiTestResult(ok=False, provider=provider, error=str(exc)[:300])
+        body = {
+            "message": "Reply with the single word: ok",
+            "system_prompt": "You are a connection test. Reply with exactly: ok",
+            "history": [],
+            "selected_text": "",
+            "nearby_text": "",
+            "document_title": "",
+        }
+        try:
+            r = await core.request("POST", f"/api/projects/{pid}/assistant/chat", json=body)
+            reply = (r.json().get("reply") or "").strip()
+            return AiTestResult(ok=True, provider=provider, reply=reply[:200])
+        except httpx.HTTPStatusError as exc:
+            detail = core_error_message(exc, fallback="AI provider test failed")
+            return AiTestResult(ok=False, provider=provider, error=detail[:500])
+        except Exception as exc:  # transport / unexpected
+            return AiTestResult(ok=False, provider=provider, error=str(exc)[:300])

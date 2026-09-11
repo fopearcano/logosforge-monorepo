@@ -13,9 +13,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Query, Request
+import httpx
+from fastapi import APIRouter, HTTPException, Query, Request, status
 
-from app.core_client import resolve_pid
+from app.core_client import core_error_message
+from app.document_lifecycle import locked_document_request
 from app.local_state import (
     CommentsDocument,
     WhiteboardDocument,
@@ -56,6 +58,7 @@ def build_project_bundle(
             "id": str(pid),
             "title": wb.title,
             "mode": wb.mode,
+            "settings": dict(wb.settings),
             "manuscript": {"blocks": [b.model_dump(exclude_none=True) for b in wb.blocks]},
             "outline": list(outline_items),
             "comments": [c.model_dump() for c in comments.comments],
@@ -65,14 +68,37 @@ def build_project_bundle(
 
 
 async def _list_psyke(core, pid: int) -> list[dict[str, Any]]:
-    """All PSYKE entries for the project, in the frontend shape. Best-effort — a
-    project with an empty/unreadable bible exports an empty list rather than
-    failing the whole bundle."""
+    """Return every PSYKE entry or abort the supposedly complete export.
+
+    An empty list is a valid bible; a transport, project, or payload error is not.
+    Silently translating those errors to ``[]`` would create a bundle that looks
+    complete while omitting story data — especially dangerous when used as backup.
+    """
     try:
         entries = (await core.request("GET", f"/api/projects/{pid}/psyke/entries")).json()
-    except Exception:
-        return []
-    return [_to_frontend(e) for e in entries]
+    except httpx.HTTPStatusError as exc:
+        detail = core_error_message(exc, fallback="PSYKE could not be read")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Project bundle export aborted: {detail}",
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Project bundle export aborted because PSYKE could not be read.",
+        ) from exc
+    if not isinstance(entries, list):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Project bundle export aborted: the PSYKE response was invalid.",
+        )
+    try:
+        return [_to_frontend(e) for e in entries]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Project bundle export aborted: a PSYKE entry was invalid.",
+        ) from exc
 
 
 @router.get("/api/export/project")
@@ -80,10 +106,19 @@ async def export_project(request: Request, doc: int | None = Query(None)) -> dic
     """Return the complete ``.lfbundle`` for the given document (default doc when
     ``doc`` is omitted). One request = the whole project, one pass."""
     core = request.app.state.core
-    pid = await resolve_pid(core, doc)
-    wb = whiteboard_store.get(str(pid))
-    outline_items = outline_items_store.get(str(pid))
-    comments = comments_store.get(str(pid))
-    psyke_elements = await _list_psyke(core, pid)
-    exported_at = datetime.now(timezone.utc).isoformat()
-    return build_project_bundle(pid, wb, outline_items, comments, psyke_elements, exported_at)
+    # Keep the numeric id and its incarnation stable across every subsystem read;
+    # DELETE/reuse and all mutations share this same lifecycle lock.
+    async with locked_document_request(request, doc) as locked:
+        wb = whiteboard_store.get(locked.document_id)
+        outline_items = outline_items_store.get(locked.document_id)
+        comments = comments_store.get(locked.document_id)
+        psyke_elements = await _list_psyke(core, locked.project_id)
+        exported_at = datetime.now(timezone.utc).isoformat()
+        return build_project_bundle(
+            locked.project_id,
+            wb,
+            outline_items,
+            comments,
+            psyke_elements,
+            exported_at,
+        )

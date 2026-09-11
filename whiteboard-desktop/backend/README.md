@@ -9,6 +9,11 @@ The Whiteboard frontend is project-agnostic; the core is project-scoped. Each
 Whiteboard document is one core project id, giving every document an isolated
 PSYKE bible while the wrapper translates between the two DTO contracts.
 
+When launched by Electron, every `/api/*` request is protected by an in-memory
+per-process Bearer token and the health handshake carries a random instance
+nonce. Neither value is persisted. A manually launched browser-development
+backend remains tokenless unless `LOGOSFORGE_WHITEBOARD_AUTH_TOKEN` is set.
+
 ## Setup (local, editable core)
 
 ```sh
@@ -38,12 +43,16 @@ backend; only the venv (now has `logosforge`) and the wrapped routes differ.
 | `/api/psyke/search`, `/elements` | ✅ | wraps project-scoped core PSYKE routes |
 | `/api/littleboy/billy/chat`, `/logos/inline` | ✅ | prompt orchestration → core Assistant/Logos; manual Whiteboard outline added to AI grounding |
 | `/api/settings/ai`, `/test` | ✅ | global provider settings passthrough + actionable connection test |
-| `/api/whiteboard`, `/api/outline/items`, `/api/comments` | ✅ | per-document atomic JSON stores (desktop-only board state) |
-| `/api/export/project` | ✅ | complete `.lfbundle` (manuscript + outline + comments + PSYKE) |
+| `/api/whiteboard`, `/api/outline/items`, `/api/comments` | ✅ | per-document atomic JSON with fsync, transaction-wide locks, two rotating backups, quarantine + recovery; manuscript records also own voice/format settings |
+| `/api/export/project` | ✅ | complete-or-failed `.lfbundle` (manuscript + document settings + outline + comments + PSYKE) |
+| `/api/recovery/notices` | ✅ | one-shot notices when a local state backup was restored |
 
 ## Verification
 
 ```sh
+# Full backend regression suite
+.venv/Scripts/python -m pytest tests -q
+
 # Provider transport, error translation, manual-outline + PSYKE grounding
 .venv/Scripts/python tests/test_ai_grounding.py
 
@@ -51,5 +60,6 @@ backend; only the venv (now has `logosforge`) and the wrapped routes differ.
 .venv/Scripts/python tests/test_export.py
 ```
 
-Both tests use temporary data/DB state; the AI test uses loopback mock OpenAI
-and Anthropic servers and never needs or reads a real API key.
+All tests use temporary data/DB state; the AI test uses loopback mock OpenAI
+and Anthropic servers and never needs or reads a real API key. Recovery tests
+exercise backup rotation, quarantine, fail-closed autosave, and complete export.

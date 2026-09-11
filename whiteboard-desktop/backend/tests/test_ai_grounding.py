@@ -38,7 +38,7 @@ from app.routers.littleboy import (  # noqa: E402
     _logos_nearby_context,
     build_manual_outline_context,
 )
-from app.routers.settings import test_ai_connection  # noqa: E402
+from app.routers.settings import test_ai_connection as _ai_connection_endpoint  # noqa: E402
 
 passed = 0
 failures: list[str] = []
@@ -78,6 +78,9 @@ class _ErrorCore:
     async def ensure_project(self) -> int:
         return 2
 
+    async def ensure_project_with_status(self) -> tuple[int, bool]:
+        return 2, False
+
     async def request(self, method: str, path: str, **_kwargs):
         if method == "GET":
             return _JsonResponse({"provider": "OpenAI"})
@@ -94,7 +97,7 @@ class _JsonResponse:
 
 async def _test_settings_error_translation() -> None:
     req = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(core=_ErrorCore())))
-    result = await test_ai_connection(req)
+    result = await _ai_connection_endpoint(req)
     check("settings test reports provider failure", not result.ok and "OpenAI returned HTTP 401" in (result.error or ""))
     check("settings test never reports internal core URL", "logosforge-core" not in (result.error or ""))
 
@@ -178,9 +181,10 @@ async def _test_wrapper_injection() -> None:
     fake = _FakeCore()
     result = await _core_chat(fake, 42, "system", "question", nearby_text="cursor paragraph")
     nearby = str((fake.body or {}).get("nearby_text") or "")
+    planning = str((fake.body or {}).get("planning_outline") or "")
     check("core chat still returns reply", result == "ok")
-    check("core chat injects manual outline", "The Locked Observatory" in nearby)
-    check("core chat keeps cursor context after outline", nearby.index("Locked Observatory") < nearby.index("cursor paragraph"))
+    check("core chat sends manual outline in its typed field", "The Locked Observatory" in planning)
+    check("core chat keeps nearby text cursor-only", nearby == "cursor paragraph")
 
 
 asyncio.run(_test_wrapper_injection())
@@ -301,9 +305,15 @@ check("Anthropic request uses x-api-key", anthropic_headers.get("x-api-key") == 
 check("Anthropic request sends selected model", bool(anthropic_req and anthropic_req["body"].get("model") == "claude-test"))
 
 
-print(f"Whiteboard AI tests: {passed} passed, {len(failures)} failed")
-for failure in failures:
-    print("  FAIL: " + failure)
-if failures:
-    raise SystemExit(1)
-print("WHITEBOARD AI TESTS: PASS")
+def test_ai_grounding_regression_suite() -> None:
+    """Expose the standalone checks as one real pytest assertion."""
+    assert not failures, "\n".join(failures)
+
+
+if __name__ == "__main__":
+    print(f"Whiteboard AI tests: {passed} passed, {len(failures)} failed")
+    for failure in failures:
+        print("  FAIL: " + failure)
+    if failures:
+        raise SystemExit(1)
+    print("WHITEBOARD AI TESTS: PASS")

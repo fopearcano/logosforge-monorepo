@@ -43,6 +43,7 @@ def test_build_bundle_pure() -> None:
 
     wb = WhiteboardDocument(
         id="7", title="The Sounding", mode="novel", updated_at="2026-01-01T00:00:00Z",
+        settings={"narrativePerson": "first", "narrativeStyle": "literary"},
         blocks=[
             WhiteboardBlock(id="b0", type="heading", text="Chapter One", level=1),
             WhiteboardBlock(id="b1", type="paragraph", text="The hull settled."),
@@ -51,7 +52,9 @@ def test_build_bundle_pure() -> None:
     outline = [{"id": "o1", "parentId": None, "type": "act", "title": "Act I", "order": 0}]
     comments = CommentsDocument(comments=[
         Comment(
-            id="c1", anchor=CommentAnchor(block_index=1, from_offset=0, to_offset=3),
+            id="c1", anchor=CommentAnchor(
+                block_index=1, block_id="block-body", from_offset=0, to_offset=3,
+            ),
             quote="The", body="opening?", resolved=False,
             created_at="2026-01-01T00:00:00Z", updated_at="2026-01-01T00:00:00Z",
         )
@@ -64,14 +67,22 @@ def test_build_bundle_pure() -> None:
     check("version present", isinstance(b.get("version"), str))
     check("project id stringified", b["project"]["id"] == "7")
     check("title + mode carried", b["project"]["title"] == "The Sounding" and b["project"]["mode"] == "novel")
+    check("document settings carried", b["project"]["settings"]["narrativePerson"] == "first")
     blocks = b["project"]["manuscript"]["blocks"]
     check("all blocks carried", len(blocks) == 2 and blocks[0]["type"] == "heading" and blocks[0]["level"] == 1)
     check("None fields dropped from blocks", "level" not in blocks[1])  # paragraph has no level
     check("outline carried", b["project"]["outline"] == outline)
     cm = b["project"]["comments"]
-    check("comment carried with anchor", len(cm) == 1 and cm[0]["anchor"]["block_index"] == 1 and cm[0]["quote"] == "The")
+    check(
+        "comment carried with stable anchor",
+        len(cm) == 1
+        and cm[0]["anchor"]["block_index"] == 1
+        and cm[0]["anchor"]["block_id"] == "block-body"
+        and cm[0]["quote"] == "The",
+    )
     ps = b["project"]["psyke"]["elements"]
     check("psyke carried", len(ps) == 1 and ps[0]["name"] == "Mara" and ps[0]["entry_type"] == "character")
+    assert not failures, "\n".join(failures)
 
 
 # -- 2. integration smoke (temp DB, real route) ------------------------------
@@ -80,13 +91,13 @@ def test_export_route_integration() -> None:
         from fastapi.testclient import TestClient
         from app.main import app
     except Exception as exc:  # pragma: no cover
-        failures.append(f"integration import failed: {exc!r}")
-        return
+        raise AssertionError(f"integration import failed: {exc!r}") from exc
 
     with TestClient(app) as client:
         # Seed the DEFAULT document (doc omitted → default project).
         client.put("/api/whiteboard", json={
             "title": "Bundle Demo", "mode": "novel",
+            "settings": {"narrativePerson": "third-limited"},
             "blocks": [
                 {"id": "b0", "type": "heading", "text": "Act I", "level": 1},
                 {"id": "b1", "type": "paragraph", "text": "It began with a knock."},
@@ -96,7 +107,9 @@ def test_export_route_integration() -> None:
             {"id": "o1", "parentId": None, "type": "act", "title": "Act I", "order": 0},
         ]})
         client.post("/api/comments", json={
-            "anchor": {"block_index": 1, "from_offset": 0, "to_offset": 2},
+            "anchor": {
+                "block_index": 1, "block_id": "b1", "from_offset": 0, "to_offset": 2,
+            },
             "quote": "It", "body": "hook",
         })
         client.post("/api/psyke/elements", json={
@@ -109,9 +122,15 @@ def test_export_route_integration() -> None:
         proj = b.get("project", {})
         check("route: format tag", b.get("format") == "logosforge-project-bundle")
         check("route: blocks present", len(proj.get("manuscript", {}).get("blocks", [])) == 2)
+        check("route: settings present", proj.get("settings", {}).get("narrativePerson") == "third-limited")
         check("route: outline present", len(proj.get("outline", [])) == 1)
-        check("route: comment present", len(proj.get("comments", [])) == 1)
+        comments = proj.get("comments", [])
+        check(
+            "route: stable comment anchor present",
+            len(comments) == 1 and comments[0]["anchor"].get("block_id") == "b1",
+        )
         check("route: psyke present", any(e.get("name") == "Mara" for e in proj.get("psyke", {}).get("elements", [])))
+    assert not failures, "\n".join(failures)
 
 
 if __name__ == "__main__":

@@ -14,6 +14,7 @@ This is the Small system only: no Counterpart, no Quantum, no multi-agent.
 """
 from __future__ import annotations
 
+import hashlib
 import re
 import uuid
 from typing import List, Optional
@@ -22,7 +23,9 @@ import httpx
 from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel
 
-from app.core_client import core_error_message, resolve_pid
+from app.core_client import core_error_message
+from app.document_lifecycle import locked_document_request
+from app.local_state import CommentReplyCreate, comments_store
 
 router = APIRouter()
 
@@ -160,14 +163,6 @@ def _manual_outline_context(pid: int) -> str:
         return ""
 
 
-def _with_manual_outline(pid: int, nearby: str = "") -> str:
-    outline = _manual_outline_context(pid)
-    text = (nearby or "").strip()
-    if outline and text:
-        return f"{outline}\n\n{text}"
-    return outline or text
-
-
 def _clip_head(text: str, limit: int) -> str:
     value = (text or "").strip()
     if len(value) <= limit:
@@ -256,8 +251,9 @@ async def _core_chat(core, pid: int, system_prompt: str, message: str,
         "system_prompt": system_prompt,
         "history": [{"role": m.role, "content": m.content} for m in (history or [])],
         "selected_text": selected_text,
-        "nearby_text": _with_manual_outline(pid, nearby_text),
+        "nearby_text": nearby_text,
         "document_title": document_title,
+        "planning_outline": _manual_outline_context(pid),
     }
     r = await core.request("POST", f"/api/projects/{pid}/assistant/chat", json=body)
     return r.json().get("reply", "")
@@ -349,19 +345,41 @@ async def ai_reply_to_comment(core, pid: int, assistant: str, comment) -> str:
         return f"({assistant} is unavailable — configure an AI provider in LogosForge to enable @-mention replies.)"
 
 
-async def maybe_ai_reply(core, pid: int, comment_id: str, text: str):
+def _assistant_reply_id(comment_id: str, trigger_id: str, assistant: str) -> str:
+    """Return a stable id in a namespace rejected by client reply validation."""
+    material = f"{comment_id}\0{trigger_id}\0{assistant.lower()}".encode("utf-8")
+    return f"ai:{hashlib.sha256(material).hexdigest()}"
+
+
+async def maybe_ai_reply(
+    core,
+    pid: int,
+    comment_id: str,
+    text: str,
+    *,
+    trigger_reply_id: str | None = None,
+):
     """If `text` @-mentions Billy/Logos, append an AI reply to the thread and return
     the updated Comment; otherwise return None."""
     assistant = _detect_mention(text)
     if not assistant:
         return None
-    from app.local_state import CommentReplyCreate, comments_store
     comment = next((c for c in comments_store.get(str(pid)).comments if c.id == comment_id), None)
     if comment is None:
         return None
+    reply_id = _assistant_reply_id(
+        comment_id,
+        trigger_reply_id or "comment-root",
+        assistant,
+    )
+    # A response can be lost after the assistant reply's atomic save. The
+    # writer's retry must return that saved result without another provider call.
+    if any(reply.id == reply_id for reply in comment.replies):
+        return comment
     reply_text = await ai_reply_to_comment(core, pid, assistant, comment)
     return comments_store.add_reply(
-        str(pid), comment_id, uuid.uuid4().hex, CommentReplyCreate(body=reply_text, author=assistant))
+        str(pid), comment_id, reply_id, CommentReplyCreate(body=reply_text, author=assistant)
+    )
 
 
 # -- endpoints ---------------------------------------------------------------
@@ -369,49 +387,58 @@ async def maybe_ai_reply(core, pid: int, comment_id: str, text: str):
 @router.post("/api/littleboy/billy/chat", response_model=BillyChatResponse)
 async def billy_chat(request: Request, body: BillyChatRequest, doc: int | None = Query(None)):
     core = request.app.state.core
-    pid = await resolve_pid(core, doc)
-    conversation_id = (body.conversation_id or "").strip() or uuid.uuid4().hex
-    mode = (body.writing_mode or "novel").strip() or "novel"
+    # An explicit desktop request is identity-sensitive even though it is
+    # read-only: a provider round-trip can outlive DELETE + SQLite id reuse.
+    # Require and validate the captured generation, then retain the per-id lock
+    # through grounding, the whole provider call, and response construction.
+    async with locked_document_request(
+        request,
+        doc,
+        mutation=doc is not None,
+    ) as locked:
+        pid = locked.project_id
+        conversation_id = (body.conversation_id or "").strip() or uuid.uuid4().hex
+        mode = (body.writing_mode or "novel").strip() or "novel"
 
-    # The "Billy" persona name is a Whiteboard product label (Pro's assistant is
-    # not Billy), so it stays here as a thin system addendum; the CORE owns the
-    # actual grounding/context from the editor fields passed below.
-    system = (
-        f"You are Billy, a concise, friendly writing assistant for {mode} writing "
-        "inside the LogosForge Whiteboard. Help with the user's draft; keep replies short."
-    )
-    comments_ctx = _comments_context(pid)
-    if comments_ctx:
-        system = f"{system}\n\n{comments_ctx}"
-    history = [m for m in (body.history or []) if m.role in ("user", "assistant") and m.content]
-
-    try:
-        content = await _core_chat(
-            core, pid, system, body.message, history,
-            selected_text=(body.selected_text or ""),
-            nearby_text=(body.nearby_context or ""),
-            document_title=(body.document_title or ""),
+        # The "Billy" persona name is a Whiteboard product label (Pro's assistant is
+        # not Billy), so it stays here as a thin system addendum; the CORE owns the
+        # actual grounding/context from the editor fields passed below.
+        system = (
+            f"You are Billy, a concise, friendly writing assistant for {mode} writing "
+            "inside the LogosForge Whiteboard. Help with the user's draft; keep replies short."
         )
-        return BillyChatResponse(
-            ok=True, conversation_id=conversation_id,
-            message=ChatMessage(role="assistant", content=content),
-            provider=await _provider_name(core, pid))
-    except httpx.HTTPStatusError as exc:
-        provider = await _provider_name(core, pid)
-        detail = core_error_message(exc, fallback=f"{provider} request failed")
-        if body.selected_text and body.selected_text.strip():
-            extra = f" I can see your {len(body.selected_text.strip())}-character selection in {mode} mode."
-        else:
-            extra = f" I'd help with your {mode} writing here."
-        return BillyChatResponse(
-            ok=False, conversation_id=conversation_id,
-            message=ChatMessage(
-                role="assistant",
-                content=(
-                    f"Billy couldn’t reach {provider}. Open Settings → AI provider and run "
-                    f"Test connection.\n\n{detail}" + extra
-                )),
-            provider=provider, note=detail)
+        comments_ctx = _comments_context(pid)
+        if comments_ctx:
+            system = f"{system}\n\n{comments_ctx}"
+        history = [m for m in (body.history or []) if m.role in ("user", "assistant") and m.content]
+
+        try:
+            content = await _core_chat(
+                core, pid, system, body.message, history,
+                selected_text=(body.selected_text or ""),
+                nearby_text=(body.nearby_context or ""),
+                document_title=(body.document_title or ""),
+            )
+            return BillyChatResponse(
+                ok=True, conversation_id=conversation_id,
+                message=ChatMessage(role="assistant", content=content),
+                provider=await _provider_name(core, pid))
+        except httpx.HTTPStatusError as exc:
+            provider = await _provider_name(core, pid)
+            detail = core_error_message(exc, fallback=f"{provider} request failed")
+            if body.selected_text and body.selected_text.strip():
+                extra = f" I can see your {len(body.selected_text.strip())}-character selection in {mode} mode."
+            else:
+                extra = f" I'd help with your {mode} writing here."
+            return BillyChatResponse(
+                ok=False, conversation_id=conversation_id,
+                message=ChatMessage(
+                    role="assistant",
+                    content=(
+                        f"Billy couldn’t reach {provider}. Open Settings → AI provider and run "
+                        f"Test connection.\n\n{detail}" + extra
+                    )),
+                provider=provider, note=detail)
 
 
 @router.post("/api/littleboy/logos/inline", response_model=LogosResponse)
@@ -425,43 +452,48 @@ async def logos_inline(request: Request, body: LogosRequest, doc: int | None = Q
     (no/failed provider) degrades to the stable placeholder shape the frontend
     expects."""
     core = request.app.state.core
-    pid = await resolve_pid(core, doc)
-    front_action = (body.action or "rewrite").strip().lower()
-    core_action = _CORE_ACTION.get(front_action, "inline_suggest")
-    selected = (body.selected_text or "").strip()
+    async with locked_document_request(
+        request,
+        doc,
+        mutation=doc is not None,
+    ) as locked:
+        pid = locked.project_id
+        front_action = (body.action or "rewrite").strip().lower()
+        core_action = _CORE_ACTION.get(front_action, "inline_suggest")
+        selected = (body.selected_text or "").strip()
 
-    comments_ctx = _comments_context(pid)
-    nearby = _logos_nearby_context(
-        pid,
-        (body.nearby_context or "").strip(),
-        comments_ctx,
-    )
-    run_body = {
-        "action": core_action,
-        "section": "Inline",
-        "selected_text": selected,
-        "nearby_context": nearby,
-        "writing_mode": (body.writing_mode or "").strip(),
-    }
-    try:
-        data = (await core.request(
-            "POST", f"/api/projects/{pid}/logos/run", json=run_body)).json()
-    except Exception:  # transport/project error -> degrade below
-        data = {"ok": False}
+        comments_ctx = _comments_context(pid)
+        nearby = _logos_nearby_context(
+            pid,
+            (body.nearby_context or "").strip(),
+            comments_ctx,
+        )
+        run_body = {
+            "action": core_action,
+            "section": "Inline",
+            "selected_text": selected,
+            "nearby_context": nearby,
+            "writing_mode": (body.writing_mode or "").strip(),
+        }
+        try:
+            data = (await core.request(
+                "POST", f"/api/projects/{pid}/logos/run", json=run_body)).json()
+        except Exception:  # transport/project error -> degrade below
+            data = {"ok": False}
 
-    if data.get("ok"):
-        message = data.get("message", "")
-        # Apply-able replacement only for generative transforms over a selection —
-        # read straight from the core's generative flag.
-        replacement = message if (data.get("generative") and selected) else None
-        provider = ("psyke" if core_action == "connect_to_psyke"
-                    else await _provider_name(core, pid))
+        if data.get("ok"):
+            message = data.get("message", "")
+            # Apply-able replacement only for generative transforms over a selection —
+            # read straight from the core's generative flag.
+            replacement = message if (data.get("generative") and selected) else None
+            provider = ("psyke" if core_action == "connect_to_psyke"
+                        else await _provider_name(core, pid))
+            return LogosResponse(
+                ok=True, action=front_action, result=message,
+                suggested_replacement=replacement, provider=provider)
+
         return LogosResponse(
-            ok=True, action=front_action, result=message,
-            suggested_replacement=replacement, provider=provider)
-
-    return LogosResponse(
-        ok=True, action=front_action,
-        result=f"Logos placeholder response for action: {front_action}. "
-               "Connect an AI provider for a real result.",
-        suggested_replacement=None, provider="stub", note=_NO_PROVIDER_NOTE)
+            ok=True, action=front_action,
+            result=f"Logos placeholder response for action: {front_action}. "
+                   "Connect an AI provider for a real result.",
+            suggested_replacement=None, provider="stub", note=_NO_PROVIDER_NOTE)
