@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, Query
 
 from logosforge.api import schemas, serializers
 from logosforge.api.deps import get_db, get_project
+from logosforge.api.errors import not_found
 from logosforge.db import Database
 
 router = APIRouter(tags=["logos"])
@@ -30,6 +31,23 @@ def _build_provider():
     from logosforge.providers import build_active_provider
 
     return build_active_provider()
+
+
+def _validate_context_ids(db: Database, project_id: int, body: schemas.LogosRunRequestDTO) -> None:
+    for scene_id in (body.current_scene_id, body.current_timeline_event_id):
+        if scene_id is None:
+            continue
+        scene = db.get_scene_by_id(scene_id)
+        if scene is None or scene.project_id != project_id:
+            raise not_found(f"Scene {scene_id} not found")
+    if body.current_outline_node_id is not None:
+        node = db.get_outline_node_by_id(body.current_outline_node_id)
+        if node is None or node.project_id != project_id:
+            raise not_found(f"Outline node {body.current_outline_node_id} not found")
+    if body.current_psyke_entry_id is not None:
+        entry = db.get_psyke_entry_by_id(body.current_psyke_entry_id)
+        if entry is None or entry.project_id != project_id:
+            raise not_found(f"PSYKE entry {body.current_psyke_entry_id} not found")
 
 
 @router.get(
@@ -96,6 +114,8 @@ def logos_run(
     from logosforge.logos.context import build_logos_context
     from logosforge.logos.controller import LogosController
     from logosforge.logos.actions import get_action, CATEGORY_GENERATIVE
+
+    _validate_context_ids(db, project.id, body)
 
     context = build_logos_context(
         db,

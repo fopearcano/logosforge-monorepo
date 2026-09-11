@@ -27,6 +27,86 @@ def _entry_or_404(db: Database, project_id: int, entry_id: int):
     return entry
 
 
+def _scene_or_404(db: Database, project_id: int, scene_id: int):
+    scene = db.get_scene_by_id(scene_id)
+    if scene is None or scene.project_id != project_id:
+        raise not_found(f"Scene {scene_id} not found")
+    return scene
+
+
+def _character_or_404(db: Database, project_id: int, character_id: int):
+    character = db.get_character_by_id(character_id)
+    if character is None or character.project_id != project_id:
+        raise not_found(f"Character {character_id} not found")
+    return character
+
+
+def _gn_page_or_404(db: Database, project_id: int, page_id: int):
+    page = db.get_gn_page_by_id(page_id)
+    if page is None or page.project_id != project_id:
+        raise not_found(f"Graphic-novel page {page_id} not found")
+    return page
+
+
+def _gn_panel_or_404(db: Database, project_id: int, panel_id: int):
+    panel = db.get_gn_panel_by_id(panel_id)
+    if panel is None or panel.project_id != project_id:
+        raise not_found(f"Graphic-novel panel {panel_id} not found")
+    return panel
+
+
+def _gn_item_or_404(db: Database, project_id: int, item_id: int):
+    item = db.get_gn_continuity_item_by_id(item_id)
+    if item is None or item.project_id != project_id:
+        raise not_found(f"Graphic-novel continuity item {item_id} not found")
+    return item
+
+
+def _gn_appearance_or_404(db: Database, project_id: int, appearance_id: int):
+    appearance = db.get_gn_continuity_appearance_by_id(appearance_id)
+    if appearance is None:
+        raise not_found(f"Graphic-novel continuity appearance {appearance_id} not found")
+    _gn_item_or_404(db, project_id, appearance.continuity_item_id)
+    return appearance
+
+
+def _season_or_404(db: Database, project_id: int, season_id: int):
+    season = db.get_season_by_id(season_id)
+    if season is None or season.project_id != project_id:
+        raise not_found(f"Season {season_id} not found")
+    return season
+
+
+def _episode_or_404(db: Database, project_id: int, episode_id: int):
+    episode = db.get_episode_by_id(episode_id)
+    if episode is None or episode.project_id != project_id:
+        raise not_found(f"Episode {episode_id} not found")
+    return episode
+
+
+def _series_arc_or_404(db: Database, project_id: int, arc_id: int):
+    arc = db.get_series_arc_by_id(arc_id)
+    if arc is None or arc.project_id != project_id:
+        raise not_found(f"Series arc {arc_id} not found")
+    return arc
+
+
+def _episode_plotline_or_404(db: Database, project_id: int, plotline_id: int):
+    plotline = db.get_episode_plotline_by_id(plotline_id)
+    if plotline is None:
+        raise not_found(f"Episode plotline {plotline_id} not found")
+    _episode_or_404(db, project_id, plotline.episode_id)
+    return plotline
+
+
+def _stage_row_or_404(db: Database, project_id: int, row_id: int, getter, label: str):
+    row = getter(row_id)
+    if row is None:
+        raise not_found(f"{label} {row_id} not found")
+    _scene_or_404(db, project_id, row.scene_id)
+    return row
+
+
 def _g(o, name, default=""):
     return getattr(o, name, default) or default
 
@@ -76,6 +156,7 @@ def gn_pages_list(project=Depends(get_project), db: Database = Depends(get_db)):
 
 @router.post("/projects/{project_id}/gn/pages/{page_id}/panels", response_model=schemas.GnPanelDTO)
 def gn_panel_create(page_id: int, body: schemas.GnPanelDTO, project=Depends(get_project), db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    _gn_page_or_404(db, project.id, page_id)
     panel = db.create_gn_panel(
         page_id, project_id=project.id, panel_number=body.panel_number or None,
         description=body.description, camera_angle=body.camera_angle, shot_type=body.shot_type,
@@ -88,6 +169,7 @@ def gn_panel_create(page_id: int, body: schemas.GnPanelDTO, project=Depends(get_
 
 @router.get("/projects/{project_id}/gn/pages/{page_id}/panels", response_model=list[schemas.GnPanelDTO])
 def gn_panels_list(page_id: int, project=Depends(get_project), db: Database = Depends(get_db)):
+    _gn_page_or_404(db, project.id, page_id)
     return [_gn_panel_dto(p) for p in db.get_gn_panels_for_page(page_id)]
 
 
@@ -104,6 +186,8 @@ def _gn_appearance_dto(r) -> schemas.GnContinuityAppearanceDTO:
 
 @router.post("/projects/{project_id}/gn/continuity-items", response_model=schemas.GnContinuityItemDTO)
 def gn_continuity_item_create(body: schemas.GnContinuityItemDTO, project=Depends(get_project), db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    if body.linked_psyke_entry_id is not None:
+        _entry_or_404(db, project.id, body.linked_psyke_entry_id)
     row = db.create_gn_continuity_item(project.id, body.name, item_type=body.item_type,
         description=body.description, linked_psyke_entry_id=body.linked_psyke_entry_id, notes=body.notes)
     broker.publish("project_data_changed", project_id=project.id)
@@ -117,6 +201,13 @@ def gn_continuity_items_list(project=Depends(get_project), db: Database = Depend
 
 @router.post("/projects/{project_id}/gn/continuity-items/{item_id}/appearances", response_model=schemas.GnContinuityAppearanceDTO)
 def gn_continuity_appearance_create(item_id: int, body: schemas.GnContinuityAppearanceDTO, project=Depends(get_project), db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    _gn_item_or_404(db, project.id, item_id)
+    if body.page_id is not None:
+        _gn_page_or_404(db, project.id, body.page_id)
+    if body.panel_id is not None:
+        panel = _gn_panel_or_404(db, project.id, body.panel_id)
+        if body.page_id is not None and panel.page_id != body.page_id:
+            raise not_found("Graphic-novel panel does not belong to the selected page")
     row = db.add_gn_continuity_appearance(item_id, page_id=body.page_id, panel_id=body.panel_id,
         state_description=body.state_description, continuity_status=body.continuity_status)
     broker.publish("project_data_changed", project_id=project.id)
@@ -125,6 +216,7 @@ def gn_continuity_appearance_create(item_id: int, body: schemas.GnContinuityAppe
 
 @router.get("/projects/{project_id}/gn/continuity-items/{item_id}/appearances", response_model=list[schemas.GnContinuityAppearanceDTO])
 def gn_continuity_appearances_list(item_id: int, project=Depends(get_project), db: Database = Depends(get_db)):
+    _gn_item_or_404(db, project.id, item_id)
     return [_gn_appearance_dto(r) for r in db.get_gn_continuity_appearances(item_id)]
 
 
@@ -163,6 +255,9 @@ def _biz_dto(r) -> schemas.StageBusinessDTO:
 
 @router.post("/projects/{project_id}/stage/scenes/{scene_id}/entrances", response_model=schemas.StageEntranceExitDTO)
 def stage_entrance_create(scene_id: int, body: schemas.StageEntranceExitDTO, project=Depends(get_project), db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    _scene_or_404(db, project.id, scene_id)
+    if body.character_id is not None:
+        _character_or_404(db, project.id, body.character_id)
     row = db.create_stage_entrance_exit(scene_id, character_id=body.character_id, type=body.type,
         moment_order=body.moment_order, cue_text=body.cue_text, notes=body.notes)
     broker.publish("scenes_changed", project_id=project.id)
@@ -171,11 +266,13 @@ def stage_entrance_create(scene_id: int, body: schemas.StageEntranceExitDTO, pro
 
 @router.get("/projects/{project_id}/stage/scenes/{scene_id}/entrances", response_model=list[schemas.StageEntranceExitDTO])
 def stage_entrances_list(scene_id: int, project=Depends(get_project), db: Database = Depends(get_db)):
+    _scene_or_404(db, project.id, scene_id)
     return [_ee_dto(r) for r in db.get_stage_entrances_exits(scene_id)]
 
 
 @router.post("/projects/{project_id}/stage/scenes/{scene_id}/cues", response_model=schemas.StageCueDTO)
 def stage_cue_create(scene_id: int, body: schemas.StageCueDTO, project=Depends(get_project), db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    _scene_or_404(db, project.id, scene_id)
     row = db.create_stage_cue(scene_id, cue_type=body.cue_type, moment_order=body.moment_order,
         cue_text=body.cue_text, notes=body.notes)
     broker.publish("scenes_changed", project_id=project.id)
@@ -184,11 +281,17 @@ def stage_cue_create(scene_id: int, body: schemas.StageCueDTO, project=Depends(g
 
 @router.get("/projects/{project_id}/stage/scenes/{scene_id}/cues", response_model=list[schemas.StageCueDTO])
 def stage_cues_list(scene_id: int, project=Depends(get_project), db: Database = Depends(get_db)):
+    _scene_or_404(db, project.id, scene_id)
     return [_cue_dto(r) for r in db.get_stage_cues(scene_id)]
 
 
 @router.post("/projects/{project_id}/stage/scenes/{scene_id}/business", response_model=schemas.StageBusinessDTO)
 def stage_business_create(scene_id: int, body: schemas.StageBusinessDTO, project=Depends(get_project), db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    _scene_or_404(db, project.id, scene_id)
+    if body.prop_psyke_entry_id is not None:
+        _entry_or_404(db, project.id, body.prop_psyke_entry_id)
+    if body.character_id is not None:
+        _character_or_404(db, project.id, body.character_id)
     row = db.create_stage_business(scene_id, prop_psyke_entry_id=body.prop_psyke_entry_id,
         character_id=body.character_id, stage_action=body.stage_action,
         continuity_note=body.continuity_note, moment_order=body.moment_order)
@@ -198,6 +301,7 @@ def stage_business_create(scene_id: int, body: schemas.StageBusinessDTO, project
 
 @router.get("/projects/{project_id}/stage/scenes/{scene_id}/business", response_model=list[schemas.StageBusinessDTO])
 def stage_business_list(scene_id: int, project=Depends(get_project), db: Database = Depends(get_db)):
+    _scene_or_404(db, project.id, scene_id)
     return [_biz_dto(r) for r in db.get_stage_business(scene_id)]
 
 
@@ -248,6 +352,7 @@ def seasons_list(project=Depends(get_project), db: Database = Depends(get_db)):
 
 @router.post("/projects/{project_id}/series/seasons/{season_id}/episodes", response_model=schemas.EpisodeDTO)
 def episode_create(season_id: int, body: schemas.EpisodeDTO, project=Depends(get_project), db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    _season_or_404(db, project.id, season_id)
     e = db.create_episode(season_id, project_id=project.id, episode_number=body.episode_number or None,
         title=body.title, logline=body.logline, summary=body.summary, cliffhanger=body.cliffhanger, status=body.status)
     broker.publish("project_data_changed", project_id=project.id)
@@ -261,6 +366,10 @@ def episodes_list(project=Depends(get_project), db: Database = Depends(get_db)):
 
 @router.post("/projects/{project_id}/series/arcs", response_model=schemas.SeriesArcDTO)
 def arc_create(body: schemas.SeriesArcDTO, project=Depends(get_project), db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    if body.setup_episode_id is not None:
+        _episode_or_404(db, project.id, body.setup_episode_id)
+    if body.payoff_episode_id is not None:
+        _episode_or_404(db, project.id, body.payoff_episode_id)
     a = db.create_series_arc(project.id, scope=body.scope, title=body.title, summary=body.summary,
         setup_episode_id=body.setup_episode_id, payoff_episode_id=body.payoff_episode_id,
         status=body.status, notes=body.notes)
@@ -281,6 +390,7 @@ def _plotline_dto(p) -> schemas.EpisodePlotlineDTO:
 
 @router.post("/projects/{project_id}/series/episodes/{episode_id}/plotlines", response_model=schemas.EpisodePlotlineDTO)
 def episode_plotline_create(episode_id: int, body: schemas.EpisodePlotlineDTO, project=Depends(get_project), db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    _episode_or_404(db, project.id, episode_id)
     row = db.create_episode_plotline(episode_id, type=body.type or "A", title=body.title,
         summary=body.summary, resolution_state=body.resolution_state)
     broker.publish("project_data_changed", project_id=project.id)
@@ -289,6 +399,7 @@ def episode_plotline_create(episode_id: int, body: schemas.EpisodePlotlineDTO, p
 
 @router.get("/projects/{project_id}/series/episodes/{episode_id}/plotlines", response_model=list[schemas.EpisodePlotlineDTO])
 def episode_plotlines_list(episode_id: int, project=Depends(get_project), db: Database = Depends(get_db)):
+    _episode_or_404(db, project.id, episode_id)
     return [_plotline_dto(p) for p in db.get_episode_plotlines(episode_id)]
 
 
@@ -324,181 +435,285 @@ def psyke_series_memory_set(entry_id: int, body: schemas.SeriesMemoryDTO, projec
 # stage cue/entrance from the app instead of only ever appending.
 # ---------------------------------------------------------------------------
 
-_RESERVED = {"id", "project_id", "page_id", "season_id", "episode_id", "scene_id"}
+_RESERVED = {
+    "id", "project_id", "page_id", "season_id", "episode_id", "scene_id",
+    "continuity_item_id",
+}
 
 
-def _patch_fields(body: dict[str, Any]) -> dict[str, Any]:
-    """Keep only real, provided column values (drop ids and unset Nones)."""
-    return {k: v for k, v in (body or {}).items() if k not in _RESERVED and v is not None}
+def _patch_fields(body: Any) -> dict[str, Any]:
+    """Keep only provided mutable columns; explicit null clears nullable links."""
+    raw = body.model_dump(exclude_unset=True) if hasattr(body, "model_dump") else (body or {})
+    return {k: v for k, v in raw.items() if k not in _RESERVED}
 
 
 # --- Graphic novel -----------------------------------------------------------
-@router.patch("/projects/{project_id}/gn/pages/{page_id}")
-def gn_page_update(page_id: int, body: dict[str, Any], project=Depends(get_project),
+@router.patch(
+    "/projects/{project_id}/gn/pages/{page_id}",
+    response_model=schemas.UpdatedResultDTO,
+)
+def gn_page_update(page_id: int, body: schemas.GnPageDTO, project=Depends(get_project),
                    db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    _gn_page_or_404(db, project.id, page_id)
     db.update_gn_page(page_id, **_patch_fields(body))
     broker.publish("project_data_changed", project_id=project.id)
     return {"ok": True, "updated": page_id}
 
 
-@router.delete("/projects/{project_id}/gn/pages/{page_id}")
+@router.delete(
+    "/projects/{project_id}/gn/pages/{page_id}",
+    response_model=schemas.DeleteResultDTO,
+)
 def gn_page_delete(page_id: int, project=Depends(get_project),
                    db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    _gn_page_or_404(db, project.id, page_id)
     db.delete_gn_page(page_id)
     broker.publish("project_data_changed", project_id=project.id)
     return {"ok": True, "deleted": page_id}
 
 
-@router.patch("/projects/{project_id}/gn/panels/{panel_id}")
-def gn_panel_update(panel_id: int, body: dict[str, Any], project=Depends(get_project),
+@router.patch(
+    "/projects/{project_id}/gn/panels/{panel_id}",
+    response_model=schemas.UpdatedResultDTO,
+)
+def gn_panel_update(panel_id: int, body: schemas.GnPanelDTO, project=Depends(get_project),
                     db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    _gn_panel_or_404(db, project.id, panel_id)
     db.update_gn_panel(panel_id, **_patch_fields(body))
     broker.publish("project_data_changed", project_id=project.id)
     return {"ok": True, "updated": panel_id}
 
 
-@router.delete("/projects/{project_id}/gn/panels/{panel_id}")
+@router.delete(
+    "/projects/{project_id}/gn/panels/{panel_id}",
+    response_model=schemas.DeleteResultDTO,
+)
 def gn_panel_delete(panel_id: int, project=Depends(get_project),
                     db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    _gn_panel_or_404(db, project.id, panel_id)
     db.delete_gn_panel(panel_id)
     broker.publish("project_data_changed", project_id=project.id)
     return {"ok": True, "deleted": panel_id}
 
 
 # --- Series ------------------------------------------------------------------
-@router.patch("/projects/{project_id}/series/seasons/{season_id}")
-def season_update(season_id: int, body: dict[str, Any], project=Depends(get_project),
+@router.patch(
+    "/projects/{project_id}/series/seasons/{season_id}",
+    response_model=schemas.UpdatedResultDTO,
+)
+def season_update(season_id: int, body: schemas.SeasonDTO, project=Depends(get_project),
                   db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    _season_or_404(db, project.id, season_id)
     db.update_season(season_id, **_patch_fields(body))
     broker.publish("project_data_changed", project_id=project.id)
     return {"ok": True, "updated": season_id}
 
 
-@router.delete("/projects/{project_id}/series/seasons/{season_id}")
+@router.delete(
+    "/projects/{project_id}/series/seasons/{season_id}",
+    response_model=schemas.DeleteResultDTO,
+)
 def season_delete(season_id: int, project=Depends(get_project),
                   db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    _season_or_404(db, project.id, season_id)
     db.delete_season(season_id)
     broker.publish("project_data_changed", project_id=project.id)
     return {"ok": True, "deleted": season_id}
 
 
-@router.patch("/projects/{project_id}/series/episodes/{episode_id}")
-def episode_update(episode_id: int, body: dict[str, Any], project=Depends(get_project),
+@router.patch(
+    "/projects/{project_id}/series/episodes/{episode_id}",
+    response_model=schemas.UpdatedResultDTO,
+)
+def episode_update(episode_id: int, body: schemas.EpisodeDTO, project=Depends(get_project),
                    db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    _episode_or_404(db, project.id, episode_id)
     db.update_episode(episode_id, **_patch_fields(body))
     broker.publish("project_data_changed", project_id=project.id)
     return {"ok": True, "updated": episode_id}
 
 
-@router.delete("/projects/{project_id}/series/episodes/{episode_id}")
+@router.delete(
+    "/projects/{project_id}/series/episodes/{episode_id}",
+    response_model=schemas.DeleteResultDTO,
+)
 def episode_delete(episode_id: int, project=Depends(get_project),
                    db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    _episode_or_404(db, project.id, episode_id)
     db.delete_episode(episode_id)
     broker.publish("project_data_changed", project_id=project.id)
     return {"ok": True, "deleted": episode_id}
 
 
-@router.patch("/projects/{project_id}/series/arcs/{arc_id}")
-def series_arc_update(arc_id: int, body: dict[str, Any], project=Depends(get_project),
+@router.patch(
+    "/projects/{project_id}/series/arcs/{arc_id}",
+    response_model=schemas.UpdatedResultDTO,
+)
+def series_arc_update(arc_id: int, body: schemas.SeriesArcDTO, project=Depends(get_project),
                       db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
-    db.update_series_arc(arc_id, **_patch_fields(body))
+    _series_arc_or_404(db, project.id, arc_id)
+    fields = _patch_fields(body)
+    if fields.get("setup_episode_id") is not None:
+        _episode_or_404(db, project.id, fields["setup_episode_id"])
+    if fields.get("payoff_episode_id") is not None:
+        _episode_or_404(db, project.id, fields["payoff_episode_id"])
+    db.update_series_arc(arc_id, **fields)
     broker.publish("project_data_changed", project_id=project.id)
     return {"ok": True, "updated": arc_id}
 
 
 # --- Stage -------------------------------------------------------------------
-@router.delete("/projects/{project_id}/stage/entrances/{row_id}")
+@router.delete(
+    "/projects/{project_id}/stage/entrances/{row_id}",
+    response_model=schemas.DeleteResultDTO,
+)
 def stage_entrance_delete(row_id: int, project=Depends(get_project),
                           db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    _stage_row_or_404(db, project.id, row_id, db.get_stage_entrance_exit_by_id, "Stage entrance")
     db.delete_stage_entrance_exit(row_id)
     broker.publish("project_data_changed", project_id=project.id)
     return {"ok": True, "deleted": row_id}
 
 
-@router.delete("/projects/{project_id}/stage/cues/{row_id}")
+@router.delete(
+    "/projects/{project_id}/stage/cues/{row_id}",
+    response_model=schemas.DeleteResultDTO,
+)
 def stage_cue_delete(row_id: int, project=Depends(get_project),
                      db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    _stage_row_or_404(db, project.id, row_id, db.get_stage_cue_by_id, "Stage cue")
     db.delete_stage_cue(row_id)
     broker.publish("project_data_changed", project_id=project.id)
     return {"ok": True, "deleted": row_id}
 
 
 # --- Class-C feature completions: the update/delete the DB previously lacked --
-@router.patch("/projects/{project_id}/gn/continuity-items/{item_id}")
-def gn_continuity_item_update(item_id: int, body: dict[str, Any], project=Depends(get_project),
+@router.patch(
+    "/projects/{project_id}/gn/continuity-items/{item_id}",
+    response_model=schemas.UpdatedResultDTO,
+)
+def gn_continuity_item_update(item_id: int, body: schemas.GnContinuityItemDTO, project=Depends(get_project),
                               db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
-    db.update_gn_continuity_item(item_id, **_patch_fields(body))
+    _gn_item_or_404(db, project.id, item_id)
+    fields = _patch_fields(body)
+    if fields.get("linked_psyke_entry_id") is not None:
+        _entry_or_404(db, project.id, fields["linked_psyke_entry_id"])
+    db.update_gn_continuity_item(item_id, **fields)
     broker.publish("project_data_changed", project_id=project.id)
     return {"ok": True, "updated": item_id}
 
 
-@router.delete("/projects/{project_id}/gn/continuity-items/{item_id}")
+@router.delete(
+    "/projects/{project_id}/gn/continuity-items/{item_id}",
+    response_model=schemas.DeleteResultDTO,
+)
 def gn_continuity_item_delete(item_id: int, project=Depends(get_project),
                               db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    _gn_item_or_404(db, project.id, item_id)
     db.delete_gn_continuity_item(item_id)
     broker.publish("project_data_changed", project_id=project.id)
     return {"ok": True, "deleted": item_id}
 
 
-@router.patch("/projects/{project_id}/gn/continuity-appearances/{appearance_id}")
-def gn_continuity_appearance_update(appearance_id: int, body: dict[str, Any], project=Depends(get_project),
+@router.patch(
+    "/projects/{project_id}/gn/continuity-appearances/{appearance_id}",
+    response_model=schemas.UpdatedResultDTO,
+)
+def gn_continuity_appearance_update(appearance_id: int, body: schemas.GnContinuityAppearanceDTO, project=Depends(get_project),
                                     db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
-    db.update_gn_continuity_appearance(appearance_id, **_patch_fields(body))
+    appearance = _gn_appearance_or_404(db, project.id, appearance_id)
+    fields = _patch_fields(body)
+    if fields.get("panel_id") is not None:
+        panel = _gn_panel_or_404(db, project.id, fields["panel_id"])
+        if appearance.page_id is not None and panel.page_id != appearance.page_id:
+            raise not_found("Graphic-novel panel does not belong to the selected page")
+    db.update_gn_continuity_appearance(appearance_id, **fields)
     broker.publish("project_data_changed", project_id=project.id)
     return {"ok": True, "updated": appearance_id}
 
 
-@router.delete("/projects/{project_id}/gn/continuity-appearances/{appearance_id}")
+@router.delete(
+    "/projects/{project_id}/gn/continuity-appearances/{appearance_id}",
+    response_model=schemas.DeleteResultDTO,
+)
 def gn_continuity_appearance_delete(appearance_id: int, project=Depends(get_project),
                                     db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    _gn_appearance_or_404(db, project.id, appearance_id)
     db.delete_gn_continuity_appearance(appearance_id)
     broker.publish("project_data_changed", project_id=project.id)
     return {"ok": True, "deleted": appearance_id}
 
 
-@router.patch("/projects/{project_id}/stage/entrances/{row_id}")
-def stage_entrance_update(row_id: int, body: dict[str, Any], project=Depends(get_project),
+@router.patch(
+    "/projects/{project_id}/stage/entrances/{row_id}",
+    response_model=schemas.UpdatedResultDTO,
+)
+def stage_entrance_update(row_id: int, body: schemas.StageEntranceExitDTO, project=Depends(get_project),
                           db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
-    db.update_stage_entrance_exit(row_id, **_patch_fields(body))
+    _stage_row_or_404(db, project.id, row_id, db.get_stage_entrance_exit_by_id, "Stage entrance")
+    fields = _patch_fields(body)
+    if fields.get("character_id") is not None:
+        _character_or_404(db, project.id, fields["character_id"])
+    db.update_stage_entrance_exit(row_id, **fields)
     broker.publish("project_data_changed", project_id=project.id)
     return {"ok": True, "updated": row_id}
 
 
-@router.patch("/projects/{project_id}/stage/cues/{row_id}")
-def stage_cue_update(row_id: int, body: dict[str, Any], project=Depends(get_project),
+@router.patch(
+    "/projects/{project_id}/stage/cues/{row_id}",
+    response_model=schemas.UpdatedResultDTO,
+)
+def stage_cue_update(row_id: int, body: schemas.StageCueDTO, project=Depends(get_project),
                      db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    _stage_row_or_404(db, project.id, row_id, db.get_stage_cue_by_id, "Stage cue")
     db.update_stage_cue(row_id, **_patch_fields(body))
     broker.publish("project_data_changed", project_id=project.id)
     return {"ok": True, "updated": row_id}
 
 
-@router.delete("/projects/{project_id}/stage/business/{row_id}")
+@router.delete(
+    "/projects/{project_id}/stage/business/{row_id}",
+    response_model=schemas.DeleteResultDTO,
+)
 def stage_business_delete(row_id: int, project=Depends(get_project),
                           db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    _stage_row_or_404(db, project.id, row_id, db.get_stage_business_by_id, "Stage business")
     db.delete_stage_business(row_id)
     broker.publish("project_data_changed", project_id=project.id)
     return {"ok": True, "deleted": row_id}
 
 
-@router.delete("/projects/{project_id}/series/arcs/{arc_id}")
+@router.delete(
+    "/projects/{project_id}/series/arcs/{arc_id}",
+    response_model=schemas.DeleteResultDTO,
+)
 def series_arc_delete(arc_id: int, project=Depends(get_project),
                       db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    _series_arc_or_404(db, project.id, arc_id)
     db.delete_series_arc(arc_id)
     broker.publish("project_data_changed", project_id=project.id)
     return {"ok": True, "deleted": arc_id}
 
 
-@router.patch("/projects/{project_id}/series/plotlines/{plotline_id}")
-def episode_plotline_update(plotline_id: int, body: dict[str, Any], project=Depends(get_project),
+@router.patch(
+    "/projects/{project_id}/series/plotlines/{plotline_id}",
+    response_model=schemas.UpdatedResultDTO,
+)
+def episode_plotline_update(plotline_id: int, body: schemas.EpisodePlotlineDTO, project=Depends(get_project),
                             db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    _episode_plotline_or_404(db, project.id, plotline_id)
     db.update_episode_plotline(plotline_id, **_patch_fields(body))
     broker.publish("project_data_changed", project_id=project.id)
     return {"ok": True, "updated": plotline_id}
 
 
-@router.delete("/projects/{project_id}/series/plotlines/{plotline_id}")
+@router.delete(
+    "/projects/{project_id}/series/plotlines/{plotline_id}",
+    response_model=schemas.DeleteResultDTO,
+)
 def episode_plotline_delete(plotline_id: int, project=Depends(get_project),
                             db: Database = Depends(get_db), broker: ApiEventBroker = Depends(get_broker)):
+    _episode_plotline_or_404(db, project.id, plotline_id)
     db.delete_episode_plotline(plotline_id)
     broker.publish("project_data_changed", project_id=project.id)
     return {"ok": True, "deleted": plotline_id}

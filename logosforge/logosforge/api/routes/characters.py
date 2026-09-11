@@ -52,7 +52,10 @@ def create_character(
     return serializers.character_to_dto(db, character)
 
 
-@router.delete("/projects/{project_id}/characters/{character_id}")
+@router.delete(
+    "/projects/{project_id}/characters/{character_id}",
+    response_model=schemas.DeleteResultDTO,
+)
 def delete_character(
     character_id: int,
     project=Depends(get_project),
@@ -111,7 +114,10 @@ def update_character(
     return serializers.character_to_dto(db, db.get_character_by_id(character_id))
 
 
-@router.post("/projects/{project_id}/characters/backfill-links")
+@router.post(
+    "/projects/{project_id}/characters/backfill-links",
+    response_model=schemas.CharacterBackfillResultDTO,
+)
 def backfill_character_links(
     project=Depends(get_project),
     db: Database = Depends(get_db),

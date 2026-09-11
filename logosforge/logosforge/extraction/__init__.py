@@ -292,10 +292,15 @@ def _known_entities(db: Database, project_id: int) -> list[str]:
 # --------------------------------------------------------------------------- #
 # Orchestrator (read-only proposals)
 # --------------------------------------------------------------------------- #
+class ExtractionCancelled(Exception):
+    """Cooperative cancellation at a safe scene boundary."""
+
+
 def extract_project(
     db: Database, project_id: int, provider=None, *,
     use_llm: bool = True, timeout: int = 60,
     on_progress: Callable[[int, int, str], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> ProjectExtraction:
     """Build the proposal set. ``on_progress(done, total, label)`` is invoked after
     each scene (and before the cross-scene pass) so a job runner can stream progress."""
@@ -309,6 +314,8 @@ def extract_project(
     out = ProjectExtraction(project_id=project_id, used_llm=bool(use_llm))
     briefs = []
     for i, s in enumerate(scenes):
+        if should_cancel is not None and should_cancel():
+            raise ExtractionCancelled("Extraction cancelled")
         text = s.content or ""
         ex = SceneExtraction(scene_id=s.id, title=s.title, characters=extract_characters(text, engine))
         if use_llm and text.strip():
@@ -318,9 +325,13 @@ def extract_project(
         if on_progress is not None:
             on_progress(i + 1, total, s.title or f"Scene {s.id}")
     if use_llm and len(briefs) >= 2:
+        if should_cancel is not None and should_cancel():
+            raise ExtractionCancelled("Extraction cancelled")
         if on_progress is not None:
             on_progress(total, total, "cross-scene setup / payoff")
         out.setup_payoffs = extract_setup_payoffs(briefs, provider, entities=entities, timeout=timeout)
+    if should_cancel is not None and should_cancel():
+        raise ExtractionCancelled("Extraction cancelled")
     # Advisory near-duplicate / new-vs-existing hints for the review UI (no merging).
     # Fully best-effort: a hinting failure must never break the extraction itself.
     try:

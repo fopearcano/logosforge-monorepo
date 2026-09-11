@@ -370,7 +370,7 @@ class GraphicNovelManuscriptView(QWidget):
             header = QLabel((act or "Act").upper())
             header.setObjectName("gnActHeader")
             header.setStyleSheet(
-                f"font-size: 18px; font-weight: bold; letter-spacing: 1px;"
+                f"font-size: 18px; font-weight: bold;"
                 f" color: {theme.TEXT_PRIMARY}; padding-top: 8px;")
             self._doc_layout.addWidget(header)
             rule = QFrame()

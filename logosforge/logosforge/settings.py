@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import copy
 import json
+import os
+import threading
 from pathlib import Path
+from uuid import uuid4
 
 CONFIG_DIR = Path.home() / ".logosforge"
 SETTINGS_FILE = CONFIG_DIR / "settings.json"
@@ -199,7 +203,8 @@ DEFAULTS: dict[str, object] = {
 
 class SettingsManager:
     def __init__(self) -> None:
-        self._data: dict[str, object] = dict(DEFAULTS)
+        self._lock = threading.RLock()
+        self._data: dict[str, object] = copy.deepcopy(DEFAULTS)
         self._load()
 
     def _load(self) -> None:
@@ -213,30 +218,80 @@ class SettingsManager:
         except (json.JSONDecodeError, OSError):
             pass
 
-    def _save(self) -> None:
+    def _save_locked(self) -> bool:
+        tmp: Path | None = None
         try:
-            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-            SETTINGS_FILE.write_text(
-                json.dumps(self._data, indent=2), encoding="utf-8",
+            SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            tmp = SETTINGS_FILE.with_name(
+                f".{SETTINGS_FILE.name}.{os.getpid()}.{uuid4().hex}.tmp"
             )
-        except OSError:
-            pass
+            with tmp.open("x", encoding="utf-8", newline="\n") as handle:
+                try:
+                    os.chmod(tmp, 0o600)
+                except OSError:
+                    pass
+                json.dump(self._data, handle, indent=2)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp, SETTINGS_FILE)
+            return True
+        except (OSError, TypeError, ValueError):
+            return False
+        finally:
+            if tmp is not None:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+    def _save(self) -> bool:
+        with self._lock:
+            return self._save_locked()
 
     def get(self, key: str) -> object:
-        return self._data.get(key, DEFAULTS.get(key))
+        with self._lock:
+            return copy.deepcopy(self._data.get(key, DEFAULTS.get(key)))
 
-    def set(self, key: str, value: object) -> None:
-        if self._data.get(key) == value:
-            return
-        self._data[key] = value
-        self._save()
+    def snapshot(self) -> dict[str, object]:
+        """Return one internally consistent, mutation-safe settings snapshot."""
+        with self._lock:
+            return copy.deepcopy(self._data)
+
+    def update(self, changes: dict[str, object]) -> bool:
+        """Persist a group atomically; return False and roll back on I/O failure."""
+        with self._lock:
+            effective = {
+                key: copy.deepcopy(value)
+                for key, value in changes.items()
+                if self._data.get(key) != value
+            }
+            if not effective:
+                return True
+            before = {key: copy.deepcopy(self._data.get(key)) for key in effective}
+            missing = {key for key in effective if key not in self._data}
+            self._data.update(effective)
+            if self._save_locked():
+                return True
+            for key, value in before.items():
+                if key in missing:
+                    self._data.pop(key, None)
+                else:
+                    self._data[key] = value
+            return False
+
+    def set(self, key: str, value: object) -> bool:
+        return self.update({key: value})
 
 
 _instance: SettingsManager | None = None
+_instance_lock = threading.Lock()
 
 
 def get_manager() -> SettingsManager:
     global _instance
     if _instance is None:
-        _instance = SettingsManager()
+        with _instance_lock:
+            if _instance is None:
+                _instance = SettingsManager()
     return _instance

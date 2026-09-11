@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import stat
+import subprocess
 import sys
 import types
 import warnings
@@ -140,9 +141,10 @@ def test_invalid_paths_never_crash():
 # ==========================================================================
 
 
-def test_faster_whisper_missing_dependency_reported():
-    # CI has no faster-whisper installed.
-    assert "faster_whisper" not in sys.modules
+def test_faster_whisper_missing_dependency_reported(monkeypatch):
+    # Simulate absence explicitly; developer and CI environments may install the
+    # optional voice extra.
+    monkeypatch.setitem(sys.modules, "faster_whisper", None)
     status, msg = vs.check_faster_whisper(_settings(model_path="/m"))
     assert status == ST_MISSING_DEPENDENCY
     assert "faster-whisper" in msg
@@ -160,7 +162,7 @@ def test_faster_whisper_ready_with_mocked_module(monkeypatch, tmp_path):
     assert status2 == ST_MISSING_MODEL
 
 
-def test_whisper_cpp_statuses(tmp_path):
+def test_whisper_cpp_statuses(tmp_path, monkeypatch):
     model = _model_file(tmp_path)
     # Missing executable path / file.
     assert vs.check_whisper_cpp(_settings(model_path=model))[0] == \
@@ -170,8 +172,15 @@ def test_whisper_cpp_statuses(tmp_path):
         ST_MISSING_EXECUTABLE
     # Present but not runnable.
     not_exec = _stub_exe(tmp_path, executable=False)
+    real_access = os.access
+    monkeypatch.setattr(
+        os,
+        "access",
+        lambda candidate, mode: False if str(candidate) == not_exec else real_access(candidate, mode),
+    )
     assert vs.check_whisper_cpp(_settings(
         executable_path=not_exec, model_path=model))[0] == ST_ERROR
+    monkeypatch.setattr(os, "access", real_access)
     # Runnable but missing model.
     exe = _stub_exe(tmp_path)
     assert vs.check_whisper_cpp(_settings(
@@ -180,6 +189,11 @@ def test_whisper_cpp_statuses(tmp_path):
     status, msg = vs.check_whisper_cpp(_settings(
         executable_path=exe, model_path=model))
     assert status == ST_READY
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda cmd, **_kwargs: subprocess.CompletedProcess(cmd, 0, stdout="", stderr=""),
+    )
     ok, probe = vs.probe_whisper_cpp(exe)
     assert ok is True and "responded" in probe
 
@@ -212,8 +226,16 @@ def test_microphone_mock_backend_available():
     assert ok is True and msg
 
 
-def test_microphone_unavailable_is_graceful():
-    # local_process needs sounddevice — absent in CI: clear message, no crash.
+def test_microphone_unavailable_is_graceful(monkeypatch):
+    # Simulate an unavailable device explicitly; sounddevice may be installed on
+    # a developer workstation or self-hosted release runner.
+    from logosforge.voice import recorder as rec
+
+    class UnavailableRecorder:
+        def availability(self):
+            return False, "No microphone device available."
+
+    monkeypatch.setattr(rec, "build_recorder", lambda _settings: UnavailableRecorder())
     ok, msg = microphone_diagnostics(_settings(backend_mode="local_process"))
     assert ok is False
     assert msg                                          # actionable message
@@ -243,22 +265,36 @@ def test_test_transcription_mock_no_file_needed():
     assert ok is True and "mock transcript" in text
 
 
-def test_test_transcription_via_whisper_cpp_stub(tmp_path):
+def test_test_transcription_via_whisper_cpp_stub(tmp_path, monkeypatch):
     exe = _stub_exe(tmp_path)
     model = _model_file(tmp_path)
     wav = _wav_file(tmp_path)
     settings = _settings(backend_mode="whisper_cpp", executable_path=exe,
                          model_path=model)
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda cmd, **_kwargs: subprocess.CompletedProcess(
+            cmd, 0, stdout="stub transcript\n", stderr="",
+        ),
+    )
     ok, text = run_test_transcription(settings, wav_path=wav)
     assert ok is True and text == "stub transcript"
 
 
-def test_test_transcription_failure_non_blocking(tmp_path):
+def test_test_transcription_failure_non_blocking(tmp_path, monkeypatch):
     exe = _stub_exe(tmp_path, body="#!/bin/sh\necho bad >&2\nexit 3\n")
     model = _model_file(tmp_path)
     wav = _wav_file(tmp_path)
     settings = _settings(backend_mode="whisper_cpp", executable_path=exe,
                          model_path=model)
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda cmd, **_kwargs: subprocess.CompletedProcess(
+            cmd, 3, stdout="", stderr="bad\n",
+        ),
+    )
     ok, msg = run_test_transcription(settings, wav_path=wav)
     assert ok is False and "whisper.cpp" in msg
 
@@ -277,6 +313,13 @@ def test_whisper_cpp_transcriber_deletes_temp_audio(tmp_path, monkeypatch):
     exe = _stub_exe(tmp_path)
     settings = _settings(backend_mode="whisper_cpp", executable_path=exe,
                          model_path=_model_file(tmp_path))
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda cmd, **_kwargs: subprocess.CompletedProcess(
+            cmd, 0, stdout="stub transcript\n", stderr="",
+        ),
+    )
     seg = WhisperCppTranscriber(settings).transcribe(
         b"\x00\x00" * 1600, sample_rate=16000)
     assert seg.text == "stub transcript"

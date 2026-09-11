@@ -11,6 +11,9 @@ SURROUNDING_SUMMARY_MAX_CHARS = 200
 PREVIOUS_SCENES_LIMIT = 2
 STORY_ARC_SUMMARY_MAX_CHARS = 200
 TOP_TAGS_LIMIT = 7
+OUTLINE_CONTEXT_MAX_NODES = 120
+OUTLINE_CONTEXT_MAX_CHARS = 4000
+OUTLINE_DESCRIPTION_MAX_CHARS = 180
 
 PSYKE_GLOBAL_NOTES_MAX = 100
 PSYKE_RELEVANT_NOTES_MAX = 150
@@ -228,9 +231,62 @@ def _build_screenplay_context(
 
 
 def gather_outline_context(db: Database, project_id: int) -> str:
+    nodes = db.get_outline_nodes(project_id)
     scenes = db.get_all_scenes(project_id)
-    if not scenes:
+    if not nodes and not scenes:
         return ""
+
+    if nodes:
+        scene_by_id = {scene.id: scene for scene in scenes}
+        node_by_id = {node.id: node for node in nodes if node.id is not None}
+        children: dict[int | None, list] = {}
+        for node in nodes:
+            parent_id = node.parent_id if node.parent_id in node_by_id else None
+            children.setdefault(parent_id, []).append(node)
+        for siblings in children.values():
+            siblings.sort(key=lambda node: (node.sort_order, node.id or 0))
+
+        lines = [
+            "[Planned Story Outline — authoritative]",
+            "This hierarchy is the writer's intended structure; drafted scenes may lag behind it.",
+        ]
+        visited: set[int] = set()
+
+        def visit(node, depth: int) -> None:
+            if node.id is None or node.id in visited or len(visited) >= OUTLINE_CONTEXT_MAX_NODES:
+                return
+            visited.add(node.id)
+            title = " ".join((node.title or "Untitled").split())
+            line = f"{'  ' * min(depth, 8)}- {title}"
+            description = " ".join((node.description or "").split())
+            if description:
+                line += f" — {description[:OUTLINE_DESCRIPTION_MAX_CHARS]}"
+            linked_scene = scene_by_id.get(node.scene_id)
+            if linked_scene is not None:
+                line += f" [linked scene: {linked_scene.title}]"
+            lines.append(line)
+            for child in children.get(node.id, []):
+                visit(child, depth + 1)
+
+        for root in children.get(None, []):
+            visit(root, 0)
+        # Malformed cycles/orphans remain visible exactly once rather than
+        # silently disappearing from Billy's understanding of the plan.
+        for node in sorted(nodes, key=lambda item: (item.sort_order, item.id or 0)):
+            visit(node, 0)
+
+        omitted = len(node_by_id) - len(visited)
+        if omitted > 0:
+            lines.append(f"… (+{omitted} outline items omitted)")
+        if scenes:
+            lines.append("")
+            lines.append("[Drafted Scenes]")
+            for index, scene in enumerate(scenes[:OUTLINE_CONTEXT_MAX_NODES], 1):
+                lines.append(f"  {index}. {scene.title}")
+            if len(scenes) > OUTLINE_CONTEXT_MAX_NODES:
+                lines.append(f"… (+{len(scenes) - OUTLINE_CONTEXT_MAX_NODES} scenes omitted)")
+        return _truncate("\n".join(lines), OUTLINE_CONTEXT_MAX_CHARS)
+
     lines = ["[Story Outline]"]
     for i, s in enumerate(scenes, 1):
         line = f"  {i}. {s.title}"
@@ -239,7 +295,7 @@ def gather_outline_context(db: Database, project_id: int) -> str:
         if s.summary:
             line += f" — {s.summary[:80]}"
         lines.append(line)
-    return "\n".join(lines)
+    return _truncate("\n".join(lines), OUTLINE_CONTEXT_MAX_CHARS)
 
 
 def gather_story_memory(db: Database, project_id: int) -> str:

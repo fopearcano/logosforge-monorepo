@@ -9,6 +9,7 @@ appears only in Series mode. No Season/Episode storage, no image generation.
 
 from __future__ import annotations
 
+import builtins
 import os
 import sys
 import warnings
@@ -108,7 +109,14 @@ def test_pdf_export_degrades_gracefully_when_reportlab_missing(monkeypatch, tmp_
     # Force reportlab to be unavailable regardless of the environment. The general
     # PDF export (the UI path) raises ImportError, which MainWindow catches and
     # turns into the "install …" message — graceful degradation, no crash.
-    monkeypatch.setitem(sys.modules, "reportlab", None)
+    real_import = builtins.__import__
+
+    def without_reportlab(name, *args, **kwargs):
+        if name == "reportlab" or name.startswith("reportlab."):
+            raise ModuleNotFoundError("reportlab intentionally unavailable in this test")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", without_reportlab)
     with pytest.raises((ImportError, ModuleNotFoundError)):
         export.export_pdf(db, pid, str(tmp_path / "x.pdf"))
 
@@ -118,7 +126,14 @@ def test_docx_export_degrades_gracefully_when_docx_missing(monkeypatch, tmp_path
     db = Database()
     pid = db.create_project("N", narrative_engine="novel").id
     _scene(db, pid, content="Prose.", act="Act 1", chapter="Chapter 1")
-    monkeypatch.setitem(sys.modules, "docx", None)
+    real_import = builtins.__import__
+
+    def without_docx(name, *args, **kwargs):
+        if name == "docx" or name.startswith("docx."):
+            raise ModuleNotFoundError("python-docx intentionally unavailable in this test")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", without_docx)
     with pytest.raises((ImportError, ModuleNotFoundError)):
         export.export_docx_manuscript(db, pid, str(tmp_path / "x.docx"))
 

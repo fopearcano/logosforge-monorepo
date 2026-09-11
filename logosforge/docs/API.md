@@ -53,12 +53,15 @@ Configuration comes from `API_*` environment variables (CLI flags win):
 | `API_MODE`             | `desktop`     | `desktop` \| `lan` \| `remote`.                    |
 | `API_ALLOWED_ORIGINS`  | *(empty)*     | Comma-separated CORS origins (lan/remote).         |
 | `API_AUTH_TOKEN`       | *(empty)*     | If set, all `/api/*` routes (except health) require `Authorization: Bearer <token>`. |
+| `API_INSTANCE_NONCE`   | *(empty)*     | Optional process identity echoed by health; Electron sets a random value per launch. |
 | `LOGOSFORGE_DB_PATH` | `logosforge.db` | SQLite project DB the API serves.              |
 
 **CORS / security**
 
 * **desktop** — any `http://localhost:*` / `http://127.0.0.1:*` origin is
-  allowed (Electron/Vite pick a free port). Bind to `127.0.0.1` only.
+  allowed (Electron/Vite pick a free port). Bind to `127.0.0.1` only. Pro
+  Electron generates `API_AUTH_TOKEN` and `API_INSTANCE_NONCE` in memory for
+  every launch; they are never written to settings or project files.
 * **lan / remote** — only origins in `API_ALLOWED_ORIGINS` are allowed. Set
   `API_AUTH_TOKEN` before exposing the API beyond localhost. Authentication is
   a single clean hook (`require_auth`) ready to grow into real auth.
@@ -100,13 +103,18 @@ backend. `version` mirrors `api_version` for backward compatibility.
 GET    /api/projects
 POST   /api/projects                       { title, description?, narrative_engine?, default_writing_format? }
 GET    /api/projects/{project_id}
+PATCH  /api/projects/{project_id}          { title?, description?, narrative_engine? }
 POST   /api/projects/{project_id}/open
 POST   /api/projects/{project_id}/save
 POST   /api/projects/{project_id}/close
-DELETE /api/projects/{project_id}          → 501 (not supported via API)
+DELETE /api/projects/{project_id}
 GET    /api/projects/{project_id}/settings
 PATCH  /api/projects/{project_id}/settings { settings: { ... } }   # merged
 ```
+
+Changing `narrative_engine` is accepted only while the project is still an
+empty scaffold. Once manuscript or planning content exists, the API returns
+`409 writing_mode_locked` so existing prose is never reinterpreted silently.
 
 ### Scenes / manuscript
 ```
@@ -116,6 +124,12 @@ GET    /api/projects/{project_id}/scenes/{scene_id}
 PATCH  /api/projects/{project_id}/scenes/{scene_id}
 DELETE /api/projects/{project_id}/scenes/{scene_id}
 ```
+
+Every `SceneDTO` includes a content-addressed `revision`. Send it back as
+`expected_revision` in a PATCH to reject stale writes with
+`409 scene_conflict`. Omitting the token preserves legacy last-write-wins
+behaviour and is also the explicit overwrite path. The token is derived from
+the scene and its replaceable associations, so no database migration is needed.
 
 ### Outline (hierarchical)
 ```
@@ -167,9 +181,17 @@ POST   /api/projects/{project_id}/assistant/chat        { message, history?, sys
 POST   /api/projects/{project_id}/assistant/action      { action, args }   # safe action layer
 GET    /api/projects/{project_id}/assistant/settings    # api_key never returned
 PATCH  /api/projects/{project_id}/assistant/settings
+GET    /api/projects/{project_id}/ai/behavior
+PATCH  /api/projects/{project_id}/ai/behavior
+GET    /api/projects/{project_id}/quantum/settings
+PATCH  /api/projects/{project_id}/quantum/settings
 GET    /api/projects/{project_id}/connector/actions     # registered actions + param schema
 POST   /api/projects/{project_id}/connector/execute     { action, args }
 ```
+
+Assistant/behavior settings are committed as one atomic, thread-safe global
+settings snapshot. Quantum settings are merged atomically into the selected
+project's settings; partial PATCH fields never replace unrelated values.
 
 All mutating connector/assistant actions pass through
 `logosforge.connector_executor.execute_action`, which validates inputs against
@@ -177,6 +199,43 @@ the action's param schema and only permits **registered** actions. Read actions
 are always allowed; **write** actions respect the desktop connector settings
 (`connector_enabled` / `connector_allow_writes`) so remote writes stay an
 explicit opt-in. The API never mutates the DB directly on the assistant's behalf.
+
+### Voice (Dexter's Room)
+```
+GET    /api/voice/status
+POST   /api/projects/{project_id}/voice/transcribe-segment
+GET    /api/projects/{project_id}/voice/history
+POST   /api/projects/{project_id}/voice/intents
+POST   /api/projects/{project_id}/voice/intents/preview
+POST   /api/projects/{project_id}/voice/intents/apply
+POST   /api/projects/{project_id}/voice/intents/cancel
+POST   /api/projects/{project_id}/voice/billy/operations
+POST   /api/projects/{project_id}/voice/billy/generate
+POST   /api/projects/{project_id}/voice/billy/apply
+POST   /api/projects/{project_id}/voice/billy/cancel
+POST   /api/projects/{project_id}/voice/commit-targets
+POST   /api/projects/{project_id}/voice/commit
+GET    /api/projects/{project_id}/voice/can-undo
+POST   /api/projects/{project_id}/voice/undo
+```
+
+Audio is transcribed locally. Stateful operations are serialized per project,
+and access to the shared speech model is serialized globally. Apply/cancel and
+commit update the core-owned session history, including source segment IDs, so
+a frontend remount sees the same reviewed state.
+
+### Extraction jobs
+```
+POST   /api/projects/{project_id}/extract
+GET    /api/projects/{project_id}/extract/jobs/{job_id}
+DELETE /api/projects/{project_id}/extract/jobs/{job_id}
+POST   /api/projects/{project_id}/extract/apply
+POST   /api/projects/{project_id}/extract/revert
+```
+
+Extraction starts asynchronously. Poll the job endpoint until `done`, `error`
+or `cancelled`; DELETE requests cooperative cancellation. Apply is a separate,
+explicit mutation and returns a receipt that can be sent to `extract/revert`.
 
 ### Export
 ```
@@ -260,6 +319,6 @@ independently.
 | API location  | bundled, `127.0.0.1:<port>`       | LAN or remote server               |
 | `API_MODE`    | `desktop`                         | `lan` / `remote`                   |
 | CORS          | localhost origins (regex)         | `API_ALLOWED_ORIGINS` list         |
-| Auth          | none needed (loopback)            | set `API_AUTH_TOKEN`               |
+| Auth          | random per-process Bearer token   | set `API_AUTH_TOKEN`               |
 | Data          | local SQLite file                 | server-side SQLite                 |
-| Live updates  | SSE                               | SSE (or polling fallback)          |
+| Live updates  | authenticated polling             | SSE (or polling fallback)          |

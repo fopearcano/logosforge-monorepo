@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+import threading
 import warnings
 
 import pytest
@@ -96,6 +98,53 @@ def test_create_project(env):
     body = r.json()
     assert body["title"] == "Fresh"
     assert body["narrative_engine"] == "screenplay"
+    assert body["default_writing_format"] == "screenplay"
+    assert body["format_mode"] == "screenplay"
+
+
+def test_project_mode_patch_is_atomic_for_empty_project(env):
+    client, _, _ = env
+    created = client.post(
+        "/api/projects", json={"title": "Series", "narrative_engine": "novel"},
+    ).json()
+    r = client.patch(
+        f"/api/projects/{created['id']}", json={"narrative_engine": "series"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["narrative_engine"] == "series"
+    assert body["default_writing_format"] == "screenplay"
+    assert body["format_mode"] == "screenplay"
+
+
+def test_project_mode_patch_rejects_locked_project_without_partial_metadata(env):
+    client, _, _ = env
+    created = client.post(
+        "/api/projects", json={"title": "Locked", "narrative_engine": "novel"},
+    ).json()
+    pid = created["id"]
+    client.post(
+        f"/api/projects/{pid}/scenes",
+        json={"title": "Opening", "content": "Meaningful prose."},
+    )
+    r = client.patch(
+        f"/api/projects/{pid}",
+        json={"title": "Must Not Rename", "narrative_engine": "screenplay"},
+    )
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "writing_mode_locked"
+    unchanged = client.get(f"/api/projects/{pid}").json()
+    assert unchanged["title"] == "Locked"
+    assert unchanged["narrative_engine"] == "novel"
+
+
+def test_project_mode_patch_rejects_unknown_mode(env):
+    client, _, pid = env
+    r = client.patch(
+        f"/api/projects/{pid}", json={"narrative_engine": "teleplay-ish"},
+    )
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "bad_request"
 
 
 def test_get_project_and_404(env):
@@ -128,6 +177,25 @@ def test_project_settings_roundtrip(env):
     assert r.json()["settings"]["theme"] == "dark"
     # Persisted.
     assert client.get(f"/api/projects/{pid}/settings").json()["settings"]["theme"] == "dark"
+
+
+def test_concurrent_project_settings_patches_do_not_lose_keys(tmp_path):
+    db = Database(str(tmp_path / "concurrent-settings.db"))
+    pid = db.create_project("Concurrent settings").id
+    client = TestClient(create_api(db=db, config=ApiConfig(mode="desktop")))
+
+    def patch(index: int) -> None:
+        response = client.patch(
+            f"/api/projects/{pid}/settings",
+            json={"settings": {f"setting_{index}": index}},
+        )
+        assert response.status_code == 200
+
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        list(pool.map(patch, range(24)))
+
+    settings = client.get(f"/api/projects/{pid}/settings").json()["settings"]
+    assert settings == {f"setting_{index}": index for index in range(24)}
 
 
 # -- Scenes ------------------------------------------------------------------
@@ -177,6 +245,70 @@ def test_scene_patch_preserves_associations(env):
     scene = client.get(f"/api/projects/{pid}/scenes/{sid}").json()
     assert scene["character_ids"] == [alice.id]
     assert scene["place_ids"] == [castle.id]
+
+
+def test_scene_revision_rejects_a_stale_patch_without_losing_newer_text(env):
+    client, db, pid = env
+    created = client.post(
+        f"/api/projects/{pid}/scenes",
+        json={"title": "Revision", "content": "original"},
+    ).json()
+    assert created["revision"]
+
+    first = client.patch(
+        f"/api/projects/{pid}/scenes/{created['id']}",
+        json={"content": "newer", "expected_revision": created["revision"]},
+    )
+    assert first.status_code == 200
+    assert first.json()["revision"] != created["revision"]
+
+    stale = client.patch(
+        f"/api/projects/{pid}/scenes/{created['id']}",
+        json={"content": "stale overwrite", "expected_revision": created["revision"]},
+    )
+    assert stale.status_code == 409
+    assert stale.json()["error"]["code"] == "scene_conflict"
+    assert db.get_scene_by_id(created["id"]).content == "newer"
+
+    overwritten = client.patch(
+        f"/api/projects/{pid}/scenes/{created['id']}",
+        json={"content": "intentional overwrite"},
+    )
+    assert overwritten.status_code == 200
+    assert overwritten.json()["content"] == "intentional overwrite"
+
+    # A direct core mutation also changes the derived revision.
+    db.update_scene_content(created["id"], "core update")
+    refreshed = client.get(f"/api/projects/{pid}/scenes/{created['id']}").json()
+    assert refreshed["revision"] != overwritten.json()["revision"]
+
+
+def test_concurrent_scene_patches_with_one_revision_have_one_winner(tmp_path):
+    # Concurrent Sessions cannot safely share SQLite's one in-memory connection
+    # (StaticPool). Exercise the production, file-backed connection path instead.
+    db = Database(str(tmp_path / "concurrent-scenes.db"))
+    pid = db.create_project("Concurrent scenes", narrative_engine="novel").id
+    client = TestClient(create_api(db=db, config=ApiConfig(mode="desktop")))
+    scene = client.post(
+        f"/api/projects/{pid}/scenes",
+        json={"title": "Concurrent", "content": "base"},
+    ).json()
+    start = threading.Barrier(2)
+
+    def patch(content: str):
+        start.wait(timeout=2)
+        return client.patch(
+            f"/api/projects/{pid}/scenes/{scene['id']}",
+            json={"content": content, "expected_revision": scene["revision"]},
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(patch, ["writer A", "writer B"]))
+
+    assert sorted(response.status_code for response in responses) == [200, 409]
+    winner = next(response.json()["content"] for response in responses if response.status_code == 200)
+    current = client.get(f"/api/projects/{pid}/scenes/{scene['id']}").json()
+    assert current["content"] == winner
 
 
 # -- Outline / Plot / Timeline -----------------------------------------------
@@ -350,6 +482,63 @@ def test_assistant_settings_roundtrip(env):
     assert got["api_key"] is None  # never returned
 
 
+def test_assistant_settings_reports_persistence_failure(env, monkeypatch):
+    client, _, pid = env
+    from logosforge.settings import get_manager
+
+    monkeypatch.setattr(get_manager(), "update", lambda _changes: False)
+    response = client.patch(
+        f"/api/projects/{pid}/assistant/settings",
+        json={"provider": "OpenRouter", "model": "openrouter/auto"},
+    )
+    assert response.status_code == 500
+    assert response.json()["error"]["code"] == "settings_save_failed"
+
+
+def test_ai_behavior_roundtrip_is_atomic(env):
+    client, _, pid = env
+    response = client.patch(
+        f"/api/projects/{pid}/ai/behavior",
+        json={"ctx_outline": False, "connector_enabled": True},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ctx_outline"] is False
+    assert body["connector_enabled"] is True
+    stored = client.get(f"/api/projects/{pid}/ai/behavior").json()
+    assert stored["ctx_outline"] is False
+    assert stored["connector_enabled"] is True
+
+
+def test_quantum_settings_patch_updates_one_coherent_snapshot(env):
+    client, _, pid = env
+    response = client.patch(
+        f"/api/projects/{pid}/quantum/settings",
+        json={
+            "weights": {
+                "structure_fit": 0.4,
+                "psyke_consistency": 0.2,
+                "tension_gain": 0.2,
+                "novelty": 0.1,
+                "goal_alignment": 0.1,
+            },
+            "selection_mode": "pareto",
+            "show_tradeoffs": True,
+            "ensemble_alpha": 4.0,
+            "weight_learning": False,
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["preset"] == "Custom"
+    assert body["weights"]["structure_fit"] == 0.4
+    assert body["weights"]["goal_alignment"] == 0.1
+    assert body["selection_mode"] == "pareto"
+    assert body["show_tradeoffs"] is True
+    assert body["ensemble_alpha"] == 1.0
+    assert body["weight_learning"] is False
+
+
 def test_characters_list_link_and_backfill(env):
     """The /characters endpoints surface psyke_entry_id and let a client set/clear
     + auto-link it (the manuscript Character <-> PSYKE bible bridge)."""
@@ -401,6 +590,42 @@ def test_extract_accepts_model_override(env):
             break
         time.sleep(0.05)
     assert j["status"] == "done"  # Tier-1 completes; the model param didn't break it
+
+
+def test_extract_job_can_be_cancelled_cooperatively(env, monkeypatch):
+    import threading
+    import time
+    from logosforge import extraction
+
+    client, _, pid = env
+    started = threading.Event()
+
+    def wait_for_cancel(*_args, should_cancel=None, **_kwargs):
+        started.set()
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if should_cancel and should_cancel():
+                raise extraction.ExtractionCancelled("cancelled by test")
+            time.sleep(0.01)
+        raise AssertionError("job never received cancellation")
+
+    monkeypatch.setattr(extraction, "extract_project", wait_for_cancel)
+    started_job = client.post(f"/api/projects/{pid}/extract?use_llm=false")
+    assert started_job.status_code == 200
+    job_id = started_job.json()["job_id"]
+    assert started.wait(timeout=1)
+
+    cancel = client.delete(f"/api/projects/{pid}/extract/jobs/{job_id}")
+    assert cancel.status_code == 200
+    assert cancel.json()["status"] in ("cancelling", "cancelled")
+    status = cancel.json()
+    for _ in range(100):
+        status = client.get(f"/api/projects/{pid}/extract/jobs/{job_id}").json()
+        if status["status"] == "cancelled":
+            break
+        time.sleep(0.01)
+    assert status["status"] == "cancelled"
+    assert status.get("result") is None
 
 
 def test_extract_models_endpoint_returns_dto(env):
@@ -480,10 +705,12 @@ def test_assistant_chat_folds_editor_context(env, monkeypatch):
     r = client.post(f"/api/projects/{pid}/assistant/chat", json={
         "message": "tighten this", "selected_text": "the salt ledger glints",
         "document_title": "Chapter One",
+        "planning_outline": "[Writer Plan]\n- Act Two\n  - The observatory",
     })
     assert r.status_code == 200
     system_text = " ".join(m["content"] for m in captured["messages"] if m["role"] == "system")
     assert "the salt ledger glints" in system_text and "Chapter One" in system_text
+    assert "[Writer Plan]" in system_text and "The observatory" in system_text
 
 
 def test_connector_actions_listed(env):
@@ -504,6 +731,17 @@ def test_connector_execute_validates_unknown_action(env):
     assert "Unknown action" in body["error"]
 
 
+def test_unknown_connector_action_is_validated_before_disabled_list(env):
+    from logosforge.settings import get_manager
+
+    client, _, pid = env
+    get_manager().set("connector_disabled_actions", ["does_not_exist"])
+    r = client.post(
+        f"/api/projects/{pid}/connector/execute", json={"action": "does_not_exist"},
+    )
+    assert "Unknown action" in r.json()["error"]
+
+
 def test_connector_read_action_allowed(env):
     client, _, pid = env
     r = client.post(
@@ -512,6 +750,18 @@ def test_connector_read_action_allowed(env):
     body = r.json()
     assert body["ok"] is True
     assert body["result"]["id"] == pid
+
+
+def test_connector_write_action_remains_blocked_when_connector_is_off(env):
+    client, db, pid = env
+    r = client.post(
+        f"/api/projects/{pid}/connector/execute",
+        json={"action": "create_note", "args": {"title": "Must not exist"}},
+    )
+    body = r.json()
+    assert body["ok"] is False
+    assert "disabled" in body["error"].lower()
+    assert db.get_all_notes(pid) == []
 
 
 def test_assistant_action_uses_safe_layer(env):
@@ -601,10 +851,20 @@ def test_events_sse_drains_buffered_events(env):
 def test_auth_hook_enforced_when_token_set():
     db = Database()
     db.create_project("Secured")
-    app = create_api(db=db, config=ApiConfig(mode="remote", auth_token="s3cret"))
+    app = create_api(
+        db=db,
+        config=ApiConfig(
+            mode="remote",
+            auth_token="s3cret",
+            instance_nonce="desktop-instance-1",
+        ),
+    )
     client = TestClient(app)
     # Health is open; project routes require the token.
-    assert client.get("/api/health").status_code == 200
+    health = client.get("/api/health")
+    assert health.status_code == 200
+    assert health.json()["instance_nonce"] == "desktop-instance-1"
+    assert "s3cret" not in health.text
     assert client.get("/api/projects").status_code == 403
     ok = client.get("/api/projects", headers={"Authorization": "Bearer s3cret"})
     assert ok.status_code == 200

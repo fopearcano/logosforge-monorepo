@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends
 
 from logosforge.api import schemas
 from logosforge.api.deps import get_broker, get_db, get_project
-from logosforge.api.errors import ApiError
+from logosforge.api.errors import ApiError, not_found
 from logosforge.api.events import ApiEventBroker
 from logosforge.db import Database
 
@@ -29,16 +29,111 @@ _JOBS_LOCK = threading.Lock()
 _JOBS_CAP = 32
 
 
+def _trim_jobs_locked(*, preserve: str | None = None) -> None:
+    terminal = {"done", "error", "cancelled"}
+    while len(_JOBS) > _JOBS_CAP:
+        victim = next(
+            (
+                key for key, value in _JOBS.items()
+                if key != preserve and value.get("status") in terminal
+            ),
+            None,
+        )
+        if victim is None:  # never make a running job unobservable
+            break
+        _JOBS.pop(victim, None)
+
+
 def _set_job(job_id: str, **fields) -> None:
     with _JOBS_LOCK:
         _JOBS.setdefault(job_id, {}).update(fields)
-        while len(_JOBS) > _JOBS_CAP:
-            _JOBS.pop(next(iter(_JOBS)))
+        _trim_jobs_locked(preserve=job_id)
 
 
 def _get_job(job_id: str) -> dict | None:
     with _JOBS_LOCK:
         return dict(_JOBS[job_id]) if job_id in _JOBS else None
+
+
+def _cancel_job(job_id: str, project_id: int) -> dict | None:
+    with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+        if job is None or job.get("project_id") != project_id:
+            return None
+        if job.get("status") == "running":
+            job.update(cancel_requested=True, status="cancelling")
+        return dict(job)
+
+
+def _cancel_requested(job_id: str) -> bool:
+    with _JOBS_LOCK:
+        return bool(_JOBS.get(job_id, {}).get("cancel_requested"))
+
+
+def _finish_job(
+    job_id: str, *, result=None, error: str = "", cancelled: bool = False,
+) -> str:
+    with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+        if job is None:
+            return "cancelled"
+        if cancelled or job.get("cancel_requested"):
+            job.update(status="cancelled", result=None, error="")
+        elif error:
+            job.update(status="error", result=None, error=error)
+        else:
+            job.update(status="done", result=result, error="")
+        _trim_jobs_locked(preserve=job_id)
+        return str(job["status"])
+
+
+def _job_dto(job_id: str, job: dict) -> schemas.ExtractionJobDTO:
+    return schemas.ExtractionJobDTO(
+        job_id=job_id,
+        status=job.get("status", "running"),
+        done=job.get("done", 0),
+        total=job.get("total", 0),
+        error=job.get("error") or "",
+        result=job.get("result"),
+    )
+
+
+def _scene_or_404(db: Database, project_id: int, scene_id: int):
+    scene = db.get_scene_by_id(scene_id)
+    if scene is None or scene.project_id != project_id:
+        raise not_found(f"Scene {scene_id} not found")
+    return scene
+
+
+def _reject_foreign_receipt_ids(
+    db: Database, project_id: int, body: schemas.ExtractionReceiptDTO,
+) -> None:
+    """Preflight an idempotent revert without rejecting already-missing rows."""
+    for character_id in body.character_ids:
+        character = db.get_character_by_id(character_id)
+        if character is not None and character.project_id != project_id:
+            raise not_found(f"Character {character_id} not found")
+    for link in body.links:
+        if len(link) < 2:
+            continue
+        scene_id, character_id = link[:2]
+        scene = db.get_scene_by_id(scene_id)
+        if scene is not None and scene.project_id != project_id:
+            raise not_found(f"Scene {scene_id} not found")
+        character = db.get_character_by_id(character_id)
+        if character is not None and character.project_id != project_id:
+            raise not_found(f"Character {character_id} not found")
+    for scene_id in body.wkw_scene_ids:
+        scene = db.get_scene_by_id(scene_id)
+        if scene is not None and scene.project_id != project_id:
+            raise not_found(f"Scene {scene_id} not found")
+    entry_ids = set(body.psyke_ids)
+    for relation in body.relations:
+        entry_ids.update((relation.source_id, relation.target_id))
+    for entry_id in entry_ids:
+        entry = db.get_psyke_entry_by_id(entry_id)
+        if entry is not None and entry.project_id != project_id:
+            raise not_found(f"PSYKE entry {entry_id} not found")
 
 
 def _hint_to_dto(h) -> schemas.NearDupHintDTO | None:
@@ -96,6 +191,8 @@ def _run_extract_job(job_id: str, db: Database, project_id: int, use_llm: bool, 
     from logosforge import extraction, providers
 
     def on_progress(done: int, total: int, label: str) -> None:
+        if _cancel_requested(job_id):
+            raise extraction.ExtractionCancelled("Extraction cancelled")
         _set_job(job_id, done=done, total=total, label=label)
         try:  # best-effort SSE progress; the registry is the source of truth for polling
             broker.publish("extraction_progress", project_id=project_id, job_id=job_id, done=done, total=total, label=label)
@@ -113,13 +210,19 @@ def _run_extract_job(job_id: str, db: Database, project_id: int, use_llm: bool, 
             provider = None
 
     try:
-        ext = extraction.extract_project(db, project_id, provider=provider, use_llm=use_llm, on_progress=on_progress)
-        _set_job(job_id, status="done", result=_result_dto(project_id, ext))
+        ext = extraction.extract_project(
+            db, project_id, provider=provider, use_llm=use_llm,
+            on_progress=on_progress,
+            should_cancel=lambda: _cancel_requested(job_id),
+        )
+        status = _finish_job(job_id, result=_result_dto(project_id, ext))
+    except extraction.ExtractionCancelled:
+        status = _finish_job(job_id, cancelled=True)
     except Exception as exc:
-        _set_job(job_id, status="error", error=str(exc))
+        status = _finish_job(job_id, error=str(exc))
     finally:
         try:
-            broker.publish("extraction_done", project_id=project_id, job_id=job_id)
+            broker.publish("extraction_done", project_id=project_id, job_id=job_id, status=status)
         except Exception:
             pass
 
@@ -143,7 +246,10 @@ def extract(
     """
     total = len(db.get_all_scenes(project.id))
     job_id = uuid.uuid4().hex[:12]
-    _set_job(job_id, status="running", done=0, total=total, error="", result=None)
+    _set_job(
+        job_id, project_id=project.id, status="running", done=0,
+        total=total, error="", result=None, cancel_requested=False,
+    )
     threading.Thread(
         target=_run_extract_job, args=(job_id, db, project.id, use_llm, model, broker), daemon=True,
     ).start()
@@ -178,16 +284,21 @@ def extract_models(project=Depends(get_project)):
 )
 def extract_job(job_id: str, project=Depends(get_project)):
     job = _get_job(job_id)
+    if job is None or job.get("project_id") != project.id:
+        raise ApiError(404, "Unknown extraction job", code="extraction_job_unknown")
+    return _job_dto(job_id, job)
+
+
+@router.delete(
+    "/projects/{project_id}/extract/jobs/{job_id}",
+    response_model=schemas.ExtractionJobDTO,
+)
+def cancel_extract_job(job_id: str, project=Depends(get_project)):
+    """Request cooperative cancellation; an in-flight provider call may finish."""
+    job = _cancel_job(job_id, project.id)
     if job is None:
         raise ApiError(404, "Unknown extraction job", code="extraction_job_unknown")
-    return schemas.ExtractionJobDTO(
-        job_id=job_id,
-        status=job.get("status", "running"),
-        done=job.get("done", 0),
-        total=job.get("total", 0),
-        error=job.get("error") or "",
-        result=job.get("result"),
-    )
+    return _job_dto(job_id, job)
 
 
 @router.post(
@@ -202,6 +313,9 @@ def extract_apply(
 ):
     """Write the reviewed/accepted proposals via the real writers (idempotent)."""
     from logosforge import extraction
+
+    for scene in body.scenes:
+        _scene_or_404(db, project.id, scene.scene_id)
 
     ext = extraction.ProjectExtraction(
         project_id=project.id,
@@ -237,6 +351,8 @@ def extract_revert(
 ):
     """Undo a prior apply via its receipt — delete the created links/relations/entities."""
     from logosforge import extraction
+
+    _reject_foreign_receipt_ids(db, project.id, body)
 
     receipt = extraction.ApplyReceipt(
         character_ids=list(body.character_ids),

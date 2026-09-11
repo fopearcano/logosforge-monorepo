@@ -245,8 +245,26 @@ class VoiceRoomService:
         # nothing — hand it back for the frontend to use.
         text = preview.after_text if (ok and preview.intent_type == ir.I_CLEANUP) \
             else None
+        if ok and preview.intent_type == ir.I_CLEANUP:
+            for entry_id in preview.source_segment_ids:
+                self._history.edit(entry_id, preview.after_text or "")
+        elif ok and preview.source_segment_ids:
+            self._history.last_commit_op = op
+            self._history.mark_committed(
+                preview.source_segment_ids,
+                preview.intent_type,
+                getattr(op, "id", "") if op is not None else "",
+            )
+        self._intent_previews.pop(preview_id, None)
         return self._apply_result(ok, message, captured,
                                   extra={"cleaned_text": text} if text else None)
+
+    def cancel_intent(self, preview_id: str) -> dict[str, Any]:
+        preview = self._intent_previews.pop(preview_id, None)
+        if preview is None:
+            return {"cancelled": False, "message": "Unknown intent preview."}
+        ir.cancel_voice_intent(preview)
+        return {"cancelled": True, "message": "Intent preview dismissed."}
 
     # -- Billy --------------------------------------------------------------
     def billy_operations(self, ctx_fields: dict | None = None
@@ -264,6 +282,12 @@ class VoiceRoomService:
             operation, transcript_text, ctx,
             source_segment_ids=source_segment_ids)
         self._billy_proposals[proposal.id] = proposal
+        for entry_id in proposal.source_segment_ids:
+            entry = self._history.get(entry_id)
+            if entry is not None:
+                entry.sent_to_billy = True
+                entry.billy_proposal_id = proposal.id
+                entry.billy_state = "proposed"
         return ser.billy_proposal_to_dict(proposal)
 
     def apply_billy(self, proposal_id: str,
@@ -275,7 +299,31 @@ class VoiceRoomService:
         ok, message, op = bb.apply_billy_voice_proposal(proposal, ctx)
         if ok and op is not None:
             self._last_op = op
+            self._history.last_commit_op = op
+        if ok:
+            for entry_id in proposal.source_segment_ids:
+                entry = self._history.get(entry_id)
+                if entry is not None:
+                    entry.billy_state = "applied"
+            if proposal.source_segment_ids:
+                self._history.mark_committed(
+                    proposal.source_segment_ids,
+                    proposal.operation,
+                    getattr(op, "id", "") if op is not None else "",
+                )
+        self._billy_proposals.pop(proposal_id, None)
         return self._apply_result(ok, message, captured)
+
+    def cancel_billy(self, proposal_id: str) -> dict[str, Any]:
+        proposal = self._billy_proposals.pop(proposal_id, None)
+        if proposal is None:
+            return {"cancelled": False, "message": "Unknown Billy proposal."}
+        bb.cancel_billy_voice_proposal(proposal)
+        for entry_id in proposal.source_segment_ids:
+            entry = self._history.get(entry_id)
+            if entry is not None and entry.billy_state == "proposed":
+                entry.billy_state = "cancelled"
+        return {"cancelled": True, "message": "Billy proposal dismissed."}
 
     # -- commit -------------------------------------------------------------
     def commit_targets(self, ctx_fields: dict | None = None
@@ -285,11 +333,25 @@ class VoiceRoomService:
                 for t in cr.get_available_voice_commit_targets(ctx)]
 
     def commit(self, text: str, target_id: str,
-               ctx_fields: dict | None = None) -> dict[str, Any]:
+               ctx_fields: dict | None = None, *,
+               source_segment_ids: list[str] | None = None) -> dict[str, Any]:
         ctx, captured = self._build_context(ctx_fields)
+        source_ids = list(source_segment_ids or [])
+        if source_ids:
+            same_project, reason = self._history.check_same_project(
+                source_ids, self._project_id)
+            if not same_project:
+                return self._apply_result(False, reason, captured)
         ok, message, op = cr.commit_transcript_op(text, target_id, ctx)
         if ok and op is not None:
             self._last_op = op
+            self._history.last_commit_op = op
+        if ok and source_ids:
+            self._history.mark_committed(
+                source_ids,
+                target_id,
+                getattr(op, "id", "") if op is not None else "",
+            )
         return self._apply_result(ok, message, captured)
 
     # -- undo (server-side commits: Note / PSYKE / GN field) ----------------

@@ -78,7 +78,8 @@ def _code_skeleton(rel_path: str) -> str:
     with open(os.path.join(_HERE, rel_path), "rb") as fh:
         for tok in tokenize.tokenize(fh.readline):
             name = tokenize.tok_name[tok.type]
-            if tok.type == tokenize.COMMENT or name.endswith("STRING"):
+            if (tok.type == tokenize.COMMENT or name == "STRING"
+                    or name.startswith("FSTRING_")):
                 continue
             toks.append(tok.string.lower())
     return " ".join(toks)

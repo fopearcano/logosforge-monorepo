@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
+from logosforge import writing_modes as wm
 from logosforge.api import schemas, serializers
 from logosforge.api.deps import get_broker, get_db, get_project
+from logosforge.api.errors import ApiError, bad_request
 from logosforge.api.events import ApiEventBroker
 from logosforge.db import Database
 
@@ -23,9 +25,12 @@ def create_project(
     db: Database = Depends(get_db),
     broker: ApiEventBroker = Depends(get_broker),
 ):
+    requested_engine = (body.narrative_engine or "").strip()
+    if requested_engine and not wm.is_valid_mode(requested_engine):
+        raise bad_request(f"Unknown writing mode: {requested_engine}")
     project = db.create_project(
         body.title,
-        narrative_engine=body.narrative_engine,
+        narrative_engine=requested_engine,
         default_writing_format=body.default_writing_format,
     )
     if body.description:
@@ -47,7 +52,21 @@ def update_project(
     db: Database = Depends(get_db),
     broker: ApiEventBroker = Depends(get_broker),
 ):
-    """Rename / re-describe a project (fields left None are unchanged)."""
+    """Update project metadata; mode changes are guarded against reinterpretation."""
+    if body.narrative_engine is not None:
+        requested = body.narrative_engine.strip()
+        if not wm.is_valid_mode(requested):
+            raise bad_request(f"Unknown writing mode: {requested}")
+        current = wm.get_project_writing_mode(project)
+        if requested != current:
+            changed, _ = wm.change_writing_mode(
+                db,
+                project.id,
+                requested,
+                writing_format=wm.default_writing_format(requested),
+            )
+            if not changed:
+                raise ApiError(409, wm.MODE_LOCK_MESSAGE, code="writing_mode_locked")
     db.update_project(project.id, title=body.title, description=body.description)
     updated = db.get_project_by_id(project.id)
     broker.publish("project_data_changed", project_id=project.id)
@@ -63,7 +82,10 @@ def open_project(
     return serializers.project_to_dto(project)
 
 
-@router.post("/projects/{project_id}/save")
+@router.post(
+    "/projects/{project_id}/save",
+    response_model=schemas.ProjectActionResultDTO,
+)
 def save_project(
     project=Depends(get_project),
     broker: ApiEventBroker = Depends(get_broker),
@@ -75,7 +97,10 @@ def save_project(
     return {"ok": True, "project_id": project.id}
 
 
-@router.post("/projects/{project_id}/close")
+@router.post(
+    "/projects/{project_id}/close",
+    response_model=schemas.ProjectActionResultDTO,
+)
 def close_project(
     project=Depends(get_project),
     broker: ApiEventBroker = Depends(get_broker),
@@ -84,7 +109,10 @@ def close_project(
     return {"ok": True, "project_id": project.id}
 
 
-@router.delete("/projects/{project_id}")
+@router.delete(
+    "/projects/{project_id}",
+    response_model=schemas.DeleteResultDTO,
+)
 def delete_project(
     project=Depends(get_project),
     db: Database = Depends(get_db),
@@ -109,8 +137,6 @@ def patch_settings(
     db: Database = Depends(get_db),
     broker: ApiEventBroker = Depends(get_broker),
 ):
-    current = db.get_project_settings(project.id)
-    current.update(body.settings)
-    db.save_project_settings(project.id, current)
+    current = db.patch_project_settings(project.id, body.settings)
     broker.publish("project_data_changed", project_id=project.id)
     return schemas.SettingsDTO(settings=current)

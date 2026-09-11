@@ -232,7 +232,7 @@ class GraphicNovelOutlineView(QWidget):
         head = QLabel((act or "Act").upper())
         head.setObjectName("gnActCardTitle")
         head.setStyleSheet(
-            f"font-size: 15px; font-weight: bold; letter-spacing: 1px;"
+            f"font-size: 15px; font-weight: bold;"
             f" color: {theme.TEXT_PRIMARY};")
         v.addWidget(head)
         for page_no, slices in pages:

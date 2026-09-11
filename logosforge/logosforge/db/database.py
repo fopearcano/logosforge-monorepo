@@ -8,10 +8,133 @@ UI code should only call the public methods below (e.g. create_character,
 get_all_places). All session management stays inside this module.
 """
 
+import os
+import shutil
+import sqlite3
+import threading
+import time
+from contextlib import closing
+from contextlib import contextmanager
+from functools import wraps
 from pathlib import Path
 from typing import Optional
+from uuid import uuid4
 
+from sqlalchemy import event
 from sqlmodel import Session, SQLModel, create_engine, select
+
+
+DB_SCHEMA_VERSION = 1
+SQLITE_BUSY_TIMEOUT_MS = 5000
+BACKUP_INSTALL_WAIT_SECONDS = 10.0
+
+
+def _scene_locked(method):
+    """Serialize mutations of one Scene inside a Database process."""
+    @wraps(method)
+    def wrapped(self, scene_id: int, *args, **kwargs):
+        with self.scene_write_lock(scene_id):
+            return method(self, scene_id, *args, **kwargs)
+    return wrapped
+
+
+def _read_user_version(path: Path) -> int:
+    uri = f"file:{path.resolve().as_posix()}?mode=ro"
+    with closing(sqlite3.connect(uri, uri=True)) as conn:
+        return int(conn.execute("PRAGMA user_version").fetchone()[0])
+
+
+def _fsync_directory(path: Path) -> None:
+    """Persist a newly-installed backup directory entry where supported."""
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def _install_backup_once(tmp: Path, backup: Path) -> None:
+    """Publish a complete backup without replacing another process's winner."""
+    try:
+        os.link(tmp, backup)
+        _fsync_directory(backup.parent)
+        return
+    except FileExistsError:
+        return
+    except OSError:
+        # Hard links may be disabled by the filesystem. Coordinate through a
+        # sidecar lock, then atomically rename the already-complete same-directory
+        # snapshot. Never expose the final backup path while bytes are still being
+        # copied. A stale lock blocks migration rather than risking no backup.
+        lock = backup.with_name(f".{backup.name}.installing")
+        deadline = time.monotonic() + BACKUP_INSTALL_WAIT_SECONDS
+        while True:
+            if backup.exists():
+                return
+            try:
+                fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            except FileExistsError:
+                if time.monotonic() >= deadline:
+                    if backup.exists():
+                        return
+                    raise TimeoutError(
+                        f"Timed out waiting to install migration backup: {backup}"
+                    )
+                time.sleep(0.01)
+                continue
+            else:
+                os.close(fd)
+                break
+        try:
+            if backup.exists():
+                return
+            os.replace(tmp, backup)
+            _fsync_directory(backup.parent)
+        finally:
+            lock.unlink(missing_ok=True)
+
+
+def _prepare_migration_backup(path: Path) -> Path | None:
+    """Create one durable pre-v1 copy before touching an unversioned database."""
+    if not path.exists() or path.stat().st_size == 0:
+        return None
+    try:
+        current_version = _read_user_version(path)
+    except sqlite3.DatabaseError:
+        current_version = 0  # preserve unreadable bytes before SQLAlchemy reports it
+    if current_version >= DB_SCHEMA_VERSION:
+        return None
+    backup = path.with_name(path.name + f".pre-v{DB_SCHEMA_VERSION}.bak")
+    if backup.exists():
+        return backup
+    tmp = backup.with_name(f".{backup.name}.{os.getpid()}.{uuid4().hex}.tmp")
+    try:
+        try:
+            uri = f"file:{path.resolve().as_posix()}?mode=ro"
+            with closing(sqlite3.connect(uri, uri=True)) as source, closing(
+                sqlite3.connect(tmp)
+            ) as target:
+                source.backup(target)  # consistent snapshot, including committed WAL pages
+                target.commit()
+        except sqlite3.DatabaseError:
+            # If SQLite cannot open the source, preserve its raw bytes before
+            # SQLAlchemy reports the corruption; never destroy forensic data.
+            tmp.unlink(missing_ok=True)
+            with path.open("rb") as source, tmp.open("xb") as target:
+                shutil.copyfileobj(source, target)
+                target.flush()
+                os.fsync(target.fileno())
+        with tmp.open("r+b") as handle:
+            os.fsync(handle.fileno())
+        _install_backup_once(tmp, backup)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return backup
 
 # Sentinel for partial updates: distinguishes "argument not provided" (leave the
 # column as-is) from an explicit ``None`` (clear a nullable column).
@@ -117,17 +240,25 @@ CONTINUITY_MEMORY_TYPES = (
 
 class Database:
     def __init__(self, path: Optional[str] = None) -> None:
-        # ``check_same_thread=False`` lets the same engine be used safely from
-        # multiple threads (the connection pool serialises access).  This is
-        # required when the HTTP API serves requests from a threadpool and is
-        # harmless for the single-threaded desktop app.
+        self._settings_lock = threading.RLock()
+        self._scene_locks_guard = threading.RLock()
+        self._scene_write_locks: dict[int, threading.RLock] = {}
+        # ``check_same_thread=False`` lets FastAPI's threadpool use pooled
+        # connections. WAL permits concurrent readers; busy_timeout gives a
+        # competing writer time to finish instead of surfacing a transient lock.
         from sqlalchemy.pool import StaticPool
 
+        file_based = bool(path and path != ":memory:")
+        if file_based:
+            db_path = Path(path)
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            _prepare_migration_backup(db_path)
         if path:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
             url = f"sqlite:///{path}"
             self._engine = create_engine(
-                url, echo=False, connect_args={"check_same_thread": False},
+                url, echo=False,
+                connect_args={"check_same_thread": False, "timeout": 5.0},
             )
         else:
             # An in-memory DB lives inside a single connection, so a StaticPool
@@ -139,8 +270,29 @@ class Database:
                 connect_args={"check_same_thread": False},
                 poolclass=StaticPool,
             )
+
+        @event.listens_for(self._engine, "connect")
+        def _configure_sqlite(dbapi_connection, _connection_record) -> None:
+            cursor = dbapi_connection.cursor()
+            try:
+                cursor.execute("PRAGMA foreign_keys=ON")
+                cursor.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
+                if file_based:
+                    cursor.execute("PRAGMA journal_mode=WAL")
+            finally:
+                cursor.close()
+
         SQLModel.metadata.create_all(self._engine)
         self._migrate()
+
+    @contextmanager
+    def scene_write_lock(self, scene_id: int):
+        """Hold the stable per-scene lock across read/compare/write sequences."""
+        key = int(scene_id)
+        with self._scene_locks_guard:
+            lock = self._scene_write_locks.setdefault(key, threading.RLock())
+        with lock:
+            yield
 
     def _migrate(self) -> None:
         from sqlalchemy import text
@@ -325,6 +477,9 @@ class Database:
                 ))
                 conn.commit()
 
+            conn.execute(text(f"PRAGMA user_version = {DB_SCHEMA_VERSION}"))
+            conn.commit()
+
     # -- Projects ------------------------------------------------------------
 
     def get_project_by_id(self, project_id: int) -> Project | None:
@@ -339,8 +494,8 @@ class Database:
         """Delete a project and ALL of its data (generic cascade). Collects every
         parent id the project owns, then sweeps each table that references the
         project — by ``project_id`` or by a parent-id FK column — and finally removes
-        the project row. SQLite FK enforcement is off here, so order is irrelevant.
-        Safe to call on a missing id (no-op)."""
+        the project row. Tables are processed child-first so SQLite foreign-key
+        enforcement can remain enabled. Safe to call on a missing id (no-op)."""
         from sqlalchemy import or_
 
         def _ids(getter):
@@ -472,6 +627,21 @@ class Database:
                 project.narrative_engine = engine
                 session.commit()
 
+    def update_project_mode(
+        self, project_id: int, engine: str, writing_format: str,
+    ) -> None:
+        """Atomically keep the canonical engine and both format fields aligned."""
+        with Session(self._engine) as session:
+            project = session.get(Project, project_id)
+            if project is None or not engine or not writing_format:
+                return
+            project.narrative_engine = engine
+            project.default_writing_format = writing_format
+            # Legacy readers still use format_mode, so the three fields must move
+            # together whenever the project-level writing mode changes.
+            project.format_mode = writing_format
+            session.commit()
+
     def update_project_writing_format(
         self, project_id: int, writing_format: str,
     ) -> None:
@@ -486,22 +656,43 @@ class Database:
 
     def get_project_settings(self, project_id: int) -> dict:
         import json
-        with Session(self._engine) as session:
-            project = session.get(Project, project_id)
-            if project and project.settings_json:
-                try:
-                    return json.loads(project.settings_json)
-                except (json.JSONDecodeError, TypeError):
-                    return {}
-            return {}
+        with self._settings_lock:
+            with Session(self._engine) as session:
+                project = session.get(Project, project_id)
+                if project and project.settings_json:
+                    try:
+                        return json.loads(project.settings_json)
+                    except (json.JSONDecodeError, TypeError):
+                        return {}
+                return {}
 
     def save_project_settings(self, project_id: int, settings: dict) -> None:
         import json
-        with Session(self._engine) as session:
-            project = session.get(Project, project_id)
-            if project:
-                project.settings_json = json.dumps(settings)
+        with self._settings_lock:
+            with Session(self._engine) as session:
+                project = session.get(Project, project_id)
+                if project:
+                    project.settings_json = json.dumps(settings)
+                    session.commit()
+
+    def patch_project_settings(self, project_id: int, changes: dict) -> dict:
+        """Atomically merge settings and return the complete stored object."""
+        import json
+        with self._settings_lock:
+            with Session(self._engine) as session:
+                project = session.get(Project, project_id)
+                if project is None:
+                    return {}
+                try:
+                    current = json.loads(project.settings_json or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    current = {}
+                if not isinstance(current, dict):
+                    current = {}
+                current.update(changes)
+                project.settings_json = json.dumps(current)
                 session.commit()
+                return current
 
     def get_project_by_source_path(self, source_path: str) -> int | None:
         """Return the id of the project imported from *source_path*, if any.
@@ -724,13 +915,35 @@ class Database:
 
     def delete_character(self, character_id: int) -> None:
         with Session(self._engine) as session:
-            # Remove scene links
+            # Remove owned child rows; optional stage references are preserved
+            # but detached from the deleted cast member.
             for link in session.exec(
                 select(SceneCharacterLink).where(
                     SceneCharacterLink.character_id == character_id
                 )
             ).all():
                 session.delete(link)
+            for state in session.exec(
+                select(SceneCharacterState).where(
+                    SceneCharacterState.character_id == character_id
+                )
+            ).all():
+                session.delete(state)
+            for profile in session.exec(
+                select(VoiceProfile).where(VoiceProfile.character_id == character_id)
+            ).all():
+                session.delete(profile)
+            for entrance in session.exec(
+                select(StageEntranceExit).where(
+                    StageEntranceExit.character_id == character_id
+                )
+            ).all():
+                entrance.character_id = None
+            for business in session.exec(
+                select(StageBusiness).where(StageBusiness.character_id == character_id)
+            ).all():
+                business.character_id = None
+            session.flush()
             character = session.get(Character, character_id)
             if character:
                 session.delete(character)
@@ -990,6 +1203,9 @@ class Database:
                 )
                 for link in session.exec(stmt).all():
                     session.delete(link)
+                # No ORM relationships declare delete ordering; flush every
+                # child row before deleting the FK-protected parent Note.
+                session.flush()
                 session.delete(note)
             session.commit()
 
@@ -1311,6 +1527,7 @@ class Database:
             session.refresh(scene)
             return scene
 
+    @_scene_locked
     def update_scene(
         self,
         scene_id: int,
@@ -1474,6 +1691,7 @@ class Database:
             session.refresh(scene)
             return scene
 
+    @_scene_locked
     def delete_scene(self, scene_id: int) -> None:
         with Session(self._engine) as session:
             # Delete links first
@@ -1523,12 +1741,33 @@ class Database:
             ).all():
                 session.delete(tsl)
 
+            # Scene-owned rows disappear with the scene.
+            for model in (StageEntranceExit, StageCue, StageBusiness, StoryMemoryEntry):
+                for row in session.exec(select(model).where(model.scene_id == scene_id)).all():
+                    session.delete(row)
+
+            # Historical/planning rows survive, but their optional scene anchor
+            # is cleared so deleting manuscript text never erases the record.
+            for model in (
+                PsykeProgression,
+                ProductionSceneNumber,
+                RevisionChange,
+                RevisionDiffSnapshot,
+                RevisionImpactReport,
+                CanvasPlotNode,
+                OutlineNode,
+            ):
+                for row in session.exec(select(model).where(model.scene_id == scene_id)).all():
+                    row.scene_id = None
+
             # Delete the scene
+            session.flush()
             scene = session.get(Scene, scene_id)
             if scene:
                 session.delete(scene)
             session.commit()
 
+    @_scene_locked
     def move_scene_up(self, scene_id: int) -> None:
         """Swap sort_order with the scene directly above (lower sort_order)."""
         with Session(self._engine) as session:
@@ -1560,6 +1799,7 @@ class Database:
             )
             session.commit()
 
+    @_scene_locked
     def move_scene_down(self, scene_id: int) -> None:
         """Swap sort_order with the scene directly below (higher sort_order)."""
         with Session(self._engine) as session:
@@ -1591,6 +1831,7 @@ class Database:
             )
             session.commit()
 
+    @_scene_locked
     def update_scene_plotline(self, scene_id: int, plotline: str) -> None:
         with Session(self._engine) as session:
             scene = session.get(Scene, scene_id)
@@ -2257,6 +2498,7 @@ class Database:
                 session.delete(node)
             session.commit()
 
+    @_scene_locked
     def update_scene_content(self, scene_id: int, content: str) -> None:
         with Session(self._engine) as session:
             scene = session.get(Scene, scene_id)
@@ -2265,6 +2507,7 @@ class Database:
             scene.content = content
             session.commit()
 
+    @_scene_locked
     def set_scene_offstage_events(self, scene_id: int, text: str) -> None:
         """Set just the stage 'offstage_events' field without blanking the rest of the
         scene (update_scene defaults-blanks unspecified fields)."""
@@ -2275,6 +2518,7 @@ class Database:
             scene.offstage_events = text
             session.commit()
 
+    @_scene_locked
     def update_scene_synopsis(self, scene_id: int, synopsis: str) -> None:
         with Session(self._engine) as session:
             scene = session.get(Scene, scene_id)
@@ -2283,6 +2527,7 @@ class Database:
             scene.synopsis = synopsis
             session.commit()
 
+    @_scene_locked
     def update_scene_color(self, scene_id: int, color_label: str) -> None:
         with Session(self._engine) as session:
             scene = session.get(Scene, scene_id)
@@ -2291,6 +2536,7 @@ class Database:
             scene.color_label = color_label or ""
             session.commit()
 
+    @_scene_locked
     def update_scene_summary(self, scene_id: int, summary: str) -> None:
         with Session(self._engine) as session:
             scene = session.get(Scene, scene_id)
@@ -2299,6 +2545,7 @@ class Database:
             scene.summary = summary
             session.commit()
 
+    @_scene_locked
     def update_scene_title(self, scene_id: int, title: str) -> None:
         """Targeted title update that preserves links (unlike full update_scene)."""
         with Session(self._engine) as session:
@@ -2308,6 +2555,7 @@ class Database:
             scene.title = title
             session.commit()
 
+    @_scene_locked
     def update_scene_tags(self, scene_id: int, tags: str) -> None:
         """Targeted tags update that preserves links (unlike full update_scene)."""
         with Session(self._engine) as session:
@@ -2317,6 +2565,7 @@ class Database:
             scene.tags = tags or ""
             session.commit()
 
+    @_scene_locked
     def reorder_scene(self, scene_id: int, new_index: int) -> None:
         """Move a scene to a new position (0-based) among all project scenes."""
         with Session(self._engine) as session:
@@ -2345,6 +2594,7 @@ class Database:
                 s.sort_order = i
             session.commit()
 
+    @_scene_locked
     def set_scene_structure(
         self, scene_id: int, act: str, chapter: str,
     ) -> None:
@@ -2362,6 +2612,7 @@ class Database:
             scene.chapter = chapter or ""
             session.commit()
 
+    @_scene_locked
     def set_scene_episode(self, scene_id: int, episode_id: int | None) -> None:
         """Assign (or clear, with ``None``) a scene's Series Episode link.
 
@@ -2376,6 +2627,7 @@ class Database:
             scene.episode_id = episode_id
             session.commit()
 
+    @_scene_locked
     def set_scene_gn_page_start(self, scene_id: int,
                                 start: int | None) -> None:
         """Pin (or clear, with ``None``) a Graphic Novel scene's act-wide
@@ -2791,12 +3043,26 @@ class Database:
 
     def delete_gn_page(self, page_id: int) -> None:
         with Session(self._engine) as session:
-            for panel in session.exec(
+            panels = session.exec(
                 select(GraphicNovelPanel).where(
                     GraphicNovelPanel.page_id == page_id,
                 )
+            ).all()
+            panel_ids = [panel.id for panel in panels if panel.id is not None]
+            appearance_query = (
+                GraphicNovelContinuityAppearance.page_id == page_id
+            )
+            if panel_ids:
+                appearance_query = appearance_query | (
+                    GraphicNovelContinuityAppearance.panel_id.in_(panel_ids)
+                )
+            for appearance in session.exec(
+                select(GraphicNovelContinuityAppearance).where(appearance_query)
             ).all():
+                session.delete(appearance)
+            for panel in panels:
                 session.delete(panel)
+            session.flush()
             page = session.get(GraphicNovelPage, page_id)
             if page:
                 session.delete(page)
@@ -2872,6 +3138,13 @@ class Database:
 
     def delete_gn_panel(self, panel_id: int) -> None:
         with Session(self._engine) as session:
+            for appearance in session.exec(
+                select(GraphicNovelContinuityAppearance).where(
+                    GraphicNovelContinuityAppearance.panel_id == panel_id,
+                )
+            ).all():
+                session.delete(appearance)
+            session.flush()
             panel = session.get(GraphicNovelPanel, panel_id)
             if panel:
                 session.delete(panel)
@@ -2903,6 +3176,12 @@ class Database:
                 .order_by(GraphicNovelContinuityItem.id)
             )
             return list(session.exec(stmt).all())
+
+    def get_gn_continuity_item_by_id(
+        self, item_id: int,
+    ) -> GraphicNovelContinuityItem | None:
+        with Session(self._engine) as session:
+            return session.get(GraphicNovelContinuityItem, item_id)
 
     def add_gn_continuity_appearance(
         self, continuity_item_id: int, *, page_id: int | None = None,
@@ -2942,6 +3221,12 @@ class Database:
                 )
             )
             return list(session.exec(stmt).all())
+
+    def get_gn_continuity_appearance_by_id(
+        self, appearance_id: int,
+    ) -> GraphicNovelContinuityAppearance | None:
+        with Session(self._engine) as session:
+            return session.get(GraphicNovelContinuityAppearance, appearance_id)
 
     def _patch_row(self, model, row_id: int, fields: dict) -> None:
         """Set provided attributes on a row, ignoring unknown keys."""
@@ -2988,6 +3273,10 @@ class Database:
             )
             return list(session.exec(stmt).all())
 
+    def get_stage_entrance_exit_by_id(self, row_id: int) -> StageEntranceExit | None:
+        with Session(self._engine) as session:
+            return session.get(StageEntranceExit, row_id)
+
     def delete_stage_entrance_exit(self, row_id: int) -> None:
         with Session(self._engine) as session:
             row = session.get(StageEntranceExit, row_id)
@@ -3022,6 +3311,10 @@ class Database:
                 .order_by(StageCue.moment_order, StageCue.id)
             )
             return list(session.exec(stmt).all())
+
+    def get_stage_cue_by_id(self, row_id: int) -> StageCue | None:
+        with Session(self._engine) as session:
+            return session.get(StageCue, row_id)
 
     def delete_stage_cue(self, row_id: int) -> None:
         with Session(self._engine) as session:
@@ -3061,6 +3354,10 @@ class Database:
                 .order_by(StageBusiness.moment_order, StageBusiness.id)
             )
             return list(session.exec(stmt).all())
+
+    def get_stage_business_by_id(self, row_id: int) -> StageBusiness | None:
+        with Session(self._engine) as session:
+            return session.get(StageBusiness, row_id)
 
     # -- Series: seasons / episodes / arcs / plotlines ----------------------
 
@@ -3180,6 +3477,17 @@ class Database:
                     EpisodePlotline.episode_id == episode_id)
             ).all():
                 session.delete(pl)
+            for arc in session.exec(
+                select(SeriesArc).where(
+                    (SeriesArc.setup_episode_id == episode_id)
+                    | (SeriesArc.payoff_episode_id == episode_id)
+                )
+            ).all():
+                if arc.setup_episode_id == episode_id:
+                    arc.setup_episode_id = None
+                if arc.payoff_episode_id == episode_id:
+                    arc.payoff_episode_id = None
+            session.flush()
             row = session.get(Episode, episode_id)
             if row is not None:
                 session.delete(row)
@@ -3208,8 +3516,19 @@ class Database:
                         EpisodePlotline.episode_id.in_(ep_ids))
                 ).all():
                     session.delete(pl)
+                for arc in session.exec(
+                    select(SeriesArc).where(
+                        (SeriesArc.setup_episode_id.in_(ep_ids))
+                        | (SeriesArc.payoff_episode_id.in_(ep_ids))
+                    )
+                ).all():
+                    if arc.setup_episode_id in ep_ids:
+                        arc.setup_episode_id = None
+                    if arc.payoff_episode_id in ep_ids:
+                        arc.payoff_episode_id = None
                 for e in episodes:
                     session.delete(e)
+                session.flush()
             row = session.get(Season, season_id)
             if row is not None:
                 session.delete(row)
@@ -3292,6 +3611,10 @@ class Database:
             )
             return list(session.exec(stmt).all())
 
+    def get_series_arc_by_id(self, arc_id: int) -> SeriesArc | None:
+        with Session(self._engine) as session:
+            return session.get(SeriesArc, arc_id)
+
     def update_series_arc(self, arc_id: int, **fields) -> None:
         if "linked_psyke_entries" in fields and not isinstance(
             fields["linked_psyke_entries"], str
@@ -3333,6 +3656,10 @@ class Database:
             )
             return list(session.exec(stmt).all())
 
+    def get_episode_plotline_by_id(self, plotline_id: int) -> EpisodePlotline | None:
+        with Session(self._engine) as session:
+            return session.get(EpisodePlotline, plotline_id)
+
     # -- Format-structure single-row update/delete completions --------------
     # These entities previously had create/get only (no in-app way to correct or
     # prune a wrong row); thin _patch_row/delete wrappers, same style as the
@@ -3367,6 +3694,7 @@ class Database:
                 )
             ).all():
                 session.delete(app)
+            session.flush()
             row = session.get(GraphicNovelContinuityItem, item_id)
             if row:
                 session.delete(row)
@@ -3635,6 +3963,19 @@ class Database:
                 select(Character).where(Character.psyke_entry_id == entry_id)
             ).all():
                 char.psyke_entry_id = None
+            for item in session.exec(
+                select(GraphicNovelContinuityItem).where(
+                    GraphicNovelContinuityItem.linked_psyke_entry_id == entry_id
+                )
+            ).all():
+                item.linked_psyke_entry_id = None
+            for business in session.exec(
+                select(StageBusiness).where(
+                    StageBusiness.prop_psyke_entry_id == entry_id
+                )
+            ).all():
+                business.prop_psyke_entry_id = None
+            session.flush()
             entry = session.get(PsykeEntry, entry_id)
             if entry:
                 session.delete(entry)
@@ -3979,6 +4320,13 @@ class Database:
                 stmt = stmt.where(StoryMemoryEntry.scene_id == scene_id)
             stmt = stmt.order_by(StoryMemoryEntry.scene_id, StoryMemoryEntry.id)
             return list(session.exec(stmt).all())
+
+    def get_story_memory_by_id(
+        self, memory_id: int,
+    ) -> StoryMemoryEntry | None:
+        """Return one narrative-memory row without assuming project ownership."""
+        with Session(self._engine) as session:
+            return session.get(StoryMemoryEntry, memory_id)
 
     def get_memories_by_type(
         self, project_id: int, memory_type: str

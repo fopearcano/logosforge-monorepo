@@ -13,6 +13,7 @@ import array
 import importlib.util
 import json
 import os
+import pathlib
 import threading
 import urllib.error
 import urllib.request
@@ -121,7 +122,7 @@ def test_oversized_payload_rejected(server):
     # a rejection (the Desktop client maps either to a non-crashing LAN error).
     try:
         status, _ = _post(base + "/v1/audio/transcriptions", body, ctype)
-    except urllib.error.URLError:
+    except (urllib.error.URLError, OSError):
         status = 413
     assert status == 413
 
@@ -300,13 +301,17 @@ def test_cli_defaults_localhost_and_full_flag_set():
         assert flag in text, flag
 
 
-def test_missing_faster_whisper_exits_with_clear_setup_message():
-    # CI has no faster-whisper, so the real startup path must exit cleanly
-    # with the install hint — never start a half-configured server.
+def test_missing_faster_whisper_exits_with_clear_setup_message(tmp_path):
+    # Simulate absence even when the optional voice dependency is installed on
+    # a developer workstation or self-hosted runner.
     import subprocess
     import sys
+    missing_module = tmp_path / "faster_whisper.py"
+    missing_module.write_text("raise ImportError('simulated missing faster-whisper')\n")
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(tmp_path) + os.pathsep + env.get("PYTHONPATH", "")
     out = subprocess.run([sys.executable, _SCRIPT, "--model", "/fake/model"],
-                         capture_output=True, text=True, timeout=30)
+                         capture_output=True, text=True, timeout=30, env=env)
     assert out.returncode == 2
     assert "faster-whisper is not installed" in out.stderr
 
@@ -328,8 +333,9 @@ def test_default_port_and_lan_warning_text():
 
 def test_app_never_imports_companion_server():
     # The companion is opt-in: no app module references the script.
-    import subprocess
-    out = subprocess.run(
-        ["grep", "-rl", "local_whisper_server", os.path.join(_ROOT, "logosforge")],
-        capture_output=True, text=True)
-    assert out.stdout.strip() == ""
+    root = pathlib.Path(_ROOT) / "logosforge"
+    offenders = [
+        path for path in root.rglob("*.py")
+        if "local_whisper_server" in path.read_text(encoding="utf-8", errors="ignore")
+    ]
+    assert offenders == []

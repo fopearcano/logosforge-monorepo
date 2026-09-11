@@ -33,7 +33,15 @@ def _theme_or_404(db: Database, project_id: int, entry_id: int):
 )
 def get_theme_scenes(entry_id: int, project=Depends(get_project), db: Database = Depends(get_db)):
     _theme_or_404(db, project.id, entry_id)
-    return schemas.ThemeScenesDTO(entry_id=entry_id, scene_ids=db.get_theme_scene_ids(entry_id))
+    scene_ids = [
+        scene_id
+        for scene_id in db.get_theme_scene_ids(entry_id)
+        if (
+            (scene := db.get_scene_by_id(scene_id)) is not None
+            and scene.project_id == project.id
+        )
+    ]
+    return schemas.ThemeScenesDTO(entry_id=entry_id, scene_ids=scene_ids)
 
 
 @router.put(
@@ -47,12 +55,21 @@ def set_theme_scenes(
     db: Database = Depends(get_db),
     broker: ApiEventBroker = Depends(get_broker),
 ):
-    """Replace the full set of scenes this theme is tagged in. Scene ids not in this
-    project are ignored (never cross-project links)."""
+    """Replace the full set of scenes this theme is tagged in.
+
+    Missing ids are ignored for backward compatibility with stale clients;
+    existing scenes owned by another project are rejected.
+    """
     _theme_or_404(db, project.id, entry_id)
-    valid = {s.id for s in db.get_all_scenes(project.id)}
-    scene_ids = [sid for sid in body.scene_ids if sid in valid]
+    scene_ids: list[int] = []
+    for scene_id in body.scene_ids:
+        scene = db.get_scene_by_id(scene_id)
+        if scene is None:
+            continue
+        if scene.project_id != project.id:
+            raise not_found(f"Scene {scene_id} not found")
+        scene_ids.append(scene_id)
     db.set_theme_scenes(entry_id, scene_ids)
     broker.publish("psyke_changed", project_id=project.id)
     broker.publish("project_data_changed", project_id=project.id)
-    return schemas.ThemeScenesDTO(entry_id=entry_id, scene_ids=db.get_theme_scene_ids(entry_id))
+    return get_theme_scenes(entry_id, project=project, db=db)

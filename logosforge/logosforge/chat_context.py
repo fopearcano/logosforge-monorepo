@@ -6,6 +6,9 @@ PSYKE or scene gathering logic.
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Callable
+
 from logosforge.context_builder import (
     gather_outline_context,
     gather_psyke_context,
@@ -15,6 +18,91 @@ from logosforge.context_builder import (
 from logosforge.db import Database
 
 CONTEXT_MAX_CHARS = 6000
+_LOG = logging.getLogger(__name__)
+
+# Guaranteed first-pass budgets. Short sources give their unused space back;
+# the remainder is then shared among longer sources. This prevents a long active
+# scene or outline from pushing PSYKE entirely past the global tail cut.
+_SOURCE_MIN_CHARS = {
+    "project": 300,
+    "scene": 1200,
+    "outline": 1200,
+    "psyke": 1200,
+    "memory": 400,
+}
+_TRUNCATED = "\n[...source truncated]"
+
+
+def _append_context_source(
+    sections: list[tuple[str, str]],
+    key: str,
+    label: str,
+    build: Callable[[], str],
+) -> None:
+    """Append one source without letting it erase every other grounding source."""
+    try:
+        block = build()
+    except Exception:
+        _LOG.exception("Could not build %s assistant context", label)
+        sections.append((key, f"[Context Warning] {label} context unavailable for this reply."))
+        return
+    if block:
+        sections.append((key, block))
+
+
+def _fit_context_sections(sections: list[tuple[str, str]]) -> str:
+    """Fit all non-empty sources while preserving every source's leading context.
+
+    The old final-string slice privileged whichever source happened to come
+    first and could remove PSYKE altogether. Allocate a minimum to every source,
+    then water-fill unused capacity across the still-truncated sources.
+    """
+    if not sections:
+        return ""
+    separator_chars = 2 * (len(sections) - 1)
+    available = max(0, CONTEXT_MAX_CHARS - separator_chars)
+    wanted = [
+        min(len(block), _SOURCE_MIN_CHARS.get(key, 400))
+        for key, block in sections
+    ]
+    wanted_total = sum(wanted)
+    if wanted_total > available and wanted_total:
+        # Defensive fallback if budgets or the global cap are changed later.
+        scale = available / wanted_total
+        allocations = [int(value * scale) for value in wanted]
+    else:
+        allocations = wanted
+
+    remaining = available - sum(allocations)
+    while remaining > 0:
+        open_indexes = [
+            index for index, (_key, block) in enumerate(sections)
+            if allocations[index] < len(block)
+        ]
+        if not open_indexes:
+            break
+        share = max(1, remaining // len(open_indexes))
+        spent = 0
+        for index in open_indexes:
+            need = len(sections[index][1]) - allocations[index]
+            add = min(need, share, remaining - spent)
+            allocations[index] += add
+            spent += add
+            if spent >= remaining:
+                break
+        if spent == 0:
+            break
+        remaining -= spent
+
+    fitted: list[str] = []
+    for (_key, block), limit in zip(sections, allocations):
+        if len(block) <= limit:
+            fitted.append(block)
+        elif limit <= len(_TRUNCATED):
+            fitted.append(block[:limit])
+        else:
+            fitted.append(block[:limit - len(_TRUNCATED)] + _TRUNCATED)
+    return "\n\n".join(fitted)
 
 
 def build_chat_context(
@@ -32,41 +120,55 @@ def build_chat_context(
     CONTEXT_MAX_CHARS — anything past that is dropped from the tail
     so the most-relevant earlier sections survive.
     """
-    sections: list[str] = []
+    sections: list[tuple[str, str]] = []
 
-    project = db.get_project_by_id(project_id)
+    try:
+        project = db.get_project_by_id(project_id)
+    except Exception:
+        _LOG.exception("Could not build project assistant context")
+        project = None
+        sections.append(("project", "[Context Warning] Project header unavailable for this reply."))
     if project is not None:
         header = f"[Project] {project.title}"
         if project.description:
             header += f" — {project.description.strip()[:200]}"
-        sections.append(header)
+        sections.append(("project", header))
 
     if active_scene_id is not None:
-        scene_block = gather_scene_context(db, project_id, active_scene_id)
-        if scene_block:
-            sections.append(scene_block)
+        _append_context_source(
+            sections,
+            "scene",
+            "Active scene",
+            lambda: gather_scene_context(db, project_id, active_scene_id),
+        )
 
     if include_outline:
-        outline = gather_outline_context(db, project_id)
-        if outline:
-            sections.append(outline)
+        _append_context_source(
+            sections,
+            "outline",
+            "Outline",
+            lambda: gather_outline_context(db, project_id),
+        )
 
     if include_psyke:
-        psyke = gather_psyke_context(
-            db, project_id, scene_id=active_scene_id,
+        _append_context_source(
+            sections,
+            "psyke",
+            "PSYKE",
+            lambda: gather_psyke_context(
+                db, project_id, scene_id=active_scene_id,
+            ),
         )
-        if psyke:
-            sections.append(psyke)
 
     if include_memory:
-        memory = gather_story_memory(db, project_id)
-        if memory:
-            sections.append(memory)
+        _append_context_source(
+            sections,
+            "memory",
+            "Story memory",
+            lambda: gather_story_memory(db, project_id),
+        )
 
-    combined = "\n\n".join(sections)
-    if len(combined) > CONTEXT_MAX_CHARS:
-        combined = combined[:CONTEXT_MAX_CHARS] + "\n[...context truncated]"
-    return combined
+    return _fit_context_sections(sections)
 
 
 def context_summary(

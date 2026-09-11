@@ -93,7 +93,10 @@ def update_event(
     return _event_dto(db, project.id, event_id)
 
 
-@router.delete("/projects/{project_id}/timeline/events/{event_id}")
+@router.delete(
+    "/projects/{project_id}/timeline/events/{event_id}",
+    response_model=schemas.RemovedResultDTO,
+)
 def delete_event(
     event_id: int,
     project=Depends(get_project),

@@ -325,14 +325,22 @@ def can_change_writing_mode(db, project_id: int) -> bool:
         return False
 
 
-def change_writing_mode(db, project_id: int, mode: str) -> tuple[bool, str]:
+def change_writing_mode(
+    db,
+    project_id: int,
+    mode: str,
+    *,
+    writing_format: str | None = None,
+) -> tuple[bool, str]:
     """Guarded mode change. Returns ``(changed, mode)``.
 
     * Same mode → ``(False, current)`` (no-op, no write).
     * Locked project (meaningful content) → ``(False, current)`` and **writes
       nothing** — the lock is never bypassed.
     * Unlocked project with a different valid target → persists and returns
-      ``(True, target)``.
+      ``(True, target)``. When ``writing_format`` is supplied by a UI workflow,
+      engine and block grammar are committed together; otherwise a separately
+      customized format is preserved.
 
     This is the only guarded path; the low-level :func:`set_project_writing_mode`
     remains the unguarded persistence primitive used at creation time.
@@ -343,5 +351,10 @@ def change_writing_mode(db, project_id: int, mode: str) -> tuple[bool, str]:
         return (False, current)
     if not can_change_writing_mode(db, project_id):
         return (False, current)
-    set_project_writing_mode(db, project_id, target)
+    if writing_format:
+        db.update_project_mode(project_id, target, writing_format)
+    else:
+        # Internal callers may have selected a custom block grammar separately;
+        # changing only the narrative engine must preserve that choice.
+        set_project_writing_mode(db, project_id, target)
     return (True, target)

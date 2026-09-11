@@ -24,10 +24,13 @@ Pure logic: no Qt, no LLM, no network. ``.docx`` is read via ``python-docx``
 from __future__ import annotations
 
 import io
+import logging
 import re
 from typing import Any
 
 from logosforge import writing_modes
+
+_LOG = logging.getLogger(__name__)
 
 # --- line classification --------------------------------------------------
 
@@ -212,12 +215,19 @@ def import_manuscript_document(
         proj_title, format_mode=mode, narrative_engine=mode,
         default_writing_format=default_fmt,
     )
-    scenes = segment_manuscript(text, mode, strategy)
-    titles: list[str] = []
-    for i, sc in enumerate(scenes, start=1):
-        name = sc["title"] or f"Scene {i}"
-        db.create_scene(project.id, title=name, content=sc["content"])
-        titles.append(name)
+    try:
+        scenes = segment_manuscript(text, mode, strategy)
+        titles: list[str] = []
+        for i, sc in enumerate(scenes, start=1):
+            name = sc["title"] or f"Scene {i}"
+            db.create_scene(project.id, title=name, content=sc["content"])
+            titles.append(name)
+    except Exception:
+        try:
+            db.delete_project(project.id)
+        except Exception:
+            _LOG.exception("Could not roll back failed manuscript import project %s", project.id)
+        raise
     return {
         "project_id": project.id,
         "title": proj_title,

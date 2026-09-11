@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hmac
+
 from fastapi import Depends, Header, Path, Request
 
 from logosforge.api.config import ApiConfig
@@ -47,6 +49,7 @@ def require_auth(
     token = config.auth_token
     if not token:
         return
-    expected = f"Bearer {token}"
-    if authorization != expected:
+    prefix = "Bearer "
+    provided = authorization[len(prefix):] if authorization and authorization.startswith(prefix) else ""
+    if not provided or not hmac.compare_digest(provided.encode(), token.encode()):
         raise forbidden("Missing or invalid authorization token")

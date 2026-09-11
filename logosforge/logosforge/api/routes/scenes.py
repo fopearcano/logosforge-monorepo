@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends
 
 from logosforge.api import schemas, serializers
 from logosforge.api.deps import get_broker, get_db, get_project
-from logosforge.api.errors import not_found
+from logosforge.api.errors import conflict, not_found
 from logosforge.api.events import ApiEventBroker
 from logosforge.db import Database
 
@@ -15,6 +15,20 @@ router = APIRouter(tags=["scenes"])
 
 def _csv(values):
     return ", ".join(values) if values else ""
+
+
+def _character_or_404(db: Database, project_id: int, character_id: int):
+    character = db.get_character_by_id(character_id)
+    if character is None or character.project_id != project_id:
+        raise not_found(f"Character {character_id} not found")
+    return character
+
+
+def _place_or_404(db: Database, project_id: int, place_id: int):
+    place = db.get_place_by_id(place_id)
+    if place is None or place.project_id != project_id:
+        raise not_found(f"Place {place_id} not found")
+    return place
 
 
 @router.get("/projects/{project_id}/scenes", response_model=list[schemas.SceneDTO])
@@ -32,6 +46,10 @@ def create_scene(
     db: Database = Depends(get_db),
     broker: ApiEventBroker = Depends(get_broker),
 ):
+    for character_id in body.character_ids:
+        _character_or_404(db, project.id, character_id)
+    for place_id in body.place_ids:
+        _place_or_404(db, project.id, place_id)
     scene = db.create_scene(
         project.id,
         title=body.title,
@@ -76,53 +94,67 @@ def update_scene(
     db: Database = Depends(get_db),
     broker: ApiEventBroker = Depends(get_broker),
 ):
-    scene = db.get_scene_by_id(scene_id)
-    if scene is None or scene.project_id != project.id:
-        raise not_found(f"Scene {scene_id} not found")
+    # The read, revision comparison and write are one process-local critical
+    # section. Database's targeted Scene writers use this same re-entrant lock.
+    with db.scene_write_lock(scene_id):
+        scene = db.get_scene_by_id(scene_id)
+        if scene is None or scene.project_id != project.id:
+            raise not_found(f"Scene {scene_id} not found")
 
-    patch = body.model_dump(exclude_unset=True)
+        patch = body.model_dump(exclude_unset=True)
+        expected_revision = patch.pop("expected_revision", None)
+        if expected_revision and expected_revision != serializers.scene_revision(db, scene):
+            raise conflict(
+                "The scene changed after it was loaded. Reload it or explicitly overwrite the newer version.",
+                code="scene_conflict",
+            )
 
-    def merged(field: str, current):
-        if field not in patch or patch[field] is None:
-            return current
-        return patch[field]
+        def merged(field: str, current):
+            if field not in patch or patch[field] is None:
+                return current
+            return patch[field]
 
-    # core text fields default to "" in update_scene, so pass the merged
-    # current values to avoid clobbering unspecified fields.
-    db.update_scene(
-        scene_id,
-        title=merged("title", scene.title),
-        summary=merged("summary", scene.summary),
-        synopsis=merged("synopsis", scene.synopsis),
-        goal=merged("goal", scene.goal),
-        conflict=merged("conflict", scene.conflict),
-        outcome=merged("outcome", scene.outcome),
-        beat=merged("beat", scene.beat),
-        tags=_csv(patch["tags"]) if "tags" in patch and patch["tags"] is not None else scene.tags,
-        act=merged("act", scene.act),
-        content=merged("content", scene.content),
-        chapter=merged("chapter", scene.chapter),
-        plotline=merged("plotline", scene.plotline),
-        color_label=patch.get("color_label"),  # None = leave unchanged
-        time_of_day=patch.get("time_of_day"),
-        location=patch.get("location"),
-        estimated_duration_minutes=patch.get("estimated_duration_minutes"),
-        who_knows_what=patch.get("who_knows_what"),  # feeds the graph "knowledge" edge
-        offstage_events=patch.get("offstage_events"),  # feeds the graph "offstage" edge
-        # update_scene unconditionally replaces these associations, so pass the
-        # current values to preserve them across a partial PATCH.
-        character_ids=db.get_scene_character_ids(scene_id),
-        place_ids=db.get_scene_place_ids(scene_id),
-        character_states=db.get_scene_character_states(scene_id),
-    )
-    if patch.get("sort_order") is not None:
-        db.reorder_scene(scene_id, patch["sort_order"])
+        # core text fields default to "" in update_scene, so pass the merged
+        # current values to avoid clobbering unspecified fields.
+        db.update_scene(
+            scene_id,
+            title=merged("title", scene.title),
+            summary=merged("summary", scene.summary),
+            synopsis=merged("synopsis", scene.synopsis),
+            goal=merged("goal", scene.goal),
+            conflict=merged("conflict", scene.conflict),
+            outcome=merged("outcome", scene.outcome),
+            beat=merged("beat", scene.beat),
+            tags=_csv(patch["tags"]) if "tags" in patch and patch["tags"] is not None else scene.tags,
+            act=merged("act", scene.act),
+            content=merged("content", scene.content),
+            chapter=merged("chapter", scene.chapter),
+            plotline=merged("plotline", scene.plotline),
+            color_label=patch.get("color_label"),  # None = leave unchanged
+            time_of_day=patch.get("time_of_day"),
+            location=patch.get("location"),
+            estimated_duration_minutes=patch.get("estimated_duration_minutes"),
+            who_knows_what=patch.get("who_knows_what"),  # feeds the graph "knowledge" edge
+            offstage_events=patch.get("offstage_events"),  # feeds the graph "offstage" edge
+            # update_scene unconditionally replaces these associations, so pass the
+            # current values to preserve them across a partial PATCH.
+            character_ids=db.get_scene_character_ids(scene_id),
+            place_ids=db.get_scene_place_ids(scene_id),
+            character_states=db.get_scene_character_states(scene_id),
+        )
+        if patch.get("sort_order") is not None:
+            db.reorder_scene(scene_id, patch["sort_order"])
+        updated = db.get_scene_by_id(scene_id)
+        updated_dto = serializers.scene_to_dto(db, updated)
 
     broker.publish("scene_changed", project_id=project.id, scene_id=scene_id)
-    return serializers.scene_to_dto(db, db.get_scene_by_id(scene_id))
+    return updated_dto
 
 
-@router.delete("/projects/{project_id}/scenes/{scene_id}")
+@router.delete(
+    "/projects/{project_id}/scenes/{scene_id}",
+    response_model=schemas.DeleteResultDTO,
+)
 def delete_scene(
     scene_id: int,
     project=Depends(get_project),
@@ -142,6 +174,20 @@ def _scene_or_404(db: Database, project_id: int, scene_id: int):
     if scene is None or scene.project_id != project_id:
         raise not_found(f"Scene {scene_id} not found")
     return scene
+
+
+def _continuity_or_404(
+    db: Database, project_id: int, scene_id: int, memory_id: int,
+):
+    memory = db.get_story_memory_by_id(memory_id)
+    if (
+        memory is None
+        or memory.project_id != project_id
+        or memory.scene_id != scene_id
+        or not (memory.memory_type or "").startswith("continuity_")
+    ):
+        raise not_found(f"Continuity note {memory_id} not found")
+    return memory
 
 
 def _continuity_dto(m) -> schemas.ContinuityMemoryDTO:
@@ -194,6 +240,7 @@ def update_continuity(
 ):
     """Edit a pinned continuity note's target/value (and kind → memory_type)."""
     _scene_or_404(db, project.id, scene_id)
+    _continuity_or_404(db, project.id, scene_id, memory_id)
     fields: dict = {"target": body.target, "value": body.value}
     if body.kind:
         fields["memory_type"] = f"continuity_{(body.kind or 'state').strip() or 'state'}"
@@ -205,7 +252,10 @@ def update_continuity(
     raise not_found(f"Continuity note {memory_id} not found")
 
 
-@router.delete("/projects/{project_id}/scenes/{scene_id}/continuity/{memory_id}")
+@router.delete(
+    "/projects/{project_id}/scenes/{scene_id}/continuity/{memory_id}",
+    response_model=schemas.DeleteResultDTO,
+)
 def delete_continuity(
     scene_id: int,
     memory_id: int,
@@ -215,6 +265,7 @@ def delete_continuity(
 ):
     """Remove a pinned continuity note."""
     _scene_or_404(db, project.id, scene_id)
+    _continuity_or_404(db, project.id, scene_id, memory_id)
     db.delete_continuity_memory(memory_id)
     broker.publish("scene_changed", project_id=project.id, scene_id=scene_id)
     return {"ok": True, "deleted": memory_id}

@@ -6,6 +6,9 @@ objects, and the wire contract stays decoupled from the database schema.
 
 from __future__ import annotations
 
+import hashlib
+import json
+
 from logosforge.api import schemas
 from logosforge.db import Database
 
@@ -14,6 +17,15 @@ def _split_csv(value: str | None) -> list[str]:
     if not value:
         return []
     return [p.strip() for p in value.split(",") if p.strip()]
+
+
+def _local_scene_id(
+    db: Database, project_id: int, scene_id: int | None,
+) -> int | None:
+    if scene_id is None:
+        return None
+    scene = db.get_scene_by_id(scene_id)
+    return scene_id if scene is not None and scene.project_id == project_id else None
 
 
 # -- Projects ----------------------------------------------------------------
@@ -38,7 +50,62 @@ def project_to_dto(project) -> schemas.ProjectDTO:
 # -- Scenes ------------------------------------------------------------------
 
 
-def scene_to_dto(db: Database, scene, order_index: int = 0) -> schemas.SceneDTO:
+def scene_revision(
+    db: Database,
+    scene,
+    *,
+    character_ids: list[int] | None = None,
+    place_ids: list[int] | None = None,
+) -> str:
+    """Content-addressed revision for optimistic Scene updates.
+
+    It is deliberately derived rather than stored, so existing databases need
+    no migration. All scalar Scene columns and the associations replaced by
+    ``update_scene`` participate in the token.
+    """
+    if character_ids is None:
+        character_ids = db.get_scene_character_ids(scene.id)
+    if place_ids is None:
+        place_ids = db.get_scene_place_ids(scene.id)
+    payload = {
+        "scene": scene.model_dump(),
+        "character_ids": sorted(int(value) for value in character_ids),
+        "place_ids": sorted(int(value) for value in place_ids),
+        "character_states": sorted(
+            (int(character_id), str(state))
+            for character_id, state in db.get_scene_character_states(scene.id)
+        ),
+    }
+    encoded = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def scene_to_dto(
+    db: Database,
+    scene,
+    order_index: int = 0,
+    *,
+    valid_character_ids: set[int] | None = None,
+    valid_place_ids: set[int] | None = None,
+) -> schemas.SceneDTO:
+    if valid_character_ids is None:
+        valid_character_ids = {
+            character.id for character in db.get_all_characters(scene.project_id)
+        }
+    if valid_place_ids is None:
+        valid_place_ids = {place.id for place in db.get_all_places(scene.project_id)}
+    character_ids = [
+        character_id
+        for character_id in db.get_scene_character_ids(scene.id)
+        if character_id in valid_character_ids
+    ]
+    place_ids = [
+        place_id
+        for place_id in db.get_scene_place_ids(scene.id)
+        if place_id in valid_place_ids
+    ]
     return schemas.SceneDTO(
         id=scene.id,
         title=scene.title,
@@ -56,14 +123,32 @@ def scene_to_dto(db: Database, scene, order_index: int = 0) -> schemas.SceneDTO:
         content=scene.content or "",
         sort_order=scene.sort_order or 0,
         order_index=order_index,
-        character_ids=db.get_scene_character_ids(scene.id),
-        place_ids=db.get_scene_place_ids(scene.id),
+        character_ids=character_ids,
+        place_ids=place_ids,
         who_knows_what=getattr(scene, "who_knows_what", "") or "",
+        revision=scene_revision(
+            db, scene, character_ids=character_ids, place_ids=place_ids,
+        ),
     )
 
 
 def scenes_to_dtos(db: Database, scenes) -> list[schemas.SceneDTO]:
-    return [scene_to_dto(db, s, i + 1) for i, s in enumerate(scenes)]
+    scenes = list(scenes)
+    if not scenes:
+        return []
+    project_id = scenes[0].project_id
+    valid_character_ids = {
+        character.id for character in db.get_all_characters(project_id)
+    }
+    valid_place_ids = {place.id for place in db.get_all_places(project_id)}
+    return [
+        scene_to_dto(
+            db, scene, index + 1,
+            valid_character_ids=valid_character_ids,
+            valid_place_ids=valid_place_ids,
+        )
+        for index, scene in enumerate(scenes)
+    ]
 
 
 # -- Outline -----------------------------------------------------------------
@@ -71,9 +156,12 @@ def scenes_to_dtos(db: Database, scenes) -> list[schemas.SceneDTO]:
 
 def outline_tree(db: Database, project_id: int) -> list[schemas.OutlineNodeDTO]:
     nodes = db.get_outline_nodes(project_id)
+    node_ids = {node.id for node in nodes}
+    scene_ids = {scene.id for scene in db.get_all_scenes(project_id)}
     children_map: dict[int | None, list] = {}
     for node in nodes:
-        children_map.setdefault(node.parent_id, []).append(node)
+        parent_id = node.parent_id if node.parent_id in node_ids and node.parent_id != node.id else None
+        children_map.setdefault(parent_id, []).append(node)
 
     def build(parent_id: int | None) -> list[schemas.OutlineNodeDTO]:
         kids = children_map.get(parent_id, [])
@@ -81,11 +169,11 @@ def outline_tree(db: Database, project_id: int) -> list[schemas.OutlineNodeDTO]:
         return [
             schemas.OutlineNodeDTO(
                 id=n.id,
-                parent_id=n.parent_id,
+                parent_id=(n.parent_id if n.parent_id in node_ids and n.parent_id != n.id else None),
                 title=n.title,
                 description=n.description or "",
                 sort_order=n.sort_order or 0,
-                scene_id=n.scene_id,
+                scene_id=(n.scene_id if n.scene_id in scene_ids else None),
                 children=build(n.id),
             )
             for n in kids
@@ -94,14 +182,15 @@ def outline_tree(db: Database, project_id: int) -> list[schemas.OutlineNodeDTO]:
     return build(None)
 
 
-def outline_node_to_dto(node) -> schemas.OutlineNodeDTO:
+def outline_node_to_dto(db: Database, node) -> schemas.OutlineNodeDTO:
+    parent = db.get_outline_node_by_id(node.parent_id) if node.parent_id is not None else None
     return schemas.OutlineNodeDTO(
         id=node.id,
-        parent_id=node.parent_id,
+        parent_id=(node.parent_id if parent is not None and parent.project_id == node.project_id else None),
         title=node.title,
         description=node.description or "",
         sort_order=node.sort_order or 0,
-        scene_id=node.scene_id,
+        scene_id=_local_scene_id(db, node.project_id, node.scene_id),
         children=[],
     )
 
@@ -239,6 +328,8 @@ def psyke_relations(db: Database, project_id: int) -> list[schemas.PsykeRelation
     seen: set[tuple] = set()
     for e in entries:
         for related, rtype in db.get_typed_related_psyke_entries(e.id):
+            if related.id not in name_by_id:
+                continue
             key = (min(e.id, related.id), max(e.id, related.id), rtype)
             if key in seen:
                 continue
@@ -262,14 +353,15 @@ def psyke_progressions(db: Database, project_id: int) -> list[schemas.PsykeProgr
     out = []
     for e in entries:
         for prog in db.get_psyke_progressions(e.id):
+            scene_id = prog.scene_id if prog.scene_id in scene_title_by_id else None
             out.append(
                 schemas.PsykeProgressionDTO(
                     id=prog.id,
                     entry_id=e.id,
                     text=prog.text,
-                    scene_id=prog.scene_id,
-                    scene_title=scene_title_by_id.get(prog.scene_id, "")
-                    if prog.scene_id else "",
+                    scene_id=scene_id,
+                    scene_title=scene_title_by_id.get(scene_id, "")
+                    if scene_id else "",
                     sort_order=prog.sort_order or 0,
                 )
             )
@@ -278,14 +370,15 @@ def psyke_progressions(db: Database, project_id: int) -> list[schemas.PsykeProgr
 
 def progression_to_dto(db: Database, project_id: int, prog, entry_id: int) -> schemas.PsykeProgressionDTO:
     scene_title = ""
-    if prog.scene_id:
-        scene = db.get_scene_by_id(prog.scene_id)
+    scene_id = _local_scene_id(db, project_id, prog.scene_id)
+    if scene_id:
+        scene = db.get_scene_by_id(scene_id)
         scene_title = scene.title if scene else ""
     return schemas.PsykeProgressionDTO(
         id=prog.id,
         entry_id=entry_id,
         text=prog.text,
-        scene_id=prog.scene_id,
+        scene_id=scene_id,
         scene_title=scene_title,
         sort_order=prog.sort_order or 0,
     )
@@ -295,24 +388,46 @@ def progression_to_dto(db: Database, project_id: int, prog, entry_id: int) -> sc
 
 
 def note_to_dto(db: Database, note) -> schemas.NoteDTO:
+    psyke_links = [
+        entry_id
+        for entry_id in db.get_note_psyke_links(note.id)
+        if (
+            (entry := db.get_psyke_entry_by_id(entry_id)) is not None
+            and entry.project_id == note.project_id
+        )
+    ]
+    scene_links = [
+        scene_id
+        for scene_id in db.get_note_scene_links(note.id)
+        if _local_scene_id(db, note.project_id, scene_id) is not None
+    ]
     return schemas.NoteDTO(
         id=note.id,
         title=note.title,
         content=note.content or "",
         tags=_split_csv(note.tags),
         pinned=bool(note.pinned),
-        psyke_links=db.get_note_psyke_links(note.id),
-        scene_links=db.get_note_scene_links(note.id),
+        psyke_links=psyke_links,
+        scene_links=scene_links,
     )
 
 
 def character_to_dto(db: Database, character) -> schemas.CharacterDTO:
+    psyke_entry_id = character.psyke_entry_id
+    if psyke_entry_id is not None:
+        entry = db.get_psyke_entry_by_id(psyke_entry_id)
+        if (
+            entry is None
+            or entry.project_id != character.project_id
+            or (entry.entry_type or "").lower() != "character"
+        ):
+            psyke_entry_id = None
     return schemas.CharacterDTO(
         id=character.id,
         name=character.name,
         description=character.description or "",
         color=character.color or "#3498db",
-        psyke_entry_id=character.psyke_entry_id,
+        psyke_entry_id=psyke_entry_id,
     )
 
 

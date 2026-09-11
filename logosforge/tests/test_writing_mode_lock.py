@@ -80,6 +80,18 @@ def test_empty_project_change_persists():
     assert wm.get_project_writing_mode_by_id(db, pid) == "screenplay"
 
 
+def test_explicit_mode_and_format_change_keeps_fields_in_sync():
+    db = Database()
+    pid = _project(db, "novel")
+    assert wm.change_writing_mode(
+        db, pid, "series", writing_format="screenplay",
+    ) == (True, "series")
+    project = db.get_project_by_id(pid)
+    assert project.narrative_engine == "series"
+    assert project.default_writing_format == "screenplay"
+    assert project.format_mode == "screenplay"
+
+
 # ==========================================================================
 # 4-13  Mode locks once meaningful content exists
 # ==========================================================================

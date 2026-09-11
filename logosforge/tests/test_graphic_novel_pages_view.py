@@ -273,17 +273,16 @@ def test_novel_view_is_inert():
 def test_main_window_disables_standalone_pages_navigation_in_manuscript():
     # Alpha: the standalone "Pages" section is disabled (fullscreen-hostile) and
     # hidden in every mode. Graphic Novel Page/Panel navigation lives in the
-    # Manuscript as the comics script editor (GraphicNovelManuscriptView).
+    # canonical shared block editor (WritingCoreView).
     from logosforge.ui.main_window import MainWindow
-    from logosforge.ui.graphic_novel_manuscript_view import (
-        GraphicNovelManuscriptView)
+    from logosforge.ui.writing_core_view import WritingCoreView
     db = Database()
     p = _gn(db)
     win = MainWindow(db, p.id)
     assert "Pages" not in win.sidebar_buttons
     assert "Pages" not in win._nav_labels
     win._show_manuscript()
-    assert isinstance(win.content_area, GraphicNovelManuscriptView)
+    assert isinstance(win.content_area, WritingCoreView)
 
 
 def test_main_window_hides_pages_for_novel():

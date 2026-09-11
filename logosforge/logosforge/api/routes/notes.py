@@ -24,6 +24,40 @@ def _note_or_404(db: Database, project_id: int, note_id: int):
     return note
 
 
+def _scene_or_404(db: Database, project_id: int, scene_id: int):
+    scene = db.get_scene_by_id(scene_id)
+    if scene is None or scene.project_id != project_id:
+        raise not_found(f"Scene {scene_id} not found")
+    return scene
+
+
+def _entry_or_404(db: Database, project_id: int, entry_id: int):
+    entry = db.get_psyke_entry_by_id(entry_id)
+    if entry is None or entry.project_id != project_id:
+        raise not_found(f"PSYKE entry {entry_id} not found")
+    return entry
+
+
+def _local_scene_links(db: Database, project_id: int, note_id: int) -> list[int]:
+    return [
+        scene_id for scene_id in db.get_note_scene_links(note_id)
+        if (
+            (scene := db.get_scene_by_id(scene_id)) is not None
+            and scene.project_id == project_id
+        )
+    ]
+
+
+def _local_psyke_links(db: Database, project_id: int, note_id: int) -> list[int]:
+    return [
+        entry_id for entry_id in db.get_note_psyke_links(note_id)
+        if (
+            (entry := db.get_psyke_entry_by_id(entry_id)) is not None
+            and entry.project_id == project_id
+        )
+    ]
+
+
 @router.get("/projects/{project_id}/notes", response_model=list[schemas.NoteDTO])
 def list_notes(project=Depends(get_project), db: Database = Depends(get_db)):
     return [serializers.note_to_dto(db, n) for n in db.get_all_notes(project.id)]
@@ -74,7 +108,10 @@ def update_note(
     return serializers.note_to_dto(db, db.get_note_by_id(note_id))
 
 
-@router.delete("/projects/{project_id}/notes/{note_id}")
+@router.delete(
+    "/projects/{project_id}/notes/{note_id}",
+    response_model=schemas.DeleteResultDTO,
+)
 def delete_note(
     note_id: int,
     project=Depends(get_project),
@@ -92,49 +129,65 @@ def delete_note(
 # the Notes cards already display, so a writer can cross-reference from the app.
 
 
-@router.post("/projects/{project_id}/notes/{note_id}/scene-links/{scene_id}")
+@router.post(
+    "/projects/{project_id}/notes/{note_id}/scene-links/{scene_id}",
+    response_model=schemas.NoteSceneLinksDTO,
+)
 def link_note_scene(
     note_id: int, scene_id: int,
     project=Depends(get_project), db: Database = Depends(get_db),
     broker: ApiEventBroker = Depends(get_broker),
 ):
     _note_or_404(db, project.id, note_id)
+    _scene_or_404(db, project.id, scene_id)
     db.link_note_to_scene(note_id, scene_id)
     broker.publish("notes_changed", project_id=project.id)
-    return {"ok": True, "scene_links": db.get_note_scene_links(note_id)}
+    return {"ok": True, "scene_links": _local_scene_links(db, project.id, note_id)}
 
 
-@router.delete("/projects/{project_id}/notes/{note_id}/scene-links/{scene_id}")
+@router.delete(
+    "/projects/{project_id}/notes/{note_id}/scene-links/{scene_id}",
+    response_model=schemas.NoteSceneLinksDTO,
+)
 def unlink_note_scene(
     note_id: int, scene_id: int,
     project=Depends(get_project), db: Database = Depends(get_db),
     broker: ApiEventBroker = Depends(get_broker),
 ):
     _note_or_404(db, project.id, note_id)
+    _scene_or_404(db, project.id, scene_id)
     db.unlink_note_from_scene(note_id, scene_id)
     broker.publish("notes_changed", project_id=project.id)
-    return {"ok": True, "scene_links": db.get_note_scene_links(note_id)}
+    return {"ok": True, "scene_links": _local_scene_links(db, project.id, note_id)}
 
 
-@router.post("/projects/{project_id}/notes/{note_id}/psyke-links/{entry_id}")
+@router.post(
+    "/projects/{project_id}/notes/{note_id}/psyke-links/{entry_id}",
+    response_model=schemas.NotePsykeLinksDTO,
+)
 def link_note_psyke(
     note_id: int, entry_id: int,
     project=Depends(get_project), db: Database = Depends(get_db),
     broker: ApiEventBroker = Depends(get_broker),
 ):
     _note_or_404(db, project.id, note_id)
+    _entry_or_404(db, project.id, entry_id)
     db.link_note_to_psyke(note_id, entry_id)
     broker.publish("notes_changed", project_id=project.id)
-    return {"ok": True, "psyke_links": db.get_note_psyke_links(note_id)}
+    return {"ok": True, "psyke_links": _local_psyke_links(db, project.id, note_id)}
 
 
-@router.delete("/projects/{project_id}/notes/{note_id}/psyke-links/{entry_id}")
+@router.delete(
+    "/projects/{project_id}/notes/{note_id}/psyke-links/{entry_id}",
+    response_model=schemas.NotePsykeLinksDTO,
+)
 def unlink_note_psyke(
     note_id: int, entry_id: int,
     project=Depends(get_project), db: Database = Depends(get_db),
     broker: ApiEventBroker = Depends(get_broker),
 ):
     _note_or_404(db, project.id, note_id)
+    _entry_or_404(db, project.id, entry_id)
     db.unlink_note_from_psyke(note_id, entry_id)
     broker.publish("notes_changed", project_id=project.id)
-    return {"ok": True, "psyke_links": db.get_note_psyke_links(note_id)}
+    return {"ok": True, "psyke_links": _local_psyke_links(db, project.id, note_id)}

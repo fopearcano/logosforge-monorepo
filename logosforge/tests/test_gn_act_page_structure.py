@@ -1165,14 +1165,14 @@ def test_p2_cursor_panel_mapping_round_trips():
 def test_p2gate_legacy_renderers_not_constructed_in_production():
     """Verification-gate pin: no production module instantiates the LEGACY
     GraphicNovel*View renderers (their modules carry the LEGACY — NOT
-    ROUTED label); 'Comics Script' exists nowhere in production code."""
+    ROUTED label). User-facing vocabulary is tested separately; prohibitions in
+    assistant prompts may legitimately mention the retired wording."""
     import pathlib
     legacy_defs = {"logosforge/ui/graphic_novel_manuscript_view.py",
                    "logosforge/ui/graphic_novel_outline_view.py"}
     for path in pathlib.Path("logosforge").rglob("*.py"):
         src = path.read_text(encoding="utf-8")
-        assert "Comics Script" not in src, path
-        if str(path) in legacy_defs:
+        if path.as_posix() in legacy_defs:
             assert src.startswith('"""LEGACY — NOT ROUTED')
             continue
         assert "GraphicNovelManuscriptView(" not in src, path

@@ -7,9 +7,9 @@ stable across releases.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, RootModel
 
 
 # ---------------------------------------------------------------------------
@@ -37,6 +37,58 @@ class ProjectUpdateDTO(BaseModel):
     """PATCH a project — fields left None are unchanged."""
     title: str | None = None
     description: str | None = None
+    narrative_engine: str | None = None
+
+
+class HealthDTO(BaseModel):
+    status: str
+    service: str
+    instance_nonce: str = ""
+    mode: str
+    version: str
+    api_version: str
+    core_version: str
+
+
+class ProjectActionResultDTO(BaseModel):
+    ok: bool
+    project_id: int
+
+
+class DeleteResultDTO(BaseModel):
+    ok: bool
+    deleted: int | str
+
+
+class RemovedResultDTO(BaseModel):
+    ok: bool
+    removed: int
+
+
+class UpdatedResultDTO(BaseModel):
+    ok: bool
+    updated: int
+
+
+class NoteSceneLinksDTO(BaseModel):
+    ok: bool
+    scene_links: list[int] = Field(default_factory=list)
+
+
+class NotePsykeLinksDTO(BaseModel):
+    ok: bool
+    psyke_links: list[int] = Field(default_factory=list)
+
+
+class CharacterBackfillResultDTO(BaseModel):
+    ok: bool
+    linked: int
+
+
+class EventsPollDTO(BaseModel):
+    events: list[dict[str, Any]] = Field(default_factory=list)
+    cursor: int
+    known_events: list[str] = Field(default_factory=list)
 
 
 # --- Free-tier Whiteboard document import (blocks -> a new Pro project) ------
@@ -154,7 +206,176 @@ class VoiceBillyApplyReqDTO(BaseModel):
 class VoiceCommitReqDTO(BaseModel):
     text: str
     target_id: str
+    source_segment_ids: list[str] = Field(default_factory=list)
     ctx: dict[str, Any] | None = None
+
+
+class VoiceCorrectionDTO(BaseModel):
+    id: str
+    project_id: int
+    original_text: str
+    replacement_text: str
+    start_offset: int
+    end_offset: int
+    source_term_id: int | None
+    source: str
+    reason: str
+    confidence: float | None
+    applied: bool
+    created_at: float
+
+
+class VoiceHistoryEntryDTO(BaseModel):
+    id: str
+    session_id: str
+    project_id_at_capture: int
+    writing_mode_at_capture: str
+    text: str
+    original_text: str
+    preview: str
+    created_at: float
+    updated_at: float
+    language: str
+    source: str
+    is_final: bool
+    status: str
+    committed_target: str
+    committed_at: float | None
+    duration_ms: int
+    confidence: float | None
+    error: str
+    merged_from: list[str] = Field(default_factory=list)
+    split_from: str
+    corrections: list[VoiceCorrectionDTO] = Field(default_factory=list)
+    sent_to_billy: bool
+    billy_proposal_id: str
+    billy_state: str
+    has_audio: bool
+    sample_rate: int
+
+
+class VoiceHistoryDTO(BaseModel):
+    entries: list[VoiceHistoryEntryDTO] = Field(default_factory=list)
+
+
+class VoiceIntentDTO(BaseModel):
+    id: str
+    type: str
+    label: str
+    enabled: bool
+    requires_ai: bool
+    requires_confirmation: bool
+    reason_if_disabled: str
+    target_type: str
+
+
+class VoiceIntentsDTO(BaseModel):
+    intents: list[VoiceIntentDTO] = Field(default_factory=list)
+
+
+class VoiceIntentPreviewDTO(BaseModel):
+    id: str
+    intent_id: str
+    intent_type: str
+    project_id: int
+    created_at: float
+    target_summary: str
+    before_text: str | None
+    after_text: str | None
+    diff: str | None
+    created_note_preview: dict[str, Any] | None
+    created_psyke_entry_preview: dict[str, Any] | None
+    risk_level: str
+    can_apply: bool
+    reason_if_blocked: str
+    commit_target_id: str
+    gn_field: str
+    gn_ref: list[int] | None
+    source_segment_ids: list[str] = Field(default_factory=list)
+
+
+class VoiceBillyOperationDTO(BaseModel):
+    id: str
+    label: str
+    enabled: bool
+    reason_if_disabled: str
+
+
+class VoiceBillyOpsDTO(BaseModel):
+    operations: list[VoiceBillyOperationDTO] = Field(default_factory=list)
+
+
+class VoiceBillyProposalDTO(BaseModel):
+    id: str
+    proposal_type: str
+    operation: str
+    project_id: int
+    created_at: float
+    source_segment_ids: list[str] = Field(default_factory=list)
+    prompt_text: str
+    response_text: str
+    target_summary: str
+    before_text: str | None
+    after_text: str | None
+    diff: str | None
+    note_preview: dict[str, Any] | None
+    psyke_preview: dict[str, Any] | None
+    gn_ref: list[int] | None
+    gn_field: str
+    can_apply: bool
+    reason_if_blocked: str
+    applied: bool
+    cancelled: bool
+    applied_at: float | None
+
+
+class VoiceCommitTargetDTO(BaseModel):
+    id: str
+    label: str
+    mode: str
+    enabled: bool
+    target_type: str
+    reason_if_disabled: str
+
+
+class VoiceCommitTargetsDTO(BaseModel):
+    targets: list[VoiceCommitTargetDTO] = Field(default_factory=list)
+
+
+class VoiceApplyResultDTO(BaseModel):
+    applied: bool
+    message: str
+    inserted_text: str | None = None
+    cleaned_text: str | None = None
+
+
+class VoiceCancelResultDTO(BaseModel):
+    cancelled: bool
+    message: str
+
+
+class VoiceUndoStateDTO(BaseModel):
+    can_undo: bool
+    reason: str
+
+
+class VoiceUndoResultDTO(BaseModel):
+    undone: bool
+    message: str
+
+
+class VoiceSegmentErrorDTO(BaseModel):
+    error: str
+
+
+class VoiceSegmentEmptyDTO(BaseModel):
+    empty: Literal[True] = True
+
+
+class VoiceSegmentResultDTO(RootModel[
+    VoiceHistoryEntryDTO | VoiceSegmentErrorDTO | VoiceSegmentEmptyDTO
+]):
+    pass
 
 
 class ModeSuggestionDTO(BaseModel):
@@ -264,6 +485,7 @@ class SceneDTO(BaseModel):
     character_ids: list[int] = Field(default_factory=list)
     place_ids: list[int] = Field(default_factory=list)
     who_knows_what: str = ""
+    revision: str = ""
 
 
 class SceneCreateDTO(BaseModel):
@@ -306,6 +528,9 @@ class SceneUpdateDTO(BaseModel):
     # Graph-feeding structured fields (None = leave unchanged):
     who_knows_what: str | None = None   # screenplay — powers "knowledge" graph edges
     offstage_events: str | None = None  # stage — powers "offstage" graph edges
+    # Optional optimistic-concurrency token from SceneDTO. Empty/omitted keeps
+    # legacy last-write-wins behaviour for older clients.
+    expected_revision: str | None = Field(default=None, max_length=64)
 
 
 class ContinuityMemoryDTO(BaseModel):
@@ -560,6 +785,9 @@ class AssistantRequestDTO(BaseModel):
     selected_text: str = ""
     nearby_text: str = ""
     document_title: str = ""
+    # A frontend-owned planning tree that is not persisted in the core (the
+    # Whiteboard manual outline). Kept separate from cursor-near manuscript text.
+    planning_outline: str = ""
     # "Go Irrational" — inject surreal creative provocations for this one reply
     # (needs active_scene_id). Per-request; nothing is persisted.
     irrational: bool = False

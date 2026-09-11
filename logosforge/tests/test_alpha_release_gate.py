@@ -362,7 +362,8 @@ def test_no_writing_module_uses_season_episode_tables():
         with open(os.path.join(_HERE, rel), "rb") as fh:
             for tok in tokenize.tokenize(fh.readline):
                 name = tokenize.tok_name[tok.type]
-                if tok.type == tokenize.COMMENT or name.endswith("STRING"):
+                if (tok.type == tokenize.COMMENT or name == "STRING"
+                        or name.startswith("FSTRING_")):
                     continue
                 toks.append(tok.string.lower())
         skeleton = " ".join(toks)

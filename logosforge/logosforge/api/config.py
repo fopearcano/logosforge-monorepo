@@ -38,6 +38,7 @@ class ApiConfig:
     allowed_origins: list[str] = field(default_factory=list)
     db_path: str | None = None
     auth_token: str = ""
+    instance_nonce: str = ""
 
     # -- Derived helpers ---------------------------------------------------
 
@@ -69,7 +70,7 @@ class ApiConfig:
 
         Recognised variables:
             API_HOST, API_PORT, API_MODE, API_ALLOWED_ORIGINS (comma list),
-            API_AUTH_TOKEN, LOGOSFORGE_DB_PATH.
+            API_AUTH_TOKEN, API_INSTANCE_NONCE, LOGOSFORGE_DB_PATH.
         Keyword *overrides* win over the environment.
         """
         mode = os.environ.get("API_MODE", "desktop").strip() or "desktop"
@@ -88,6 +89,7 @@ class ApiConfig:
             allowed_origins=_split_origins(os.environ.get("API_ALLOWED_ORIGINS", "")),
             db_path=os.environ.get("LOGOSFORGE_DB_PATH") or None,
             auth_token=os.environ.get("API_AUTH_TOKEN", "").strip(),
+            instance_nonce=os.environ.get("API_INSTANCE_NONCE", "").strip(),
         )
         for key, value in overrides.items():
             setattr(cfg, key, value)

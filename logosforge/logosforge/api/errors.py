@@ -35,6 +35,10 @@ def forbidden(message: str) -> ApiError:
     return ApiError(403, message, code="forbidden")
 
 
+def conflict(message: str, code: str = "conflict") -> ApiError:
+    return ApiError(409, message, code=code)
+
+
 def not_implemented(message: str) -> ApiError:
     return ApiError(501, message, code="not_implemented")
 

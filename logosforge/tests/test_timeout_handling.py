@@ -222,7 +222,7 @@ class TestTimeoutErrorMessages:
     @patch("logosforge.assistant.time.sleep")
     @patch("logosforge.assistant.get_configured_timeout", return_value=120)
     @patch("logosforge.assistant._detect_response_language", return_value="en")
-    @patch("logosforge.assistant._openai_completion")
+    @patch("logosforge.assistant._anthropic_completion")
     def test_connection_error_includes_url(self, mock_comp, _mock_lang, _mock_timeout, _mock_sleep):
         from logosforge.assistant import chat_completion
         from logosforge.providers import ProviderConfig

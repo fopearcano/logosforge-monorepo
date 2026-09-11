@@ -22,10 +22,13 @@ Pure logic — no Qt, no LLM, no network. One-way (blocks → scenes).
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 
 from logosforge import writing_modes
+
+_LOG = logging.getLogger(__name__)
 
 # A screenplay scene break: a slug line (INT./EXT./EST./I/E) or a '.'-forced
 # heading (a single leading dot, but not an ellipsis).
@@ -173,14 +176,24 @@ def import_whiteboard_document(db, doc: dict, *, title: str | None = None) -> di
         proj_title, format_mode=mode, narrative_engine=mode,
         default_writing_format=default_fmt,
     )
-    scenes, block_to_scene = segment_blocks(doc)
-    titles: list[str] = []
-    scene_ids: list[int] = []   # scene_ids[ordinal] = the created scene's id
-    for i, sc in enumerate(scenes, start=1):
-        name = sc["title"] or f"Scene {i}"
-        scene = db.create_scene(project.id, title=name, content=sc["content"])
-        scene_ids.append(scene.id)
-        titles.append(name)
+    try:
+        scenes, block_to_scene = segment_blocks(doc)
+        titles: list[str] = []
+        scene_ids: list[int] = []   # scene_ids[ordinal] = the created scene's id
+        for i, sc in enumerate(scenes, start=1):
+            name = sc["title"] or f"Scene {i}"
+            scene = db.create_scene(project.id, title=name, content=sc["content"])
+            scene_ids.append(scene.id)
+            titles.append(name)
+    except Exception:
+        # Database helpers commit per operation. Compensate as one logical import:
+        # never leave a project containing only the scenes created before a later
+        # failure. Preserve the original exception if cleanup itself has trouble.
+        try:
+            db.delete_project(project.id)
+        except Exception:
+            _LOG.exception("Could not roll back failed Whiteboard import project %s", project.id)
+        raise
     # Resolve each source block to the id of the scene it landed in (-1 if none).
     scene_ids_by_block = [
         scene_ids[o] if 0 <= o < len(scene_ids) else -1 for o in block_to_scene

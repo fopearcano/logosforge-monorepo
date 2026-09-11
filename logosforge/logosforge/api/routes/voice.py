@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 import os
+import threading
 
 from typing import Any
 
@@ -26,6 +27,8 @@ router = APIRouter(tags=["voice"])
 
 _TRANSCRIBER = None
 _TRANSCRIBER_KEY: tuple[str, str, str, str] | None = None
+_TRANSCRIBER_LOCK = threading.RLock()
+_TRANSCRIBE_LOCK = threading.Lock()
 
 
 def _config() -> tuple[str, str, str, str]:
@@ -40,25 +43,26 @@ def _config() -> tuple[str, str, str, str]:
 def _get_transcriber():
     """Lazily build + cache a transcriber from the env config (model loads once)."""
     global _TRANSCRIBER, _TRANSCRIBER_KEY
-    key = _config()
-    if _TRANSCRIBER is not None and _TRANSCRIBER_KEY == key:
-        return _TRANSCRIBER
-    model, device, compute, cuda = key
-    if not model:
-        from logosforge.voice.transcriber import DisabledTranscriber
-        _TRANSCRIBER = DisabledTranscriber()
+    with _TRANSCRIBER_LOCK:
+        key = _config()
+        if _TRANSCRIBER is not None and _TRANSCRIBER_KEY == key:
+            return _TRANSCRIBER
+        model, device, compute, cuda = key
+        if not model:
+            from logosforge.voice.transcriber import DisabledTranscriber
+            _TRANSCRIBER = DisabledTranscriber()
+            _TRANSCRIBER_KEY = key
+            return _TRANSCRIBER
+        if cuda:
+            try:
+                from logosforge.voice.cuda_paths import ensure_cuda_dll_path
+                ensure_cuda_dll_path([d for d in cuda.split(os.pathsep) if d])
+            except Exception:
+                pass
+        from logosforge.voice.transcriber import FasterWhisperTranscriber
+        _TRANSCRIBER = FasterWhisperTranscriber(model_path=model, device=device, compute_type=compute)
         _TRANSCRIBER_KEY = key
         return _TRANSCRIBER
-    if cuda:
-        try:
-            from logosforge.voice.cuda_paths import ensure_cuda_dll_path
-            ensure_cuda_dll_path([d for d in cuda.split(os.pathsep) if d])
-        except Exception:
-            pass
-    from logosforge.voice.transcriber import FasterWhisperTranscriber
-    _TRANSCRIBER = FasterWhisperTranscriber(model_path=model, device=device, compute_type=compute)
-    _TRANSCRIBER_KEY = key
-    return _TRANSCRIBER
 
 
 @router.get("/voice/status", response_model=schemas.VoiceStatusDTO)
@@ -83,7 +87,8 @@ def voice_transcribe(body: schemas.VoiceTranscribeDTO, project=Depends(get_proje
     except Exception:
         return schemas.VoiceTranscriptDTO(error="invalid audio payload")
     try:
-        seg = _get_transcriber().transcribe(pcm, sample_rate=body.sample_rate or 16000, language=body.language)
+        with _TRANSCRIBE_LOCK:
+            seg = _get_transcriber().transcribe(pcm, sample_rate=body.sample_rate or 16000, language=body.language)
     except Exception as exc:
         return schemas.VoiceTranscriptDTO(error=str(exc))
     return schemas.VoiceTranscriptDTO(
@@ -105,6 +110,8 @@ def voice_transcribe(body: schemas.VoiceTranscribeDTO, project=Depends(get_proje
 # ---------------------------------------------------------------------------
 
 _SESSIONS: dict[int, Any] = {}
+_SESSION_LOCKS: dict[int, threading.RLock] = {}
+_SESSIONS_LOCK = threading.RLock()
 
 
 def _ai_complete():
@@ -126,19 +133,48 @@ def _ai_complete():
 def _session(db, project):
     """Get-or-build the per-project VoiceRoomService (shared transcriber + LLM)."""
     pid = int(project.id)
-    svc = _SESSIONS.get(pid)
-    if svc is None:
-        from logosforge.voice.service import VoiceRoomService
-        mode = (getattr(project, "narrative_engine", "")
-                or getattr(project, "writing_mode", "") or "novel")
-        svc = VoiceRoomService(
-            db=db, project_id=pid, writing_mode=mode,
-            transcriber=_get_transcriber(), ai_complete=_ai_complete())
-        _SESSIONS[pid] = svc
-    return svc
+    mode = (getattr(project, "narrative_engine", "")
+            or getattr(project, "writing_mode", "") or "novel")
+    with _SESSIONS_LOCK:
+        svc = _SESSIONS.get(pid)
+        # Test hosts and embedded API restarts can reuse integer project ids with
+        # a different Database. Never carry history/previews into that new store.
+        if svc is not None and getattr(svc, "_db", None) is not db:
+            _SESSIONS.pop(pid, None)
+            svc = None
+        if svc is None:
+            from logosforge.voice.service import VoiceRoomService
+            svc = VoiceRoomService(
+                db=db, project_id=pid, writing_mode=mode,
+                transcriber=_get_transcriber(), ai_complete=_ai_complete())
+            _SESSIONS[pid] = svc
+            _SESSION_LOCKS.setdefault(pid, threading.RLock())
+        else:
+            svc.set_project(pid, writing_mode=mode)
+        _SESSION_LOCKS.setdefault(pid, threading.RLock())
+        return svc
 
 
-@router.post("/projects/{project_id}/voice/transcribe-segment")
+def _call_session(db, project, method: str, *args, **kwargs):
+    """Run one stateful VoiceRoomService operation serially for its project."""
+    pid = int(project.id)
+    with _SESSIONS_LOCK:
+        lock = _SESSION_LOCKS.setdefault(pid, threading.RLock())
+    with lock:
+        # Resolve/refresh the service only after owning the stable project lock:
+        # set_project and a Database replacement must not race a live operation.
+        svc = _session(db, project)
+        fn = getattr(svc, method)
+        if method == "transcribe_segment":
+            with _TRANSCRIBE_LOCK:
+                return fn(*args, **kwargs)
+        return fn(*args, **kwargs)
+
+
+@router.post(
+    "/projects/{project_id}/voice/transcribe-segment",
+    response_model=schemas.VoiceSegmentResultDTO,
+)
 def voice_transcribe_segment(body: schemas.VoiceSegmentReqDTO,
                              db=Depends(get_db), project=Depends(get_project)):
     """Transcribe a finalized PCM segment AND record it in the session history
@@ -148,81 +184,139 @@ def voice_transcribe_segment(body: schemas.VoiceSegmentReqDTO,
     except Exception:
         return {"error": "invalid audio payload"}
     try:
-        entry = _session(db, project).transcribe_segment(pcm)
+        entry = _call_session(db, project, "transcribe_segment", pcm)
     except Exception as exc:
         return {"error": str(exc)}
     return entry or {"empty": True}
 
 
-@router.get("/projects/{project_id}/voice/history")
+@router.get(
+    "/projects/{project_id}/voice/history",
+    response_model=schemas.VoiceHistoryDTO,
+)
 def voice_history(db=Depends(get_db), project=Depends(get_project)):
-    return {"entries": _session(db, project).history()}
+    return {"entries": _call_session(db, project, "history")}
 
 
-@router.post("/projects/{project_id}/voice/intents")
+@router.post(
+    "/projects/{project_id}/voice/intents",
+    response_model=schemas.VoiceIntentsDTO,
+)
 def voice_intents(body: schemas.VoiceCtxReqDTO,
                   db=Depends(get_db), project=Depends(get_project)):
     """Available voice Intents (cleanup, etc.) for the current context."""
-    return {"intents": _session(db, project).list_intents(body.ctx)}
+    return {"intents": _call_session(db, project, "list_intents", body.ctx)}
 
 
-@router.post("/projects/{project_id}/voice/intents/preview")
+@router.post(
+    "/projects/{project_id}/voice/intents/preview",
+    response_model=schemas.VoiceIntentPreviewDTO,
+)
 def voice_intent_preview(body: schemas.VoiceIntentPreviewReqDTO,
                          db=Depends(get_db), project=Depends(get_project)):
-    return _session(db, project).preview_intent(
+    return _call_session(
+        db, project, "preview_intent",
         body.intent_id, body.source_text, body.ctx,
         commit_target_id=body.commit_target_id,
         source_segment_ids=body.source_segment_ids or None)
 
 
-@router.post("/projects/{project_id}/voice/intents/apply")
+@router.post(
+    "/projects/{project_id}/voice/intents/apply",
+    response_model=schemas.VoiceApplyResultDTO,
+    response_model_exclude_none=True,
+)
 def voice_intent_apply(body: schemas.VoiceIntentApplyReqDTO,
                        db=Depends(get_db), project=Depends(get_project)):
-    return _session(db, project).apply_intent(body.preview_id, body.ctx)
+    return _call_session(db, project, "apply_intent", body.preview_id, body.ctx)
 
 
-@router.post("/projects/{project_id}/voice/billy/operations")
+@router.post(
+    "/projects/{project_id}/voice/intents/cancel",
+    response_model=schemas.VoiceCancelResultDTO,
+)
+def voice_intent_cancel(body: schemas.VoiceIntentApplyReqDTO,
+                        db=Depends(get_db), project=Depends(get_project)):
+    return _call_session(db, project, "cancel_intent", body.preview_id)
+
+
+@router.post(
+    "/projects/{project_id}/voice/billy/operations",
+    response_model=schemas.VoiceBillyOpsDTO,
+)
 def voice_billy_operations(body: schemas.VoiceCtxReqDTO,
                            db=Depends(get_db), project=Depends(get_project)):
     """Ask/edit-with-Billy operations available for the current context."""
-    return {"operations": _session(db, project).billy_operations(body.ctx)}
+    return {"operations": _call_session(db, project, "billy_operations", body.ctx)}
 
 
-@router.post("/projects/{project_id}/voice/billy/generate")
+@router.post(
+    "/projects/{project_id}/voice/billy/generate",
+    response_model=schemas.VoiceBillyProposalDTO,
+)
 def voice_billy_generate(body: schemas.VoiceBillyGenReqDTO,
                          db=Depends(get_db), project=Depends(get_project)):
-    return _session(db, project).generate_billy(
+    return _call_session(
+        db, project, "generate_billy",
         body.operation, body.transcript_text, body.ctx,
         source_segment_ids=body.source_segment_ids or None)
 
 
-@router.post("/projects/{project_id}/voice/billy/apply")
+@router.post(
+    "/projects/{project_id}/voice/billy/apply",
+    response_model=schemas.VoiceApplyResultDTO,
+    response_model_exclude_none=True,
+)
 def voice_billy_apply(body: schemas.VoiceBillyApplyReqDTO,
                       db=Depends(get_db), project=Depends(get_project)):
-    return _session(db, project).apply_billy(body.proposal_id, body.ctx)
+    return _call_session(db, project, "apply_billy", body.proposal_id, body.ctx)
 
 
-@router.post("/projects/{project_id}/voice/commit-targets")
+@router.post(
+    "/projects/{project_id}/voice/billy/cancel",
+    response_model=schemas.VoiceCancelResultDTO,
+)
+def voice_billy_cancel(body: schemas.VoiceBillyApplyReqDTO,
+                       db=Depends(get_db), project=Depends(get_project)):
+    return _call_session(db, project, "cancel_billy", body.proposal_id)
+
+
+@router.post(
+    "/projects/{project_id}/voice/commit-targets",
+    response_model=schemas.VoiceCommitTargetsDTO,
+)
 def voice_commit_targets(body: schemas.VoiceCtxReqDTO,
                          db=Depends(get_db), project=Depends(get_project)):
     """Where a transcript can be committed (editor / Note / PSYKE / GN field)."""
-    return {"targets": _session(db, project).commit_targets(body.ctx)}
+    return {"targets": _call_session(db, project, "commit_targets", body.ctx)}
 
 
-@router.post("/projects/{project_id}/voice/commit")
+@router.post(
+    "/projects/{project_id}/voice/commit",
+    response_model=schemas.VoiceApplyResultDTO,
+    response_model_exclude_none=True,
+)
 def voice_commit(body: schemas.VoiceCommitReqDTO,
                  db=Depends(get_db), project=Depends(get_project)):
     """Commit transcript text to a target. ``inserted_text`` in the reply means
     the frontend should insert it at the editor cursor; its absence means it was
     committed server-side (Note / PSYKE)."""
-    return _session(db, project).commit(body.text, body.target_id, body.ctx)
+    return _call_session(
+        db, project, "commit", body.text, body.target_id, body.ctx,
+        source_segment_ids=body.source_segment_ids or None)
 
 
-@router.get("/projects/{project_id}/voice/can-undo")
+@router.get(
+    "/projects/{project_id}/voice/can-undo",
+    response_model=schemas.VoiceUndoStateDTO,
+)
 def voice_can_undo(db=Depends(get_db), project=Depends(get_project)):
-    return _session(db, project).can_undo()
+    return _call_session(db, project, "can_undo")
 
 
-@router.post("/projects/{project_id}/voice/undo")
+@router.post(
+    "/projects/{project_id}/voice/undo",
+    response_model=schemas.VoiceUndoResultDTO,
+)
 def voice_undo(db=Depends(get_db), project=Depends(get_project)):
-    return _session(db, project).undo_last()
+    return _call_session(db, project, "undo_last")

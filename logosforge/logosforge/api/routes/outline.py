@@ -16,6 +16,20 @@ router = APIRouter(tags=["outline"])
 _SCOPES = ("full", "act", "chapter", "scene")
 
 
+def _node_or_404(db: Database, project_id: int, node_id: int):
+    node = db.get_outline_node_by_id(node_id)
+    if node is None or node.project_id != project_id:
+        raise not_found(f"Outline node {node_id} not found")
+    return node
+
+
+def _scene_or_404(db: Database, project_id: int, scene_id: int):
+    scene = db.get_scene_by_id(scene_id)
+    if scene is None or scene.project_id != project_id:
+        raise not_found(f"Scene {scene_id} not found")
+    return scene
+
+
 @router.get(
     "/projects/{project_id}/outline",
     response_model=list[schemas.OutlineNodeDTO],
@@ -34,6 +48,10 @@ def create_outline_node(
     db: Database = Depends(get_db),
     broker: ApiEventBroker = Depends(get_broker),
 ):
+    if body.parent_id is not None:
+        _node_or_404(db, project.id, body.parent_id)
+    if body.scene_id is not None:
+        _scene_or_404(db, project.id, body.scene_id)
     node = db.create_outline_node(
         project.id,
         title=body.title,
@@ -43,7 +61,7 @@ def create_outline_node(
         scene_id=body.scene_id,
     )
     broker.publish("outline_changed", project_id=project.id)
-    return serializers.outline_node_to_dto(node)
+    return serializers.outline_node_to_dto(db, node)
 
 
 @router.patch(
@@ -57,9 +75,9 @@ def update_outline_node(
     db: Database = Depends(get_db),
     broker: ApiEventBroker = Depends(get_broker),
 ):
-    node = db.get_outline_node_by_id(node_id)
-    if node is None or node.project_id != project.id:
-        raise not_found(f"Outline node {node_id} not found")
+    node = _node_or_404(db, project.id, node_id)
+    if "scene_id" in body.model_fields_set and body.scene_id is not None:
+        _scene_or_404(db, project.id, body.scene_id)
     db.update_outline_node(
         node_id,
         title=body.title,
@@ -70,19 +88,20 @@ def update_outline_node(
         scene_id=(body.scene_id if "scene_id" in body.model_fields_set else _UNSET),
     )
     broker.publish("outline_changed", project_id=project.id)
-    return serializers.outline_node_to_dto(db.get_outline_node_by_id(node_id))
+    return serializers.outline_node_to_dto(db, db.get_outline_node_by_id(node_id))
 
 
-@router.delete("/projects/{project_id}/outline/nodes/{node_id}")
+@router.delete(
+    "/projects/{project_id}/outline/nodes/{node_id}",
+    response_model=schemas.DeleteResultDTO,
+)
 def delete_outline_node(
     node_id: int,
     project=Depends(get_project),
     db: Database = Depends(get_db),
     broker: ApiEventBroker = Depends(get_broker),
 ):
-    node = db.get_outline_node_by_id(node_id)
-    if node is None or node.project_id != project.id:
-        raise not_found(f"Outline node {node_id} not found")
+    _node_or_404(db, project.id, node_id)
     db.delete_outline_node(node_id)
     broker.publish("outline_changed", project_id=project.id)
     return {"ok": True, "deleted": node_id}
@@ -128,9 +147,7 @@ def generate_outline(
     parent_id = body.parent_id
     target_title = ""
     if parent_id is not None:
-        parent = db.get_outline_node_by_id(parent_id)
-        if parent is None or parent.project_id != project.id:
-            raise not_found(f"Outline node {parent_id} not found")
+        parent = _node_or_404(db, project.id, parent_id)
         target_title = parent.title or ""
 
     provider = build_active_provider(require_configured=True)

@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends
 
 from logosforge.api import schemas
 from logosforge.api.deps import get_broker, get_db, get_project
-from logosforge.api.errors import ApiError
+from logosforge.api.errors import ApiError, not_found
 from logosforge.api.events import ApiEventBroker
 from logosforge.db import Database
 
@@ -32,6 +32,13 @@ def _build_provider():
     return build_active_provider()
 
 
+def _scene_or_404(db: Database, project_id: int, scene_id: int):
+    scene = db.get_scene_by_id(scene_id)
+    if scene is None or scene.project_id != project_id:
+        raise not_found(f"Scene {scene_id} not found")
+    return scene
+
+
 @router.post(
     "/projects/{project_id}/assistant/chat",
     response_model=schemas.AssistantResponseDTO,
@@ -44,6 +51,9 @@ def assistant_chat(
     from logosforge import assistant
     from logosforge.chat_context import build_chat_context
     from logosforge.chat_memory import build_system_prompt
+
+    if body.active_scene_id is not None:
+        _scene_or_404(db, project.id, body.active_scene_id)
 
     # Project-aware context so Billy answers about THIS manuscript, not a
     # hallucinated generic one. build_chat_context bundles project header +
@@ -76,6 +86,11 @@ def assistant_chat(
     # Fold any inline-editor context (selection / nearby text / document title)
     # into the same grounding block, so a thin editor client just sends the raw
     # fields instead of hand-building a competing context preamble.
+    planning_outline = body.planning_outline.strip()
+    if planning_outline:
+        planning_block = planning_outline[:4000]
+        context = (context + "\n\n" + planning_block) if context else planning_block
+
     editor_bits: list[str] = []
     if body.document_title.strip():
         editor_bits.append(f"Open document: {body.document_title.strip()}")
@@ -171,11 +186,12 @@ def get_assistant_settings(project=Depends(get_project)):
     from logosforge.settings import get_manager
 
     settings = get_manager()
+    values = settings.snapshot()
     return schemas.AssistantSettingsDTO(
-        provider=str(settings.get("ai_provider") or ""),
-        model=str(settings.get("ai_model") or ""),
-        base_url=str(settings.get("ai_base_url") or ""),
-        timeout=int(settings.get("assistant_api_timeout") or 0),
+        provider=str(values.get("ai_provider") or ""),
+        model=str(values.get("ai_model") or ""),
+        base_url=str(values.get("ai_base_url") or ""),
+        timeout=int(values.get("assistant_api_timeout") or 0),
         api_key=None,  # never returned
     )
 
@@ -192,16 +208,15 @@ def patch_assistant_settings(
 
     settings = get_manager()
     patch = body.model_dump(exclude_unset=True)
-    if "provider" in patch:
-        settings.set("ai_provider", patch["provider"])
-    if "model" in patch:
-        settings.set("ai_model", patch["model"])
-    if "base_url" in patch:
-        settings.set("ai_base_url", patch["base_url"])
-    if "timeout" in patch:
-        settings.set("assistant_api_timeout", patch["timeout"])
+    changes = {
+        settings_key: patch[dto_key]
+        for dto_key, settings_key in _AI_KEYS.items()
+        if dto_key in patch
+    }
     if patch.get("api_key"):  # write-only; only set when non-empty
-        settings.set("ai_api_key", patch["api_key"])
+        changes["ai_api_key"] = patch["api_key"]
+    if not settings.update(changes):
+        raise ApiError(500, "Could not persist AI settings", code="settings_save_failed")
     return get_assistant_settings(project=project)
 
 
@@ -228,16 +243,17 @@ def get_ai_behavior(project=Depends(get_project)):
     from logosforge.settings import get_manager
 
     s = get_manager()
-    disabled = s.get("connector_disabled_actions")
+    values = s.snapshot()
+    disabled = values.get("connector_disabled_actions")
     return schemas.AiBehaviorDTO(
-        ctx_outline=bool(s.get("assistant_ctx_outline")),
-        ctx_bible=bool(s.get("assistant_ctx_bible")),
-        ctx_memory=bool(s.get("assistant_ctx_memory")),
-        connector_enabled=bool(s.get("connector_enabled")),
-        connector_allow_writes=bool(s.get("connector_allow_writes")),
-        connector_confirm_writes=bool(s.get("connector_confirm_writes")),
+        ctx_outline=bool(values.get("assistant_ctx_outline")),
+        ctx_bible=bool(values.get("assistant_ctx_bible")),
+        ctx_memory=bool(values.get("assistant_ctx_memory")),
+        connector_enabled=bool(values.get("connector_enabled")),
+        connector_allow_writes=bool(values.get("connector_allow_writes")),
+        connector_confirm_writes=bool(values.get("connector_confirm_writes")),
         connector_disabled_actions=list(disabled) if isinstance(disabled, list) else [],
-        adaptive_override=str(s.get("adaptive_mode_override") or ""),
+        adaptive_override=str(values.get("adaptive_mode_override") or ""),
     )
 
 
@@ -245,12 +261,21 @@ def get_ai_behavior(project=Depends(get_project)):
     "/projects/{project_id}/ai/behavior",
     response_model=schemas.AiBehaviorDTO,
 )
-def patch_ai_behavior(body: schemas.AiBehaviorUpdateDTO, project=Depends(get_project)):
+def patch_ai_behavior(
+    body: schemas.AiBehaviorUpdateDTO,
+    project=Depends(get_project),
+    broker: ApiEventBroker = Depends(get_broker),
+):
     from logosforge.settings import get_manager
 
     s = get_manager()
     patch = body.model_dump(exclude_unset=True)
-    for dto_key, settings_key in _BEHAVIOR_KEYS.items():
-        if dto_key in patch:
-            s.set(settings_key, patch[dto_key])
+    changes = {
+        settings_key: patch[dto_key]
+        for dto_key, settings_key in _BEHAVIOR_KEYS.items()
+        if dto_key in patch
+    }
+    if not s.update(changes):
+        raise ApiError(500, "Could not persist AI behavior", code="settings_save_failed")
+    broker.publish("project_data_changed", project_id=project.id)
     return get_ai_behavior(project=project)

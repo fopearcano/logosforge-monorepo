@@ -15,6 +15,7 @@ from logosforge.api.config import ApiConfig
 from logosforge.api.deps import require_auth
 from logosforge.api.errors import install_error_handlers
 from logosforge.api.events import ApiEventBroker
+from logosforge.api.schemas import HealthDTO
 from logosforge.api.routes import ALL_ROUTERS
 from logosforge.db import Database
 
@@ -70,7 +71,7 @@ def create_api(
 
     install_error_handlers(app)
 
-    @app.get("/api/health", tags=["health"])
+    @app.get("/api/health", tags=["health"], response_model=HealthDTO)
     def health():
         # Clients (Electron desktop + Web/PWA) read this to verify they're
         # talking to a compatible backend: ``api_version`` is the stable DTO
@@ -78,6 +79,7 @@ def create_api(
         return {
             "status": "ok",
             "service": "logosforge-api",
+            "instance_nonce": config.instance_nonce,
             "mode": config.mode,
             "version": app.version,          # = api_version (backward-compat)
             "api_version": API_CONTRACT_VERSION,

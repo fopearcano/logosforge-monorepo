@@ -143,7 +143,8 @@ def test_runtime_report_points_at_local_view_modules():
     assert "writing_core_view" in r["manuscript_view"]
     assert "plan_view" in r["outline_view"]
     assert "plot_timeline_view" in r["timeline_view"]
-    assert r["logosforge_pkg"].endswith("logosforge/__init__.py")
+    from pathlib import Path
+    assert Path(r["logosforge_pkg"]).as_posix().endswith("logosforge/__init__.py")
     assert r["commit"]                       # some commit string resolved
 
 

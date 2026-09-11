@@ -12,6 +12,7 @@ flowing through to every backend and into transcript metadata.
 
 from __future__ import annotations
 
+import pathlib
 import re
 import warnings
 
@@ -135,11 +136,13 @@ def test_billy_and_logos_names_unchanged_no_dester():
     _db, _pid, win = _ui_window()
     panel = win._voice_panel
     assert panel._billy_label.text() == "Billy:"                 # Billy stays
-    import subprocess
-    out = subprocess.run(
-        ["grep", "-ri", "dester", "logosforge", "docs"],
-        capture_output=True, text=True)
-    assert out.stdout.strip() == ""                              # no typo
+    offenders = []
+    for root in (pathlib.Path("logosforge"), pathlib.Path("docs")):
+        for path in root.rglob("*"):
+            if path.is_file() and path.suffix.lower() in {".py", ".md", ".txt"}:
+                if "dester" in path.read_text(encoding="utf-8", errors="ignore").lower():
+                    offenders.append(path.as_posix())
+    assert offenders == []                                      # no typo
     # Internal VoiceRoom names intentionally retained (low-risk policy).
     from logosforge.voice.room import VoiceRoomStateMachine
     assert VoiceRoomStateMachine                                  # importable
@@ -240,11 +243,10 @@ def test_whisper_cpp_language_argument_construction(tmp_path):
     def args_for(language):
         import subprocess as sp
         calls = {}
-        real_run = sp.run
 
         def spy(cmd, **kw):
             calls["cmd"] = cmd
-            return real_run(cmd, **kw)
+            return sp.CompletedProcess(cmd, 0, stdout="ok\n", stderr="")
         sp_run, sp.run = sp.run, spy
         try:
             settings = VoiceSettings(backend_mode="whisper_cpp",

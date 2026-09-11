@@ -11,11 +11,16 @@ from fastapi.responses import StreamingResponse
 
 from logosforge.api.deps import get_broker, get_project
 from logosforge.api.events import KNOWN_EVENTS, ApiEventBroker
+from logosforge.api.schemas import EventsPollDTO
 
 router = APIRouter(tags=["events"])
 
 
-@router.get("/projects/{project_id}/events")
+@router.get(
+    "/projects/{project_id}/events",
+    response_class=StreamingResponse,
+    responses={200: {"content": {"text/event-stream": {}}}},
+)
 def stream_events(
     once: bool = Query(False, description="Drain buffered events and close (no live tail)"),
     project=Depends(get_project),
@@ -33,7 +38,10 @@ def stream_events(
     )
 
 
-@router.get("/projects/{project_id}/events/poll")
+@router.get(
+    "/projects/{project_id}/events/poll",
+    response_model=EventsPollDTO,
+)
 def poll_events(
     since: int = Query(0, ge=0, description="Return events with id greater than this"),
     project=Depends(get_project),

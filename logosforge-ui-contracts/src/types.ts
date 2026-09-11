@@ -23,6 +23,28 @@ export interface ProjectCreateDTO {
 export interface ProjectUpdateDTO {
   title?: string;
   description?: string;
+  narrative_engine?: string;
+}
+export interface HealthDTO {
+  status: string;
+  service: string;
+  instance_nonce: string;
+  mode: string;
+  version: string;
+  api_version: string;
+  core_version: string;
+}
+export interface ProjectActionResultDTO { ok: boolean; project_id: number }
+export interface DeleteResultDTO { ok: boolean; deleted: number | string }
+export interface RemovedResultDTO { ok: boolean; removed: number }
+export interface UpdatedResultDTO { ok: boolean; updated: number }
+export interface NoteSceneLinksDTO { ok: boolean; scene_links: number[] }
+export interface NotePsykeLinksDTO { ok: boolean; psyke_links: number[] }
+export interface CharacterBackfillResultDTO { ok: boolean; linked: number }
+export interface EventsPollDTO {
+  events: Array<Record<string, unknown>>;
+  cursor: number;
+  known_events: string[];
 }
 
 // -- Free-tier Whiteboard document import (blocks -> a new Pro project) -------
@@ -93,17 +115,47 @@ export interface VoiceCtx {
   gn_field_choice?: string;
   gn_panel_ref?: number[] | null;
 }
+export interface VoiceCorrectionDTO {
+  id: string;
+  project_id: number;
+  original_text: string;
+  replacement_text: string;
+  start_offset: number;
+  end_offset: number;
+  source_term_id: number | null;
+  source: string;
+  reason: string;
+  confidence: number | null;
+  applied: boolean;
+  created_at: number;
+}
 export interface VoiceHistoryEntryDTO {
   id: string;
+  session_id: string;
+  project_id_at_capture: number;
+  writing_mode_at_capture: string;
   text: string;
+  original_text: string;
   preview: string;
+  created_at: number;
+  updated_at: number;
+  language: string;
+  source: string;
+  is_final: boolean;
   status: string;
   committed_target: string;
+  committed_at: number | null;
+  duration_ms: number;
+  confidence: number | null;
   error: string;
+  merged_from: string[];
+  split_from: string;
+  corrections: VoiceCorrectionDTO[];
   sent_to_billy: boolean;
-  billy_state: string;
   billy_proposal_id: string;
-  language: string;
+  billy_state: string;
+  has_audio: boolean;
+  sample_rate: number;
 }
 export interface VoiceHistoryDTO { entries: VoiceHistoryEntryDTO[] }
 export interface VoiceIntentDTO {
@@ -121,13 +173,21 @@ export interface VoiceIntentPreviewDTO {
   id: string;
   intent_id: string;
   intent_type: string;
+  project_id: number;
+  created_at: number;
   target_summary: string;
-  before_text: string;
-  after_text: string;
-  diff: string;
+  before_text: string | null;
+  after_text: string | null;
+  diff: string | null;
+  created_note_preview: Record<string, unknown> | null;
+  created_psyke_entry_preview: Record<string, unknown> | null;
   risk_level: string;
   can_apply: boolean;
   reason_if_blocked: string;
+  commit_target_id: string;
+  gn_field: string;
+  gn_ref: number[] | null;
+  source_segment_ids: string[];
 }
 export interface VoiceBillyOperationDTO {
   id: string;
@@ -140,14 +200,24 @@ export interface VoiceBillyProposalDTO {
   id: string;
   proposal_type: string;
   operation: string;
+  project_id: number;
+  created_at: number;
+  source_segment_ids: string[];
+  prompt_text: string;
   response_text: string;
   target_summary: string;
-  before_text: string;
-  after_text: string;
-  diff: string;
+  before_text: string | null;
+  after_text: string | null;
+  diff: string | null;
+  note_preview: Record<string, unknown> | null;
+  psyke_preview: Record<string, unknown> | null;
+  gn_ref: number[] | null;
+  gn_field: string;
   can_apply: boolean;
   reason_if_blocked: string;
   applied: boolean;
+  cancelled: boolean;
+  applied_at: number | null;
 }
 export interface VoiceCommitTargetDTO {
   id: string;
@@ -167,6 +237,10 @@ export interface VoiceApplyResultDTO {
 }
 export interface VoiceUndoStateDTO { can_undo: boolean; reason: string }
 export interface VoiceUndoResultDTO { undone: boolean; message: string }
+export interface VoiceCancelResultDTO { cancelled: boolean; message: string }
+export interface VoiceSegmentErrorDTO { error: string }
+export interface VoiceSegmentEmptyDTO { empty: true }
+export type VoiceSegmentResultDTO = VoiceHistoryEntryDTO | VoiceSegmentErrorDTO | VoiceSegmentEmptyDTO;
 // request bodies
 export interface VoiceSegmentReqDTO { audio_base64: string; sample_rate?: number }
 export interface VoiceCtxReqDTO { ctx?: VoiceCtx | null }
@@ -185,7 +259,12 @@ export interface VoiceBillyGenReqDTO {
   ctx?: VoiceCtx | null;
 }
 export interface VoiceBillyApplyReqDTO { proposal_id: string; ctx?: VoiceCtx | null }
-export interface VoiceCommitReqDTO { text: string; target_id: string; ctx?: VoiceCtx | null }
+export interface VoiceCommitReqDTO {
+  text: string;
+  target_id: string;
+  source_segment_ids?: string[];
+  ctx?: VoiceCtx | null;
+}
 
 export interface ModeSuggestionDTO {
   text: string;
@@ -280,6 +359,8 @@ export interface SceneDTO {
   character_ids: number[];
   place_ids: number[];
   who_knows_what: string;
+  /** Content-addressed optimistic-concurrency token supplied by the core. */
+  revision?: string;
 }
 export interface SceneCreateDTO {
   title: string;
@@ -311,6 +392,8 @@ export interface SceneUpdateDTO {
   plotline?: string;
   color_label?: string;
   content?: string;
+  /** Reject the PATCH with 409 when the Scene changed since this token. */
+  expected_revision?: string;
   tags?: string[];
   sort_order?: number;
   time_of_day?: string;
@@ -555,6 +638,8 @@ export interface AssistantRequestDTO {
   selected_text?: string;
   nearby_text?: string;
   document_title?: string;
+  /** Frontend-owned planning hierarchy, separate from cursor-near manuscript text. */
+  planning_outline?: string;
   /** "Go Irrational" — surreal creative provocations for this reply (needs active_scene_id). */
   irrational?: boolean;
 }
@@ -1042,7 +1127,7 @@ export interface ExtractionApplyReportDTO {
 }
 export interface ExtractionJobDTO {
   job_id: string;
-  /** running | done | error */
+  /** running | cancelling | cancelled | done | error */
   status: string;
   done: number;
   total: number;

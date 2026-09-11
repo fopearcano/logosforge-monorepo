@@ -24,6 +24,21 @@ def _entry_or_404(db: Database, project_id: int, entry_id: int):
     return entry
 
 
+def _scene_or_404(db: Database, project_id: int, scene_id: int):
+    scene = db.get_scene_by_id(scene_id)
+    if scene is None or scene.project_id != project_id:
+        raise not_found(f"Scene {scene_id} not found")
+    return scene
+
+
+def _progression_or_404(db: Database, project_id: int, progression_id: int):
+    progression = db.get_psyke_progression_by_id(progression_id)
+    if progression is None:
+        raise not_found(f"PSYKE progression {progression_id} not found")
+    _entry_or_404(db, project_id, progression.entry_id)
+    return progression
+
+
 # -- Entries -----------------------------------------------------------------
 
 
@@ -95,7 +110,10 @@ def update_entry(
     return serializers.psyke_entry_to_dto(db, db.get_psyke_entry_by_id(entry_id))
 
 
-@router.delete("/projects/{project_id}/psyke/entries/{entry_id}")
+@router.delete(
+    "/projects/{project_id}/psyke/entries/{entry_id}",
+    response_model=schemas.DeleteResultDTO,
+)
 def delete_entry(
     entry_id: int,
     project=Depends(get_project),
@@ -147,7 +165,10 @@ def create_relation(
     )
 
 
-@router.delete("/projects/{project_id}/psyke/relations/{relation_id}")
+@router.delete(
+    "/projects/{project_id}/psyke/relations/{relation_id}",
+    response_model=schemas.DeleteResultDTO,
+)
 def delete_relation(
     relation_id: str,
     project=Depends(get_project),
@@ -187,6 +208,8 @@ def create_progression(
     broker: ApiEventBroker = Depends(get_broker),
 ):
     _entry_or_404(db, project.id, body.entry_id)
+    if body.scene_id is not None:
+        _scene_or_404(db, project.id, body.scene_id)
     prog = db.create_psyke_progression(body.entry_id, body.text, scene_id=body.scene_id)
     broker.publish("psyke_changed", project_id=project.id, entry_id=body.entry_id)
     return serializers.progression_to_dto(db, project.id, prog, body.entry_id)
@@ -204,12 +227,18 @@ def update_progression(
     broker: ApiEventBroker = Depends(get_broker),
 ):
     """Edit an arc-progression beat's text and/or the scene it anchors to."""
+    _progression_or_404(db, project.id, progression_id)
+    if body.scene_id is not None:
+        _scene_or_404(db, project.id, body.scene_id)
     prog = db.update_psyke_progression(progression_id, body.text, scene_id=body.scene_id)
     broker.publish("psyke_changed", project_id=project.id, entry_id=prog.entry_id)
     return serializers.progression_to_dto(db, project.id, prog, prog.entry_id)
 
 
-@router.delete("/projects/{project_id}/psyke/progressions/{progression_id}")
+@router.delete(
+    "/projects/{project_id}/psyke/progressions/{progression_id}",
+    response_model=schemas.DeleteResultDTO,
+)
 def delete_progression(
     progression_id: int,
     project=Depends(get_project),
@@ -217,6 +246,7 @@ def delete_progression(
     broker: ApiEventBroker = Depends(get_broker),
 ):
     """Remove an arc-progression beat."""
+    _progression_or_404(db, project.id, progression_id)
     db.delete_psyke_progression(progression_id)
     broker.publish("psyke_changed", project_id=project.id)
     return {"ok": True, "deleted": progression_id}

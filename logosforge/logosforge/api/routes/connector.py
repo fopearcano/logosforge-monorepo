@@ -53,14 +53,18 @@ def execute(
     db: Database = Depends(get_db),
     broker: ApiEventBroker = Depends(get_broker),
 ):
-    # Governance gate (the same flags the Qt Preferences expose) — enforced here
-    # so the settings are REAL controls, not decoration: the connector must be
-    # enabled, write actions require allow-writes, and disabled actions are blocked.
+    # Governance gate (the same flags the Qt Preferences expose). Read actions
+    # are deliberately available even when the write-capable connector is off:
+    # they power local context/MCP inspection and cannot mutate the project.
+    # Unknown actions still reach the canonical executor so callers get its
+    # validation error rather than a misleading settings error.
     from logosforge.settings import get_manager
 
     s = get_manager()
     category = _action_category(body.action)
-    if not s.get("connector_enabled"):
+    if not category:
+        return _result_dto(body.action, run_action(db, project.id, body.action, body.args))
+    if category != "read" and not s.get("connector_enabled"):
         return schemas.ConnectorResultDTO(
             ok=False, action=body.action, result=None,
             error="Connector is disabled. Enable it in AI Behaviour settings to let the AI run actions.",
@@ -80,9 +84,13 @@ def execute(
     result = run_action(db, project.id, body.action, body.args)
     if result.get("ok") and category == "write":
         broker.publish("project_data_changed", project_id=project.id)
+    return _result_dto(body.action, result)
+
+
+def _result_dto(requested_action: str, result: dict) -> schemas.ConnectorResultDTO:
     return schemas.ConnectorResultDTO(
         ok=bool(result.get("ok")),
-        action=result.get("action", body.action),
+        action=result.get("action", requested_action),
         result=result.get("result"),
         error=result.get("error", ""),
     )
