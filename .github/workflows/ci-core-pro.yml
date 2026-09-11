@@ -1,0 +1,117 @@
+name: CI — LogosForge Core and Pro
+
+on:
+  pull_request:
+    paths:
+      - "logosforge/**"
+      - "logosforge-ui-contracts/**"
+      - "pro-shared-ui/**"
+      - "pro-desktop/**"
+      - ".github/workflows/ci-core-pro.yml"
+      - ".github/workflows/release-windows.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "logosforge/**"
+      - "logosforge-ui-contracts/**"
+      - "pro-shared-ui/**"
+      - "pro-desktop/**"
+      - ".github/workflows/ci-core-pro.yml"
+      - ".github/workflows/release-windows.yml"
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-core-pro-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core-tests:
+    name: Core tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUTF8: "1"
+
+    steps:
+      - name: Checkout monorepo
+        uses: actions/checkout@v4
+
+      - name: Install Linux audio runtime
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libportaudio2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            logosforge/pyproject.toml
+            logosforge/requirements.txt
+
+      - name: Install core and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r logosforge/requirements.txt httpx pytest
+          python -m pip check
+
+      - name: Run complete core suite
+        working-directory: logosforge
+        run: python -m pytest -q
+
+  contracts-and-pro:
+    name: Contracts and Pro build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout monorepo
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            logosforge-ui-contracts/package-lock.json
+            pro-shared-ui/package-lock.json
+            pro-desktop/package-lock.json
+
+      - name: Test API contracts
+        working-directory: logosforge-ui-contracts
+        run: |
+          npm ci
+          npm test
+
+      - name: Typecheck, build, and audit Pro shared UI
+        working-directory: pro-shared-ui
+        run: |
+          npm ci
+          npm test
+          npm run build
+          npm audit --audit-level=moderate
+
+      - name: Typecheck, build, and audit Pro desktop
+        working-directory: pro-desktop
+        run: |
+          npm ci
+          npm test
+          npm run build
+          npm audit --audit-level=moderate

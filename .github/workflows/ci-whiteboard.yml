@@ -1,0 +1,85 @@
+name: CI — LogosForge Whiteboard
+
+on:
+  pull_request:
+    paths:
+      - "logosforge/**"
+      - "whiteboard-desktop/**"
+      - ".github/workflows/ci-whiteboard.yml"
+      - ".github/workflows/release-whiteboard-*.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "logosforge/**"
+      - "whiteboard-desktop/**"
+      - ".github/workflows/ci-whiteboard.yml"
+      - ".github/workflows/release-whiteboard-*.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-whiteboard-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  whiteboard-quality:
+    name: Whiteboard quality (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout monorepo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            logosforge/pyproject.toml
+            whiteboard-desktop/backend/requirements.txt
+
+      - name: Install Whiteboard backend and core
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "./logosforge" -r whiteboard-desktop/backend/requirements.txt pytest
+
+      - name: Test Whiteboard backend
+        run: |
+          python -m pytest whiteboard-desktop/backend/tests -q
+          python -m compileall -q whiteboard-desktop/backend/app
+          python -m pip check
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: whiteboard-desktop/desktop/package-lock.json
+
+      - name: Install Whiteboard renderer
+        working-directory: whiteboard-desktop/desktop
+        run: npm ci
+
+      - name: Test and build Whiteboard renderer
+        working-directory: whiteboard-desktop/desktop
+        run: |
+          npm test
+          npm run build
+
+      - name: Block moderate-or-higher dependency vulnerabilities
+        working-directory: whiteboard-desktop/desktop
+        # Electron is a devDependency but becomes the shipped runtime, so the
+        # audit must include build/dev dependencies as well.
+        run: npm audit --audit-level=moderate

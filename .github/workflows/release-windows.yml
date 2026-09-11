@@ -33,7 +33,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  quality:
+    uses: ./.github/workflows/ci-core-pro.yml
+
   build-windows:
+    needs: quality
     runs-on: windows-latest
     timeout-minutes: 45
     defaults:
@@ -59,7 +63,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Set up Python
         uses: actions/setup-python@v5

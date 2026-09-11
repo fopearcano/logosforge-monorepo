@@ -76,7 +76,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
 
       # actions/setup-python@v5 does NOT work on a self-hosted macOS runner when
       # it has to download a version — it assumes the hosted `/Users/runner`
@@ -103,7 +103,10 @@ jobs:
         run: |
           "${{ steps.py.outputs.python }}" -m venv build-venv
           ./build-venv/bin/python -m pip install --upgrade pip
-          ./build-venv/bin/python -m pip install "./logosforge[export]" fastapi "uvicorn[standard]" httpx pyinstaller
+          ./build-venv/bin/python -m pip install "./logosforge[export]" fastapi "uvicorn[standard]" httpx pytest pyinstaller
+          ./build-venv/bin/python -m pytest whiteboard-desktop/backend/tests -q
+          ./build-venv/bin/python -m compileall -q whiteboard-desktop/backend/app
+          ./build-venv/bin/python -m pip check
           cd whiteboard-desktop/backend
           ../../build-venv/bin/python -m PyInstaller logosforge-whiteboard-backend.spec --noconfirm --clean --log-level WARN
 
@@ -124,6 +127,12 @@ jobs:
       - name: Install whiteboard-desktop deps
         working-directory: whiteboard-desktop/desktop
         run: npm ci
+
+      - name: Test renderer and audit runtime dependencies
+        working-directory: whiteboard-desktop/desktop
+        run: |
+          npm test
+          npm audit --audit-level=moderate
 
       - name: Build renderer + main, then package (DMG)
         working-directory: whiteboard-desktop/desktop

@@ -11,7 +11,7 @@ name: Release — LogosForge Whiteboard (Windows)
 #
 # NOTE: Pro's Windows release lives in release-windows.yml and triggers on v*
 # tags; this one uses whiteboard-v* so the two products release independently
-# from the same monorepo. (Mac/Linux targets are a later milestone.)
+# from the same monorepo.
 #
 # Assumes a single monorepo checkout containing: logosforge/ (core) and
 # whiteboard-desktop/. The whiteboard renderer is self-contained (it has no
@@ -64,7 +64,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -76,7 +76,10 @@ jobs:
         run: |
           python -m venv build-venv
           ./build-venv/Scripts/python.exe -m pip install --upgrade pip
-          ./build-venv/Scripts/python.exe -m pip install "./logosforge[export]" fastapi "uvicorn[standard]" httpx pyinstaller
+          ./build-venv/Scripts/python.exe -m pip install "./logosforge[export]" fastapi "uvicorn[standard]" httpx pytest pyinstaller
+          ./build-venv/Scripts/python.exe -m pytest whiteboard-desktop/backend/tests -q
+          ./build-venv/Scripts/python.exe -m compileall -q whiteboard-desktop/backend/app
+          ./build-venv/Scripts/python.exe -m pip check
           cd whiteboard-desktop/backend
           ../../build-venv/Scripts/python.exe -m PyInstaller logosforge-whiteboard-backend.spec --noconfirm --clean --log-level WARN
 
@@ -100,6 +103,12 @@ jobs:
         # npm ci = deterministic install from the committed lockfile. The
         # renderer is self-contained (no file: deps), so this is the only install.
         run: npm ci
+
+      - name: Test renderer and audit runtime dependencies
+        working-directory: whiteboard-desktop/desktop
+        run: |
+          npm test
+          npm audit --audit-level=moderate
 
       - name: Build renderer + main, then package (NSIS + portable)
         working-directory: whiteboard-desktop/desktop
