@@ -43,7 +43,6 @@ jobs:
     env:
       CI: "true"
       PYTHONUTF8: "1"
-      LOGOSFORGE_PACKAGED_ACCEPTANCE_ROOT: ${{ runner.temp }}/logosforge-packaged-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
 
     steps:
       - name: Checkout monorepo without credentials
@@ -170,6 +169,8 @@ jobs:
 
       - name: Run genuine packaged cross-product acceptance
         working-directory: whiteboard-desktop/desktop
+        env:
+          LOGOSFORGE_PACKAGED_ACCEPTANCE_ROOT: ${{ runner.temp }}/logosforge-packaged-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
         run: npm run test:packaged
 
       - name: Upload packaged-acceptance diagnostics
@@ -177,7 +178,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: packaged-windows-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ env.LOGOSFORGE_PACKAGED_ACCEPTANCE_ROOT }}
+          path: ${{ runner.temp }}/logosforge-packaged-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: warn
           include-hidden-files: true
           retention-days: 14
