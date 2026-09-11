@@ -952,6 +952,16 @@ async function selectProPanel(page, name, screenName) {
   return waitVisible(proScreen(page, screenName), `Pro ${screenName} screen`);
 }
 
+async function collapseProAiDock(page) {
+  const collapse = page.getByRole('button', { name: 'Collapse AI dock', exact: true });
+  if (!(await collapse.isVisible().catch(() => false))) return;
+  await collapse.click();
+  await waitVisible(
+    page.getByRole('button', { name: 'Open AI dock', exact: true }),
+    'collapsed Pro AI dock strip',
+  );
+}
+
 async function importAndVerifyInPro(session, bundlePath, bodyMarker) {
   const { page } = session;
   const projects = await waitProReady(page);
@@ -964,6 +974,9 @@ async function importAndVerifyInPro(session, bundlePath, bodyMarker) {
   );
   assert.equal(await projectSelect.inputValue() !== '', true, 'Pro imported project has no selected id');
 
+  // GitHub's hosted Windows desktop is limited to a 1024px-wide work area.
+  // Collapse the dock so the manuscript editor is exercised at that supported width.
+  await collapseProAiDock(page);
   const manuscript = await selectProPanel(page, 'Manuscript', 'Manuscript Editor');
   await waitText(manuscript, bodyMarker, 'Pro imported manuscript marker');
   const firstTitle = await waitVisible(manuscript.getByLabel('Scene 1 title', { exact: true }), 'Pro first scene title');
@@ -1019,6 +1032,8 @@ async function configureProAiAndChat(page) {
 }
 
 async function editProManuscript(page, bodyMarker, proMarker) {
+  // The Billy exercise opens the dock again before this edit step.
+  await collapseProAiDock(page);
   const manuscript = await selectProPanel(page, 'Manuscript', 'Manuscript Editor');
   await waitText(manuscript, bodyMarker, 'Pro manuscript before edit');
   const firstScene = manuscript.locator('[data-scene-id]').first();
