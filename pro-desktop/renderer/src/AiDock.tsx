@@ -1,10 +1,11 @@
-import { useCallback, useRef, type PointerEvent as ReactPointerEvent, type ReactElement } from 'react';
+import { useCallback, useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactElement } from 'react';
 import {
   AssistantDock,
   Logos,
   QuantumOutliner,
   CounterpartPanel,
   ExtractionReview,
+  PanelErrorBoundary,
 } from '@logosforge/pro-shared-ui';
 
 interface AiTool {
@@ -64,15 +65,27 @@ export function AiDock({
     document.body.style.cursor = '';
     document.body.style.userSelect = '';
   }, []);
+  useEffect(() => endDrag, [endDrag]);
+
+  const onResizeKey = useCallback((event: ReactKeyboardEvent) => {
+    let next: number | null = null;
+    if (event.key === 'ArrowLeft') next = width + (event.shiftKey ? 64 : 16);
+    else if (event.key === 'ArrowRight') next = width - (event.shiftKey ? 64 : 16);
+    else if (event.key === 'Home') next = MIN_W;
+    else if (event.key === 'End') next = MAX_W;
+    if (next == null) return;
+    event.preventDefault();
+    onWidthChange(Math.max(MIN_W, Math.min(MAX_W, next)));
+  }, [onWidthChange, width]);
 
   const openTo = (key: string) => { onTabChange(key); onOpenChange(true); };
 
   if (!open) {
     return (
       <div className="ai-strip" title="Open the AI companions">
-        <button className="ai-strip-toggle" onClick={() => onOpenChange(true)} aria-label="Open AI dock">‹ AI</button>
+        <button type="button" className="ai-strip-toggle" onClick={() => onOpenChange(true)} aria-label="Open AI dock">‹ AI</button>
         {AI_TOOLS.map((t) => (
-          <button key={t.key} className="ai-strip-btn" title={t.label} onClick={() => openTo(t.key)}>{t.glyph}</button>
+          <button type="button" key={t.key} className="ai-strip-btn" title={t.label} aria-label={`Open ${t.label}`} onClick={() => openTo(t.key)}>{t.glyph}</button>
         ))}
       </div>
     );
@@ -81,21 +94,23 @@ export function AiDock({
   const current = AI_TOOLS.find((t) => t.key === tab) ?? AI_TOOLS[0]!;
   return (
     <aside className="ai-dock" style={{ width }}>
-      <div className="ai-resize" onPointerDown={startDrag} onPointerMove={onDragMove} onPointerUp={endDrag} title="Drag to resize the AI dock" />
+      <div className="ai-resize" role="separator" aria-label="Resize AI dock" aria-orientation="vertical" aria-valuemin={MIN_W} aria-valuemax={MAX_W} aria-valuenow={width} tabIndex={0} onKeyDown={onResizeKey} onPointerDown={startDrag} onPointerMove={onDragMove} onPointerUp={endDrag} onPointerCancel={endDrag} onLostPointerCapture={endDrag} title="Drag to resize; use Left/Right arrows from the keyboard" />
       <div className="ai-tabs">
         {AI_TOOLS.map((t) => (
-          <button key={t.key} className={tab === t.key ? 'on' : ''} onClick={() => onTabChange(t.key)} title={t.label}>
+          <button type="button" key={t.key} className={tab === t.key ? 'on' : ''} aria-pressed={tab === t.key} onClick={() => onTabChange(t.key)} title={t.label}>
             <span className="ai-tab-glyph">{t.glyph}</span>{t.label}
           </button>
         ))}
         <div style={{ flex: 1 }} />
-        <button className="ai-collapse" onClick={() => onOpenChange(false)} title="Collapse the AI dock" aria-label="Collapse AI dock">›</button>
+        <button type="button" className="ai-collapse" onClick={() => onOpenChange(false)} title="Collapse the AI dock" aria-label="Collapse AI dock">›</button>
       </div>
       {/* keep every tool mounted so Billy's chat / job state survives tab switches */}
       <div className="ai-body">
         {AI_TOOLS.map((t) => (
           <div key={t.key} style={{ position: 'absolute', inset: 0, visibility: t.key === current.key ? 'visible' : 'hidden' }}>
-            {t.node}
+            <PanelErrorBoundary name={`${t.label} AI`} resetKey={t.key}>
+              {t.node}
+            </PanelErrorBoundary>
           </div>
         ))}
       </div>

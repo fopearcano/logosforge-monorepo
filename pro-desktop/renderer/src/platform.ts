@@ -5,6 +5,7 @@ export type CoreStatus = {
   baseUrl: string;
   managed: boolean;
   detail?: string;
+  authToken?: string;
 };
 
 /** The flat `window.logosforge` surface exposed by the Electron preload. */
@@ -17,6 +18,8 @@ export interface DesktopBridge {
   openExternal(target: string): Promise<void>;
   loadLayout(projectId: number): Promise<unknown | null>;
   saveLayout(projectId: number, layout: unknown): Promise<void>;
+  onSaveBeforeClose(cb: () => void): () => void;
+  sendCloseResult(saved: boolean): void;
   onMenuCommand(cb: (command: string) => void): () => void;
 }
 

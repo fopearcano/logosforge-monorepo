@@ -1,7 +1,7 @@
 /**
  * Core manager — owns the lifecycle of the logosforge core HTTP API.
  *
- *  - Connect to an already-running core (e.g. one you started by hand), or
+ *  - Reuse only a core carrying this manager's one-time nonce, or
  *  - spawn `python -m logosforge.api --mode desktop` from the core's venv,
  *  - wait for GET /api/health,
  *  - report status to the renderer,
@@ -12,10 +12,14 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as http from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
+
+import { selectAvailablePort } from './port-selection';
+import { isExpectedCoreHealth } from './security';
 
 export type CoreState = 'connecting' | 'connected' | 'error';
 
@@ -24,24 +28,44 @@ export interface CoreStatus {
   baseUrl: string;
   managed: boolean;
   detail?: string;
+  /** Per-process secret used only by renderer → local core requests. */
+  authToken?: string;
 }
 
 const HOST = process.env.LOGOSFORGE_HOST ?? '127.0.0.1';
-const PORT = Number(process.env.LOGOSFORGE_PORT ?? 8765);
-const BASE_URL = `http://${HOST}:${PORT}`;
+const RAW_PORT = process.env.LOGOSFORGE_PORT;
+const INITIAL_PORT = Number(RAW_PORT ?? 8765);
+const PORT_WAS_EXPLICIT = typeof RAW_PORT === 'string' && RAW_PORT.trim().length > 0;
+const HEALTH_RESPONSE_MAX_BYTES = 64 * 1024;
 
 const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-/** Resolve true on any 2xx from the URL (lenient health probe). */
-function httpOk(url: string, timeoutMs = 1500): Promise<boolean> {
+/** Read and decode one small JSON health response. */
+function httpGetJson(url: string, timeoutMs = 1500): Promise<unknown> {
   return new Promise((resolve) => {
     const req = http.get(url, (res) => {
-      res.resume();
-      resolve(res.statusCode != null && res.statusCode >= 200 && res.statusCode < 300);
+      if (res.statusCode !== 200) {
+        res.resume();
+        resolve(null);
+        return;
+      }
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => {
+        body += chunk;
+        if (body.length > HEALTH_RESPONSE_MAX_BYTES) {
+          res.destroy();
+          resolve(null);
+        }
+      });
+      res.on('end', () => {
+        try { resolve(JSON.parse(body)); }
+        catch { resolve(null); }
+      });
     });
     req.setTimeout(timeoutMs, () => req.destroy());
-    req.on('error', () => resolve(false));
-    req.on('timeout', () => resolve(false));
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => resolve(null));
   });
 }
 
@@ -121,13 +145,19 @@ export class CoreManager {
   private child: ChildProcess | null = null;
   private managed = false;
   private spawnFailed = false;
-  private status: CoreStatus = { state: 'connecting', baseUrl: BASE_URL, managed: false };
+  private port = INITIAL_PORT;
+  private endpoint = `http://${HOST}:${INITIAL_PORT}`;
+  private readonly authToken = randomBytes(32).toString('base64url');
+  private readonly instanceNonce = randomBytes(18).toString('base64url');
+  private status: CoreStatus = {
+    state: 'connecting', baseUrl: this.endpoint, managed: false, authToken: this.authToken,
+  };
   private readonly listeners = new Set<(s: CoreStatus) => void>();
 
   constructor(private readonly opts: CoreManagerOptions = {}) {}
 
   get baseUrl(): string {
-    return BASE_URL;
+    return this.endpoint;
   }
 
   onStatus(cb: (s: CoreStatus) => void): () => void {
@@ -147,10 +177,31 @@ export class CoreManager {
   async start(): Promise<void> {
     this.setStatus({ state: 'connecting', detail: 'Looking for the logosforge core…' });
 
-    // 1. Connect to an already-running core.
+    // 1. Reuse only a process carrying this manager's one-time nonce (normally
+    // reachable only if start() is called twice on the same manager instance).
     if (await this.ping()) {
-      this.managed = false;
-      this.setStatus({ state: 'connected', managed: false, detail: 'Connected to a running core.' });
+      this.setStatus({
+        state: 'connected', managed: this.managed,
+        detail: this.managed ? 'Core launched by the app.' : 'Connected to a verified core.',
+      });
+      return;
+    }
+
+    try {
+      const selectedPort = await selectAvailablePort(
+        HOST, this.port, !PORT_WAS_EXPLICIT,
+      );
+      if (selectedPort !== this.port) {
+        this.port = selectedPort;
+        this.endpoint = `http://${HOST}:${selectedPort}`;
+        this.setStatus({
+          baseUrl: this.endpoint,
+          detail: `Default port was occupied; using local port ${selectedPort}.`,
+        });
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.setStatus({ state: 'error', detail });
       return;
     }
 
@@ -185,13 +236,16 @@ export class CoreManager {
     }
   }
 
-  private ping(): Promise<boolean> {
-    return httpOk(`${BASE_URL}/api/health`);
+  private async ping(): Promise<boolean> {
+    return isExpectedCoreHealth(
+      await httpGetJson(`${this.endpoint}/api/health`),
+      this.instanceNonce,
+    );
   }
 
   /** Decide how to launch the core: the bundled exe (packaged) or dev python. */
   private resolveLauncher(): Launcher | null {
-    const args = ['--host', HOST, '--port', String(PORT), '--mode', 'desktop'];
+    const args = ['--host', HOST, '--port', String(this.port), '--mode', 'desktop'];
     if (this.opts.dbPath) args.push('--db', this.opts.dbPath);
     const bundled = this.opts.bundledCorePath;
     if (bundled) {
@@ -220,7 +274,15 @@ export class CoreManager {
     const cwd = launcher.kind === 'bundled' ? launcher.cwd : launcher.coreDir;
     const child = spawn(command, launcher.args, {
       cwd,
-      env: { ...process.env, API_HOST: HOST, API_PORT: String(PORT), API_MODE: 'desktop', ...resolveVoiceEnv() },
+      env: {
+        ...process.env,
+        API_HOST: HOST,
+        API_PORT: String(this.port),
+        API_MODE: 'desktop',
+        API_AUTH_TOKEN: this.authToken,
+        API_INSTANCE_NONCE: this.instanceNonce,
+        ...resolveVoiceEnv(),
+      },
       stdio: 'pipe',
       windowsHide: true, // the bundled core is a console exe; don't flash a window
     });

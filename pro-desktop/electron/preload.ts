@@ -20,6 +20,8 @@ export interface LogosForgeDesktop {
   openExternal(target: string): Promise<void>;
   loadLayout(projectId: number): Promise<unknown | null>;
   saveLayout(projectId: number, layout: unknown): Promise<void>;
+  onSaveBeforeClose(cb: () => void): () => void;
+  sendCloseResult(saved: boolean): void;
 
   /** Menu → renderer commands (see electron/menu.ts for the grammar). */
   onMenuCommand(cb: (command: string) => void): () => void;
@@ -41,6 +43,8 @@ const api: LogosForgeDesktop = {
   openExternal: (target) => ipcRenderer.invoke('shell:open-external', { target }),
   loadLayout: (projectId) => ipcRenderer.invoke('layout:load', { projectId }),
   saveLayout: (projectId, layout) => ipcRenderer.invoke('layout:save', { projectId, layout }),
+  onSaveBeforeClose: (cb) => subscribe<void>('app:save-before-close', () => cb()),
+  sendCloseResult: (saved) => ipcRenderer.send('app:close-result', saved),
 
   onMenuCommand: (cb) => subscribe<string>('menu:command', cb),
 };

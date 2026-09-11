@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, ipcMain } from 'electron';
+import { app, BrowserWindow, Menu, dialog, ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron';
 import * as path from 'node:path';
 
 import { CoreManager, type CoreStatus } from './core-manager';
@@ -24,8 +24,70 @@ const dbPath = app.isPackaged ? path.join(app.getPath('userData'), 'logosforge.d
 let mainWindow: BrowserWindow | null = null;
 let rendererServer: StaticServer | null = null;
 const core = new CoreManager({ bundledCorePath, dbPath });
+let allowClose = false;
+let isQuitting = false;
+let closeInProgress = false;
+let pendingCloseResult: ((saved: boolean) => void) | null = null;
+
+function requireMainRenderer(event: IpcMainInvokeEvent): void {
+  const win = mainWindow;
+  if (!win || event.sender !== win.webContents || event.senderFrame !== win.webContents.mainFrame) {
+    throw new Error('Rejected IPC call from an untrusted renderer frame.');
+  }
+}
+
+function requestRendererFlush(): Promise<boolean> {
+  const win = mainWindow;
+  if (!win || win.webContents.isDestroyed()) return Promise.resolve(true);
+  if (win.webContents.isLoadingMainFrame()) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (saved: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      pendingCloseResult = null;
+      resolve(saved);
+    };
+    const timer = setTimeout(() => finish(false), 15_000);
+    pendingCloseResult = finish;
+    win.webContents.send('app:save-before-close');
+  });
+}
+
+async function handleCloseRequest(): Promise<void> {
+  const win = mainWindow;
+  if (!win || closeInProgress) return;
+  closeInProgress = true;
+  let saved = await requestRendererFlush();
+  while (!saved && mainWindow === win) {
+    const choice = await dialog.showMessageBox(win, {
+      type: 'warning',
+      title: 'Unsaved manuscript changes',
+      message: 'LogosForge Pro could not save every pending manuscript change.',
+      detail: 'Retry after checking the core connection, keep the app open, or explicitly close without saving.',
+      buttons: ['Retry Save', 'Keep Open', 'Close Without Saving'],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    });
+    if (choice.response === 0) saved = await requestRendererFlush();
+    else if (choice.response === 2) break;
+    else {
+      closeInProgress = false;
+      isQuitting = false;
+      return;
+    }
+  }
+  closeInProgress = false;
+  if (mainWindow !== win) return;
+  allowClose = true;
+  if (isQuitting) app.quit();
+  else win.close();
+}
 
 async function createWindow(): Promise<void> {
+  allowClose = false;
   mainWindow = new BrowserWindow({
     width: 1480,
     height: 920,
@@ -51,19 +113,53 @@ async function createWindow(): Promise<void> {
     await mainWindow.loadURL(DEV_SERVER_URL);
   }
 
+  mainWindow.on('close', (event) => {
+    if (allowClose) return;
+    event.preventDefault();
+    isQuitting = false;
+    void handleCloseRequest();
+  });
+
   mainWindow.on('closed', () => {
+    pendingCloseResult?.(false);
     mainWindow = null;
   });
 }
 
 function registerIpc(): void {
-  ipcMain.handle('core:base-url', () => core.baseUrl);
-  ipcMain.handle('core:get-status', () => core.getStatus());
-  ipcMain.handle('file:open', (_e, p: { filters?: DialogFilter[] }) => openFile(mainWindow, p?.filters));
-  ipcMain.handle('file:save', (_e, p: { suggestedName?: string; content?: string; contentBase64?: string; mimeType?: string }) => saveFile(mainWindow, p));
-  ipcMain.handle('shell:open-external', (_e, p: { target: string }) => openExternal(p.target));
-  ipcMain.handle('layout:load', (_e, p: { projectId: number }) => loadLayout(p.projectId));
-  ipcMain.handle('layout:save', (_e, p: { projectId: number; layout: unknown }) => saveLayout(p.projectId, p.layout));
+  ipcMain.handle('core:base-url', (event) => {
+    requireMainRenderer(event);
+    return core.baseUrl;
+  });
+  ipcMain.handle('core:get-status', (event) => {
+    requireMainRenderer(event);
+    return core.getStatus();
+  });
+  ipcMain.handle('file:open', (event, p: { filters?: DialogFilter[] }) => {
+    requireMainRenderer(event);
+    return openFile(mainWindow, p?.filters);
+  });
+  ipcMain.handle('file:save', (event, p: { suggestedName?: string; content?: string; contentBase64?: string; mimeType?: string }) => {
+    requireMainRenderer(event);
+    return saveFile(mainWindow, p);
+  });
+  ipcMain.handle('shell:open-external', (event, p: { target: string }) => {
+    requireMainRenderer(event);
+    return openExternal(p.target);
+  });
+  ipcMain.handle('layout:load', (event, p: { projectId: number }) => {
+    requireMainRenderer(event);
+    return loadLayout(p.projectId);
+  });
+  ipcMain.handle('layout:save', (event, p: { projectId: number; layout: unknown }) => {
+    requireMainRenderer(event);
+    return saveLayout(p.projectId, p.layout);
+  });
+  ipcMain.on('app:close-result', (event: IpcMainEvent, saved: boolean) => {
+    const win = mainWindow;
+    if (!win || event.sender !== win.webContents || event.senderFrame !== win.webContents.mainFrame) return;
+    pendingCloseResult?.(saved === true);
+  });
 }
 
 // Single-instance: a second launch focuses the existing window instead of
@@ -94,6 +190,13 @@ if (!app.requestSingleInstanceLock()) {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('before-quit', (event) => {
+  if (allowClose || !mainWindow) return;
+  event.preventDefault();
+  isQuitting = true;
+  void handleCloseRequest();
 });
 
 app.on('will-quit', () => {

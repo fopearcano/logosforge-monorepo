@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { ModalPortal, useModalDialog } from '@logosforge/pro-shared-ui';
 
 export interface Command {
   id: string;
@@ -11,15 +12,15 @@ export function CommandPalette({ open, onClose, commands }: { open: boolean; onC
   const [q, setQ] = useState('');
   const [sel, setSel] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+
+  useModalDialog({ open, dialogRef, initialFocusRef: inputRef, onClose });
 
   useEffect(() => {
     if (open) {
       setQ('');
       setSel(0);
-      const t = setTimeout(() => inputRef.current?.focus(), 0);
-      return () => clearTimeout(t);
     }
-    return undefined;
   }, [open]);
 
   const filtered = useMemo(() => {
@@ -42,8 +43,9 @@ export function CommandPalette({ open, onClose, commands }: { open: boolean; onC
   };
 
   return (
-    <div className="cmdk-backdrop" onMouseDown={onClose}>
-      <div className="cmdk" onMouseDown={(e) => e.stopPropagation()}>
+    <ModalPortal>
+      <div data-lf-modal-layer className="cmdk-backdrop" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <div ref={dialogRef} className="cmdk" role="dialog" aria-modal="true" aria-label="Command palette" tabIndex={-1}>
         <input
           ref={inputRef}
           value={q}
@@ -65,6 +67,7 @@ export function CommandPalette({ open, onClose, commands }: { open: boolean; onC
           )}
         </div>
       </div>
-    </div>
+      </div>
+    </ModalPortal>
   );
 }

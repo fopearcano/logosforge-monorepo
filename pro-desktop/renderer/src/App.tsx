@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import {
   StudioProvider,
   createHttpApiClient,
@@ -39,6 +39,13 @@ import {
   AiSettingsPanel,
   ConnectorPanel,
   HelpPanel,
+  flushPendingProjectSaves,
+  prepareProjectHandoff,
+  trackProjectWrite,
+  PanelErrorBoundary,
+  RuntimeFaultBanner,
+  useRuntimeFaultReporter,
+  createDeferredDisposer,
 } from '@logosforge/pro-shared-ui';
 import { WRITING_MODES, type WritingMode, type ProjectDTO } from '@logosforge/ui-contracts';
 import { desktop, platform, type CoreStatus } from './platform';
@@ -143,6 +150,13 @@ const DOT: Record<CoreStatus['state'], string> = {
   error: '#e8443a',
 };
 
+function projectWritingMode(project: ProjectDTO): WritingMode {
+  const candidate = project.narrative_engine || project.format_mode || 'novel';
+  return (WRITING_MODES as readonly string[]).includes(candidate)
+    ? candidate as WritingMode
+    : 'novel';
+}
+
 function CoreBadge({ status }: { status: CoreStatus }) {
   return (
     <div className="badge">
@@ -155,11 +169,23 @@ function CoreBadge({ status }: { status: CoreStatus }) {
 
 export function App() {
   const [status, setStatus] = useState<CoreStatus>({ state: 'connecting', baseUrl: '', managed: false });
-  const [baseUrl, setBaseUrl] = useState<string | null>(null);
   const [projectId, setProjectId] = useState<number | undefined>(undefined);
-  const [mode, setMode] = useState<WritingMode>('screenplay');
+  const [mode, setMode] = useState<WritingMode>('novel');
+  const [modeBusy, setModeBusy] = useState(false);
+  const [bootstrapAttempt, setBootstrapAttempt] = useState(0);
   const [sel, setSel] = useState(PANELS[0]!.label);
   const [pendingScene, setPendingScene] = useState<number | null>(null);
+  const [handoffError, setHandoffError] = useState<string | null>(null);
+  const { fault: runtimeFault, dismiss: dismissRuntimeFault } = useRuntimeFaultReporter();
+  const selRef = useRef(sel);
+  selRef.current = sel;
+  const panelQueue = useRef<Promise<void>>(Promise.resolve());
+  const projectIdRef = useRef(projectId);
+  projectIdRef.current = projectId;
+  const projectQueue = useRef<Promise<void>>(Promise.resolve());
+  const bootstrapRunRef = useRef<{ api: ApiClient; attempt: number } | null>(null);
+  const bootstrapRetryTimerRef = useRef<number | null>(null);
+  const appMountedRef = useRef(true);
 
   // Cockpit HUD state: the AI dock (right rail), the shell layout (cockpit vs
   // distraction-free focus), and the ⌘K command palette.
@@ -179,12 +205,47 @@ export function App() {
   useEffect(() => { localStorage.setItem('lf.theme', ambiance); }, [ambiance]);
   // Drive the global CSS palette (body + command palette live outside the shell).
   useEffect(() => { document.documentElement.dataset.theme = ambiance; }, [ambiance]);
-
-  // Cross-panel navigation: any panel can switch panels / open a scene.
-  const navigate = useCallback((panel: string, opts?: { sceneId?: number }) => {
-    if (PANELS.some((p) => p.label === panel)) setSel(panel);
-    if (opts?.sceneId != null) setPendingScene(opts.sceneId);
+  useEffect(() => {
+    appMountedRef.current = true;
+    return () => {
+      appMountedRef.current = false;
+      if (bootstrapRetryTimerRef.current !== null) {
+        window.clearTimeout(bootstrapRetryTimerRef.current);
+        bootstrapRetryTimerRef.current = null;
+      }
+    };
   }, []);
+
+  const selectPanel = useCallback((panel: string, opts?: { sceneId?: number }): Promise<boolean> => {
+    const task = panelQueue.current.then(async () => {
+      if (!PANELS.some((candidate) => candidate.label === panel)) return false;
+      if (selRef.current !== panel) {
+        try {
+          await flushPendingProjectSaves({ commitActiveField: true });
+        } catch (error) {
+          setHandoffError(
+            `Panel switch stopped; the manuscript remains open. ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+          return false;
+        }
+        setSel(panel);
+        selRef.current = panel;
+      }
+      if (opts?.sceneId != null) setPendingScene(opts.sceneId);
+      setHandoffError(null);
+      return true;
+    });
+    panelQueue.current = task.then(() => undefined, () => undefined);
+    return task;
+  }, []);
+
+  // Cross-panel navigation: any panel can switch panels / open a scene, but no
+  // panel unmounts a dirty editor until its save barrier succeeds.
+  const navigate = useCallback((panel: string, opts?: { sceneId?: number }) => {
+    void selectPanel(panel, opts);
+  }, [selectPanel]);
 
   // Open an AI companion (used by the dock and the palette). Bring the dock into
   // view — and drop out of focus mode so it's actually visible.
@@ -209,9 +270,9 @@ export function App() {
   // bounces to Dashboard; Manuscript is the writer's home in this shell).
   useEffect(() => {
     if (!visiblePanels.some((p) => p.label === sel)) {
-      setSel(visiblePanels.find((p) => p.label === 'Manuscript')?.label ?? visiblePanels[0]?.label ?? 'Projects');
+      void selectPanel(visiblePanels.find((p) => p.label === 'Manuscript')?.label ?? visiblePanels[0]?.label ?? 'Projects');
     }
-  }, [visiblePanels, sel]);
+  }, [visiblePanels, sel, selectPanel]);
 
   // ⌘K / Ctrl+K toggles the command palette anywhere; Escape leaves focus mode
   // (when the palette isn't the one consuming the keystroke).
@@ -231,19 +292,100 @@ export function App() {
   // Everything the palette can do: jump to any section, open any AI companion,
   // toggle focus mode.
   const commands = useMemo<Command[]>(() => [
-    ...visiblePanels.map((p) => ({ id: `go-${p.label}`, kind: 'Go', label: p.label, run: () => setSel(p.label) })),
+    ...visiblePanels.map((p) => ({ id: `go-${p.label}`, kind: 'Go', label: p.label, run: () => { void selectPanel(p.label); } })),
     ...AI_TOOL_KEYS.map((k) => ({ id: `ai-${k}`, kind: 'AI', label: k, run: () => openAi(k) })),
     { id: 'focus', kind: 'View', label: layout === 'focus' ? 'Exit focus mode' : 'Enter focus mode', run: toggleFocus },
-  ], [layout, openAi, toggleFocus, visiblePanels]);
+  ], [layout, openAi, toggleFocus, visiblePanels, selectPanel]);
 
   useEffect(() => {
     if (!desktop) return;
-    desktop.coreBaseUrl().then(setBaseUrl).catch(() => {});
-    desktop.getCoreStatus().then(setStatus).catch(() => {});
-    return desktop.onCoreStatus(setStatus);
+    let active = true;
+    let liveEventSeen = false;
+    const unsubscribe = desktop.onCoreStatus((next) => {
+      if (!active) return;
+      liveEventSeen = true;
+      setStatus(next);
+    });
+    void desktop.getCoreStatus().then((next) => {
+      if (active && !liveEventSeen) setStatus(next);
+    }).catch((error) => {
+      if (active && !liveEventSeen) setStatus({
+        state: 'error', baseUrl: '', managed: false,
+        detail: `Could not read core status. ${error instanceof Error ? error.message : String(error)}`,
+      });
+    });
+    return () => { active = false; unsubscribe(); };
   }, []);
 
-  const api = useMemo<ApiClient | null>(() => (baseUrl != null ? createHttpApiClient(baseUrl) : null), [baseUrl]);
+  // Electron close/quit handshake: never let the process disappear inside the
+  // scene debounce window. Main waits for this result before closing.
+  useEffect(() => {
+    const bridge = desktop;
+    if (!bridge?.onSaveBeforeClose) return;
+    return bridge.onSaveBeforeClose(() => {
+      void flushPendingProjectSaves({ commitActiveField: true }).then(
+        () => bridge.sendCloseResult(true),
+        (error) => {
+          setHandoffError(
+            `Close stopped because pending changes could not be saved. ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+          bridge.sendCloseResult(false);
+        },
+      );
+    });
+  }, []);
+
+  // The manager may move away from the default port when an orphaned process
+  // occupies it. Always derive the API endpoint from the latest status event;
+  // a one-time coreBaseUrl() read would become stale during that fallback.
+  const baseUrl = status.baseUrl || null;
+  const api = useMemo<ApiClient | null>(
+    () => (baseUrl != null ? createHttpApiClient(baseUrl, status.authToken ?? '') : null),
+    [baseUrl, status.authToken],
+  );
+  const apiDisposer = useMemo(
+    () => createDeferredDisposer<ApiClient>((client) => client.dispose?.()),
+    [],
+  );
+  useEffect(() => (api ? apiDisposer.acquire(api) : undefined), [api, apiDisposer]);
+
+  const selectProject = useCallback((id: number): Promise<boolean> => {
+    const target = id || undefined;
+    const task = projectQueue.current.then(async () => {
+      if (projectIdRef.current === target) return true;
+      if (!api && target != null) return false;
+      try {
+        let opened: ProjectDTO | null = null;
+        if (target == null) await flushPendingProjectSaves({ commitActiveField: true });
+        else opened = await prepareProjectHandoff(() => api!.openProject(target));
+        if (opened) {
+          setProjects((current) => {
+            const found = current.some((project) => project.id === opened.id);
+            return found
+              ? current.map((project) => project.id === opened.id ? opened : project)
+              : [...current, opened];
+          });
+          setMode(projectWritingMode(opened));
+        }
+      } catch (error) {
+        setHandoffError(
+          `Project switch stopped; your current manuscript remains open. ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+        return false;
+      }
+      setProjectId(target);
+      projectIdRef.current = target;
+      setPendingScene(null);
+      setHandoffError(null);
+      return true;
+    });
+    projectQueue.current = task.then(() => undefined, () => undefined);
+    return task;
+  }, [api]);
 
   // Project list + selection. On connect, load the projects; if there are none,
   // create a starter one so a fresh install can write immediately (otherwise
@@ -253,41 +395,134 @@ export function App() {
 
   const refreshProjects = useCallback(async (): Promise<ProjectDTO[]> => {
     if (!api) return [];
-    const ps = await api.listProjects().catch(() => [] as ProjectDTO[]);
+    const ps = await api.listProjects();
     setProjects(ps);
+    const active = ps.find((project) => project.id === projectIdRef.current);
+    if (active) setMode(projectWritingMode(active));
     return ps;
   }, [api]);
 
+  const changeProjectMode = useCallback((nextMode: WritingMode): Promise<boolean> => {
+    const task = projectQueue.current.then(async () => {
+      if (!api) return false;
+      const activeId = projectIdRef.current;
+      if (activeId == null) {
+        setMode(nextMode);
+        return true;
+      }
+      setModeBusy(true);
+      try {
+        await flushPendingProjectSaves({ commitActiveField: true });
+        if (projectIdRef.current !== activeId) return false;
+        const updated = await prepareProjectHandoff(() =>
+          trackProjectWrite(api.updateProject(activeId, { narrative_engine: nextMode })),
+        );
+        setProjects((current) => current.map((project) =>
+          project.id === updated.id ? updated : project,
+        ));
+        if (projectIdRef.current === activeId) setMode(projectWritingMode(updated));
+        setHandoffError(null);
+        return true;
+      } catch (error) {
+        setHandoffError(
+          `Writing-mode change stopped. ${error instanceof Error ? error.message : String(error)}`,
+        );
+        return false;
+      } finally {
+        setModeBusy(false);
+      }
+    });
+    projectQueue.current = task.then(() => undefined, () => undefined);
+    return task;
+  }, [api]);
+
   useEffect(() => {
-    if (!api || status.state !== 'connected' || busy || projects.length > 0) return;
+    const clearRetry = () => {
+      if (bootstrapRetryTimerRef.current !== null) {
+        window.clearTimeout(bootstrapRetryTimerRef.current);
+        bootstrapRetryTimerRef.current = null;
+      }
+    };
+    if (!api || status.state !== 'connected') {
+      bootstrapRunRef.current = null;
+      clearRetry();
+      return;
+    }
+    if (bootstrapRunRef.current?.api !== api) {
+      bootstrapRunRef.current = null;
+      clearRetry();
+    }
+    if (projects.length > 0 || projectId != null) {
+      bootstrapRunRef.current = null;
+      clearRetry();
+      return;
+    }
+    if (busy) return;
+    const previous = bootstrapRunRef.current;
+    if (previous?.api === api && previous.attempt === bootstrapAttempt) return;
+    const run = { api, attempt: bootstrapAttempt };
+    bootstrapRunRef.current = run;
+    const isCurrent = () => appMountedRef.current && bootstrapRunRef.current === run;
     setBusy(true);
-    refreshProjects()
-      .then(async (ps) => {
+    void (async () => {
+      try {
+        const ps = await api.listProjects();
+        if (!isCurrent()) return;
+        setProjects(ps);
         if (ps.length === 0) {
-          const created = await api.createProject({ title: 'Untitled Project', default_writing_format: mode });
+          const created = await api.createProject({ title: 'Untitled Project', narrative_engine: mode });
+          if (!isCurrent()) return;
           setProjects([created]);
           setProjectId(created.id);
+          projectIdRef.current = created.id;
+          setMode(projectWritingMode(created));
         } else if (projectId == null) {
           setProjectId(ps[0]!.id);
+          projectIdRef.current = ps[0]!.id;
+          setMode(projectWritingMode(ps[0]!));
         }
-      })
-      .catch(() => {})
-      .finally(() => setBusy(false));
-  }, [api, status.state, busy, projects.length, projectId, mode, refreshProjects]);
+        setHandoffError(null);
+      } catch (error) {
+        if (!isCurrent()) return;
+        setHandoffError(
+          `Could not load projects; retrying shortly. ${error instanceof Error ? error.message : String(error)}`,
+        );
+        clearRetry();
+        const timer = window.setTimeout(() => {
+          if (bootstrapRetryTimerRef.current === timer) bootstrapRetryTimerRef.current = null;
+          if (!isCurrent()) return;
+          bootstrapRunRef.current = null;
+          setBootstrapAttempt((attempt) => attempt + 1);
+        }, 3000);
+        bootstrapRetryTimerRef.current = timer;
+      } finally {
+        if (appMountedRef.current) setBusy(false);
+      }
+    })();
+  }, [api, status.state, busy, projects.length, projectId, mode, bootstrapAttempt]);
 
   const newProject = useCallback(async () => {
     if (!api || busy) return;
     setBusy(true);
     try {
-      const created = await api.createProject({ title: 'Untitled Project', default_writing_format: mode });
+      const created = await prepareProjectHandoff(() =>
+        api.createProject({ title: 'Untitled Project', narrative_engine: mode }),
+      );
+      await selectProject(created.id);
       await refreshProjects();
-      setProjectId(created.id);
-    } catch {
-      /* keep current selection on failure */
+    } catch (error) {
+      // Creation may have succeeded before the second safety drain failed.
+      // Refresh so the recoverable blank project remains visible.
+      await refreshProjects();
+      setHandoffError(
+        `New project stopped; your current manuscript remains open. ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
     } finally {
       setBusy(false);
     }
-  }, [api, busy, mode, refreshProjects]);
+  }, [api, busy, mode, refreshProjects, selectProject]);
 
   // Native menu (electron/menu.ts) → the same handlers the sidebar / palette use.
   useEffect(() => {
@@ -297,14 +532,14 @@ export function App() {
       else if (cmd === 'palette') setPaletteOpen((o) => !o);
       else if (cmd === 'focus') toggleFocus();
       else if (cmd === 'ai-dock') setAiOpen((o) => !o);
-      else if (cmd.startsWith('nav:')) setSel(cmd.slice(4));
+      else if (cmd.startsWith('nav:')) void selectPanel(cmd.slice(4));
       else if (cmd.startsWith('ai:')) openAi(cmd.slice(3));
       else if (cmd.startsWith('theme:')) {
         const t = cmd.slice(6);
         if (t === 'dark' || t === 'light' || t === 'warm') setAmbiance(t);
       }
     });
-  }, [newProject, toggleFocus, openAi]);
+  }, [newProject, toggleFocus, openAi, selectPanel]);
 
   if (!desktop) {
     return (
@@ -324,6 +559,14 @@ export function App() {
       </div>
     );
   }
+  if (busy && projects.length === 0 && projectId == null) {
+    return (
+      <div className="boot">
+        Preparing your project…
+        <span className="detail">Checking the local library and creating a blank project only when needed.</span>
+      </div>
+    );
+  }
 
   const services = { api, platform: platform as PlatformAdapter };
   const current = PANELS.find((p) => p.label === sel) ?? PANELS[0]!;
@@ -334,8 +577,8 @@ export function App() {
     <aside className="rail">
       <CoreBadge status={status} />
       <label className="field">
-        writing mode
-        <select value={mode} onChange={(e) => setMode(e.target.value as WritingMode)}>
+        project mode
+        <select value={mode} disabled={modeBusy || busy} onChange={(e) => { void changeProjectMode(e.target.value as WritingMode); }}>
           {WRITING_MODES.map((m) => (
             <option key={m} value={m}>{m}</option>
           ))}
@@ -343,15 +586,14 @@ export function App() {
       </label>
       <label className="field">
         project
-        <select value={projectId ?? ''} onChange={(e) => setProjectId(Number(e.target.value) || undefined)}>
+        <select value={projectId ?? ''} disabled={busy} onChange={(e) => { void selectProject(Number(e.target.value) || 0); }}>
           {projects.length === 0 && <option value="">—</option>}
           {projects.map((p) => (
             <option key={p.id} value={p.id}>{p.title || `Project ${p.id}`}</option>
           ))}
         </select>
       </label>
-      <button
-        type="button"
+      <button type="button"
         onClick={newProject}
         disabled={busy}
         style={{ width: '100%', marginTop: 2, padding: '7px 0', background: 'transparent', border: '1px solid #2b6f8f', color: '#9fd4ec', cursor: busy ? 'default' : 'pointer', fontSize: 11, letterSpacing: '.12em', opacity: busy ? 0.5 : 1 }}
@@ -371,7 +613,7 @@ export function App() {
           <div key={g.group || `top-${gi}`} className="nav-group">
             {g.group && <div className="nav-group-label">{g.group}</div>}
             {g.panels.map((p) => (
-              <button key={p.label} className={sel === p.label ? 'on' : ''} onClick={() => setSel(p.label)}>
+              <button type="button" key={p.label} className={sel === p.label ? 'on' : ''} aria-current={sel === p.label ? 'page' : undefined} onClick={() => { void selectPanel(p.label); }}>
                 {p.label}
               </button>
             ))}
@@ -383,7 +625,9 @@ export function App() {
 
   return (
     <div className="cockpit-root">
+      <PanelErrorBoundary name="Studio workspace" resetKey={`${projectId ?? 'none'}:${mode}`}>
       <StudioProvider
+        key={projectId ?? 'no-project'}
         services={services}
         writingMode={mode}
         projectId={projectId}
@@ -391,8 +635,12 @@ export function App() {
           navigate,
           manuscriptTargetSceneId: pendingScene,
           clearManuscriptTarget: () => setPendingScene(null),
-          selectProject: (id: number) => setProjectId(id || undefined),
-          refreshProjects: () => { void refreshProjects(); },
+          selectProject,
+          refreshProjects: () => {
+            void refreshProjects().catch((error) => setHandoffError(
+              `Could not refresh projects. ${error instanceof Error ? error.message : String(error)}`,
+            ));
+          },
         }}
       >
         <WorkspaceShell
@@ -405,7 +653,13 @@ export function App() {
           countdown="LIVE"
           sync="100"
           navSlot={rail}
-          centerSlot={<div className="panel-host">{current.node}</div>}
+          centerSlot={
+            <div className="panel-host">
+              <PanelErrorBoundary name={`${current.label} panel`} resetKey={`${projectId ?? 'none'}:${current.label}`}>
+                {current.node}
+              </PanelErrorBoundary>
+            </div>
+          }
           rightSlot={
             <AiDock
               open={aiOpen}
@@ -421,6 +675,24 @@ export function App() {
         />
         <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} commands={commands} />
       </StudioProvider>
+      </PanelErrorBoundary>
+      {handoffError && (
+        <button type="button"
+          role="alert"
+          onClick={() => setHandoffError(null)}
+          title="Dismiss"
+          style={{
+            position: 'fixed', left: '50%', bottom: 24, zIndex: 1000,
+            transform: 'translateX(-50%)', maxWidth: 'min(760px, calc(100% - 40px))',
+            padding: '9px 14px', border: '1px solid var(--crimson)',
+            background: 'var(--panel)', color: 'var(--strong)', font: 'inherit',
+            fontSize: 11, lineHeight: 1.4, cursor: 'pointer', boxShadow: '0 12px 40px rgba(0,0,0,.45)',
+          }}
+        >
+          {handoffError}
+        </button>
+      )}
+      <RuntimeFaultBanner fault={runtimeFault} onDismiss={dismissRuntimeFault} bottom={handoffError ? 78 : 24} />
     </div>
   );
 }

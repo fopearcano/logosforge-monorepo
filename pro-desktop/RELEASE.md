@@ -39,7 +39,7 @@ single `actions/checkout` with one checkout per repo into those sibling paths.
 
 ## Local build (Windows)
 
-Prereqs: Node 20, Python 3.11, and (for `electron-builder`) **Windows Developer
+Prereqs: Node 22.12+, Python 3.11, and (for `electron-builder`) **Windows Developer
 Mode enabled** or an elevated/admin shell — otherwise electron-builder fails
 extracting its `winCodeSign` cache with *"Cannot create symbolic link: A
 required privilege is not held"*. (That cache holds macOS signing tools a

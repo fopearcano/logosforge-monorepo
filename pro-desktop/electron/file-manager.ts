@@ -8,6 +8,8 @@ import { app, BrowserWindow, dialog, shell } from 'electron';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
+import { normalizeExternalUrl, requireProjectId } from './security';
+
 export interface DialogFilter {
   name: string;
   extensions: string[];
@@ -70,13 +72,13 @@ export async function saveFile(
 }
 
 export async function openExternal(target: string): Promise<void> {
-  await shell.openExternal(target);
+  await shell.openExternal(normalizeExternalUrl(target));
 }
 
 // -- Per-project layout (opaque JSON in userData/layouts/{projectId}.json) ----
 
 function layoutPath(projectId: number): string {
-  return path.join(app.getPath('userData'), 'layouts', `${projectId}.json`);
+  return path.join(app.getPath('userData'), 'layouts', `${requireProjectId(projectId)}.json`);
 }
 
 export async function loadLayout(projectId: number): Promise<unknown | null> {
