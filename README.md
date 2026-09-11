@@ -28,10 +28,11 @@ Cutting a release: `git tag whiteboard-v0.1.0 && git push origin whiteboard-v0.1
 
 ## Local development
 
+- **Prerequisite:** Node.js 22.12+ (Electron 44 / Vite 8) and Python 3.11+.
 - **Core:** `pip install -e ./logosforge[export]`
 - **Whiteboard desktop:** `cd whiteboard-desktop/desktop && npm install && npm run dev` (spawns the wrapper backend from `whiteboard-desktop/backend/.venv`; run `pip install -r whiteboard-desktop/backend/requirements.txt` in that venv first).
 - **Pro desktop:** `cd pro-desktop && npm install && npm run dev`
 
 ## Status
 
-**Alpha.** Desktop builds are currently **unsigned** — Windows SmartScreen and macOS Gatekeeper will warn (on macOS, clear quarantine with `xattr -cr "/Applications/LogosForge Whiteboard.app"`). Whiteboard ships Windows, macOS Intel, and Linux x64 (AppImage — `chmod +x` and run). macOS arm64/universal, Linux `.deb`, and Pro's Mac/Linux are later milestones.
+**Alpha.** Desktop builds are currently **unsigned** — Windows SmartScreen and macOS Gatekeeper will warn (on macOS, clear quarantine with `xattr -cr "/Applications/LogosForge Whiteboard.app"`). Whiteboard ships Windows, macOS 13+ Intel, and Linux x64 (AppImage — `chmod +x` and run). macOS arm64/universal, Linux `.deb`, and Pro's Mac/Linux are later milestones.

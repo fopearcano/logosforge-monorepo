@@ -12,13 +12,14 @@ Whiteboard's manual outline gained an optional **hard link** per node. It's alre
 {
   "id": "…", "parentId": "…", "type": "chapter", "title": "Chapter One",
   "order": 0, "status": "…", "colorLabel": "…", "tags": [], "completed": false,
-  "link": { "blockIndex": 12, "quote": "By the time the ferry reached the far shore…" }
+  "link": { "blockIndex": 12, "quote": "By the time the ferry reached the far shore…", "blockId": "block-…" }
   //  ^ NEW — optional. Absent or null on unlinked nodes.
 }
 ```
 
 - `link.blockIndex` — a 0-based index into **`project.manuscript.blocks`** (the same block array Phase 1 turns into scenes).
 - `link.quote` — a snapshot of that block's text at link time (Whiteboard uses it to re-anchor after edits; here it's a **validation/disambiguation** aid, not the primary key).
+- `link.blockId` — optional in newer bundles. Whiteboard uses it for stable in-app anchoring through blank lines, rewrites, and duplicate text. Pro may ignore it because its block→scene conversion is still index-based.
 - Semantics: "this outline node *owns* the manuscript starting at that block." In Whiteboard it drives a ⚓ badge (jump-to-passage) and a "you are here" breadcrumb as the caret moves.
 
 ## The mapping problem (why this needs a small core change)
@@ -48,7 +49,7 @@ Fold the resolved target into the node's `description` (same pattern Phase 2 use
 Skip links, and (like comments) report **"N section links not migrated"** so nothing is dropped silently. Choose this only if the block→scene map work isn't wanted yet.
 
 ## Import wiring (in `pro-shared-ui/src/adapters/projectBundle.ts`)
-- Extend `ProjectBundleOutlineNode` with `link?: { blockIndex: number; quote: string } | null` (currently it's silently ignored — confirmed inert, so this is purely additive).
+- Extend `ProjectBundleOutlineNode` with `link?: { blockIndex: number; quote: string; blockId?: string } | null` (`blockId` is an optional newer Whiteboard hint; Pro's required resolution remains index-based).
 - Thread the Phase‑1 `block_index → scene` map into `importProjectBundle`, and in the existing outline loop attach the link per the chosen option. Keep it best-effort: a link that can't resolve (out-of-range index, or `quote` mismatches the mapped scene's text — a cheap sanity check) is skipped, not fatal, and counted for the summary.
 - Validate with `link.quote`: if the mapped scene's text doesn't contain the quote, treat the link as unresolved (the bundle may predate an edit). Report the count.
 

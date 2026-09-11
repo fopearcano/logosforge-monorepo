@@ -15,9 +15,9 @@
 
 Writers draft in Whiteboard (Free) and "graduate" a project into Pro via a one-click **`.lfbundle`** export → Pro's **⇩ IMPORT PROJECT** import (`pro-shared-ui/src/adapters/projectBundle.ts`). Status:
 
-- **Phase 1 — DONE & shipped:** manuscript (blocks → scenes) + PSYKE bible. See `PRO_IMPORT_BUNDLE_PROMPT.md`.
-- **Phase 2 — DONE & shipped:** manual outline (topological recreate, metadata folded into description) + comments **deferred** (Pro has no inline-comments subsystem yet). See `PRO_IMPORT_BUNDLE_PHASE2_PROMPT.md`.
-- **Phase 3 — PENDING (this is your task):** reconstruct the new **outline ↔ manuscript "hard link"** that Whiteboard now records. Each bundle outline node may carry `link: { blockIndex, quote }`; the bundle already ships it losslessly (no format bump). **Read `PRO_IMPORT_BUNDLE_PHASE3_PROMPT.md` and implement it** — it has the full source shape, the `block_index → scene` mapping (the one small sanctioned core change), three honest target options (full scene link / lossy description / defer), the import wiring, and acceptance criteria.
+- **Phase 1 — DONE & shipped:** manuscript (blocks → scenes) + PSYKE bible + preservation of Whiteboard-only document settings in the new Pro project's settings store. See `PRO_IMPORT_BUNDLE_PROMPT.md`.
+- **Phase 2 — DONE & shipped:** manual outline (topological recreate, writer summary preserved in description, metadata appended in a labelled line) + comments **deferred** (Pro has no inline-comments subsystem yet). Partial/ambiguous rows are explicitly counted in the import report. See `PRO_IMPORT_BUNDLE_PHASE2_PROMPT.md`.
+- **Phase 3 — DONE & shipped:** Whiteboard `link: { blockIndex, quote, blockId? }` anchors resolve through `scene_ids_by_block` and import as Pro outline `scene_id` hard links, with quote validation and explicit skipped-link counts. `blockId` is an additive Whiteboard stability hint; Pro remains compatible by resolving the required `blockIndex + quote`. `PRO_IMPORT_BUNDLE_PHASE3_PROMPT.md` is retained as the implementation record.
 
 ## Ground rules
 - Stay in the Pro tier. Do NOT touch `whiteboard-desktop/`. The `.lfbundle` format is a fixed contract owned by the Whiteboard exporter — read it, don't redefine it, don't bump its `version`.
@@ -27,5 +27,5 @@ Writers draft in Whiteboard (Free) and "graduate" a project into Pro via a one-c
 ## Reference docs in this repo
 - `PRO_IMPORT_BUNDLE_PROMPT.md` — Phase 1 (bundle format + manuscript/PSYKE import).
 - `PRO_IMPORT_BUNDLE_PHASE2_PROMPT.md` — Phase 2 (outline + comments decision).
-- `PRO_IMPORT_BUNDLE_PHASE3_PROMPT.md` — **Phase 3 (your task).**
+- `PRO_IMPORT_BUNDLE_PHASE3_PROMPT.md` — Phase 3 implementation record (completed).
 - `PRO_COMMENTS_IMPLEMENTATION_PROMPT.md` — the (separate) Pro inline-comments subsystem, if/when comments migration is revisited.

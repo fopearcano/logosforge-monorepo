@@ -13,7 +13,7 @@ The bundle's `project.outline` and `project.comments` shapes are documented in `
   OutlineNodeDTO       { id: number; parent_id: number | null; title: string; description: string; sort_order: number; children: OutlineNodeDTO[] }
   OutlineNodeCreateDTO { title: string; description?: string; parent_id?: number | null; sort_order?: number }
   ```
-  → Outline import is **feasible now**. Structure (title + hierarchy + order) maps cleanly; Whiteboard's extra metadata (type/status/colorLabel/tags/completed) has no field, so **fold it into `description`** rather than dropping it.
+  → Outline import is **feasible now**. Structure (title + hierarchy + order) maps cleanly. Preserve Whiteboard's writer-authored `summary` as the main Pro `description`; append extra metadata (type/status/colorLabel/tags/completed) in a clearly labelled `[Whiteboard: …]` line rather than dropping it.
 
 - **Comments → Pro has NO inline-comments subsystem.** The core exposes no comments route, and the Pro adapter has no comment methods — only entity/scene-linked **Notes** (`api.linkNoteScene` / `noteSceneLink`, `NotesPanel`). Whiteboard's inline comments (anchored to a text span via `block_index`) therefore have **no 1:1 target**. See Task B for the two honest options.
 
@@ -24,8 +24,8 @@ Runs right after the Phase 1 import, using the **new `projectId`**.
 1. Read `bundle.project.outline` — a flat `OutlineNode[]` where each node has `{ id (string uuid), parentId (string|null), type, title, order, status, colorLabel, tags, completed, … }`, tree = `parentId` + `order`.
 2. Create the Pro nodes **topologically** (parents before children) so parent ids exist. Keep an `idMap: Map<wbUuid, proNodeId>`:
    - sort the WB nodes so every node comes after its parent (or iterate roots→leaves);
-   - for each: `const created = await api.createOutlineNode(projectId, { title: wb.title, description: foldMeta(wb), parent_id: wb.parentId ? idMap.get(wb.parentId) ?? null : null, sort_order: wb.order })`; then `idMap.set(wb.id, created.id)`.
-   - `foldMeta(wb)` = a short human line preserving what Pro has no field for, e.g. `"Act · drafting · blue · #tag1 #tag2"` (only include the parts that are set). This keeps type/status/colour/tags visible instead of silently lost.
+   - for each: `const created = await api.createOutlineNode(projectId, { title: wb.title, description: outlineDescription(wb), parent_id: wb.parentId ? idMap.get(wb.parentId) ?? null : null, sort_order: wb.order })`; then `idMap.set(wb.id, created.id)`.
+   - `outlineDescription(wb)` keeps `wb.summary` verbatim, then appends a short line preserving fields Pro lacks, e.g. `[Whiteboard: Act · drafting · blue · #tag1 #tag2]` (only set parts). This keeps both narrative intent and metadata visible.
 3. Idempotency / existing content: a freshly Phase-1-imported project has an empty outline, so append. If the project already has outline nodes, either skip (leave a toast) or append under a synthetic "Imported outline" root — your call; don't silently merge-collide.
 4. Fire/observe `outline_changed` so the Pro outline panel refreshes.
 
@@ -44,6 +44,6 @@ Runs right after the Phase 1 import, using the **new `projectId`**.
 - Prefer client-side orchestration in `pro-shared-ui` where possible (outline import is all existing endpoints — no core change needed).
 
 ## Acceptance criteria
-- After import, the Pro project's outline mirrors the bundle's outline: same titles, same hierarchy (parents/children), same order; the Whiteboard type/status/colour/tags are visible in each node's description.
+- After import, the Pro project's outline mirrors the bundle's outline: same titles, summaries, hierarchy (parents/children), and order; Whiteboard type/status/colour/tags remain visible in each node's description.
 - Comments: either explicitly deferred with a clear "N comments not migrated" message, or (if the fallback is chosen) each comment appears as a scene-linked note on the correct scene.
 - Verified against a **real** `.lfbundle` exported from the Whiteboard app (File → Export → Export Project) that actually has an outline (and comments).

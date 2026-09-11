@@ -35,7 +35,7 @@ This is the deep guide. For a one-page cheat sheet, see **[QUICK_START.md](QUICK
 Download the build for your platform from the Releases page:
 
 - **Windows** — the installer (`LogosForge.Whiteboard-<version>-x64.exe`) or the portable build (`…-x64-portable.exe`).
-- **macOS (Intel)** — the disk image (`LogosForge.Whiteboard-<version>-x64.dmg`).
+- **macOS (Intel, macOS 13 Ventura or newer)** — the disk image (`LogosForge.Whiteboard-<version>-x64.dmg`).
 
 The builds are currently **unsigned**, so the OS will warn on first launch:
 
@@ -57,7 +57,7 @@ Everything runs **locally** — the app bundles its own writing engine. No accou
 Whiteboard is **database-backed**, like a project workspace — not a file-per-document editor. This is the single most important thing to understand:
 
 - **Everything auto-saves.** As you type, edits are written to the app's local store within a second. The **"Draft saved"** note near the top-right is your save indicator. There is no "Save" button because you never need one.
-- **Your work is safe across sessions and switches.** Close the app, reopen it — your documents, outlines, comments, and characters are exactly as you left them. Switch between documents freely; nothing is lost.
+- **Your work persists across sessions and switches.** Close the app, reopen it, and Whiteboard reloads each document's manuscript, narrative/format settings, outline, comments, and PSYKE data. Each local JSON save also retains two previous generations for recovery.
 - **Files are for sharing, not storing.** *Import* brings text in; *Export* sends a copy out. Neither is where your work "lives" — the app is.
 
 See [Data location & backup](#15-data-location--backup) for where the store sits on disk and how to back it up.
@@ -66,7 +66,7 @@ See [Data location & backup](#15-data-location--backup) for where the store sits
 
 ## 3. Documents
 
-Each **document** is an independent project with its own manuscript, outline, comments, and PSYKE bible. Manage them from the **File** menu (top-left):
+Each **document** is an independent project with its own manuscript, narrative voice/format settings, outline, comments, and PSYKE bible. Manage them from the **File** menu (top-left):
 
 | Action | What it does |
 |---|---|
@@ -76,6 +76,8 @@ Each **document** is an independent project with its own manuscript, outline, co
 | **Delete** | The **×** next to a document removes it *and* its outline, comments, and story bible — this can't be undone, so it asks first. |
 
 The **project name at the top** is also a quick document switcher (click it for the list). Both places are just two doors to the same library.
+
+Whiteboard drains manuscript, document-settings, outline, comment, PSYKE, title, and mode writes before changing projects. If the current document is associated with an external file, Whiteboard offers to save that file before switching and then clears the association, so saving the next document can never overwrite the previous document's file.
 
 Two projects are fully isolated: a character named "Mara" created in Project A never appears in Project B.
 
@@ -133,6 +135,7 @@ The left panel holds your **manual story structure** — separate from, and rich
 - **Multi-select** with `Ctrl`-click (or `Shift`-click for a range) then batch-set status/colour or delete.
 - **Zoom (hoist)** into any item with `Ctrl+]` to focus on its subtree; `Ctrl+[` climbs back out.
 - **Search / filter** (the search box) by title, `#tag`, type, status, or colour.
+- **Link to cursor position** (row ⋯ menu) binds an item to the exact manuscript block. The anchor badge jumps back to it, and a breadcrumb above the editor shows where you are in the outline. Stable block IDs keep the link attached through inserted lines, full rewrites, duplicate headings, and empty paragraphs.
 - **Reveal in editor** (row ⋯ menu) jumps to the matching passage in the manuscript.
 
 The full keyboard model for the outline is in the [hotkey reference](#14-full-hotkey-reference).
@@ -164,7 +167,7 @@ Comments are inline notes pinned to a span of text — for revision passes, edit
 - **Resolve:** mark a comment resolved once it's handled; resolved comments can be hidden.
 - **Panel:** toggle the comments side panel with `Ctrl+Shift+C`.
 
-Comments are anchored to the quoted text, so they follow it as you edit (and are cleaned up if the passage they point to is deleted).
+New comments combine a stable manuscript-block ID with quoted text and surrounding context, so highlights follow the intended passage through inserted blocks, duplicate wording, and edits. Legacy comments keep working through their text selectors; a comment is cleaned up only when its passage is genuinely gone.
 
 ---
 
@@ -177,7 +180,7 @@ The AI is **optional** and **bring-your-own-endpoint** — nothing is sent anywh
 
 **Configure it** in **Settings ⚙** (top-right):
 
-- **Provider** — LM Studio, Ollama, OpenAI, or Anthropic.
+- **Provider** — LM Studio, Ollama, OpenAI, Anthropic, or OpenRouter.
 - **Base URL** — the endpoint (a **Default** button fills the standard URL for the chosen provider — e.g. `http://localhost:1234/v1` for LM Studio).
 - **Model**, **API key** (write-only; blank keeps the stored one), and **Timeout**.
 - **Test connection** saves the form and round-trips a trivial prompt so you can confirm the provider actually responds.
@@ -206,7 +209,7 @@ For fully offline AI, run a local server (LM Studio or Ollama) and point the Bas
 
 | Format | Contains |
 |---|---|
-| **Export Project** (`.lfbundle`) | **The whole project** — manuscript, outline, comments, and PSYKE — in one file. Your backup, and the file you hand to LogosForge Pro. |
+| **Export Project** (`.lfbundle`) | **The whole project** — manuscript, narrative/format settings, outline, comments, and PSYKE — in one file. Your backup, and the file you hand to LogosForge Pro. |
 | Text / Markdown / Fountain | The manuscript as text. |
 | HTML | A styled, self-contained web page of the manuscript. |
 | JSON | Title, mode, and raw blocks. |
@@ -214,7 +217,7 @@ For fully offline AI, run a local server (LM Studio or Ollama) and point the Bas
 | Comments | A Markdown report of all comments, grouped open/resolved. |
 | PDF | The print path — a paginated script for screenplays, plain print otherwise. |
 
-For a true "save everything" file, use **Export Project (.lfbundle)** — it's the only single file that captures your outline, comments, *and* characters alongside the prose.
+For a true "save everything" file, use **Export Project (.lfbundle)** — it's the only single file that captures document settings, outline, comments, *and* characters alongside the prose. Whiteboard aborts this export if any component cannot be read; it never reports success for a bundle that silently dropped PSYKE or damaged local state.
 
 ---
 
@@ -302,6 +305,13 @@ Everything you write lives under one folder in your home directory:
 
 **To back up or move your entire workspace:** copy the whole `~/.logosforge` folder. **To back up a single project as a portable file:** use **File → Export → Export Project (.lfbundle)**.
 
+For manuscript, outline, and comment JSON, Whiteboard keeps the two preceding
+versions beside the current file as `.bak` and `.bak.1`. If the current copy is
+unreadable, the newest valid backup is restored automatically, the damaged bytes
+are preserved as `.corrupt-<timestamp>`, and a recovery notice appears in the app.
+If no backup validates, loading and autosave stop with an error rather than
+replacing the project with an empty document.
+
 ---
 
 ## 16. Moving a project to LogosForge Pro
@@ -311,7 +321,7 @@ Whiteboard and Pro are separate apps. To graduate a project to Pro:
 1. In Whiteboard: **File → Export → Export Project (.lfbundle)**.
 2. In Pro: import that `.lfbundle`.
 
-The bundle carries your manuscript (converted from blocks to scenes on import), your PSYKE characters, and your outline and comments — so the whole project moves, not just the prose.
+The bundle carries your manuscript (converted from blocks to scenes on import), document settings, PSYKE characters, outline, and comments — so the whole project moves, not just the prose. Pro preserves Whiteboard-only settings in the imported project's settings store even before it exposes equivalent controls.
 
 ---
 

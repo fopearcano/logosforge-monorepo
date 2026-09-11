@@ -28,6 +28,10 @@ Extension **`.lfbundle`**, a single JSON object:
     "id": "7",                        // source doc/project id (string) — informational only
     "title": "The Sounding",
     "mode": "novel",                  // novel | screenplay | scene | graphic_novel | stage_script
+    "settings": {                     // Whiteboard document-scoped voice/format settings
+      "narrativePerson": "first", "narrativeStyle": "literary",
+      "narrativeRegister": "standard", "slangLevel": "light"
+    },
     "manuscript": {
       "blocks": [                     // Whiteboard blocks, VERBATIM — this is what the converter eats
         { "id": "b0", "type": "heading", "text": "Chapter One", "level": 1 },
@@ -44,11 +48,12 @@ Extension **`.lfbundle`**, a single JSON object:
     ],
     "comments": [                     // inline comments, VERBATIM incl. anchor (Phase 2 target)
       { "id": "…",
-        "anchor": { "block_index": 3, "from_offset": 0, "to_offset": 9,
-                    "end_block_index": null, "prefix": "", "suffix": "" },
+        "anchor": { "block_index": 3, "block_id": "block-…", "from_offset": 0, "to_offset": 9,
+                    "end_block_index": null, "end_block_id": null, "prefix": "", "suffix": "" },
         "quote": "the knock", "body": "foreshadow?", "resolved": false,
         "replies": [], "created_at": "…", "updated_at": "…" }
-      // NOTE: snake_case anchor. Anchored by block_index (+ quote/prefix/suffix) — Pro must
+      // NOTE: snake_case anchor. New bundles may include optional block_id/end_block_id;
+      // block_index (+ quote/prefix/suffix) remains the portable fallback — Pro must
       // re-anchor to a scene position after the blocks→scenes conversion.
     ],
     "psyke": {                        // the story bible — same core subsystem as Pro
@@ -67,7 +72,7 @@ Extension **`.lfbundle`**, a single JSON object:
 
 Robustness:
 - Validate `format === "logosforge-project-bundle"`; reject other files with a friendly error.
-- Treat a missing/empty `outline`, `comments`, or `psyke.elements` as empty (older/small bundles).
+- Require `project.manuscript.blocks`; reject malformed sections before creating a project. Treat a missing/empty `settings`, `outline`, `comments`, or `psyke.elements` as empty (older/small bundles).
 - Be tolerant of a future `version` bump (same top-level shape).
 
 ## Reuse — what already exists (don't reinvent)
@@ -87,8 +92,9 @@ Prefer **client-side orchestration in `pro-shared-ui` reusing existing endpoints
 2. **Parse + validate** the bundle (format/version; friendly error toast on mismatch / bad JSON).
 3. **Manuscript → new project + scenes:** call `api.importWhiteboard({ title: project.title, mode: project.mode, blocks: project.manuscript.blocks })`. Capture the returned **new `projectId`**. (If `importWhiteboard` doesn't yet return the id, make it return it — a Pro-adapter/route tweak, not a Whiteboard change.)
 4. **PSYKE → new project:** for each `project.psyke.elements[i]`, call the Pro PSYKE create endpoint scoped to `projectId`, mapping `{ type: el.entry_type, name: el.name, description: el.description, notes: el.notes, aliases: el.aliases }`. Sequential; skip (don't abort) any single failure.
-5. **Finish:** refresh the project list, open the new project, toast `Imported "<title>" — N scenes, M characters`.
-6. **Robustness:** try/catch; if the manuscript import fails, abort before PSYKE and report. (For all-or-nothing, add the optional consolidated core endpoint below.)
+5. **Settings → new project:** preserve `project.settings` under `whiteboard_document_settings` in the new project's generic settings bag. Do not pretend Pro already applies controls it does not expose.
+6. **Finish:** refresh the project list, open the new project, and report created plus skipped/deferred counts.
+7. **Robustness:** validate before writing; if scene creation fails the core compensates by deleting the partial project. Individual later PSYKE/outline failures remain non-fatal but must be counted visibly.
 
 ### Optional consolidated endpoint (only if you want atomicity)
 Add `POST /import/project-bundle` in the core that calls `import_whiteboard_document` then creates the PSYKE entries in one transaction, returning `{ projectId, scenes, characters }`. Cleaner + atomic, but more surface. The client-orchestration path above is the low-risk default. If you touch the core, follow `logosforge/CLAUDE.md`.

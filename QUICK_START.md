@@ -8,14 +8,14 @@ A calm, database-backed writing workstation for **novels, screenplays, graphic n
 
 ## Getting your bearings
 
-- **Documents** — your work lives in the app, not in loose files, and it **auto-saves** continuously. Manage everything from the **File** menu: *New / Open / Rename / Delete Document*. The project name at the top is also a quick document switcher.
+- **Documents** — your work lives in the app, not in loose files, and it **auto-saves** continuously. Each document keeps its own manuscript, narrative/format settings, outline, comments, and PSYKE. Manage everything from the **File** menu: *New / Open / Rename / Delete Document*.
 - **Writing modes** — the **Mode** dropdown reformats the current document live: **Novel**, **Screenplay** (Fountain), **Graphic Novel**, or **Stage Play**. It asks first if the page already has text, since the reformat is permanent.
 - **The three surfaces** — the **Editor** (centre) is where you write; the **Outline** (left) holds your manual story structure; the **Story Map** (bottom) is a visual overview derived from the document.
-- **Outline** — build structure by hand — **Acts, Chapters, Scenes, Beats** — with drag-to-reorder, colours, and status. **+ Add ▾** inserts a typed item (auto-nested) or applies a **writing-method template** (Three-Act, Save the Cat!, Hero's Journey, and more).
+- **Outline** — build structure by hand — **Acts, Chapters, Scenes, Beats** — with drag-to-reorder, colours, and status. **+ Add ▾** inserts a typed item (auto-nested) or applies a **writing-method template** (Three-Act, Save the Cat!, Hero's Journey, and more). Use a row's **⋯ → Link to cursor position** for a stable manuscript anchor and live “you are here” breadcrumb.
 - **PSYKE — the story bible** — keep **characters, places, objects, lore, and themes** per project. PSYKE is scoped to each document, so two projects never share a cast.
 - **Comments** — highlight any text and click **Comment** to leave a threaded note pinned to that passage. Resolve them when handled.
-- **AI — Billy & Logos** — **Billy** is a hovering chat assistant; **Logos** works inline and in context. Point them at your provider (LM Studio, Ollama, OpenAI, Anthropic) in **Settings ⚙** (top-right).
-- **Export & backup** — **File → Export → Export Project (.lfbundle)** saves an entire project — manuscript, outline, comments, and PSYKE — as one file. That's your backup, and the file you hand to LogosForge Pro. Plain Text, Markdown, Fountain, and PDF export too.
+- **AI — Billy & Logos** — **Billy** is a hovering chat assistant; **Logos** works inline and in context. Point them at your provider (LM Studio, Ollama, OpenAI, Anthropic, OpenRouter) in **Settings ⚙** (top-right).
+- **Export & backup** — **File → Export → Export Project (.lfbundle)** saves an entire project — manuscript, document settings, outline, comments, and PSYKE — as one file. That's your backup, and the file you hand to LogosForge Pro. Whiteboard aborts rather than writing an incomplete bundle, and keeps two automatic local backup generations for manuscript, outline, and comments. Plain Text, Markdown, Fountain, and PDF export too.
 
 ---
 
