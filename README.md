@@ -24,7 +24,13 @@ Workflows live in `.github/workflows/`. Each freezes the Python backend/core wit
 | `release-whiteboard-linux.yml` | Whiteboard — Linux x64 (AppImage) | tag `whiteboard-v*` — hosted `ubuntu-latest` |
 | `release-windows.yml` | Pro — Windows | tag `v*` |
 
-Cutting a release: `git tag whiteboard-v0.1.0 && git push origin whiteboard-v0.1.0` (or run the workflow manually via *Actions → Run workflow* for artifacts without a Release). The macOS job needs the self-hosted Intel Mac runner online (repo *Settings → Actions → Runners*) with **Python 3.11+** installed (Homebrew or python.org) — the workflow discovers it on the Mac rather than downloading one, since `actions/setup-python` can't install onto a self-hosted Mac.
+Whiteboard release tags use the form **`whiteboard-vX.Y.Z`** and must match the
+version in `whiteboard-desktop/desktop/package.json`. Do not reuse or move a
+published tag. For the version bump, release notes, validation, tag, manual
+workflow, and recovery procedures, follow
+**[whiteboard-desktop/RELEASING.md](whiteboard-desktop/RELEASING.md)**. The macOS
+job needs a self-hosted Intel Mac runner labelled `self-hosted`, `macOS`, and
+`X64`, running macOS 13 Ventura or newer with Python 3.11+ installed.
 
 ## Local development
 
@@ -35,4 +41,4 @@ Cutting a release: `git tag whiteboard-v0.1.0 && git push origin whiteboard-v0.1
 
 ## Status
 
-**Alpha.** Desktop builds are currently **unsigned** — Windows SmartScreen and macOS Gatekeeper will warn (on macOS, clear quarantine with `xattr -cr "/Applications/LogosForge Whiteboard.app"`). Whiteboard ships Windows, macOS 13+ Intel, and Linux x64 (AppImage — `chmod +x` and run). macOS arm64/universal, Linux `.deb`, and Pro's Mac/Linux are later milestones.
+**Alpha.** Desktop builds are currently **unsigned** — Windows SmartScreen and macOS Gatekeeper will warn (on macOS, clear quarantine with `xattr -cr "/Applications/LogosForge Whiteboard.app"`). Whiteboard ships Windows, macOS 13+ Intel, and Linux x64 as a self-contained AppImage (`chmod +x "LogosForge Whiteboard-X.Y.Z-x86_64.AppImage"`, then run it). macOS arm64/universal, Linux `.deb`, and Pro's Mac/Linux are later milestones.

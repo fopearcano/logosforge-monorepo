@@ -1,215 +1,147 @@
-# LogosForge Whiteboard — Desktop Shell
+# LogosForge Whiteboard — Desktop
 
-The **Electron + React + TypeScript** desktop app for Whiteboard Free. It ships
-the multi-format TipTap editor, Outline, Comments, PSYKE, LittleBoy/Logos and
-project import/export over an authenticated local FastAPI wrapper.
+The free LogosForge writing workstation, built with Electron, React, TypeScript,
+TipTap, and the shared Python LogosForge core. Packaged builds are self-contained:
+electron-builder includes a PyInstaller-frozen FastAPI wrapper, and that wrapper
+runs the core in-process. End users do not need Node.js or Python.
 
-## Layout
+Whiteboard is alpha software. Its current core is **0.9.0-alpha**.
 
-```
+## What is implemented
+
+- Multiple isolated, autosaving documents with guarded close, reload, switch,
+  delete, external-file save, and recovery paths.
+- Four writing modes: Novel, Screenplay (Fountain editing and paginated preview),
+  Graphic Novel, and Stage Play.
+- A rich TipTap prose editor with formatting, focus mode, themes, zoom, line
+  numbers, folding, and syntax aids.
+- A persisted manual Outline with typed tree nodes, templates, drag/drop,
+  filtering, stable manuscript links, a derived **From Document** navigator, and
+  Story Map.
+- Per-document PSYKE story-bible entries and anchored comment threads.
+- Billy chat and Logos inline assistance through configurable local or cloud AI
+  providers. AI is optional; no provider is contacted until the user configures
+  one.
+- Import from text, Markdown, Fountain, Final Draft, and `.logosforge`; export to
+  text, Markdown, Fountain, HTML, JSON, `.logosforge`, comment reports, PDF, and
+  complete `.lfbundle` project snapshots. `.lfbundle` import/restoration is
+  currently handled by LogosForge Pro, not Whiteboard.
+- Windows x64 installer and portable builds, macOS 13+ Intel DMG, and Linux x64
+  AppImage release targets.
+
+The app's status bar reports `Backend: Connecting…`, `Connected`, or
+`Unavailable`. A healthy release reports **API v1.0.0 · core 0.9.0-alpha**.
+
+## Architecture
+
+```text
 desktop/
 ├── electron/
-│   ├── main.ts            # window + app lifecycle, wires backend status to the UI
-│   ├── preload.ts         # contextBridge — exposes a tiny, typed IPC surface
-│   └── backend-manager.ts # start/verify backend, poll /health, report status
+│   ├── main.ts             # window lifecycle, file IPC, persistence fences
+│   ├── preload.ts          # small typed contextBridge surface
+│   └── backend-manager.ts  # launches and verifies the local backend
 ├── renderer/
 │   ├── src/
-│   │   ├── main.tsx
-│   │   ├── App.tsx
-│   │   ├── api/backend.ts # typed bridge to the main process (+ browser fallback)
-│   │   ├── features/      # editor, outline, comments, PSYKE, AI, files
+│   │   ├── api/            # renderer-to-main/backend bridge
+│   │   ├── features/       # editor, outline, comments, PSYKE, AI, files
 │   │   └── styles/
-│   ├── index.html
 │   └── vite.config.mts
+├── tests/                  # main-process and renderer contract regressions
+├── electron-builder.yml
 └── package.json
+
+../backend/
+├── app/                    # thin Whiteboard API and local persistence
+├── tests/
+└── logosforge-whiteboard-backend.spec
 ```
 
-## Prerequisites
+The Electron main process binds the backend to loopback, selects a free port if
+the default is occupied, and accepts an explicitly configured port only when it
+is available. Every managed process gets a random Bearer token and instance
+nonce, so the app neither trusts nor terminates an unrelated listener. The
+renderer receives no Node.js integration: `contextIsolation`, sandboxing, frame
+validation, narrow IPC methods, and explicit file-path grants remain enabled.
 
-- Node.js 22.12+ and npm
-- The backend from `../backend` (Python 3.11+). In development the desktop app
-  auto-starts it using `../backend/.venv` if present.
+User data defaults to `~/.logosforge` (`%USERPROFILE%\.logosforge` on Windows).
+Set `LOGOSFORGE_DATA_DIR` and `LOGOSFORGE_DB_PATH` to isolate a development or
+test run. `LOGOSFORGE_HOST` and `LOGOSFORGE_PORT` override the loopback endpoint;
+an explicit port is strict.
 
-## 1. Install frontend dependencies
+## Development setup
+
+Prerequisites are **Node.js 22.12+**, npm, and **Python 3.11+**. From the
+monorepo root, create the backend environment and install both the shared core
+and wrapper dependencies:
 
 ```bash
-cd desktop
+python -m venv whiteboard-desktop/backend/.venv
+whiteboard-desktop/backend/.venv/bin/python -m pip install -e "./logosforge[export]" -r whiteboard-desktop/backend/requirements.txt
+```
+
+On Windows, use
+`whiteboard-desktop\backend\.venv\Scripts\python.exe` in the second command.
+Then install the desktop dependencies and start the app:
+
+```bash
+cd whiteboard-desktop/desktop
 npm install
-```
-
-## 2. Run the backend
-
-The desktop app will **auto-start** the backend in development (it looks for
-`../backend/.venv`), so the one-time setup is just creating that venv:
-
-```bash
-cd ../backend
-python3 -m venv .venv
-source .venv/bin/activate            # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-For browser-only renderer development, you can also run the wrapper yourself:
-
-```bash
-# from backend/, with the venv active
-uvicorn app.main:app --host 127.0.0.1 --port 8777
-```
-
-Override host/port with `LOGOSFORGE_HOST` / `LOGOSFORGE_PORT` (defaults
-`127.0.0.1:8777`). If the default port is occupied, Electron selects another
-free local port; an explicit `LOGOSFORGE_PORT` remains strict and reports a
-clear error instead of silently changing it.
-
-## 3. Run the Electron app
-
-```bash
-cd desktop
 npm run dev
 ```
 
-This starts the Vite dev server (renderer) and launches Electron once the dev
-server is ready. The backend manager starts the wrapper from `../backend`,
-verifies its service identity and one-time nonce, then reports status to the
-window.
-
-### Production preview (optional)
+Electron automatically launches the wrapper from `../backend/.venv`. For a
+browser-only renderer session, start the wrapper yourself from
+`whiteboard-desktop/backend`:
 
 ```bash
-npm run preview     # builds the renderer + electron, then runs with --prod
+.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8777
 ```
 
-### Minimal packaging smoke (optional)
+Use `.venv\Scripts\python.exe` on Windows.
+
+## Verification commands
+
+Run these from `whiteboard-desktop/desktop`:
 
 ```bash
-npm run pack        # builds, then electron-builder --dir -> release/ (unpacked app)
+npm test
+npm run build
+npm audit --audit-level=moderate
 ```
 
-Packages only the Electron shell (no installer, no bundled backend) — see
-`../docs/PRO_TODO.md`.
-
-### Type-check
+Backend checks run from the monorepo root with the backend venv:
 
 ```bash
-npm run typecheck
+whiteboard-desktop/backend/.venv/bin/python -m pytest whiteboard-desktop/backend/tests -q
+whiteboard-desktop/backend/.venv/bin/python -m compileall -q whiteboard-desktop/backend/app
+whiteboard-desktop/backend/.venv/bin/python -m pip check
 ```
 
-## What you should see
+## Packaging
 
-- Window titled **LogosForge Whiteboard**.
-- A bottom status bar: a colored dot + `Backend: Connecting… / Connected /
-  Unavailable`, and `API v1.0.0 · core 0.1.0` once connected.
-- A central **writing sheet** (the TipTap editor) with a save indicator
-  (`Saving… / Saved / Save failed`) at the top-right.
-- A small **Writing Mode** dropdown in the status line (Novel, Screenplay, …)
-  with the mode's structural vocabulary.
-- A hideable **Outline** panel on the left (toggle with `☰` or Ctrl/Cmd+Shift+O).
-- A **PSYKE** panel (story-bible search) — open with the `PSYKE` button or
-  Ctrl/Cmd+Shift+P; type to search, click a result for a simple detail view.
-- A **Logos** inline assistant — press Ctrl/Cmd+K in the editor to open a
-  floating box at the cursor; run a quick action and Replace/Insert the result.
+`electron-builder.yml` always expects a native frozen backend at
+`../backend/dist/logosforge-whiteboard-backend`; build it on the target operating
+system before invoking electron-builder. PyInstaller output is not portable
+between Windows, macOS, and Linux.
 
-## Editor (Phase 3)
+After the sidecar exists:
 
-The writing surface is a [TipTap](https://tiptap.dev) (ProseMirror) editor — the
-editor technology chosen in the architecture report — under
-`renderer/src/features/whiteboard/`:
+```bash
+npm run pack        # unpacked application under release/
+npm run dist:win    # Windows x64 NSIS + portable executables
+npm run dist:mac    # macOS 13+ Intel DMG
+npm run dist:linux  # Linux x64 AppImage
+```
 
-| File | Role |
-|---|---|
-| `WhiteboardPage.tsx` | Composes load/save state + editor + save indicator; loading/error states. |
-| `WhiteboardEditor.tsx` | The TipTap editor + block ↔ ProseMirror mapping. |
-| `useWhiteboardDocument.ts` | Loads `GET /api/whiteboard`, serializes manuscript + per-document settings through one `PUT` autosave queue (700 ms debounce), tracks save status. |
-| `whiteboardApi.ts` | Frontend HTTP client for the whiteboard endpoints. |
-| `types.ts` | Shared DTO types. |
+These commands package the Electron shell **and** the bundled backend/core. The
+release workflows build the native backend first and then run the appropriate
+platform command. See [../RELEASING.md](../RELEASING.md) for the versioned,
+multi-platform release procedure and
+[../scripts/validate-macos.sh](../scripts/validate-macos.sh) for local validation
+on the Intel Mac runner.
 
-It is intentionally minimal — a blank sheet with **paragraphs, headings
-(`#` / `##` / `###`), and undo/redo**. Inline marks (bold/italic) and lists are
-off for now because the backend persists plain text per block; richer content
-(canonical ProseMirror JSON) is a later milestone, so **what you see is exactly
-what is saved**. The editor loads once the backend reports connected and
-autosaves on edit.
+## Scope
 
-## Outline (Phase 4)
-
-A simple, hideable Outline panel on the left, under
-`renderer/src/features/outline/` (`OutlinePanel`, `useOutline`, `outlineApi`,
-`types`). It lists the document structure from **`GET /api/outline`** (headings,
-indented by level) and refreshes after each save.
-
-- **Toggle:** the `☰` button in the title bar, or **Ctrl/Cmd+Shift+O**.
-- **Hidden = gone:** when off, the panel is removed entirely (no collapsed rail)
-  and the editor expands to fill the space.
-- Clicking an item scrolls the editor to that heading.
-
-Minimal by design: a flat indented list — no drag/drop, no tree management, no
-Pro dockable-panel behavior.
-
-## Writing Modes (Phase 5)
-
-The five StoryPlanner Writing Modes (Novel, Screenplay, Graphic Novel, Stage
-Script, Series) are loaded from **`GET /api/writing-modes`** and selectable from
-a small keyboard-accessible dropdown in the editor's status line, under
-`renderer/src/features/writingModes/` (`WritingModeSelector`, `useWritingModes`,
-`writingModesApi`, `types`).
-
-- Selecting a mode persists it on the document (`PUT /api/whiteboard { mode }`,
-  partial update) and shows the mode's structural vocabulary (e.g. *Acts /
-  Sequences / Scenes*); the dropdown tooltip shows its medium constraints.
-- The editor reacts via a `data-writing-mode` attribute on the writing surface —
-  the clean boundary for future per-mode element grammars. Today Screenplay and
-  Stage Script switch the surface to a monospaced typeface (a real convention).
-- Only StoryPlanner-derived modes are used; none are invented. The backend
-  already serves the modes and normalizes the document mode, so no backend
-  change was needed. Full per-mode element formatting is deferred.
-
-## PSYKE (Phase 6)
-
-Lightweight access to the PSYKE story bible, under
-`renderer/src/features/psyke/` (`PsykeWindow`, `PsykeSearch`, `usePsykeSearch`,
-`psykeApi`, `types`). It opens as a simple floating panel on the right.
-
-- **Open/close:** the `PSYKE` title-bar button or **Ctrl/Cmd+Shift+P** (Esc also
-  closes). If text is selected in the editor when you open it, the search box is
-  pre-filled with that selection (contextual lookup).
-- **Search → list → detail:** queries **`GET /api/psyke/search?q=`** (matches
-  names and aliases), shows a result list with type badges, and a simple detail
-  view (name / type / aliases) on click.
-- Minimal by design: **no graph visualization, no Pro Codex workspace, no full
-  dockable panel system.**
-
-> The backend currently serves a few **placeholder sample entries** so search is
-> demonstrable; a persistent, user-populated PSYKE store arrives later.
-
-## Logos inline assistant (Phase 7)
-
-Logos is an inline, Codex-style assistant **embedded in the writing surface**
-(not a chat panel), under `renderer/src/features/logos/` (`LogosFloatingBox`,
-`useLogosInline`, `logosApi`, `logosActions`, `types`).
-
-- **Open:** press **Ctrl/Cmd+K** in the editor — a floating box appears at the
-  cursor / selection (Esc or Ctrl/Cmd+K again closes).
-- **Context captured:** the selected text, the surrounding block, and the
-  current Writing Mode are sent to **`POST /api/logos/inline`**.
-- **Actions:** Suggest, Rewrite, Expand, Explain, Summarize, **Connect**
-  (searches PSYKE for entities in the selection), and **Mode pass** — plus a
-  free-text prompt.
-- **Apply:** results apply back into the document via ProseMirror transactions
-  (**Replace** the selection / **Insert below** / Copy / Dismiss).
-- **Graceful states:** thinking / error / placeholder note.
-- **Streaming-ready:** the backend currently returns a single response (the
-  service is an offline placeholder); the transport has a streaming seam and the
-  box renders output reactively, so wiring a real provider/stream needs no UI
-  change.
-
-> The backend Logos service is an offline, deterministic **placeholder** (no LLM
-> yet); a provider transport is wired in a later milestone.
-
-## Notes & scope
-
-- The backend manager stops the backend on app close **only if the app started
-  it** (an externally-run backend is left alone).
-- Production packaging (electron-builder) and bundling a frozen backend are a
-  later milestone; `--prod` here just loads the built renderer from disk.
-- Out of scope (Pro): dashboard, project hub, timeline, graph, analytics, Pro
-  dockable workspace, advanced HUD visuals.
+Whiteboard intentionally omits Pro's dashboard, project hub, timeline, graph,
+analytics, voice room, and dockable Studio workspace. Those are product-tier
+boundaries, not missing Whiteboard packaging work.

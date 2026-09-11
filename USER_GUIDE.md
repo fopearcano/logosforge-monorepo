@@ -34,8 +34,9 @@ This is the deep guide. For a one-page cheat sheet, see **[QUICK_START.md](QUICK
 
 Download the build for your platform from the Releases page:
 
-- **Windows** — the installer (`LogosForge.Whiteboard-<version>-x64.exe`) or the portable build (`…-x64-portable.exe`).
-- **macOS (Intel, macOS 13 Ventura or newer)** — the disk image (`LogosForge.Whiteboard-<version>-x64.dmg`).
+- **Windows** — the installer (`LogosForge Whiteboard-<version>-x64.exe`) or the portable build (`LogosForge Whiteboard-<version>-x64-portable.exe`).
+- **macOS (Intel, macOS 13 Ventura or newer)** — the disk image (`LogosForge Whiteboard-<version>-x64.dmg`).
+- **Linux (x64)** — the AppImage (`LogosForge Whiteboard-<version>-x86_64.AppImage`). Make it executable with `chmod +x "LogosForge Whiteboard-<version>-x86_64.AppImage"`, then run it directly; installation and root access are not required.
 
 The builds are currently **unsigned**, so the OS will warn on first launch:
 
@@ -201,6 +202,10 @@ For fully offline AI, run a local server (LM Studio or Ollama) and point the Bas
 | **Final Draft** (`.fdx`) | Extracts the screenplay and switches to Screenplay. |
 | **LogosForge** (`.logosforge`) | The app's JSON export (manuscript + outline). |
 
+Whiteboard does **not** currently import or restore `.lfbundle` project bundles.
+Those bundles are the migration/archive format consumed by **LogosForge Pro**;
+see [Moving a project to LogosForge Pro](#16-moving-a-project-to-logosforge-pro).
+
 ---
 
 ## 12. Export & backup
@@ -209,7 +214,7 @@ For fully offline AI, run a local server (LM Studio or Ollama) and point the Bas
 
 | Format | Contains |
 |---|---|
-| **Export Project** (`.lfbundle`) | **The whole project** — manuscript, narrative/format settings, outline, comments, and PSYKE — in one file. Your backup, and the file you hand to LogosForge Pro. |
+| **Export Project** (`.lfbundle`) | A complete portable snapshot — manuscript, narrative/format settings, outline, comments, and PSYKE — for archiving or importing into LogosForge Pro. Whiteboard cannot import it yet. |
 | Text / Markdown / Fountain | The manuscript as text. |
 | HTML | A styled, self-contained web page of the manuscript. |
 | JSON | Title, mode, and raw blocks. |
@@ -217,7 +222,7 @@ For fully offline AI, run a local server (LM Studio or Ollama) and point the Bas
 | Comments | A Markdown report of all comments, grouped open/resolved. |
 | PDF | The print path — a paginated script for screenplays, plain print otherwise. |
 
-For a true "save everything" file, use **Export Project (.lfbundle)** — it's the only single file that captures document settings, outline, comments, *and* characters alongside the prose. Whiteboard aborts this export if any component cannot be read; it never reports success for a bundle that silently dropped PSYKE or damaged local state.
+For a true "save everything" snapshot, use **Export Project (.lfbundle)** — it's the only single file that captures document settings, outline, comments, *and* characters alongside the prose. Whiteboard aborts this export if any component cannot be read; it never reports success for a bundle that silently dropped PSYKE or damaged local state. To restore the bundle as a working project, import it into **LogosForge Pro**. To restore Whiteboard itself, restore the `~/.logosforge` data folder instead.
 
 ---
 
@@ -303,7 +308,7 @@ Everything you write lives under one folder in your home directory:
 
 (On Windows, `~` is `%USERPROFILE%`.)
 
-**To back up or move your entire workspace:** copy the whole `~/.logosforge` folder. **To back up a single project as a portable file:** use **File → Export → Export Project (.lfbundle)**.
+**To back up, move, or restore your Whiteboard workspace:** copy the whole `~/.logosforge` folder while Whiteboard is closed. **To archive a single project for migration to Pro:** use **File → Export → Export Project (.lfbundle)**. Whiteboard does not currently import `.lfbundle` files itself.
 
 For manuscript, outline, and comment JSON, Whiteboard keeps the two preceding
 versions beside the current file as `.bak` and `.bak.1`. If the current copy is
@@ -321,7 +326,11 @@ Whiteboard and Pro are separate apps. To graduate a project to Pro:
 1. In Whiteboard: **File → Export → Export Project (.lfbundle)**.
 2. In Pro: import that `.lfbundle`.
 
-The bundle carries your manuscript (converted from blocks to scenes on import), document settings, PSYKE characters, outline, and comments — so the whole project moves, not just the prose. Pro preserves Whiteboard-only settings in the imported project's settings store even before it exposes equivalent controls.
+Pro converts the manuscript blocks to scenes, imports the document settings,
+PSYKE entries, outline, and outline links, and preserves Whiteboard-only settings
+in the imported project's settings store. Comments remain archived in the bundle
+and are counted in Pro's import report, but span-anchored comment threads are not
+yet recreated in the Pro project.
 
 ---
 
