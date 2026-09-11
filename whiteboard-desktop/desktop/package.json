@@ -47,6 +47,7 @@
     "test:import-export": "esbuild renderer/src/features/files/importExportTests.ts --bundle --format=esm --platform=node --log-level=error --outfile=dist/import-export-test.mjs && node dist/import-export-test.mjs",
     "test:littleboy": "esbuild renderer/src/features/littleboy/littleboyTests.ts --bundle --format=esm --platform=node --log-level=error --outfile=dist/littleboy-test.mjs && node dist/littleboy-test.mjs",
     "test:settings": "esbuild renderer/src/features/settings/settingsTests.ts --bundle --format=esm --platform=node --log-level=error --outfile=dist/settings-test.mjs && node dist/settings-test.mjs",
+    "test:packaged": "node scripts/packaged-acceptance.mjs",
     "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
@@ -67,6 +68,7 @@
     "electron-builder": "^26.15.3",
     "esbuild": "^0.28.2",
     "nodemon": "^3.1.7",
+    "playwright-core": "1.63.0",
     "typescript": "^5.5.4",
     "vite": "^8.2.2",
     "wait-on": "^8.0.1"

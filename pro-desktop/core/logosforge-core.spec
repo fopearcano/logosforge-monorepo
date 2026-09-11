@@ -12,7 +12,43 @@
 # extras: `pip install ./logosforge[export] pyinstaller` (fastapi/uvicorn/
 # sqlmodel + reportlab/python-docx for export — no PySide6/torch/whisper).
 
+import os
+import sys
+
 from PyInstaller.utils.hooks import collect_all, collect_submodules, collect_data_files
+
+# Resolve the core package from this checkout, not from the build environment's
+# installed wheel.  Otherwise an incremental local build can silently freeze an
+# older ``logosforge`` copy even though the repository source has changed.
+CORE_ROOT = os.path.abspath(os.path.join(SPECPATH, "..", "..", "logosforge"))
+CORE_PKG = os.path.join(CORE_ROOT, "logosforge")
+
+
+def core_submodules():
+    """Enumerate headless core modules from source without importing PySide6 UI."""
+    if not os.path.isdir(CORE_PKG):
+        raise RuntimeError(f"LogosForge source package is missing: {CORE_PKG}")
+    mods = set()
+    for dirpath, dirnames, filenames in os.walk(CORE_PKG):
+        rel = os.path.relpath(dirpath, CORE_PKG)
+        parts = [] if rel == "." else rel.split(os.sep)
+        dirnames[:] = [
+            dirname
+            for dirname in dirnames
+            if dirname != "__pycache__" and not (not parts and dirname == "ui")
+        ]
+        for filename in filenames:
+            if filename.endswith(".py"):
+                tail = [] if filename == "__init__.py" else [filename[:-3]]
+                mods.add(".".join(["logosforge", *parts, *tail]))
+    if "logosforge.data_export" not in mods:
+        raise RuntimeError(f"LogosForge source enumeration missed data_export: {CORE_PKG}")
+    print(
+        f"[spec] core pkg={CORE_PKG!r} exists={os.path.isdir(CORE_PKG)} "
+        f"count={len(mods)} has_data_export={'logosforge.data_export' in mods}",
+        file=sys.stderr,
+    )
+    return sorted(mods)
 
 datas = []
 binaries = []
@@ -29,7 +65,10 @@ for pkg in ("uvicorn", "fastapi", "starlette", "sqlalchemy", "pydantic",
 
 # Our own package + sqlmodel are imported partly via dynamic registries
 # (providers, deterministic handlers, proactive detectors, route modules).
-hiddenimports += collect_submodules("logosforge")
+# Enumerate LogosForge from the checkout so the frozen app cannot accidentally
+# embed a stale site-packages copy.  UI is omitted from this explicit module
+# enumeration (ordinary static imports may still be analyzed); voice remains.
+hiddenimports += core_submodules()
 hiddenimports += collect_submodules("sqlmodel")
 
 # certifi ships cacert.pem (used for any HTTPS the providers make).
@@ -64,7 +103,7 @@ block_cipher = None
 
 a = Analysis(
     ["core_entry.py"],
-    pathex=[],
+    pathex=[CORE_ROOT],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,

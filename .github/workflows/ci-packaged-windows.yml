@@ -1,0 +1,183 @@
+name: CI — Packaged Whiteboard to Pro (Windows)
+
+on:
+  pull_request:
+    paths:
+      - "logosforge/**"
+      - "logosforge-ui-contracts/**"
+      - "pro-shared-ui/**"
+      - "pro-desktop/**"
+      - "whiteboard-desktop/**"
+      - ".github/workflows/ci-packaged-windows.yml"
+      - ".github/workflows/release-whiteboard-windows.yml"
+      - ".github/workflows/release-windows.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "logosforge/**"
+      - "logosforge-ui-contracts/**"
+      - "pro-shared-ui/**"
+      - "pro-desktop/**"
+      - "whiteboard-desktop/**"
+      - ".github/workflows/ci-packaged-windows.yml"
+      - ".github/workflows/release-whiteboard-windows.yml"
+      - ".github/workflows/release-windows.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-packaged-windows-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  packaged-writer-journey:
+    name: Packaged Whiteboard → Pro writer journey
+    runs-on: windows-latest
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: bash
+    env:
+      CI: "true"
+      PYTHONUTF8: "1"
+      LOGOSFORGE_PACKAGED_ACCEPTANCE_ROOT: ${{ runner.temp }}/logosforge-packaged-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+
+    steps:
+      - name: Checkout monorepo without credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Verify packaged-gate inputs
+        run: |
+          set -euo pipefail
+          for path in \
+            logosforge/pyproject.toml \
+            logosforge-ui-contracts/package.json \
+            pro-shared-ui/package.json \
+            pro-desktop/package.json \
+            pro-desktop/core/logosforge-core.spec \
+            whiteboard-desktop/backend/requirements.txt \
+            whiteboard-desktop/backend/logosforge-whiteboard-backend.spec \
+            whiteboard-desktop/desktop/package.json \
+            whiteboard-desktop/desktop/scripts/packaged-acceptance.mjs
+          do
+            test -e "$path" || { echo "::error::Missing required monorepo path: $path"; exit 1; }
+          done
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            logosforge-ui-contracts/package-lock.json
+            pro-shared-ui/package-lock.json
+            whiteboard-desktop/desktop/package-lock.json
+            pro-desktop/package-lock.json
+
+      - name: Create the shared packaging venv
+        run: |
+          set -euo pipefail
+          python -m venv acceptance-venv
+          ./acceptance-venv/Scripts/python.exe -m pip install --upgrade pip
+          ./acceptance-venv/Scripts/python.exe -m pip install \
+            "./logosforge[export]" \
+            -r whiteboard-desktop/backend/requirements.txt \
+            pytest \
+            "pyinstaller==6.22.2"
+
+      - name: Test Python sources and installed dependencies
+        run: |
+          set -euo pipefail
+          ./acceptance-venv/Scripts/python.exe -m pytest whiteboard-desktop/backend/tests -q -p no:cacheprovider
+          ./acceptance-venv/Scripts/python.exe -m compileall -q logosforge/logosforge whiteboard-desktop/backend/app pro-desktop/core
+          ./acceptance-venv/Scripts/python.exe -m pip check
+
+      - name: Test, build, and audit Whiteboard sources
+        working-directory: whiteboard-desktop/desktop
+        run: |
+          set -euo pipefail
+          npm ci
+          npm test
+          npm run build
+          npm audit --audit-level=moderate
+
+      - name: Test API contracts
+        working-directory: logosforge-ui-contracts
+        run: |
+          set -euo pipefail
+          npm ci
+          npm test
+
+      - name: Test, build, and audit Pro shared UI sources
+        working-directory: pro-shared-ui
+        run: |
+          set -euo pipefail
+          npm ci
+          npm test
+          npm run build
+          npm audit --audit-level=moderate
+
+      - name: Test, build, and audit Pro sources
+        working-directory: pro-desktop
+        run: |
+          set -euo pipefail
+          npm ci
+          npm test
+          npm run build
+          npm audit --audit-level=moderate
+
+      - name: Build fresh Whiteboard backend sidecar
+        working-directory: whiteboard-desktop/backend
+        run: |
+          set -euo pipefail
+          ../../acceptance-venv/Scripts/python.exe -m PyInstaller \
+            logosforge-whiteboard-backend.spec \
+            --noconfirm \
+            --clean \
+            --log-level WARN
+
+      - name: Build fresh Pro core sidecar
+        working-directory: pro-desktop/core
+        run: |
+          set -euo pipefail
+          ../../acceptance-venv/Scripts/python.exe -m PyInstaller \
+            logosforge-core.spec \
+            --noconfirm \
+            --clean \
+            --log-level WARN
+
+      - name: Package unpacked Whiteboard app
+        working-directory: whiteboard-desktop/desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npm run pack
+
+      - name: Package unpacked Pro app
+        working-directory: pro-desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npm run pack
+
+      - name: Run genuine packaged cross-product acceptance
+        working-directory: whiteboard-desktop/desktop
+        run: npm run test:packaged
+
+      - name: Upload packaged-acceptance diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: packaged-windows-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.LOGOSFORGE_PACKAGED_ACCEPTANCE_ROOT }}
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
