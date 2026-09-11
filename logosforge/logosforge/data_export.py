@@ -618,7 +618,7 @@ def to_markdown(data: dict) -> str:
     if data.get("scenes") is not None:
         _md_named_list(lines, "Scenes", [
             {"name": f"{s.get('order_index', '')}. {s.get('title', '')}",
-             "body": s.get("synopsis") or s.get("summary", "")}
+             "body": s.get("content") or s.get("synopsis") or s.get("summary", "")}
             for s in data["scenes"]
         ])
     if data.get("notes") is not None:

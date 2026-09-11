@@ -189,6 +189,8 @@ def test_markdown_handles_full_flat_shape():
     md = to_markdown(build_full_export(db, pid))
     assert "# Test Saga" in md
     assert "## Characters" in md  # flat shape characters render
+    assert "Full opening text" in md
+    assert "Midpoint text" in md
 
 
 # -- CSV ---------------------------------------------------------------------
