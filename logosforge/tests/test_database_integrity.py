@@ -6,12 +6,15 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from logosforge.db import Database
 from logosforge.db.database import (
     DB_SCHEMA_VERSION,
     SQLITE_BUSY_TIMEOUT_MS,
+    UnsupportedDatabaseVersionError,
     _prepare_migration_backup,
 )
 
@@ -47,6 +50,153 @@ def test_first_versioned_upgrade_preserves_exact_pre_migration_copy(tmp_path: Pa
     original_backup = backup.read_bytes()
     Database(str(path))._engine.dispose()
     assert backup.read_bytes() == original_backup
+
+
+def test_future_database_version_is_rejected_without_touching_bytes(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "future.db"
+    future_version = DB_SCHEMA_VERSION + 1
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE future_marker (value TEXT)")
+        conn.execute("INSERT INTO future_marker VALUES ('leave untouched')")
+        conn.execute(f"PRAGMA user_version = {future_version}")
+        conn.commit()
+    original = path.read_bytes()
+
+    with pytest.raises(UnsupportedDatabaseVersionError) as caught:
+        Database(str(path))
+
+    assert caught.value.found == future_version
+    assert caught.value.supported == DB_SCHEMA_VERSION
+    assert path.read_bytes() == original
+    assert not list(tmp_path.glob("future.db.pre-v*.bak"))
+
+
+def test_v2_repairs_legacy_character_psyke_fk_and_detaches_orphans(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "legacy-character.db"
+    seed = Database(str(path))
+    project = seed.create_project("FK repair")
+    entry = seed.create_psyke_entry(project.id, "Linked", "character")
+    linked = seed.create_character(project.id, "Linked")
+    orphan = seed.create_character(project.id, "Orphan")
+    seed.set_character_psyke_entry(linked.id, entry.id)
+    seed._engine.dispose()
+
+    with sqlite3.connect(path) as conn:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        conn.execute("PRAGMA journal_mode=DELETE")
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.executescript(
+            f"""
+            BEGIN;
+            CREATE TABLE character_legacy (
+                id INTEGER NOT NULL,
+                project_id INTEGER NOT NULL,
+                name VARCHAR NOT NULL,
+                description VARCHAR NOT NULL,
+                color VARCHAR NOT NULL,
+                created_at DATETIME NOT NULL,
+                psyke_entry_id INTEGER,
+                PRIMARY KEY (id),
+                FOREIGN KEY(project_id) REFERENCES project (id)
+            );
+            INSERT INTO character_legacy (
+                id, project_id, name, description, color, created_at, psyke_entry_id
+            )
+            SELECT
+                id, project_id, name, description, color, created_at, psyke_entry_id
+            FROM character;
+            DROP TABLE character;
+            ALTER TABLE character_legacy RENAME TO character;
+            UPDATE character SET psyke_entry_id = 999999 WHERE id = {orphan.id};
+            PRAGMA user_version = {DB_SCHEMA_VERSION - 1};
+            COMMIT;
+            """
+        )
+
+    upgraded = Database(str(path))
+    assert upgraded.get_character_by_id(linked.id).psyke_entry_id == entry.id
+    assert upgraded.get_character_by_id(orphan.id).psyke_entry_id is None
+    with upgraded._engine.connect() as conn:
+        character_fks = {
+            (row[2], row[3], row[4])
+            for row in conn.execute(text("PRAGMA foreign_key_list(character)"))
+        }
+        assert ("psykeentry", "psyke_entry_id", "id") in character_fks
+        assert conn.execute(text("PRAGMA foreign_key_check")).fetchall() == []
+    upgraded._engine.dispose()
+
+
+def test_failed_character_fk_rebuild_rolls_back_and_can_retry(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "legacy-character-invalid.db"
+    seed = Database(str(path))
+    project = seed.create_project("Retry repair")
+    character = seed.create_character(project.id, "Incomplete")
+    seed._engine.dispose()
+
+    with sqlite3.connect(path) as conn:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        conn.execute("PRAGMA journal_mode=DELETE")
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.executescript(
+            f"""
+            BEGIN;
+            CREATE TABLE character_legacy (
+                id INTEGER NOT NULL,
+                project_id INTEGER NOT NULL,
+                name VARCHAR NOT NULL,
+                description VARCHAR,
+                color VARCHAR NOT NULL,
+                created_at DATETIME NOT NULL,
+                psyke_entry_id INTEGER,
+                PRIMARY KEY (id),
+                FOREIGN KEY(project_id) REFERENCES project (id)
+            );
+            INSERT INTO character_legacy (
+                id, project_id, name, description, color, created_at, psyke_entry_id
+            )
+            SELECT
+                id, project_id, name, NULL, color, created_at, psyke_entry_id
+            FROM character;
+            DROP TABLE character;
+            ALTER TABLE character_legacy RENAME TO character;
+            PRAGMA user_version = {DB_SCHEMA_VERSION - 1};
+            COMMIT;
+            """
+        )
+
+    with pytest.raises(IntegrityError):
+        Database(str(path))
+
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == DB_SCHEMA_VERSION - 1
+        assert conn.execute(
+            "SELECT description FROM character WHERE id = ?", (character.id,)
+        ).fetchone()[0] is None
+        assert conn.execute(
+            "SELECT 1 FROM sqlite_master"
+            " WHERE type='table' AND name='character__logosforge_v2'"
+        ).fetchone() is None
+        conn.execute(
+            "UPDATE character SET description = '' WHERE id = ?", (character.id,)
+        )
+        conn.commit()
+
+    retried = Database(str(path))
+    assert retried.get_character_by_id(character.id).description == ""
+    with retried._engine.connect() as conn:
+        character_fks = {
+            (row[2], row[3], row[4])
+            for row in conn.execute(text("PRAGMA foreign_key_list(character)"))
+        }
+        assert ("psykeentry", "psyke_entry_id", "id") in character_fks
+        assert conn.execute(text("PRAGMA foreign_key_check")).fetchall() == []
+    retried._engine.dispose()
 
 
 def test_concurrent_backup_creation_is_first_writer_wins(tmp_path: Path) -> None:

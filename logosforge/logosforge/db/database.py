@@ -20,13 +20,24 @@ from pathlib import Path
 from typing import Optional
 from uuid import uuid4
 
-from sqlalchemy import event
+from sqlalchemy import event, text
 from sqlmodel import Session, SQLModel, create_engine, select
 
 
-DB_SCHEMA_VERSION = 1
+DB_SCHEMA_VERSION = 2
 SQLITE_BUSY_TIMEOUT_MS = 5000
 BACKUP_INSTALL_WAIT_SECONDS = 10.0
+
+
+class UnsupportedDatabaseVersionError(RuntimeError):
+    """Raised before a newer database can be changed by an older core."""
+
+    def __init__(self, found: int, supported: int) -> None:
+        super().__init__(
+            f"Database schema version {found} is newer than supported version {supported}"
+        )
+        self.found = found
+        self.supported = supported
 
 
 def _scene_locked(method):
@@ -100,7 +111,7 @@ def _install_backup_once(tmp: Path, backup: Path) -> None:
 
 
 def _prepare_migration_backup(path: Path) -> Path | None:
-    """Create one durable pre-v1 copy before touching an unversioned database."""
+    """Create one durable pre-upgrade copy before touching an older database."""
     if not path.exists() or path.stat().st_size == 0:
         return None
     try:
@@ -135,6 +146,106 @@ def _prepare_migration_backup(path: Path) -> Path | None:
     finally:
         tmp.unlink(missing_ok=True)
     return backup
+
+
+def _repair_character_psyke_foreign_key(conn) -> None:
+    """Rebuild the one released legacy table whose added column lacked its FK."""
+    rows = conn.execute(text("PRAGMA table_info(character)")).fetchall()
+    columns = {row[1] for row in rows}
+    if not rows or "psyke_entry_id" not in columns:
+        return
+    foreign_keys = {
+        (row[2], row[3], row[4])
+        for row in conn.execute(text("PRAGMA foreign_key_list(character)")).fetchall()
+    }
+    if ("psykeentry", "psyke_entry_id", "id") in foreign_keys:
+        return
+    if ("project", "project_id", "id") not in foreign_keys:
+        # Some tests and early development databases used an intentionally
+        # partial table definition. Preserve their existing best-effort
+        # column-add behavior; the released schema lineage always has this FK.
+        return
+
+    # SQLite cannot add a foreign key to an existing column. Rebuild atomically,
+    # preserving every row and detaching only already-orphaned optional links.
+    conn.commit()
+    conn.execute(text("PRAGMA foreign_keys=OFF"))
+    conn.commit()
+    try:
+        # Python's sqlite3 driver does not start a transaction for DDL in its
+        # legacy transaction mode. Begin explicitly so a failed copy or check
+        # rolls the temporary table back along with the rest of the rebuild.
+        conn.exec_driver_sql("BEGIN IMMEDIATE")
+        try:
+            existing_temp = conn.execute(text(
+                "SELECT 1 FROM sqlite_master"
+                " WHERE type='table' AND name='character__logosforge_v2'"
+            )).fetchone()
+            if existing_temp:
+                raise RuntimeError("Reserved migration table character__logosforge_v2 exists")
+            before_count = conn.execute(text(
+                'SELECT COUNT(*) FROM "character"'
+            )).scalar_one()
+            conn.execute(text(
+                """
+                CREATE TABLE character__logosforge_v2 (
+                    id INTEGER NOT NULL,
+                    project_id INTEGER NOT NULL,
+                    name VARCHAR NOT NULL,
+                    description VARCHAR NOT NULL,
+                    color VARCHAR NOT NULL,
+                    psyke_entry_id INTEGER,
+                    created_at DATETIME NOT NULL,
+                    PRIMARY KEY (id),
+                    FOREIGN KEY(project_id) REFERENCES project (id),
+                    FOREIGN KEY(psyke_entry_id) REFERENCES psykeentry (id)
+                )
+                """
+            ))
+            conn.execute(text(
+                """
+                INSERT INTO character__logosforge_v2 (
+                    id, project_id, name, description, color,
+                    psyke_entry_id, created_at
+                )
+                SELECT
+                    c.id, c.project_id, c.name, c.description, c.color,
+                    CASE
+                        WHEN c.psyke_entry_id IS NULL THEN NULL
+                        WHEN EXISTS (
+                            SELECT 1 FROM psykeentry AS p
+                            WHERE p.id = c.psyke_entry_id
+                        ) THEN c.psyke_entry_id
+                        ELSE NULL
+                    END,
+                    c.created_at
+                FROM "character" AS c
+                """
+            ))
+            conn.execute(text('DROP TABLE "character"'))
+            conn.execute(text(
+                "ALTER TABLE character__logosforge_v2 RENAME TO character"
+            ))
+            after_count = conn.execute(text(
+                'SELECT COUNT(*) FROM "character"'
+            )).scalar_one()
+            if after_count != before_count:
+                raise RuntimeError("Character FK migration changed the row count")
+            violations = conn.execute(text(
+                'PRAGMA foreign_key_check("character")'
+            )).fetchall()
+            if violations:
+                raise RuntimeError(
+                    f"Character FK migration left {len(violations)} foreign-key violation(s)"
+                )
+        except Exception:
+            conn.rollback()
+            raise
+        else:
+            conn.commit()
+    finally:
+        conn.execute(text("PRAGMA foreign_keys=ON"))
+        conn.commit()
 
 # Sentinel for partial updates: distinguishes "argument not provided" (leave the
 # column as-is) from an explicit ``None`` (clear a nullable column).
@@ -252,6 +363,19 @@ class Database:
         if file_based:
             db_path = Path(path)
             db_path.parent.mkdir(parents=True, exist_ok=True)
+            if db_path.exists() and db_path.stat().st_size:
+                try:
+                    current_version = _read_user_version(db_path)
+                except sqlite3.DatabaseError:
+                    current_version = None
+                if (
+                    current_version is not None
+                    and current_version > DB_SCHEMA_VERSION
+                ):
+                    raise UnsupportedDatabaseVersionError(
+                        current_version,
+                        DB_SCHEMA_VERSION,
+                    )
             _prepare_migration_backup(db_path)
         if path:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -295,8 +419,15 @@ class Database:
             yield
 
     def _migrate(self) -> None:
-        from sqlalchemy import text
         with self._engine.connect() as conn:
+            current_version = int(
+                conn.execute(text("PRAGMA user_version")).fetchone()[0]
+            )
+            if current_version > DB_SCHEMA_VERSION:
+                raise UnsupportedDatabaseVersionError(
+                    current_version,
+                    DB_SCHEMA_VERSION,
+                )
             rows = conn.execute(text("PRAGMA table_info(psykeentry)")).fetchall()
             columns = {row[1] for row in rows}
             if rows and "details_json" not in columns:
@@ -476,6 +607,7 @@ class Database:
                     "ALTER TABLE character ADD COLUMN psyke_entry_id INTEGER"
                 ))
                 conn.commit()
+            _repair_character_psyke_foreign_key(conn)
 
             conn.execute(text(f"PRAGMA user_version = {DB_SCHEMA_VERSION}"))
             conn.commit()
