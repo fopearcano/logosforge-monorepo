@@ -49,9 +49,9 @@ jobs:
       - name: Checkout monorepo
         uses: actions/checkout@v4
 
-      - name: Install Linux audio runtime
+      - name: Install Linux audio and Qt runtimes
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libportaudio2
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libportaudio2
 
       - name: Set up Python
         uses: actions/setup-python@v5
