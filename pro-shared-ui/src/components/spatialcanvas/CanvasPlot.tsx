@@ -23,18 +23,18 @@ const colorOf = (i: number) => PALETTE[i % PALETTE.length] ?? PALETTE[0]!;
 function Block({ left, top, width, topColor, title, badge, badgeColor, body, selected = false, onClick }: { left: number; top: number; width: number; topColor: string; title: string; badge: string; badgeColor: string; body: string; selected?: boolean; onClick?: () => void }) {
   const handle = (s: CSSProperties): CSSProperties => ({ position: "absolute", width: 6, height: 6, background: "var(--accent)", ...s });
   return (
-    <div onClick={onClick} style={{ position: "absolute", left, top, width, zIndex: selected ? 5 : 4, cursor: "pointer", border: selected ? "1px solid var(--accent)" : "1px solid var(--line2)", borderTop: `2px solid ${topColor}`, background: selected ? "var(--raised)" : "var(--raised)", boxShadow: selected ? "0 0 18px rgba(76,194,255,.25)" : "0 8px 24px rgba(0,0,0,.5)" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 8px", borderBottom: "1px solid var(--line2)" }}>
+    <button type="button" onClick={onClick} aria-pressed={selected} aria-label={`Select plot block ${title}`} style={{ position: "absolute", left, top, width, zIndex: selected ? 5 : 4, cursor: "pointer", border: selected ? "1px solid var(--accent)" : "1px solid var(--line2)", borderTop: `2px solid ${topColor}`, background: "var(--raised)", boxShadow: selected ? "0 0 18px rgba(76,194,255,.25)" : "0 8px 24px rgba(0,0,0,.5)", color: "inherit", font: "inherit", padding: 0, textAlign: "left" }}>
+      <span style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 8px", borderBottom: "1px solid var(--line2)" }}>
         <span style={{ color: selected ? "var(--accent)" : "var(--txt3)", fontSize: 9 }}>⠿</span>
         <span title={title} style={{ fontSize: 9, color: "var(--strong)", flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{title}</span>
         <span style={{ fontSize: 7, color: badgeColor, whiteSpace: "nowrap" }}>{badge}</span>
-      </div>
-      <div style={{ padding: 8, fontSize: 9, color: "var(--txt2)", lineHeight: 1.4, height: 52, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical" }}>{body}</div>
+      </span>
+      <span style={{ padding: 8, fontSize: 9, color: "var(--txt2)", lineHeight: 1.4, height: 52, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical" }}>{body}</span>
       {selected && <>
         <div style={handle({ left: -3, top: -3 })} /><div style={handle({ right: -3, top: -3 })} />
         <div style={handle({ left: -3, bottom: -3 })} /><div style={handle({ right: -3, bottom: -3 })} />
       </>}
-    </div>
+    </button>
   );
 }
 

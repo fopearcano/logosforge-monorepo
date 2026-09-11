@@ -33,13 +33,15 @@ export function CounterpartPanel(props: PanelProps) {
           <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".1em", color: "var(--strong)" }}>COUNTERPART</span>
           <div style={{ display: "flex", gap: 0, border: "1px solid var(--line2)", fontSize: 8, letterSpacing: ".08em" }}>
             {MODES.map((m, i) => (
-              <span
+              <button type="button"
                 key={m}
+                disabled={running}
+                aria-pressed={mode === m}
                 onClick={() => setMode(m)}
-                style={{ padding: "4px 8px", cursor: "pointer", borderLeft: i === 0 ? undefined : "1px solid var(--line2)", color: mode === m ? "var(--on-accent)" : "var(--txt3)", background: mode === m ? "var(--accent)" : undefined, fontWeight: mode === m ? 600 : 400 }}
+                style={{ font: "inherit", border: "none", padding: "4px 8px", cursor: running ? "default" : "pointer", borderLeft: i === 0 ? undefined : "1px solid var(--line2)", color: mode === m ? "var(--on-accent)" : "var(--txt3)", background: mode === m ? "var(--accent)" : "transparent", fontWeight: mode === m ? 600 : 400, opacity: running ? 0.65 : 1 }}
               >
                 {m.toUpperCase()}
-              </span>
+              </button>
             ))}
           </div>
           <div style={{ flex: 1 }} />
@@ -51,17 +53,20 @@ export function CounterpartPanel(props: PanelProps) {
           <div style={{ fontSize: 8, letterSpacing: ".16em", color: "var(--txt3)", marginBottom: 6 }}>SCENE / EXCERPT TO REFLECT ON</div>
           <textarea
             value={sceneText}
+            disabled={running}
             onChange={(e) => setSceneText(e.target.value)}
             placeholder="Paste the scene text or an excerpt…"
+            aria-label="Passage for Counterpart review"
             style={{ width: "100%", height: 64, resize: "vertical", background: "var(--tint)", border: "1px solid var(--line2)", color: "var(--txt)", fontFamily: "'Courier Prime'", fontSize: 12, lineHeight: 1.5, padding: "8px 10px", outline: "none" }}
           />
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
-            <span
-              onClick={canRun ? () => reflect(mode, sceneText) : undefined}
-              style={{ fontSize: 9.5, color: "var(--on-accent)", background: canRun ? "var(--accent)" : "var(--line2)", padding: "6px 13px", fontWeight: 600, letterSpacing: ".08em", cursor: canRun ? "pointer" : "default", boxShadow: canRun ? "0 0 14px rgba(176,124,255,.35)" : undefined }}
+            <button type="button"
+              disabled={!canRun}
+              onClick={() => reflect(mode, sceneText)}
+              style={{ font: "inherit", border: "none", fontSize: 9.5, color: "var(--on-accent)", background: canRun ? "var(--accent)" : "var(--line2)", padding: "6px 13px", fontWeight: 600, letterSpacing: ".08em", cursor: canRun ? "pointer" : "default", boxShadow: canRun ? "0 0 14px rgba(176,124,255,.35)" : undefined }}
             >
               {running ? "REFLECTING…" : `↯ REFLECT · ${mode.toUpperCase()}`}
-            </span>
+            </button>
             <span style={{ fontSize: 8, color: "var(--txt3)", letterSpacing: ".04em" }}>the {mode} stance reads your scene and responds — never rewrites</span>
           </div>
         </div>

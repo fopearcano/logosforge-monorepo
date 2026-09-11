@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { AdaptDTO } from "@logosforge/ui-contracts";
 import type { ShellLayout } from "./shellVars";
 import { useStudio, useNavigate } from "../../adapters/StudioProvider";
+import { createLatestRequestGate } from "../../hooks/latestRequest";
 
 /** Top-bar omnibox — opens the app's command palette. */
 export function CommandPalette({ onOpen }: { onOpen?: () => void }) {
@@ -34,35 +35,78 @@ const MODE_COLOR: Record<string, string> = {
 export function ModeStrip() {
   const { api, projectId } = useStudio();
   const navigate = useNavigate();
+  const requests = useRef(createLatestRequestGate()).current;
+  useEffect(() => { requests.open(); return () => requests.close(); }, [requests]);
+  const projectIdRef = useRef(projectId);
+  projectIdRef.current = projectId;
   const [adapt, setAdapt] = useState<AdaptDTO | null>(null);
-  const refetch = useCallback(() => {
+  const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
+  const [error, setError] = useState("");
+  const loadAdapt = useCallback(async (preserveError = false) => {
     if (projectId == null) { setAdapt(null); return; }
-    api.getAdapt(projectId).then(setAdapt).catch(() => setAdapt(null));
-  }, [api, projectId]);
+    const token = requests.begin("adapt");
+    try {
+      const value = await api.getAdapt(projectId);
+      if (requests.isCurrent(token)) { setAdapt(value); if (!preserveError) setError(""); }
+    } catch (loadError) {
+      if (requests.isCurrent(token)) setError(loadError instanceof Error ? loadError.message : String(loadError));
+    }
+  }, [api, projectId, requests]);
   useEffect(() => {
-    if (projectId == null) { setAdapt(null); return; }
-    let alive = true;
-    api.getAdapt(projectId).then((a) => { if (alive) setAdapt(a); }).catch(() => { if (alive) setAdapt(null); });
-    return () => { alive = false; };
-  }, [api, projectId]);
+    requests.invalidate("adapt");
+    busyRef.current = false;
+    setBusy(false); setAdapt(null); setError("");
+    void loadAdapt(false);
+    return () => requests.invalidate("adapt");
+  }, [loadAdapt, requests]);
+  useEffect(() => {
+    if (projectId == null || typeof api.subscribe !== "function") return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const unsubscribe = api.subscribe(projectId, (event) => {
+      if (["scene_changed", "scenes_changed", "psyke_changed", "outline_changed", "project_data_changed"].includes(event.event)) {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => { void loadAdapt(false); }, 180);
+      }
+    });
+    return () => { if (timer) clearTimeout(timer); unsubscribe?.(); };
+  }, [api, projectId, loadAdapt]);
 
   const mode = adapt?.mode ?? "—";
   const col = MODE_COLOR[adapt?.mode ?? ""] ?? "var(--amber-b)";
   const override = adapt?.override ?? "";
-  const setOverride = (v: string) => {
-    if (projectId == null) return;
-    api.patchAiBehavior(projectId, { adaptive_override: v }).then(() => refetch()).catch(() => {});
+  const setOverride = async (v: string) => {
+    if (projectId == null || busyRef.current) return;
+    const ownerProjectId = projectId;
+    busyRef.current = true;
+    setBusy(true); setError("");
+    try {
+      await api.patchAiBehavior(ownerProjectId, { adaptive_override: v });
+      if (projectIdRef.current === ownerProjectId) await loadAdapt(false);
+    } catch (saveError) {
+      if (projectIdRef.current === ownerProjectId) {
+        setError(saveError instanceof Error ? saveError.message : String(saveError));
+        await loadAdapt(true);
+      }
+    } finally {
+      if (projectIdRef.current === ownerProjectId) {
+        busyRef.current = false;
+        setBusy(false);
+      }
+    }
   };
   const tip = adapt
     ? `Adaptive AI coaching mode — ${override ? `forced to ${override}` : `auto: ${adapt.mode} (from stage ${adapt.stage} × health ${adapt.health})`}. ${adapt.description}`
     : "Adaptive AI coaching mode — auto from stage × health, or override it.";
   return (
-    <div title={tip} style={{ display: "flex", alignItems: "center", gap: 7, height: 26, padding: "0 8px", border: "1px solid var(--line2)", background: "var(--tint)" }}>
+    <div title={error ? `Adaptive mode failed: ${error}` : tip} style={{ display: "flex", alignItems: "center", gap: 7, height: 26, padding: "0 8px", border: `1px solid ${error ? "var(--blocking)" : "var(--line2)"}`, background: "var(--tint)" }}>
       <span style={{ fontSize: 8, letterSpacing: ".2em", color: "var(--txt3)" }}>ADAPTIVE</span>
       <span style={{ width: 7, height: 7, borderRadius: "50%", background: col, boxShadow: `0 0 8px ${col}`, animation: "lf-pulse 2.6s ease-in-out infinite" }} />
       <select
         value={override || "Auto"}
-        onChange={(e) => setOverride(e.target.value === "Auto" ? "" : e.target.value)}
+        disabled={busy || adapt == null}
+        aria-label="Adaptive AI coaching mode"
+        onChange={(e) => { void setOverride(e.target.value === "Auto" ? "" : e.target.value); }}
         title="Override the coaching mode (Auto = derived from stage × health)"
         style={{ background: "transparent", border: "none", color: col, font: "inherit", fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 11, letterSpacing: ".08em", cursor: "pointer", outline: "none" }}
       >
@@ -71,6 +115,7 @@ export function ModeStrip() {
         <option value="Balance">BALANCE</option>
         <option value="Refinement">REFINEMENT</option>
       </select>
+      {error && <button type="button" role="alert" disabled={busy} aria-label="Retry Adaptive mode" title={`Retry: ${error}`} onClick={() => { void loadAdapt(false); }} style={{ color: "var(--blocking)", fontSize: 9, border: "none", background: "transparent", cursor: busy ? "default" : "pointer", padding: 0 }}>⚠</button>}
       <span style={{ width: 1, height: 14, background: "var(--line2)" }} />
       <button type="button" onClick={() => navigate("Adapt")} title="Open the Adapt panel" style={{ background: "transparent", border: "none", color: "var(--txt3)", font: "inherit", fontSize: 8, letterSpacing: ".14em", cursor: "pointer", padding: 0 }}>ADAPT ›</button>
     </div>
@@ -79,8 +124,7 @@ export function ModeStrip() {
 
 function FocusToggle({ layout, onToggle }: { layout: ShellLayout; onToggle?: () => void }) {
   const seg = (label: string, on: boolean, target: ShellLayout) => (
-    <button
-      type="button"
+    <button type="button"
       onClick={onToggle && layout !== target ? onToggle : undefined}
       style={{
         display: "grid", placeItems: "center", padding: "0 11px", font: "inherit", letterSpacing: ".16em", border: "none",

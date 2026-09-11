@@ -91,9 +91,8 @@ function RadarCard({ severity, label, icon, conf, title, desc, actions, onNaviga
         {actions.map((a, i) =>
           a.nav
             ? (
-              <button
+              <button type="button"
                 key={i}
-                type="button"
                 onClick={() => onNavigate(a.nav!)}
                 style={{ fontSize: 8, color: a.color, background: "transparent", border: `1px solid ${a.border}`, padding: "3px 8px", cursor: "pointer", font: "inherit", lineHeight: 1.4, transition: "background .15s ease" }}
                 onMouseEnter={(e) => { e.currentTarget.style.background = "var(--tint2)"; }}

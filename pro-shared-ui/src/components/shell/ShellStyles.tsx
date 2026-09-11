@@ -12,6 +12,7 @@ const CSS = `
 .lf-shell ::-webkit-scrollbar-thumb{background:rgba(232,68,58,.32);}
 .lf-shell ::-webkit-scrollbar-thumb:hover{background:rgba(232,68,58,.55);}
 .lf-shell ::-webkit-scrollbar-track{background:transparent;}
+.lf-shell :is(button,[role="button"],[role="separator"],input,textarea,select):focus-visible{outline:2px solid var(--accent)!important;outline-offset:2px;}
 @keyframes lf-sweep{to{transform:rotate(360deg);}}
 @keyframes lf-blink{0%,48%{opacity:1;}49%,100%{opacity:0;}}
 @keyframes lf-pulse{0%,100%{opacity:.45;}50%{opacity:1;}}
@@ -37,6 +38,9 @@ const CSS = `
 .lf-shell .lf-opp:hover{background:rgba(98,217,154,.12);}
 .lf-shell .lf-row:hover{background:var(--tint2);}
 .lf-shell .lf-row2:hover{background:var(--tint2);}
+@media (prefers-reduced-motion:reduce){
+  .lf-shell *, .lf-shell *::before, .lf-shell *::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important;}
+}
 `;
 
 export function ShellStyles() {

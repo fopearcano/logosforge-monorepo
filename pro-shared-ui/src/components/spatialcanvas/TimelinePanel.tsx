@@ -51,11 +51,11 @@ const chip = (t: string, color: string, border?: string) => <span style={{ fontS
 const inp: CSSProperties = { background: "var(--tint)", border: "1px solid var(--line2)", color: "var(--txt)", fontSize: 9, padding: "3px 7px", outline: "none", fontFamily: "inherit", minWidth: 0 };
 // Toolbar create button — mirrors the FormatStructure "+ ADD" chip idiom.
 function Add({ on, busy }: { on: () => void; busy: boolean }) {
-  return <span onClick={busy ? undefined : on} style={{ fontSize: 8, color: "var(--on-accent)", background: busy ? "var(--line2)" : "var(--accent)", padding: "3px 9px", fontWeight: 600, letterSpacing: ".06em", cursor: busy ? "default" : "pointer", flex: "none" }}>{busy ? "…" : "+ ADD"}</span>;
+  return <button type="button" onClick={on} disabled={busy} style={{ font: "inherit", border: "none", fontSize: 8, color: "var(--on-accent)", background: busy ? "var(--line2)" : "var(--accent)", padding: "3px 9px", fontWeight: 600, letterSpacing: ".06em", cursor: busy ? "default" : "pointer", flex: "none" }}>{busy ? "…" : "+ ADD"}</button>;
 }
 // Per-card destructive ✕ — non-destructive (removes from timeline, keeps the scene).
 function Del({ on, busy }: { on: () => void; busy: boolean }) {
-  return <span onClick={busy ? undefined : on} title="remove from timeline" style={{ position: "absolute", top: 3, right: 4, fontSize: 8.5, lineHeight: 1, color: "var(--crimson)", border: "1px solid var(--crimson)", borderRadius: 2, padding: "1px 4px", cursor: busy ? "default" : "pointer", opacity: busy ? 0.5 : 0.8, zIndex: 2 }}>✕</span>;
+  return <button type="button" onClick={on} disabled={busy} aria-label="Remove from timeline" title="Remove from timeline (keeps the scene)" style={{ position: "absolute", top: 3, right: 4, font: "inherit", fontSize: 8.5, lineHeight: 1, color: "var(--crimson)", background: "transparent", border: "1px solid var(--crimson)", borderRadius: 2, padding: "1px 4px", cursor: busy ? "default" : "pointer", opacity: busy ? 0.5 : 0.8, zIndex: 2 }}>✕</button>;
 }
 
 const message = (text: string) => (
@@ -130,6 +130,7 @@ export function TimelinePanel(props: PanelProps) {
                 onChange={(e) => setTitle(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") void add(); }}
                 placeholder="new event title…"
+                aria-label="New timeline event title"
                 style={{ ...inp, width: 150 }}
               />
               <Add on={() => void add()} busy={busy} />

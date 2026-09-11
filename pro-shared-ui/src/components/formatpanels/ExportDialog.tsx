@@ -68,17 +68,17 @@ const OPTIONS: { key: keyof ExportRequestDTO; label: string }[] = [
 
 function TargetRow({ label, active = false, disabled = false, tag, onClick }: { label: string; active?: boolean; disabled?: boolean; tag?: string; onClick?: () => void }) {
   return (
-    <div onClick={disabled ? undefined : onClick} style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 9px", cursor: disabled ? "default" : "pointer", border: active ? "1px solid var(--line-cy)" : "1px solid var(--line2)", background: active ? "rgba(76,194,255,.08)" : undefined, color: disabled ? "var(--txt3)" : active ? "var(--strong)" : "var(--txt2)", opacity: disabled ? 0.55 : 1 }}>
+    <button type="button" onClick={onClick} disabled={disabled || !onClick} aria-pressed={active} style={{ width: "100%", font: "inherit", textAlign: "left", display: "flex", alignItems: "center", gap: 6, padding: "5px 9px", cursor: disabled ? "default" : "pointer", border: active ? "1px solid var(--line-cy)" : "1px solid var(--line2)", background: active ? "rgba(76,194,255,.08)" : "transparent", color: disabled ? "var(--txt3)" : active ? "var(--strong)" : "var(--txt2)", opacity: disabled ? 0.55 : 1 }}>
       <span style={{ flex: 1 }}>{label}{active ? " ●" : ""}</span>
       {tag && <span style={{ fontSize: 6.5, letterSpacing: ".1em", color: "var(--txt3)", border: "1px solid var(--line2)", padding: "0 4px" }}>{tag}</span>}
-    </div>
+    </button>
   );
 }
 
 function Check({ label, checked = false, mb, onClick }: { label: string; checked?: boolean; mb?: number; onClick?: () => void }) {
   return (
-    <label onClick={onClick} style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: mb, cursor: "pointer" }}>
-      <span style={{ width: 10, height: 10, border: checked ? "1px solid var(--line-cy)" : "1px solid var(--line2)", background: checked ? "var(--accent)" : undefined }} />
+    <label style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: mb, cursor: "pointer" }}>
+      <input type="checkbox" checked={checked} onChange={onClick} style={{ width: 12, height: 12, margin: 0, accentColor: "var(--accent)" }} />
       {label}
     </label>
   );
@@ -131,6 +131,16 @@ export function ExportDialog(props: PanelProps) {
       if (!r?.canceled) setSaveMsg({ ok: true, text: r?.path ? `saved · ${r.path}` : "saved" });
     } catch (e) {
       setSaveMsg({ ok: false, text: `save failed — ${e instanceof Error ? e.message : String(e)}` });
+    }
+  };
+  const onCopy = async () => {
+    if (!canCopy) return;
+    setSaveMsg(null);
+    try {
+      await navigator.clipboard.writeText(text);
+      setSaveMsg({ ok: true, text: "copied to clipboard" });
+    } catch (copyError) {
+      setSaveMsg({ ok: false, text: `copy failed — ${copyError instanceof Error ? copyError.message : String(copyError)}` });
     }
   };
   const status = running ? { t: "EXPORTING…", c: "var(--accent)" } : error ? { t: "FAILED", c: "var(--blocking)" } : result ? { t: "DONE", c: "var(--green)" } : { t: "READY", c: "var(--txt3)" };
@@ -190,7 +200,7 @@ export function ExportDialog(props: PanelProps) {
             <div style={{ fontSize: 7.5, letterSpacing: ".18em", color: "var(--txt3)", marginBottom: 8 }}>SCOPE</div>
             <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 13 }}>
               {EXPORT_TYPES.map((t) => (
-                <div key={t.id} onClick={() => { setDocExport(null); setExportType(t.id); }} style={{ fontSize: 9, padding: "5px 9px", cursor: "pointer", border: !docExport && exportType === t.id ? "1px solid var(--line-cy)" : "1px solid var(--line2)", background: !docExport && exportType === t.id ? "rgba(76,194,255,.08)" : undefined, color: !docExport && exportType === t.id ? "var(--strong)" : "var(--txt2)" }}>{t.label}</div>
+                <button key={t.id} type="button" aria-pressed={!docExport && exportType === t.id} onClick={() => { setDocExport(null); setExportType(t.id); }} style={{ width: "100%", font: "inherit", textAlign: "left", fontSize: 9, padding: "5px 9px", cursor: "pointer", border: !docExport && exportType === t.id ? "1px solid var(--line-cy)" : "1px solid var(--line2)", background: !docExport && exportType === t.id ? "rgba(76,194,255,.08)" : "transparent", color: !docExport && exportType === t.id ? "var(--strong)" : "var(--txt2)" }}>{t.label}</button>
               ))}
             </div>
             <div style={{ fontSize: 7.5, letterSpacing: ".18em", color: "var(--txt3)", marginBottom: 8 }}>SECTIONS</div>
@@ -211,9 +221,9 @@ export function ExportDialog(props: PanelProps) {
           {error && <span style={{ fontSize: 8.5, color: "var(--blocking)", maxWidth: 320, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{error}</span>}
           {saveMsg && <span title={saveMsg.text} style={{ fontSize: 8.5, color: saveMsg.ok ? "var(--green)" : "var(--blocking)", maxWidth: 300, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{saveMsg.ok ? "✓ " : "✕ "}{saveMsg.text}</span>}
           <div style={{ flex: 1 }} />
-          <span onClick={canCopy ? () => navigator.clipboard.writeText(text) : undefined} style={{ fontSize: 9, color: canCopy ? "var(--txt2)" : "var(--txt3)", border: "1px solid var(--line2)", padding: "6px 12px", letterSpacing: ".06em", cursor: canCopy ? "pointer" : "default", opacity: canCopy ? 1 : 0.5 }}>⧉ COPY</span>
-          <span onClick={canSave ? onSave : undefined} title={hasSave ? "Save the exported file" : "Saving needs the desktop or web host"} style={{ fontSize: 9, color: canSave ? "var(--txt2)" : "var(--txt3)", border: "1px solid var(--line2)", padding: "6px 12px", letterSpacing: ".06em", cursor: canSave ? "pointer" : "default", opacity: canSave ? 1 : 0.5 }}>⬇ SAVE</span>
-          <span onClick={running ? undefined : () => { setSaveMsg(null); run(request); }} style={{ fontSize: 10, color: "var(--on-accent)", background: running ? "var(--txt3)" : "var(--green)", padding: "7px 18px", fontWeight: 700, letterSpacing: ".06em", cursor: running ? "default" : "pointer" }}>{running ? "EXPORTING…" : "EXPORT"}</span>
+          <button type="button" disabled={!canCopy} onClick={() => { void onCopy(); }} style={{ font: "inherit", background: "transparent", fontSize: 9, color: canCopy ? "var(--txt2)" : "var(--txt3)", border: "1px solid var(--line2)", padding: "6px 12px", letterSpacing: ".06em", cursor: canCopy ? "pointer" : "default", opacity: canCopy ? 1 : 0.5 }}>⧉ COPY</button>
+          <button type="button" disabled={!canSave} onClick={() => { void onSave(); }} title={hasSave ? "Save the exported file" : "Saving needs the desktop or web host"} style={{ font: "inherit", background: "transparent", fontSize: 9, color: canSave ? "var(--txt2)" : "var(--txt3)", border: "1px solid var(--line2)", padding: "6px 12px", letterSpacing: ".06em", cursor: canSave ? "pointer" : "default", opacity: canSave ? 1 : 0.5 }}>⬇ SAVE</button>
+          <button type="button" disabled={running} onClick={() => { setSaveMsg(null); run(request); }} style={{ font: "inherit", border: "none", fontSize: 10, color: "var(--on-accent)", background: running ? "var(--txt3)" : "var(--green)", padding: "7px 18px", fontWeight: 700, letterSpacing: ".06em", cursor: running ? "default" : "pointer" }}>{running ? "EXPORTING…" : "EXPORT"}</button>
         </div>
       </div>
     </PanelShell>

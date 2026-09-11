@@ -8,6 +8,14 @@ import type {
   ProjectDTO,
   ProjectCreateDTO,
   ProjectUpdateDTO,
+  HealthDTO,
+  ProjectActionResultDTO,
+  DeleteResultDTO,
+  RemovedResultDTO,
+  UpdatedResultDTO,
+  NoteSceneLinksDTO,
+  NotePsykeLinksDTO,
+  CharacterBackfillResultDTO,
   WhiteboardImportDTO,
   WhiteboardImportResultDTO,
   ManuscriptImportDTO,
@@ -20,7 +28,7 @@ import type {
   VoiceTranscribeDTO,
   VoiceTranscriptDTO,
   VoiceSegmentReqDTO,
-  VoiceHistoryEntryDTO,
+  VoiceSegmentResultDTO,
   VoiceHistoryDTO,
   VoiceCtxReqDTO,
   VoiceIntentsDTO,
@@ -36,6 +44,7 @@ import type {
   VoiceCommitReqDTO,
   VoiceUndoStateDTO,
   VoiceUndoResultDTO,
+  VoiceCancelResultDTO,
   SettingsDTO,
   WritingModesResponseDTO,
   SceneDTO,
@@ -122,8 +131,10 @@ import type {
 } from "@logosforge/ui-contracts";
 
 export interface ApiClient {
+  /** Stop transports and in-flight requests when a host replaces this client. */
+  dispose?(): void;
   // Projects & meta
-  health(): Promise<{ status: string; core_version: string; api_version: string }>;
+  health(): Promise<HealthDTO>;
   writingModes(): Promise<WritingModesResponseDTO>;
   listProjects(): Promise<ProjectDTO[]>;
   createProject(body: ProjectCreateDTO): Promise<ProjectDTO>;
@@ -133,10 +144,10 @@ export interface ApiClient {
   importManuscript(body: ManuscriptImportDTO): Promise<ManuscriptImportResultDTO>;
   getProject(id: number): Promise<ProjectDTO>;
   updateProject(id: number, body: ProjectUpdateDTO): Promise<ProjectDTO>;
-  deleteProject(id: number): Promise<{ ok: boolean; deleted: number }>;
+  deleteProject(id: number): Promise<DeleteResultDTO>;
   openProject(id: number): Promise<ProjectDTO>;
-  saveProject(id: number): Promise<void>;
-  closeProject(id: number): Promise<void>;
+  saveProject(id: number): Promise<ProjectActionResultDTO>;
+  closeProject(id: number): Promise<ProjectActionResultDTO>;
   getSettings(id: number): Promise<SettingsDTO>;
   patchSettings(id: number, body: SettingsDTO): Promise<SettingsDTO>;
 
@@ -144,7 +155,7 @@ export interface ApiClient {
   listScenes(p: number): Promise<SceneDTO[]>;
   createScene(p: number, body: SceneCreateDTO): Promise<SceneDTO>;
   updateScene(p: number, sceneId: number, body: SceneUpdateDTO): Promise<SceneDTO>;
-  deleteScene(p: number, sceneId: number): Promise<void>;
+  deleteScene(p: number, sceneId: number): Promise<DeleteResultDTO>;
   listContinuity(p: number, sceneId: number): Promise<ContinuityMemoryDTO[]>;
   addContinuity(p: number, sceneId: number, body: ContinuityMemoryDTO): Promise<ContinuityMemoryDTO>;
 
@@ -152,7 +163,7 @@ export interface ApiClient {
   getOutline(p: number): Promise<OutlineNodeDTO[]>;
   createOutlineNode(p: number, body: OutlineNodeCreateDTO): Promise<OutlineNodeDTO>;
   updateOutlineNode(p: number, nodeId: number, body: OutlineNodeUpdateDTO): Promise<OutlineNodeDTO>;
-  deleteOutlineNode(p: number, nodeId: number): Promise<void>;
+  deleteOutlineNode(p: number, nodeId: number): Promise<DeleteResultDTO>;
   generateOutline(p: number, body: OutlineGenerateRequestDTO): Promise<OutlineGenerateResultDTO>;
 
   // Plot & timeline
@@ -161,39 +172,39 @@ export interface ApiClient {
   getTimeline(p: number): Promise<TimelineEventDTO[]>;
   createTimelineEvent(p: number, body: TimelineEventCreateDTO): Promise<TimelineEventDTO>;
   updateTimelineEvent(p: number, eventId: number, body: TimelineEventUpdateDTO): Promise<TimelineEventDTO>;
-  deleteTimelineEvent(p: number, eventId: number): Promise<{ ok: boolean; removed: number }>;
+  deleteTimelineEvent(p: number, eventId: number): Promise<RemovedResultDTO>;
 
   // PSYKE
   listPsyke(p: number): Promise<PsykeEntryDTO[]>;
   searchPsyke(p: number, q: string): Promise<PsykeEntryDTO[]>;
   createPsyke(p: number, body: PsykeEntryCreateDTO): Promise<PsykeEntryDTO>;
   updatePsyke(p: number, entryId: number, body: PsykeEntryUpdateDTO): Promise<PsykeEntryDTO>;
-  deletePsyke(p: number, entryId: number): Promise<void>;
+  deletePsyke(p: number, entryId: number): Promise<DeleteResultDTO>;
   listRelations(p: number): Promise<PsykeRelationDTO[]>;
   createRelation(p: number, body: PsykeRelationCreateDTO): Promise<PsykeRelationDTO>;
   /** Change a relation's type: re-POST via createRelation (the core upserts by pair). */
-  deleteRelation(p: number, relationId: string): Promise<{ ok: boolean; deleted: string }>;
+  deleteRelation(p: number, relationId: string): Promise<DeleteResultDTO>;
   listProgressions(p: number): Promise<PsykeProgressionDTO[]>;
   createProgression(p: number, body: PsykeProgressionCreateDTO): Promise<PsykeProgressionDTO>;
   updateProgression(p: number, progressionId: number, body: PsykeProgressionUpdateDTO): Promise<PsykeProgressionDTO>;
-  deleteProgression(p: number, progressionId: number): Promise<{ ok: boolean; deleted: number }>;
+  deleteProgression(p: number, progressionId: number): Promise<DeleteResultDTO>;
 
   // Notes
   listNotes(p: number): Promise<NoteDTO[]>;
   createNote(p: number, body: NoteCreateDTO): Promise<NoteDTO>;
   updateNote(p: number, noteId: number, body: NoteUpdateDTO): Promise<NoteDTO>;
-  deleteNote(p: number, noteId: number): Promise<void>;
-  linkNoteScene(p: number, noteId: number, sceneId: number): Promise<{ ok: boolean; scene_links: number[] }>;
-  unlinkNoteScene(p: number, noteId: number, sceneId: number): Promise<{ ok: boolean; scene_links: number[] }>;
-  linkNotePsyke(p: number, noteId: number, entryId: number): Promise<{ ok: boolean; psyke_links: number[] }>;
-  unlinkNotePsyke(p: number, noteId: number, entryId: number): Promise<{ ok: boolean; psyke_links: number[] }>;
+  deleteNote(p: number, noteId: number): Promise<DeleteResultDTO>;
+  linkNoteScene(p: number, noteId: number, sceneId: number): Promise<NoteSceneLinksDTO>;
+  unlinkNoteScene(p: number, noteId: number, sceneId: number): Promise<NoteSceneLinksDTO>;
+  linkNotePsyke(p: number, noteId: number, entryId: number): Promise<NotePsykeLinksDTO>;
+  unlinkNotePsyke(p: number, noteId: number, entryId: number): Promise<NotePsykeLinksDTO>;
 
   // Characters (manuscript cast + the stable PSYKE bible link)
   listCharacters(p: number): Promise<CharacterDTO[]>;
   createCharacter(p: number, body: CharacterCreateDTO): Promise<CharacterDTO>;
   updateCharacter(p: number, characterId: number, body: CharacterUpdateDTO): Promise<CharacterDTO>;
-  deleteCharacter(p: number, characterId: number): Promise<{ ok: boolean; deleted: number }>;
-  backfillCharacterLinks(p: number): Promise<{ ok: boolean; linked: number }>;
+  deleteCharacter(p: number, characterId: number): Promise<DeleteResultDTO>;
+  backfillCharacterLinks(p: number): Promise<CharacterBackfillResultDTO>;
 
   // Theme <-> scene links (structured theme presence)
   getThemeScenes(p: number, entryId: number): Promise<ThemeScenesDTO>;
@@ -236,14 +247,16 @@ export interface ApiClient {
   voiceTranscribe(p: number, body: VoiceTranscribeDTO): Promise<VoiceTranscriptDTO>;
   // Full Dexter's Room facade (VoiceRoomService): session history, Intent
   // cleanup, ask/edit-with-Billy, commit targets (editor/Note/PSYKE), undo.
-  voiceTranscribeSegment(p: number, body: VoiceSegmentReqDTO): Promise<VoiceHistoryEntryDTO | { error: string } | { empty: true }>;
+  voiceTranscribeSegment(p: number, body: VoiceSegmentReqDTO): Promise<VoiceSegmentResultDTO>;
   voiceHistory(p: number): Promise<VoiceHistoryDTO>;
   voiceIntents(p: number, body: VoiceCtxReqDTO): Promise<VoiceIntentsDTO>;
   voiceIntentPreview(p: number, body: VoiceIntentPreviewReqDTO): Promise<VoiceIntentPreviewDTO>;
   voiceIntentApply(p: number, body: VoiceIntentApplyReqDTO): Promise<VoiceApplyResultDTO>;
+  voiceIntentCancel(p: number, body: VoiceIntentApplyReqDTO): Promise<VoiceCancelResultDTO>;
   voiceBillyOps(p: number, body: VoiceCtxReqDTO): Promise<VoiceBillyOpsDTO>;
   voiceBillyGenerate(p: number, body: VoiceBillyGenReqDTO): Promise<VoiceBillyProposalDTO>;
   voiceBillyApply(p: number, body: VoiceBillyApplyReqDTO): Promise<VoiceApplyResultDTO>;
+  voiceBillyCancel(p: number, body: VoiceBillyApplyReqDTO): Promise<VoiceCancelResultDTO>;
   voiceCommitTargets(p: number, body: VoiceCtxReqDTO): Promise<VoiceCommitTargetsDTO>;
   voiceCommit(p: number, body: VoiceCommitReqDTO): Promise<VoiceApplyResultDTO>;
   voiceCanUndo(p: number): Promise<VoiceUndoStateDTO>;
@@ -261,6 +274,7 @@ export interface ApiClient {
   startExtract(p: number, useLlm?: boolean, model?: string): Promise<ExtractionJobDTO>;
   listExtractionModels(p: number): Promise<ExtractionModelsDTO>;
   getExtractJob(p: number, jobId: string): Promise<ExtractionJobDTO>;
+  cancelExtractJob(p: number, jobId: string): Promise<ExtractionJobDTO>;
   applyExtraction(p: number, body: ExtractionApplyRequestDTO): Promise<ExtractionApplyReportDTO>;
   revertExtraction(p: number, receipt: ExtractionReceiptDTO): Promise<ExtractionApplyReportDTO>;
 
@@ -290,30 +304,30 @@ export interface ApiClient {
   listEpisodePlotlines(p: number, episodeId: number): Promise<EpisodePlotlineDTO[]>;
   createEpisodePlotline(p: number, episodeId: number, body: EpisodePlotlineDTO): Promise<EpisodePlotlineDTO>;
   // Format-structure edit/delete (correct or prune a wrong entry, not only append)
-  updateGnPage(p: number, pageId: number, body: Partial<GnPageDTO>): Promise<{ ok: boolean; updated: number }>;
-  deleteGnPage(p: number, pageId: number): Promise<{ ok: boolean; deleted: number }>;
-  updateGnPanel(p: number, panelId: number, body: Partial<GnPanelDTO>): Promise<{ ok: boolean; updated: number }>;
-  deleteGnPanel(p: number, panelId: number): Promise<{ ok: boolean; deleted: number }>;
-  updateSeason(p: number, seasonId: number, body: Partial<SeasonDTO>): Promise<{ ok: boolean; updated: number }>;
-  deleteSeason(p: number, seasonId: number): Promise<{ ok: boolean; deleted: number }>;
-  updateEpisode(p: number, episodeId: number, body: Partial<EpisodeDTO>): Promise<{ ok: boolean; updated: number }>;
-  deleteEpisode(p: number, episodeId: number): Promise<{ ok: boolean; deleted: number }>;
-  updateSeriesArc(p: number, arcId: number, body: Partial<SeriesArcDTO>): Promise<{ ok: boolean; updated: number }>;
-  deleteStageEntrance(p: number, rowId: number): Promise<{ ok: boolean; deleted: number }>;
-  deleteStageCue(p: number, rowId: number): Promise<{ ok: boolean; deleted: number }>;
+  updateGnPage(p: number, pageId: number, body: Partial<GnPageDTO>): Promise<UpdatedResultDTO>;
+  deleteGnPage(p: number, pageId: number): Promise<DeleteResultDTO>;
+  updateGnPanel(p: number, panelId: number, body: Partial<GnPanelDTO>): Promise<UpdatedResultDTO>;
+  deleteGnPanel(p: number, panelId: number): Promise<DeleteResultDTO>;
+  updateSeason(p: number, seasonId: number, body: Partial<SeasonDTO>): Promise<UpdatedResultDTO>;
+  deleteSeason(p: number, seasonId: number): Promise<DeleteResultDTO>;
+  updateEpisode(p: number, episodeId: number, body: Partial<EpisodeDTO>): Promise<UpdatedResultDTO>;
+  deleteEpisode(p: number, episodeId: number): Promise<DeleteResultDTO>;
+  updateSeriesArc(p: number, arcId: number, body: Partial<SeriesArcDTO>): Promise<UpdatedResultDTO>;
+  deleteStageEntrance(p: number, rowId: number): Promise<DeleteResultDTO>;
+  deleteStageCue(p: number, rowId: number): Promise<DeleteResultDTO>;
   // Class-C feature completions (update/delete the DB previously lacked)
-  deleteSeriesArc(p: number, arcId: number): Promise<{ ok: boolean; deleted: number }>;
-  updateEpisodePlotline(p: number, plotlineId: number, body: Partial<EpisodePlotlineDTO>): Promise<{ ok: boolean; updated: number }>;
-  deleteEpisodePlotline(p: number, plotlineId: number): Promise<{ ok: boolean; deleted: number }>;
-  updateGnContinuityItem(p: number, itemId: number, body: Partial<GnContinuityItemDTO>): Promise<{ ok: boolean; updated: number }>;
-  deleteGnContinuityItem(p: number, itemId: number): Promise<{ ok: boolean; deleted: number }>;
-  updateGnContinuityAppearance(p: number, appearanceId: number, body: Partial<GnContinuityAppearanceDTO>): Promise<{ ok: boolean; updated: number }>;
-  deleteGnContinuityAppearance(p: number, appearanceId: number): Promise<{ ok: boolean; deleted: number }>;
-  updateStageEntrance(p: number, rowId: number, body: Partial<StageEntranceExitDTO>): Promise<{ ok: boolean; updated: number }>;
-  updateStageCue(p: number, rowId: number, body: Partial<StageCueDTO>): Promise<{ ok: boolean; updated: number }>;
-  deleteStageBusiness(p: number, rowId: number): Promise<{ ok: boolean; deleted: number }>;
+  deleteSeriesArc(p: number, arcId: number): Promise<DeleteResultDTO>;
+  updateEpisodePlotline(p: number, plotlineId: number, body: Partial<EpisodePlotlineDTO>): Promise<UpdatedResultDTO>;
+  deleteEpisodePlotline(p: number, plotlineId: number): Promise<DeleteResultDTO>;
+  updateGnContinuityItem(p: number, itemId: number, body: Partial<GnContinuityItemDTO>): Promise<UpdatedResultDTO>;
+  deleteGnContinuityItem(p: number, itemId: number): Promise<DeleteResultDTO>;
+  updateGnContinuityAppearance(p: number, appearanceId: number, body: Partial<GnContinuityAppearanceDTO>): Promise<UpdatedResultDTO>;
+  deleteGnContinuityAppearance(p: number, appearanceId: number): Promise<DeleteResultDTO>;
+  updateStageEntrance(p: number, rowId: number, body: Partial<StageEntranceExitDTO>): Promise<UpdatedResultDTO>;
+  updateStageCue(p: number, rowId: number, body: Partial<StageCueDTO>): Promise<UpdatedResultDTO>;
+  deleteStageBusiness(p: number, rowId: number): Promise<DeleteResultDTO>;
   updateContinuity(p: number, sceneId: number, memoryId: number, body: ContinuityMemoryDTO): Promise<ContinuityMemoryDTO>;
-  deleteContinuity(p: number, sceneId: number, memoryId: number): Promise<{ ok: boolean; deleted: number }>;
+  deleteContinuity(p: number, sceneId: number, memoryId: number): Promise<DeleteResultDTO>;
   getSeriesMemory(p: number, entryId: number): Promise<SeriesMemoryDTO>;
   setSeriesMemory(p: number, entryId: number, body: SeriesMemoryDTO): Promise<SeriesMemoryDTO>;
 

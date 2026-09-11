@@ -3,6 +3,7 @@ import type { QuantumSettingsDTO, QuantumSettingsUpdateDTO } from "@logosforge/u
 import { PanelShell, type PanelProps } from "../shell/PanelShell";
 import { useQuantum } from "../../hooks";
 import { useStudio, useNavigate } from "../../adapters/StudioProvider";
+import { createLatestRequestGate } from "../../hooks/latestRequest";
 
 const STRUCTURE_MODES = ["auto", "classical", "quantum", "hybrid"];
 
@@ -66,27 +67,71 @@ const message = (text: ReactNode): ReactNode => (
 export function QuantumOutliner(props: PanelProps) {
   const { generate, running, result, error } = useQuantum();
   const { api, projectId } = useStudio();
+  const projectIdRef = useRef(projectId);
+  projectIdRef.current = projectId;
   const navigate = useNavigate();
   const [premise, setPremise] = useState("");
   const [selId, setSelId] = useState<string | null>(null);
-  const canRun = !running && premise.trim().length > 0;
 
   // Lambda scoring config (persisted per-project; the generate path honours it)
   // + the per-run compose strategy (structure_mode).
   const [qs, setQs] = useState<QuantumSettingsDTO | null>(null);
   const [structureMode, setStructureMode] = useState("auto");
   const [showTune, setShowTune] = useState(false);
-  useEffect(() => {
+  const settingsRequests = useRef(createLatestRequestGate()).current;
+  useEffect(() => { settingsRequests.open(); return () => settingsRequests.close(); }, [settingsRequests]);
+  const settingsBusyRef = useRef(false);
+  const [settingsBusy, setSettingsBusy] = useState(false);
+  const [settingsError, setSettingsError] = useState("");
+  const loadSettings = useCallback(async (preserveError = false) => {
     if (projectId == null) { setQs(null); return; }
-    let alive = true;
-    api.getQuantumSettings(projectId).then((v) => { if (alive) setQs(v); }).catch(() => { if (alive) setQs(null); });
-    return () => { alive = false; };
-  }, [api, projectId]);
+    const token = settingsRequests.begin("settings");
+    try {
+      const value = await api.getQuantumSettings(projectId);
+      if (settingsRequests.isCurrent(token)) {
+        setQs(value);
+        if (!preserveError) setSettingsError("");
+      }
+    } catch (error) {
+      if (settingsRequests.isCurrent(token)) setSettingsError(error instanceof Error ? error.message : String(error));
+    }
+  }, [api, projectId, settingsRequests]);
+  useEffect(() => {
+    settingsRequests.invalidate("settings");
+    settingsBusyRef.current = false;
+    setSettingsBusy(false);
+    setQs(null);
+    setSettingsError("");
+    void loadSettings(false);
+    return () => settingsRequests.invalidate("settings");
+  }, [loadSettings, settingsRequests]);
   const tune = useCallback((patch: QuantumSettingsUpdateDTO) => {
-    if (projectId == null) return;
+    if (projectId == null || settingsBusyRef.current) return;
+    const ownerProjectId = projectId;
+    const token = settingsRequests.begin("settings");
+    settingsBusyRef.current = true;
+    setSettingsBusy(true);
+    setSettingsError("");
     setQs((cur) => (cur ? { ...cur, ...patch } as QuantumSettingsDTO : cur));   // optimistic
-    api.patchQuantumSettings(projectId, patch).then((v) => setQs(v)).catch(() => {});
-  }, [api, projectId]);
+    void api.patchQuantumSettings(projectId, patch).then((value) => {
+      if (settingsRequests.isCurrent(token)) { setQs(value); setSettingsError(""); }
+    }).catch((error) => {
+      if (!settingsRequests.isCurrent(token)) return;
+      setSettingsError(error instanceof Error ? error.message : String(error));
+      setQs(null);
+      void loadSettings(true).finally(() => {
+        if (projectIdRef.current === ownerProjectId) {
+          settingsBusyRef.current = false;
+          setSettingsBusy(false);
+        }
+      });
+    }).finally(() => {
+      if (settingsRequests.isCurrent(token)) {
+        settingsBusyRef.current = false;
+        setSettingsBusy(false);
+      }
+    });
+  }, [api, projectId, loadSettings, settingsRequests]);
   const run = () => { setSelId(null); generate(premise, 4, structureMode); };
 
   const payload = (result?.payload ?? {}) as QPayload;
@@ -110,14 +155,17 @@ export function QuantumOutliner(props: PanelProps) {
   // create routed through a confirm, then jump to the new scene in the Manuscript).
   const [confirming, setConfirming] = useState(false);
   const [creating, setCreating] = useState(false);
+  const creatingRef = useRef(false);
   const [createdId, setCreatedId] = useState<number | null>(null);
   const [createErr, setCreateErr] = useState<string | null>(null);
+  const canRun = !running && !creating && premise.trim().length > 0;
 
   // reset the collapse UI when the selection or the wavefunction changes
   useEffect(() => { setConfirming(false); setCreatedId(null); setCreateErr(null); }, [selId, result]);
 
   const materialize = useCallback(async () => {
-    if (!selected || projectId == null || creating) return;
+    if (!selected || projectId == null || creatingRef.current) return;
+    creatingRef.current = true;
     setCreating(true);
     setCreateErr(null);
     try {
@@ -134,9 +182,10 @@ export function QuantumOutliner(props: PanelProps) {
     } catch (e) {
       setCreateErr(e instanceof Error ? e.message : String(e));
     } finally {
+      creatingRef.current = false;
       setCreating(false);
     }
-  }, [selected, projectId, creating, api]);
+  }, [selected, projectId, api]);
 
   // Scale the fixed-size radial field to fit its (possibly narrow, docked)
   // container, so the absolutely-positioned branch cards never clip. The SVG
@@ -184,18 +233,21 @@ export function QuantumOutliner(props: PanelProps) {
           <span style={{ fontSize: 9, color: "var(--violet)", letterSpacing: ".1em", flex: "none" }}>λ</span>
           <input
             value={premise}
+            disabled={running || creating}
             onChange={(e) => setPremise(e.target.value)}
             placeholder="premise / branch point — e.g. “She finally says the Warden's name”"
+            aria-label="Quantum premise or branch point"
             style={{ flex: 1, minWidth: 0, background: "var(--tint)", border: "1px solid var(--line2)", color: "var(--txt)", fontSize: 11, padding: "5px 9px", outline: "none", fontFamily: "inherit" }}
           />
-          <button type="button" onClick={() => setShowTune((v) => !v)} title="Tune the Lambda scoring engine (presets, weighting, compose strategy)"
+          <button type="button" onClick={() => setShowTune((v) => !v)} disabled={running || creating} title="Tune the Lambda scoring engine (presets, weighting, compose strategy)"
             style={{ flex: "none", fontSize: 8.5, letterSpacing: ".08em", color: showTune ? "var(--violet)" : "var(--txt2)", background: "transparent", border: `1px solid ${showTune ? "var(--line-v)" : "var(--line2)"}`, padding: "4px 9px", cursor: "pointer", font: "inherit" }}>⚙ TUNE</button>
-          <span
-            onClick={canRun ? run : undefined}
-            style={{ flex: "none", fontSize: 9, color: "var(--on-accent)", background: canRun ? "var(--violet)" : "var(--line2)", padding: "5px 11px", fontWeight: 600, letterSpacing: ".08em", cursor: canRun ? "pointer" : "default", boxShadow: canRun ? "0 0 14px rgba(176,124,255,.4)" : undefined }}
+          <button type="button"
+            disabled={!canRun}
+            onClick={run}
+            style={{ flex: "none", font: "inherit", border: "none", fontSize: 9, color: "var(--on-accent)", background: canRun ? "var(--violet)" : "var(--line2)", padding: "5px 11px", fontWeight: 600, letterSpacing: ".08em", cursor: canRun ? "pointer" : "default", boxShadow: canRun ? "0 0 14px rgba(176,124,255,.4)" : undefined }}
           >
             {running ? "⟳ GENERATING…" : "⟳ GENERATE POSSIBILITIES"}
-          </span>
+          </button>
         </div>
 
         {/* Lambda tuning strip — real scoring config (persisted; honoured by the generate path) */}
@@ -203,7 +255,7 @@ export function QuantumOutliner(props: PanelProps) {
           <div style={{ flex: "none", display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12, padding: "8px 16px", borderBottom: "1px solid var(--line-v)", background: "var(--tint)", zIndex: 6, fontSize: 9 }}>
             <label style={{ display: "flex", alignItems: "center", gap: 5, color: "var(--txt3)", letterSpacing: ".08em" }}>
               PRESET
-              <select value={qs?.preset ?? "Balanced"} onChange={(e) => tune({ preset: e.target.value })}
+              <select value={qs?.preset ?? "Balanced"} disabled={running || settingsBusy || qs == null} onChange={(e) => tune({ preset: e.target.value })}
                 style={{ background: "var(--tint)", border: "1px solid var(--line2)", color: "var(--txt)", fontSize: 9, padding: "3px 5px", fontFamily: "inherit" }}>
                 {(qs?.preset_names ?? ["Balanced"]).map((p) => <option key={p} value={p}>{p}</option>)}
                 {qs && !(qs.preset_names ?? []).includes(qs.preset) && <option value={qs.preset}>{qs.preset}</option>}
@@ -211,28 +263,30 @@ export function QuantumOutliner(props: PanelProps) {
             </label>
             <label style={{ display: "flex", alignItems: "center", gap: 5, color: "var(--txt3)", letterSpacing: ".08em" }}>
               STRUCTURE
-              <select value={structureMode} onChange={(e) => setStructureMode(e.target.value)}
+              <select value={structureMode} disabled={running || creating} onChange={(e) => setStructureMode(e.target.value)}
                 style={{ background: "var(--tint)", border: "1px solid var(--line2)", color: "var(--txt)", fontSize: 9, padding: "3px 5px", fontFamily: "inherit" }}>
                 {STRUCTURE_MODES.map((m) => <option key={m} value={m}>{m}</option>)}
               </select>
             </label>
             <label style={{ display: "flex", alignItems: "center", gap: 5, color: "var(--txt3)", letterSpacing: ".08em" }}>
               SELECT
-              <select value={qs?.selection_mode ?? "weighted"} onChange={(e) => tune({ selection_mode: e.target.value })}
+              <select value={qs?.selection_mode ?? "weighted"} disabled={running || settingsBusy || qs == null} onChange={(e) => tune({ selection_mode: e.target.value })}
                 style={{ background: "var(--tint)", border: "1px solid var(--line2)", color: "var(--txt)", fontSize: 9, padding: "3px 5px", fontFamily: "inherit" }}>
                 <option value="weighted">weighted</option>
                 <option value="pareto">pareto</option>
               </select>
             </label>
             <label style={{ display: "flex", alignItems: "center", gap: 5, color: "var(--txt2)", cursor: "pointer" }}>
-              <input type="checkbox" checked={!!qs?.show_tradeoffs} onChange={(e) => tune({ show_tradeoffs: e.target.checked })} />
+              <input type="checkbox" checked={!!qs?.show_tradeoffs} disabled={running || settingsBusy || qs == null} onChange={(e) => tune({ show_tradeoffs: e.target.checked })} />
               tradeoffs
             </label>
             <label style={{ display: "flex", alignItems: "center", gap: 5, color: "var(--txt2)", cursor: "pointer" }} title="Adapt the weights from which branch you collapse">
-              <input type="checkbox" checked={qs?.weight_learning !== false} onChange={(e) => tune({ weight_learning: e.target.checked })} />
+              <input type="checkbox" checked={qs?.weight_learning !== false} disabled={running || settingsBusy || qs == null} onChange={(e) => tune({ weight_learning: e.target.checked })} />
               learn
             </label>
             {qs?.preset === "Custom" && <span style={{ color: "var(--violet)", letterSpacing: ".08em" }}>· custom weights</span>}
+            {settingsBusy && <span style={{ color: "var(--txt3)", letterSpacing: ".08em" }}>saving…</span>}
+            {settingsError && <span role="alert" style={{ color: "var(--blocking)", letterSpacing: ".04em" }}>settings failed — {settingsError} <button type="button" disabled={settingsBusy} onClick={() => { void loadSettings(false); }} style={{ font: "inherit", fontSize: 8, color: "var(--violet)", border: "none", background: "transparent", cursor: settingsBusy ? "default" : "pointer", padding: "0 2px" }}>RETRY</button></span>}
           </div>
         )}
 
@@ -263,7 +317,7 @@ export function QuantumOutliner(props: PanelProps) {
                       const color = recommended ? "var(--violet)" : BRANCH_COLORS[i % BRANCH_COLORS.length] ?? "var(--cyan)";
                       const isSel = selected?.id === b.id;
                       return (
-                        <button key={b.id} type="button" onClick={() => setSelId(b.id)} style={{ display: "block", width: "100%", textAlign: "left", font: "inherit", padding: 0, cursor: "pointer", border: `1px solid ${isSel || recommended ? "var(--violet)" : "var(--line2)"}`, background: recommended ? "linear-gradient(180deg,rgba(176,124,255,.12),var(--tint))" : "rgba(8,8,14,.9)", boxShadow: isSel ? "0 0 20px rgba(176,124,255,.3)" : undefined }}>
+                        <button key={b.id} type="button" onClick={creating ? undefined : () => setSelId(b.id)} disabled={creating} style={{ display: "block", width: "100%", textAlign: "left", font: "inherit", padding: 0, cursor: creating ? "default" : "pointer", border: `1px solid ${isSel || recommended ? "var(--violet)" : "var(--line2)"}`, background: recommended ? "linear-gradient(180deg,rgba(176,124,255,.12),var(--tint))" : "rgba(8,8,14,.9)", boxShadow: isSel ? "0 0 20px rgba(176,124,255,.3)" : undefined }}>
                           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 9px", borderBottom: "1px solid var(--line2)" }}>
                             <span style={{ fontSize: 8, letterSpacing: ".14em", color }}>{recommended ? "◉ " : ""}{(b.branch_type || b.title || "BRANCH").toUpperCase().slice(0, 26)}</span>
                             <span style={{ fontFamily: "'Chakra Petch'", fontSize: 15, color: "var(--strong)" }}>{typeof b.score === "number" ? b.score.toFixed(1) : "—"}</span>
@@ -321,8 +375,13 @@ export function QuantumOutliner(props: PanelProps) {
                     return (
                       <div
                         key={b.id}
-                        onClick={() => setSelId(b.id)}
-                        style={{ position: "absolute", left: x, top: y, transform: "translate(-50%,-50%)", width: 228, zIndex: 5, cursor: "pointer", border: `1px solid ${isSel || recommended ? "var(--violet)" : "var(--line2)"}`, background: recommended ? "linear-gradient(180deg,rgba(176,124,255,.12),var(--tint))" : "rgba(8,8,14,.95)", boxShadow: isSel || recommended ? "0 0 26px rgba(176,124,255,.35)" : undefined }}
+                        role="button"
+                        tabIndex={creating ? -1 : 0}
+                        aria-pressed={isSel}
+                        aria-label={`Inspect branch ${b.title || b.description || b.id}`}
+                        onClick={creating ? undefined : () => setSelId(b.id)}
+                        onKeyDown={(event) => { if (!creating && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); setSelId(b.id); } }}
+                        style={{ position: "absolute", left: x, top: y, transform: "translate(-50%,-50%)", width: 228, zIndex: 5, cursor: creating ? "default" : "pointer", pointerEvents: creating ? "none" : "auto", border: `1px solid ${isSel || recommended ? "var(--violet)" : "var(--line2)"}`, background: recommended ? "linear-gradient(180deg,rgba(176,124,255,.12),var(--tint))" : "rgba(8,8,14,.95)", boxShadow: isSel || recommended ? "0 0 26px rgba(176,124,255,.35)" : undefined }}
                       >
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 9px", borderBottom: "1px solid var(--line2)" }}>
                           <span style={{ fontSize: 7.5, letterSpacing: ".14em", color }}>{recommended ? "◉ " : ""}{(b.branch_type || b.title || "BRANCH").toUpperCase().slice(0, 22)}</span>

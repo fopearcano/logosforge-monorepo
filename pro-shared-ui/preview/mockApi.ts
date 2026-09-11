@@ -1,5 +1,4 @@
 import type {
-  ApiClient,
   NoteDTO,
   CharacterDTO,
   CharacterUpdateDTO,
@@ -14,7 +13,12 @@ import type {
   PlotSceneDTO,
   ExportRequestDTO,
   ExportResponseDTO,
+  VoiceHistoryEntryDTO,
+  VoiceIntentPreviewDTO,
+  VoiceBillyProposalDTO,
 } from "@logosforge/ui-contracts";
+import type { ApiClient } from "../src/adapters/api";
+import { ApiRequestError } from "../src/adapters/httpApiClient";
 
 const delay = (ms = 280) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -26,10 +30,11 @@ const PROJECTS: ProjectDTO[] = [
   { id: 3, title: "The Quiet Fleet", description: "Series · Teleplay", narrative_engine: "series", default_writing_format: "series", format_mode: "series" },
 ];
 
+let MOCK_SCENE_REVISION = 0;
 const scene = (s: Partial<SceneDTO>): SceneDTO => ({
   id: 0, title: "", summary: "", synopsis: "", goal: "", conflict: "", outcome: "", beat: "", act: "",
   chapter: "", plotline: "", color_label: "", tags: [], content: "", sort_order: 0, order_index: 0,
-  character_ids: [], place_ids: [], ...s,
+  character_ids: [], place_ids: [], who_knows_what: "", revision: `mock-scene-${++MOCK_SCENE_REVISION}`, ...s,
 });
 
 const SCENES: SceneDTO[] = [
@@ -43,7 +48,7 @@ const SCENES: SceneDTO[] = [
 ];
 
 const node = (id: number, parent_id: number | null, title: string, description: string, sort_order: number, children: OutlineNodeDTO[] = []): OutlineNodeDTO =>
-  ({ id, parent_id, title, description, sort_order, children });
+  ({ id, parent_id, title, description, sort_order, scene_id: null, children });
 
 const OUTLINE: OutlineNodeDTO[] = [
   node(1, null, "ACT I", "Arrival on a dead station.", 0, [
@@ -144,6 +149,17 @@ let SETTINGS: Record<string, unknown> = {
   chat_text_color: "#ffb000",
 };
 
+let AI_BEHAVIOR = {
+  ctx_outline: true,
+  ctx_bible: true,
+  ctx_memory: true,
+  connector_enabled: false,
+  connector_allow_writes: false,
+  connector_confirm_writes: true,
+  connector_disabled_actions: [] as string[],
+  adaptive_override: "",
+};
+
 const NOTES: NoteDTO[] = [
   { id: 1, title: "The Warden Rules", content: "No one says its name. It speaks only in counts. Never show its face before Act III.", tags: [], pinned: true, psyke_links: [3], scene_links: [21] },
   { id: 2, title: "Static = grief motif", content: "The interference grows louder near loss. Pay it off when Vesper goes quiet.", tags: ["theme"], pinned: false, psyke_links: [], scene_links: [] },
@@ -163,6 +179,21 @@ const MOCK_CHARACTERS: CharacterDTO[] = [
 
 // In-session scene-tags per theme entry id (mock seeds the STATIC theme, id 6).
 const MOCK_THEME_SCENES: Record<number, number[]> = { 6: [1, 3] };
+
+const MOCK_VOICE_HISTORY: VoiceHistoryEntryDTO[] = [{
+  id: "voice-1", session_id: "preview-session", project_id_at_capture: 1,
+  writing_mode_at_capture: "screenplay", text: "Open on the dead station.",
+  original_text: "Open on the dead station.", preview: "Open on the dead station.",
+  created_at: Date.now() / 1000, updated_at: Date.now() / 1000,
+  language: "en", source: "preview", is_final: true, status: "pending",
+  committed_target: "", committed_at: null, duration_ms: 1800,
+  confidence: 0.96, error: "", merged_from: [], split_from: "",
+  corrections: [], sent_to_billy: false, billy_proposal_id: "",
+  billy_state: "", has_audio: false, sample_rate: 16000,
+}];
+const MOCK_VOICE_INTENTS = new Map<string, VoiceIntentPreviewDTO>();
+const MOCK_VOICE_BILLY = new Map<string, VoiceBillyProposalDTO>();
+let MOCK_VOICE_SEQ = 1;
 
 export function createMockApiClient(): ApiClient {
   return {
@@ -186,19 +217,25 @@ export function createMockApiClient(): ApiClient {
       await delay(120);
       const s = SCENES.find((x) => x.id === sceneId);
       if (!s) return { id: sceneId } as unknown as SceneDTO;
+      const { expected_revision: expectedRevision, ...writePatch } = patch;
+      if (expectedRevision && expectedRevision !== s.revision) {
+        throw new ApiRequestError("PATCH", `/api/projects/${_p}/scenes/${sceneId}`, 409,
+          "The scene changed after it was loaded.", "scene_conflict");
+      }
       // mirror the core: sort_order in a PATCH is a 0-based REORDER index — move + resequence
-      if (typeof patch.sort_order === "number") {
+      if (typeof writePatch.sort_order === "number") {
         const ordered = [...SCENES].sort((a, b) => a.sort_order - b.sort_order);
         const from = ordered.indexOf(s);
         ordered.splice(from, 1);
-        ordered.splice(Math.max(0, Math.min(ordered.length, patch.sort_order)), 0, s);
-        ordered.forEach((sc, i) => { sc.sort_order = i; }); // 0-based, mirroring the core
-        const { sort_order, ...rest } = patch;
+        ordered.splice(Math.max(0, Math.min(ordered.length, writePatch.sort_order as number)), 0, s);
+        ordered.forEach((sc, i) => { sc.sort_order = i; sc.revision = `mock-scene-${++MOCK_SCENE_REVISION}`; }); // 0-based, mirroring the core
+        const { sort_order, ...rest } = writePatch;
         Object.assign(s, rest);
         SCENES.sort((a, b) => a.sort_order - b.sort_order); // listScenes returns ordered, like the core
         return { ...s };
       }
-      Object.assign(s, patch);
+      Object.assign(s, writePatch);
+      s.revision = `mock-scene-${++MOCK_SCENE_REVISION}`;
       return { ...s };
     },
     async createScene(_p: number, body: Record<string, unknown>) { await delay(140); const id = SCENES.reduce((mx, s) => Math.max(mx, s.id), 0) + 1; const s = scene({ id, title: String((body.title as string) ?? "New Scene"), content: "", sort_order: SCENES.length + 1, order_index: SCENES.length + 1 }); SCENES.push(s); return { ...s }; },
@@ -341,6 +378,29 @@ export function createMockApiClient(): ApiClient {
         ],
       };
     },
+    async getAdapt() {
+      await delay(120);
+      return {
+        mode: AI_BEHAVIOR.adaptive_override || "Structure",
+        stage: "early",
+        health: "balanced",
+        description: "Shape the major turns before polishing individual scenes.",
+        suggestions: [
+          { text: "Clarify the Act II turn.", category: "structure" },
+          { text: "Tie the black-box payoff to Vesper's choice.", category: "continuity" },
+        ],
+        override: AI_BEHAVIOR.adaptive_override,
+      };
+    },
+    async getAiBehavior() {
+      await delay(80);
+      return { ...AI_BEHAVIOR, connector_disabled_actions: [...AI_BEHAVIOR.connector_disabled_actions] };
+    },
+    async patchAiBehavior(_p: number, body: Partial<typeof AI_BEHAVIOR>) {
+      await delay(80);
+      AI_BEHAVIOR = { ...AI_BEHAVIOR, ...body };
+      return { ...AI_BEHAVIOR, connector_disabled_actions: [...AI_BEHAVIOR.connector_disabled_actions] };
+    },
     async generateQuantumOutline(_p: number, body: { premise?: string }) {
       await delay(500);
       return {
@@ -382,6 +442,142 @@ export function createMockApiClient(): ApiClient {
         { node_id: "Act:1", etype: "Act", name: "ACT II", narrative: 0.1, thematic: 0.0, structural: 0.6, total: 0.17 },
       ].sort((a, b) => b.total - a.total);
       return { weights: { narrative: 0.45, thematic: 0.35, structural: 0.2 }, glow_threshold: 0.55, available: true, nodes };
+    },
+    async voiceStatus() {
+      await delay(80);
+      return { available: true, message: "Preview voice service", model_configured: true, device: "cpu" };
+    },
+    async voiceTranscribe() {
+      await delay(180);
+      return { text: "Preview transcription.", language: "en", error: "" };
+    },
+    async voiceTranscribeSegment(p: number) {
+      await delay(220);
+      const now = Date.now() / 1000;
+      const entry: VoiceHistoryEntryDTO = {
+        ...MOCK_VOICE_HISTORY[0]!, id: `voice-${++MOCK_VOICE_SEQ}`,
+        project_id_at_capture: p, text: "Preview transcription.",
+        original_text: "Preview transcription.", preview: "Preview transcription.",
+        created_at: now, updated_at: now, status: "pending", committed_target: "",
+        committed_at: null, sent_to_billy: false, billy_proposal_id: "", billy_state: "",
+      };
+      MOCK_VOICE_HISTORY.push(entry);
+      return { ...entry };
+    },
+    async voiceHistory(p: number) {
+      await delay(100);
+      return { entries: MOCK_VOICE_HISTORY.filter((entry) => entry.project_id_at_capture === p).map((entry) => ({ ...entry })) };
+    },
+    async voiceIntents() {
+      await delay(80);
+      return { intents: [{ id: "cleanup_transcript", type: "cleanup", label: "Clean transcript", enabled: true, requires_ai: false, requires_confirmation: true, reason_if_disabled: "", target_type: "transcript" }] };
+    },
+    async voiceIntentPreview(p: number, body: { intent_id: string; source_text: string; source_segment_ids?: string[] }) {
+      await delay(180);
+      const id = `intent-${++MOCK_VOICE_SEQ}`;
+      const after = body.source_text.replace(/\bcomma\b/gi, ",").replace(/\s+,/g, ",");
+      const preview: VoiceIntentPreviewDTO = {
+        id, intent_id: body.intent_id, intent_type: "cleanup_transcript", project_id: p,
+        created_at: Date.now() / 1000, target_summary: "Clean the selected transcript",
+        before_text: body.source_text, after_text: after, diff: null,
+        created_note_preview: null, created_psyke_entry_preview: null,
+        risk_level: "low", can_apply: true, reason_if_blocked: "",
+        commit_target_id: "", gn_field: "", gn_ref: null,
+        source_segment_ids: [...(body.source_segment_ids ?? [])],
+      };
+      MOCK_VOICE_INTENTS.set(id, preview);
+      return { ...preview };
+    },
+    async voiceIntentApply(p: number, body: { preview_id: string }) {
+      await delay(140);
+      const preview = MOCK_VOICE_INTENTS.get(body.preview_id);
+      if (!preview || preview.project_id !== p) return { applied: false, message: "Unknown intent preview." };
+      for (const id of preview.source_segment_ids) {
+        const entry = MOCK_VOICE_HISTORY.find((item) => item.id === id);
+        if (entry?.project_id_at_capture === p) { entry.text = preview.after_text ?? entry.text; entry.status = "edited"; entry.updated_at = Date.now() / 1000; }
+      }
+      MOCK_VOICE_INTENTS.delete(body.preview_id);
+      return { applied: true, message: "Cleanup applied.", cleaned_text: preview.after_text ?? "" };
+    },
+    async voiceIntentCancel(p: number, body: { preview_id: string }) {
+      await delay(80);
+      const preview = MOCK_VOICE_INTENTS.get(body.preview_id);
+      const cancelled = Boolean(preview?.project_id === p && MOCK_VOICE_INTENTS.delete(body.preview_id));
+      return { cancelled, message: cancelled ? "Intent preview dismissed." : "Unknown intent preview." };
+    },
+    async voiceBillyOps() {
+      await delay(80);
+      return { operations: [
+        { id: "billy_ask", label: "Ask Billy", enabled: true, reason_if_disabled: "" },
+        { id: "billy_continue_cursor", label: "Continue in scene", enabled: true, reason_if_disabled: "" },
+      ] };
+    },
+    async voiceBillyGenerate(p: number, body: { operation: string; transcript_text: string; source_segment_ids?: string[] }) {
+      await delay(240);
+      const id = `billy-${++MOCK_VOICE_SEQ}`;
+      const canApply = body.operation === "billy_continue_cursor";
+      const proposal: VoiceBillyProposalDTO = {
+        id, proposal_type: canApply ? "insert_at_cursor" : "chat_only",
+        operation: body.operation, project_id: p, created_at: Date.now() / 1000,
+        source_segment_ids: [...(body.source_segment_ids ?? [])], prompt_text: body.transcript_text,
+        response_text: canApply ? "The station answers with a second, impossible heartbeat." : "The opening works best if the silence establishes the threat before exposition.",
+        target_summary: canApply ? "Append to active scene" : "Billy response",
+        before_text: null, after_text: canApply ? "The station answers with a second, impossible heartbeat." : null,
+        diff: null, note_preview: null, psyke_preview: null, gn_ref: null, gn_field: "",
+        can_apply: canApply, reason_if_blocked: canApply ? "" : "Nothing to apply.",
+        applied: false, cancelled: false, applied_at: null,
+      };
+      MOCK_VOICE_BILLY.set(id, proposal);
+      for (const entryId of proposal.source_segment_ids) {
+        const entry = MOCK_VOICE_HISTORY.find((item) => item.id === entryId);
+        if (entry?.project_id_at_capture === p) { entry.sent_to_billy = true; entry.billy_proposal_id = id; entry.billy_state = "proposed"; }
+      }
+      return { ...proposal };
+    },
+    async voiceBillyApply(p: number, body: { proposal_id: string }) {
+      await delay(160);
+      const proposal = MOCK_VOICE_BILLY.get(body.proposal_id);
+      if (!proposal || proposal.project_id !== p) return { applied: false, message: "Unknown Billy proposal." };
+      if (!proposal.can_apply) return { applied: false, message: "Nothing to apply." };
+      MOCK_VOICE_BILLY.delete(body.proposal_id);
+      return { applied: true, message: "Billy's edit applied.", inserted_text: proposal.after_text ?? "" };
+    },
+    async voiceBillyCancel(p: number, body: { proposal_id: string }) {
+      await delay(80);
+      const proposal = MOCK_VOICE_BILLY.get(body.proposal_id);
+      const cancelled = Boolean(proposal?.project_id === p && MOCK_VOICE_BILLY.delete(body.proposal_id));
+      if (cancelled) {
+        for (const entryId of proposal?.source_segment_ids ?? []) {
+          const entry = MOCK_VOICE_HISTORY.find((item) => item.id === entryId);
+          if (entry?.project_id_at_capture === p && entry.billy_state === "proposed") entry.billy_state = "cancelled";
+        }
+      }
+      return { cancelled, message: cancelled ? "Billy proposal dismissed." : "Unknown Billy proposal." };
+    },
+    async voiceCommitTargets() {
+      await delay(80);
+      return { targets: [
+        { id: "active_cursor", label: "Active scene", mode: "all", enabled: true, target_type: "cursor", reason_if_disabled: "" },
+        { id: "note", label: "New Note", mode: "all", enabled: true, target_type: "note", reason_if_disabled: "" },
+      ] };
+    },
+    async voiceCommit(p: number, body: { text: string; target_id: string; source_segment_ids?: string[] }) {
+      await delay(140);
+      for (const entryId of body.source_segment_ids ?? []) {
+        const entry = MOCK_VOICE_HISTORY.find((item) => item.id === entryId);
+        if (entry?.project_id_at_capture === p) { entry.status = "committed"; entry.committed_target = body.target_id; entry.committed_at = Date.now() / 1000; }
+      }
+      return body.target_id === "active_cursor"
+        ? { applied: true, message: "Committed to active scene.", inserted_text: body.text }
+        : { applied: true, message: "Note created." };
+    },
+    async voiceCanUndo() {
+      await delay(60);
+      return { can_undo: false, reason: "Nothing to undo in preview." };
+    },
+    async voiceUndo() {
+      await delay(80);
+      return { undone: false, message: "Nothing to undo in preview." };
     },
     async runCounterpart(_p: number, body: { mode?: string }) {
       await delay(500);
@@ -432,6 +628,13 @@ export function createMockApiClient(): ApiClient {
       return j.done < j.total
         ? { job_id: jobId, status: "running", done: j.done, total: j.total }
         : { job_id: jobId, status: "done", done: j.total, total: j.total, result: j.result };
+    },
+    async cancelExtractJob(_p: number, jobId: string) {
+      await delay(80);
+      const job = MOCK_EXTRACT_JOBS[jobId];
+      if (!job) return { job_id: jobId, status: "error", done: 0, total: 0, error: "unknown job" };
+      delete MOCK_EXTRACT_JOBS[jobId];
+      return { job_id: jobId, status: "cancelled", done: job.done, total: job.total };
     },
     async applyExtraction(_p: number, body: { scenes?: { scene_id?: number; characters?: string[]; who_knows_what?: string; relations?: unknown[] }[]; setup_payoffs?: unknown[] }) {
       await delay(500);

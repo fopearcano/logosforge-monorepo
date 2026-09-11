@@ -1,8 +1,9 @@
-import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import type { ProjectDTO, AiBehaviorDTO } from "@logosforge/ui-contracts";
 import { PanelShell, Corners, type PanelProps } from "../shell/PanelShell";
 import { useProjects, useSettings } from "../../hooks";
 import { useStudio } from "../../adapters/StudioProvider";
+import { createLatestRequestGate } from "../../hooks/latestRequest";
 
 const panelBox: CSSProperties = {
   position: "relative",
@@ -103,14 +104,14 @@ function projectCard(p: ProjectDTO) {
 }
 
 /** A small on/off switch wired to a settings boolean. */
-function Toggle({ on, label, onClick }: { on: boolean; label: ReactNode; onClick: () => void }) {
+function Toggle({ on, label, onClick, disabled = false }: { on: boolean; label: ReactNode; onClick: () => void; disabled?: boolean }) {
   return (
-    <div onClick={onClick} style={{ display: "flex", alignItems: "center", gap: 9, cursor: "pointer", padding: "5px 0" }}>
+    <button type="button" role="switch" aria-checked={on} disabled={disabled} onClick={onClick} style={{ width: "100%", border: "none", background: "transparent", font: "inherit", textAlign: "left", display: "flex", alignItems: "center", gap: 9, cursor: disabled ? "default" : "pointer", padding: "5px 0", opacity: disabled ? 0.55 : 1 }}>
       <span style={{ position: "relative", width: 28, height: 15, borderRadius: 8, background: on ? "var(--accent)" : "var(--line2)", flex: "none", transition: "background .15s" }}>
         <span style={{ position: "absolute", top: 2, left: on ? 15 : 2, width: 11, height: 11, borderRadius: "50%", background: "var(--strong)", transition: "left .15s" }} />
       </span>
       <span style={{ fontSize: 10, color: on ? "var(--strong)" : "var(--txt2)" }}>{label}</span>
-    </div>
+    </button>
   );
 }
 
@@ -131,17 +132,49 @@ export function CrossCutting(props: PanelProps) {
   // are REAL controls the core honours (build_chat_context + connector execute),
   // not the former hardcoded chips.
   const { api, projectId } = useStudio();
+  const requests = useRef(createLatestRequestGate()).current;
+  useEffect(() => { requests.open(); return () => requests.close(); }, [requests]);
+  const projectIdRef = useRef(projectId);
+  projectIdRef.current = projectId;
   const [behavior, setBehavior] = useState<AiBehaviorDTO | null>(null);
-  useEffect(() => {
+  const [behaviorError, setBehaviorError] = useState("");
+  const [behaviorBusy, setBehaviorBusy] = useState(false);
+  const loadBehavior = useCallback(async (preserveError = false) => {
     if (projectId == null) { setBehavior(null); return; }
-    let alive = true;
-    api.getAiBehavior(projectId).then((v) => { if (alive) setBehavior(v); }).catch(() => { if (alive) setBehavior(null); });
-    return () => { alive = false; };
-  }, [api, projectId]);
+    const token = requests.begin("behavior");
+    try {
+      const value = await api.getAiBehavior(projectId);
+      if (requests.isCurrent(token)) { setBehavior(value); if (!preserveError) setBehaviorError(""); }
+    } catch (error) {
+      if (requests.isCurrent(token)) setBehaviorError(error instanceof Error ? error.message : String(error));
+    }
+  }, [api, projectId, requests]);
+  useEffect(() => {
+    setBehavior(null);
+    setBehaviorBusy(false);
+    void loadBehavior(false);
+    return () => requests.invalidate("behavior");
+  }, [loadBehavior, requests]);
   const setB = (p: Partial<AiBehaviorDTO>) => {
     if (projectId == null) return;
+    const ownerProjectId = projectId;
+    const token = requests.begin("behavior");
     setBehavior((cur) => (cur ? { ...cur, ...p } : cur));   // optimistic
-    api.patchAiBehavior(projectId, p).then((v) => setBehavior(v)).catch(() => {});
+    setBehaviorBusy(true);
+    setBehaviorError("");
+    void api.patchAiBehavior(projectId, p).then((value) => {
+      if (requests.isCurrent(token)) { setBehavior(value); setBehaviorError(""); }
+    }).catch((error) => {
+      if (requests.isCurrent(token)) {
+        setBehaviorError(error instanceof Error ? error.message : String(error));
+        setBehavior(null);
+        void loadBehavior(true).finally(() => {
+          if (projectIdRef.current === ownerProjectId) setBehaviorBusy(false);
+        });
+      }
+    }).finally(() => {
+      if (requests.isCurrent(token)) setBehaviorBusy(false);
+    });
   };
 
   // Grammar / spelling / style check (stateless rule-based; the same core checker
@@ -149,13 +182,44 @@ export function CrossCutting(props: PanelProps) {
   const [gramText, setGramText] = useState("");
   const [gramIssues, setGramIssues] = useState<{ lang: string; items: { issue_type: string; message: string }[] } | null>(null);
   const [gramBusy, setGramBusy] = useState(false);
+  const [gramError, setGramError] = useState("");
+  const gramBusyRef = useRef(false);
+  const gramTextRef = useRef(gramText);
+  gramTextRef.current = gramText;
+  useEffect(() => {
+    requests.invalidate("grammar");
+    gramBusyRef.current = false;
+    setGramBusy(false);
+    setGramIssues(null);
+    setGramError("");
+  }, [api, projectId, requests]);
+  const changeGrammarText = (text: string) => {
+    requests.invalidate("grammar");
+    gramBusyRef.current = false;
+    setGramBusy(false);
+    setGramText(text);
+    setGramIssues(null);
+    setGramError("");
+  };
   const runGrammar = () => {
-    if (projectId == null || !gramText.trim() || gramBusy) return;
+    if (projectId == null || !gramText.trim() || gramBusyRef.current) return;
+    const submitted = gramText;
+    const token = requests.begin("grammar");
+    gramBusyRef.current = true;
     setGramBusy(true);
+    setGramError("");
     api.grammarCheck(projectId, { text: gramText })
-      .then((r) => setGramIssues({ lang: r.language, items: r.issues.map((i) => ({ issue_type: i.issue_type, message: i.message })) }))
-      .catch(() => setGramIssues(null))
-      .finally(() => setGramBusy(false));
+      .then((r) => {
+        if (!requests.isCurrent(token)) return;
+        if (gramTextRef.current !== submitted) {
+          setGramIssues(null);
+          setGramError("The passage changed while checking — run Grammar again.");
+          return;
+        }
+        setGramIssues({ lang: r.language, items: r.issues.map((i) => ({ issue_type: i.issue_type, message: i.message })) });
+      })
+      .catch((error) => { if (requests.isCurrent(token)) { setGramIssues(null); setGramError(error instanceof Error ? error.message : String(error)); } })
+      .finally(() => { if (requests.isCurrent(token)) { gramBusyRef.current = false; setGramBusy(false); } });
   };
 
   return (
@@ -216,9 +280,9 @@ export function CrossCutting(props: PanelProps) {
                 <div style={{ fontSize: 7.5, letterSpacing: ".16em", color: "var(--txt3)", marginBottom: 8 }}>CHAT APPEARANCE</div>
                 <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 11, fontSize: 10, color: "var(--txt2)" }}>
                   <span style={{ width: 52 }}>Opacity</span>
-                  <span onClick={() => setOpacity(opacity - 4)} style={{ cursor: "pointer", width: 18, height: 18, display: "grid", placeItems: "center", border: "1px solid var(--line2)", color: "var(--txt2)" }}>−</span>
+                  <button type="button" disabled={opacity <= 0} aria-label="Decrease chat opacity" onClick={() => setOpacity(opacity - 4)} style={{ font: "inherit", padding: 0, background: "transparent", cursor: opacity <= 0 ? "default" : "pointer", width: 18, height: 18, display: "grid", placeItems: "center", border: "1px solid var(--line2)", color: "var(--txt2)" }}>−</button>
                   <span style={{ width: 36, textAlign: "center", color: "var(--strong)" }}>{opacity}%</span>
-                  <span onClick={() => setOpacity(opacity + 4)} style={{ cursor: "pointer", width: 18, height: 18, display: "grid", placeItems: "center", border: "1px solid var(--line2)", color: "var(--txt2)" }}>＋</span>
+                  <button type="button" disabled={opacity >= 100} aria-label="Increase chat opacity" onClick={() => setOpacity(opacity + 4)} style={{ font: "inherit", padding: 0, background: "transparent", cursor: opacity >= 100 ? "default" : "pointer", width: 18, height: 18, display: "grid", placeItems: "center", border: "1px solid var(--line2)", color: "var(--txt2)" }}>＋</button>
                 </div>
                 <div style={{ display: "flex", gap: 18, fontSize: 9, color: "var(--txt3)" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 16, height: 16, border: "1px solid var(--line2)", background: sStr("chat_bg_color", "#3a2a55") }} />background</div>
@@ -230,24 +294,25 @@ export function CrossCutting(props: PanelProps) {
 
           <div style={{ width: 380, flex: "none", padding: "12px 14px", background: "var(--panel2)", overflowY: "auto" }}>
             <div style={{ fontSize: 7.5, letterSpacing: ".16em", color: "var(--txt3)", marginBottom: 4 }}>WHAT THE AI SEES · chat grounding</div>
+            {behaviorError && <div role="alert" style={{ fontSize: 8.5, color: "var(--blocking)", lineHeight: 1.45, marginBottom: 8 }}>AI behavior unavailable — {behaviorError} <button type="button" disabled={behaviorBusy} onClick={() => { void loadBehavior(false); }} style={{ font: "inherit", color: "var(--accent)", border: "none", background: "transparent", cursor: behaviorBusy ? "default" : "pointer", padding: "0 3px" }}>RETRY</button></div>}
             {behavior == null ? (
-              <div style={{ fontSize: 9, color: "var(--txt3)", marginBottom: 12 }}>{projectId == null ? "Open a project." : "Loading…"}</div>
+              <div style={{ fontSize: 9, color: "var(--txt3)", marginBottom: 12 }}>{projectId == null ? "Open a project." : behaviorError ? "Unavailable." : "Loading…"}</div>
             ) : (
               <div style={{ marginBottom: 12 }}>
-                <Toggle on={behavior.ctx_outline} label="Outline" onClick={() => setB({ ctx_outline: !behavior.ctx_outline })} />
-                <Toggle on={behavior.ctx_bible} label="Story bible (PSYKE)" onClick={() => setB({ ctx_bible: !behavior.ctx_bible })} />
-                <Toggle on={behavior.ctx_memory} label="Story memory" onClick={() => setB({ ctx_memory: !behavior.ctx_memory })} />
+                <Toggle on={behavior.ctx_outline} label="Outline" disabled={behaviorBusy} onClick={() => setB({ ctx_outline: !behavior.ctx_outline })} />
+                <Toggle on={behavior.ctx_bible} label="Story bible (PSYKE)" disabled={behaviorBusy} onClick={() => setB({ ctx_bible: !behavior.ctx_bible })} />
+                <Toggle on={behavior.ctx_memory} label="Story memory" disabled={behaviorBusy} onClick={() => setB({ ctx_memory: !behavior.ctx_memory })} />
                 <div style={{ fontSize: 7, color: "var(--txt3)", marginTop: 3, lineHeight: 1.5 }}>What Billy folds into its prompt for this manuscript. Off = that source is left out.</div>
               </div>
             )}
             <div style={{ fontSize: 7.5, letterSpacing: ".16em", color: "var(--txt3)", marginBottom: 4 }}>CONNECTOR PERMISSIONS · AI actions</div>
             {behavior == null ? (
-              <div style={{ fontSize: 9, color: "var(--txt3)" }}>{projectId == null ? "Open a project." : "Loading…"}</div>
+              <div style={{ fontSize: 9, color: "var(--txt3)" }}>{projectId == null ? "Open a project." : behaviorError ? "Unavailable." : "Loading…"}</div>
             ) : (
               <>
-                <Toggle on={behavior.connector_enabled} label="Connector enabled" onClick={() => setB({ connector_enabled: !behavior.connector_enabled })} />
-                <Toggle on={behavior.connector_allow_writes} label="Allow write actions" onClick={() => setB({ connector_allow_writes: !behavior.connector_allow_writes })} />
-                <Toggle on={behavior.connector_confirm_writes} label="Confirm before writes" onClick={() => setB({ connector_confirm_writes: !behavior.connector_confirm_writes })} />
+                <Toggle on={behavior.connector_enabled} label="Connector enabled" disabled={behaviorBusy} onClick={() => setB({ connector_enabled: !behavior.connector_enabled })} />
+                <Toggle on={behavior.connector_allow_writes} label="Allow write actions" disabled={behaviorBusy} onClick={() => setB({ connector_allow_writes: !behavior.connector_allow_writes })} />
+                <Toggle on={behavior.connector_confirm_writes} label="Confirm before writes" disabled={behaviorBusy} onClick={() => setB({ connector_confirm_writes: !behavior.connector_confirm_writes })} />
                 <div style={{ fontSize: 7, color: "var(--txt3)", marginTop: 4, lineHeight: 1.5, letterSpacing: ".04em" }}>
                   Enforced by the core: with the connector off, the AI can't run actions; write actions need "Allow write actions".
                   {behavior.connector_disabled_actions.length > 0 && ` · ${behavior.connector_disabled_actions.length} action(s) disabled`}
@@ -258,8 +323,9 @@ export function CrossCutting(props: PanelProps) {
             <div style={{ fontSize: 7.5, letterSpacing: ".16em", color: "var(--txt3)", margin: "16px 0 6px" }}>GRAMMAR · spelling / style check</div>
             <textarea
               value={gramText}
-              onChange={(e) => setGramText(e.target.value)}
+              onChange={(e) => changeGrammarText(e.target.value)}
               placeholder="Paste a passage to check…"
+              aria-label="Passage to check for grammar and style"
               rows={3}
               disabled={projectId == null}
               style={{ width: "100%", boxSizing: "border-box", resize: "vertical", background: "var(--tint)", border: "1px solid var(--line2)", color: "var(--txt)", fontFamily: "inherit", fontSize: 10, padding: "6px 8px", outline: "none" }}
@@ -271,6 +337,7 @@ export function CrossCutting(props: PanelProps) {
               </button>
               {gramIssues && <span style={{ fontSize: 8, color: gramIssues.items.length ? "var(--amber-b,#ffb454)" : "var(--green)", letterSpacing: ".06em" }}>{gramIssues.items.length === 0 ? "✓ no issues" : `${gramIssues.items.length} issue(s)`} · {gramIssues.lang}</span>}
             </div>
+            {gramError && <div role="alert" style={{ marginTop: 6, fontSize: 8.5, color: "var(--blocking)", lineHeight: 1.45 }}>Grammar check failed — {gramError}</div>}
             {gramIssues && gramIssues.items.length > 0 && (
               <div style={{ marginTop: 7, display: "flex", flexDirection: "column", gap: 4, maxHeight: 130, overflowY: "auto" }}>
                 {gramIssues.items.slice(0, 40).map((it, i) => (

@@ -3,7 +3,8 @@ import type { ChatMessageDTO } from "@logosforge/ui-contracts";
 import { PanelShell, Corners, type PanelProps } from "../shell/PanelShell";
 import { useStudio } from "../../adapters/StudioProvider";
 import { useSelection } from "../../adapters/selection";
-import { useApplyToScene, ApplyDiffModal } from "./applyToScene";
+import { useApplyToScene, ApplyDiffModal, type SceneTarget } from "./applyToScene";
+import { createLatestRequestGate } from "../../hooks/latestRequest";
 
 const applyBtn: CSSProperties = { fontSize: 8, letterSpacing: ".06em", color: "var(--accent)", background: "transparent", border: "1px solid var(--line-cy,#2b6f8f)", padding: "3px 8px", cursor: "pointer" };
 
@@ -30,14 +31,23 @@ export function AssistantDock(props: PanelProps) {
   const { api, projectId } = useStudio();
   const { selection } = useSelection();
   const { target, apply } = useApplyToScene();
+  const requests = useRef(createLatestRequestGate()).current;
+  useEffect(() => { requests.open(); return () => requests.close(); }, [requests]);
+  const pendingRef = useRef(false);
   const [messages, setMessages] = useState<ChatMessageDTO[]>([]);
   const [input, setInput] = useState("");
   const [pending, setPending] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [pendingApply, setPendingApply] = useState<{ proposed: string; badge: string } | null>(null);
+  const [pendingApply, setPendingApply] = useState<{ proposed: string; badge: string; target: SceneTarget } | null>(null);
   // "Go Irrational" — per-message surreal creative provocations (needs an active scene).
   const [irrational, setIrrational] = useState(false);
   const logRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    requests.invalidate("chat");
+    pendingRef.current = false;
+    setMessages([]); setPending(false); setErr(null); setPendingApply(null);
+  }, [api, projectId, requests]);
 
   useEffect(() => {
     // scroll to the newest message
@@ -48,7 +58,9 @@ export function AssistantDock(props: PanelProps) {
   const send = useCallback(
     async (text: string) => {
       const message = text.trim();
-      if (!message || pending || projectId == null) return;
+      if (!message || pendingRef.current || projectId == null) return;
+      const token = requests.begin("chat");
+      pendingRef.current = true;
       setErr(null);
       const history = messages;
       setMessages((m) => [...m, { role: "user", content: message }]);
@@ -63,15 +75,24 @@ export function AssistantDock(props: PanelProps) {
           active_scene_id: selection.sceneId ?? undefined,
           irrational: irrational || undefined,
         });
-        setMessages((m) => [...m, { role: "assistant", content: res.reply }]);
+        if (requests.isCurrent(token)) setMessages((m) => [...m, { role: "assistant", content: res.reply }]);
       } catch (e) {
-        setErr(e instanceof Error ? e.message : String(e));
+        if (requests.isCurrent(token)) setErr(e instanceof Error ? e.message : String(e));
       } finally {
-        setPending(false);
+        if (requests.isCurrent(token)) {
+          pendingRef.current = false;
+          setPending(false);
+        }
       }
     },
-    [api, projectId, pending, messages, selection, irrational],
+    [api, projectId, messages, selection, irrational, requests],
   );
+
+  const newChat = () => {
+    requests.invalidate("chat");
+    pendingRef.current = false;
+    setMessages([]); setPending(false); setErr(null); setPendingApply(null);
+  };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey || !e.shiftKey)) {
@@ -92,7 +113,7 @@ export function AssistantDock(props: PanelProps) {
           <span style={{ fontSize: 8, color: "var(--txt3)", letterSpacing: ".08em" }}>project-aware assistant</span>
           <div style={{ flex: 1 }} />
           {messages.length > 0 && (
-            <button type="button" onClick={() => { setMessages([]); setErr(null); }} style={{ fontSize: 8, color: "var(--txt3)", background: "transparent", border: "1px solid var(--line2)", padding: "3px 8px", cursor: "pointer", letterSpacing: ".08em" }}>NEW CHAT</button>
+            <button type="button" onClick={newChat} style={{ fontSize: 8, color: "var(--txt3)", background: "transparent", border: "1px solid var(--line2)", padding: "3px 8px", cursor: "pointer", letterSpacing: ".08em" }}>NEW CHAT</button>
           )}
         </div>
 
@@ -123,8 +144,8 @@ export function AssistantDock(props: PanelProps) {
                 {target && m.content.trim() && (
                   <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
                     <span style={{ fontSize: 7.5, letterSpacing: ".1em", color: "var(--txt3)" }}>→ {target.title}</span>
-                    <button type="button" style={applyBtn} title={`Rewrite ${target.title} with this (diff + confirm)`} onClick={() => setPendingApply({ proposed: m.content, badge: "REWRITE" })}>↧ REPLACE</button>
-                    <button type="button" style={applyBtn} title={`Append this to ${target.title} (diff + confirm)`} onClick={() => setPendingApply({ proposed: (target.content ? target.content + "\n\n" : "") + m.content, badge: "APPEND" })}>＋ APPEND</button>
+                    <button type="button" style={applyBtn} title={`Rewrite ${target.title} with this (diff + confirm)`} onClick={() => setPendingApply({ proposed: m.content, badge: "REWRITE", target: { ...target } })}>↧ REPLACE</button>
+                    <button type="button" style={applyBtn} title={`Append this to ${target.title} (diff + confirm)`} onClick={() => setPendingApply({ proposed: (target.content ? target.content + "\n\n" : "") + m.content, badge: "APPEND", target: { ...target } })}>＋ APPEND</button>
                   </div>
                 )}
               </div>
@@ -146,8 +167,7 @@ export function AssistantDock(props: PanelProps) {
         {/* input */}
         <div style={{ flex: "none", borderTop: "1px solid var(--line2)", padding: "11px 14px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
-            <button
-              type="button"
+            <button type="button"
               onClick={() => setIrrational((v) => !v)}
               title="Go Irrational — inject surreal creative provocations (temporal displacement, entity blending) into the next reply. Needs an active scene."
               style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 8.5, letterSpacing: ".08em", border: `1px solid ${irrational ? "var(--violet,#b07cff)" : "var(--line2)"}`, background: irrational ? "rgba(176,124,255,.12)" : "transparent", color: irrational ? "var(--violet,#b07cff)" : "var(--txt3)", padding: "3px 9px", cursor: "pointer", font: "inherit" }}
@@ -173,13 +193,13 @@ export function AssistantDock(props: PanelProps) {
           </div>
         </div>
 
-        {pendingApply && target && (
+        {pendingApply && (
           <ApplyDiffModal
-            title={target.title.toUpperCase()}
+            title={pendingApply.target.title.toUpperCase()}
             badge={pendingApply.badge}
-            original={target.content}
+            original={pendingApply.target.content}
             proposed={pendingApply.proposed}
-            onConfirm={() => apply(pendingApply.proposed)}
+            onConfirm={() => apply(pendingApply.proposed, pendingApply.target)}
             onClose={() => setPendingApply(null)}
           />
         )}

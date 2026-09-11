@@ -5,3 +5,4 @@
  */
 export * from "./useResource";
 export * from "./resources";
+export * from "./useMountedRef";

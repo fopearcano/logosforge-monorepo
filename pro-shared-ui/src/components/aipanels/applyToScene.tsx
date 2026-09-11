@@ -1,7 +1,10 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useStudio } from "../../adapters/StudioProvider";
 import { useSelection } from "../../adapters/selection";
 import { useScenes } from "../../hooks";
+import { flushPendingProjectSaves, trackProjectWrite } from "../../adapters/projectSaveCoordinator";
+import { ModalPortal } from "../common/ModalPortal";
+import { useModalDialog } from "../common/useModalDialog";
 
 /**
  * The single mutation gate for AI-proposed prose. The AI companions (Billy,
@@ -12,34 +15,66 @@ import { useScenes } from "../../hooks";
  */
 
 export interface SceneTarget {
+  projectId: number;
   id: number;
   title: string;
   content: string;
 }
 
+export function assertSceneContentUnchanged(expected: string, current: string): void {
+  if (current !== expected) {
+    throw new Error("The scene changed after this proposal was generated. Reopen the proposal against the latest text.");
+  }
+}
+
+export function assertApplyTargetUnchanged(
+  expected: SceneTarget,
+  activeProjectId: number | null,
+  currentContent: string,
+): void {
+  if (activeProjectId !== expected.projectId) {
+    throw new Error("The active project changed after this proposal was opened. Reopen it in the intended project.");
+  }
+  assertSceneContentUnchanged(expected.content, currentContent);
+}
+
 /** Resolve the active scene + a confirmed-apply writer over the core. */
-export function useApplyToScene(): { target: SceneTarget | null; apply: (proposed: string) => Promise<void> } {
+export function useApplyToScene(): {
+  target: SceneTarget | null;
+  apply: (proposed: string, expected: SceneTarget) => Promise<void>;
+} {
   const { api, projectId } = useStudio();
   const { selection } = useSelection();
   const scenes = useScenes();
+  const projectIdRef = useRef(projectId);
+  projectIdRef.current = projectId;
 
   const target = useMemo<SceneTarget | null>(() => {
     const id = selection.sceneId;
-    if (id == null) return null;
+    if (projectId == null || id == null) return null;
     const sc = scenes.data?.find((s) => s.id === id);
-    if (sc) return { id: sc.id, title: sc.title || `Scene ${sc.id}`, content: sc.content ?? "" };
-    return { id, title: `Scene ${id}`, content: "" };
-  }, [selection.sceneId, scenes.data]);
+    if (sc) return { projectId, id: sc.id, title: sc.title || `Scene ${sc.id}`, content: sc.content ?? "" };
+    return { projectId, id, title: `Scene ${id}`, content: "" };
+  }, [projectId, selection.sceneId, scenes.data]);
 
   const apply = useCallback(
-    async (proposed: string) => {
-      if (projectId == null || target == null) throw new Error("No active scene — open a scene in the Manuscript first.");
-      await api.updateScene(projectId, target.id, { content: proposed });
+    async (proposed: string, expected: SceneTarget) => {
+      if (projectIdRef.current !== expected.projectId) {
+        throw new Error("The active project changed after this proposal was opened. Reopen it in the intended project.");
+      }
+      await flushPendingProjectSaves();
+      const current = (await api.listScenes(expected.projectId)).find((scene) => scene.id === expected.id);
+      if (!current) throw new Error("The target scene no longer exists.");
+      assertApplyTargetUnchanged(expected, projectIdRef.current, current.content ?? "");
+      await trackProjectWrite(api.updateScene(expected.projectId, expected.id, {
+        content: proposed,
+        ...(current.revision ? { expected_revision: current.revision } : {}),
+      }));
       // scene_changed fires on the core stream → every useScenes (incl. the editor)
       // refetches; refetch here too so this panel's copy is immediately current.
-      scenes.refetch();
+      if (projectIdRef.current === expected.projectId) scenes.refetch();
     },
-    [api, projectId, target, scenes],
+    [api, scenes],
   );
 
   return { target, apply };
@@ -117,6 +152,11 @@ export function ApplyDiffModal({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const titleId = useId();
+  const descriptionId = useId();
+
+  useModalDialog({ open: true, dialogRef, onClose, canClose: !busy });
 
   const rows = useMemo(() => lineDiff(original, proposed), [original, proposed]);
   const adds = rows.reduce((k, r) => k + (r.type === "add" ? 1 : 0), 0);
@@ -138,28 +178,28 @@ export function ApplyDiffModal({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !busy) { e.preventDefault(); onClose(); }
-      else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void confirm(); }
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void confirm(); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [busy, onClose, confirm]);
+  }, [confirm]);
 
   return (
-    <div style={backdrop} onMouseDown={() => { if (!busy) onClose(); }}>
-      <div style={modal} onMouseDown={(e) => e.stopPropagation()}>
+    <ModalPortal>
+    <div data-lf-modal-layer style={backdrop} onClick={(event) => { if (!busy && event.target === event.currentTarget) onClose(); }}>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={descriptionId} aria-busy={busy} tabIndex={-1} style={modal}>
         {/* header */}
         <div style={{ flex: "none", padding: "13px 16px", borderBottom: "1px solid var(--line)", display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ fontFamily: "'Chakra Petch',sans-serif", fontWeight: 600, fontSize: 15, letterSpacing: ".08em", color: "var(--strong)" }}>CONTROLLED APPLY</span>
+          <span id={titleId} style={{ fontFamily: "'Chakra Petch',sans-serif", fontWeight: 600, fontSize: 15, letterSpacing: ".08em", color: "var(--strong)" }}>CONTROLLED APPLY</span>
           <span style={{ fontSize: 9, color: "var(--cyan)", border: "1px solid var(--line-cy,#2b6f8f)", padding: "2px 8px", letterSpacing: ".1em" }}>{badge} · {title}</span>
           <div style={{ flex: 1 }} />
           <span style={{ fontSize: 9, color: "var(--green)" }}>+{adds}</span>
           <span style={{ fontSize: 9, color: "var(--blocking)" }}>−{dels}</span>
-          <button type="button" onClick={() => { if (!busy) onClose(); }} aria-label="Close" style={{ background: "transparent", border: "none", color: "var(--txt3)", fontSize: 14, cursor: busy ? "default" : "pointer", padding: "0 2px" }}>✕</button>
+          <button type="button" disabled={busy} onClick={onClose} aria-label="Close" style={{ background: "transparent", border: "none", color: "var(--txt3)", fontSize: 14, cursor: busy ? "default" : "pointer", padding: "0 2px", opacity: busy ? 0.5 : 1 }}>✕</button>
         </div>
 
         {/* sub-caption */}
-        <div style={{ flex: "none", padding: "6px 16px", borderBottom: "1px solid var(--line2)", fontSize: 8.5, letterSpacing: ".14em", color: "var(--txt3)" }}>
+        <div id={descriptionId} style={{ flex: "none", padding: "6px 16px", borderBottom: "1px solid var(--line2)", fontSize: 8.5, letterSpacing: ".14em", color: "var(--txt3)" }}>
           DIFF · ORIGINAL → PROPOSED · confirm writes to the scene (non-destructive — the editor updates live)
         </div>
 
@@ -188,7 +228,7 @@ export function ApplyDiffModal({
         {/* footer */}
         <div style={{ flex: "none", borderTop: "1px solid var(--line)", display: "flex", alignItems: "center", gap: 11, padding: "12px 16px" }}>
           {error
-            ? <span style={{ fontSize: 9, color: "var(--crimson)", lineHeight: 1.4 }}>⚠ {error}</span>
+            ? <span role="alert" style={{ fontSize: 9, color: "var(--crimson)", lineHeight: 1.4 }}>⚠ {error}</span>
             : <span style={{ fontSize: 8.5, color: "var(--txt3)", letterSpacing: ".04em" }}>↳ nothing is auto-applied · this is the single mutation gate</span>}
           <div style={{ flex: 1 }} />
           <button type="button" onClick={() => { if (!busy) onClose(); }} disabled={busy}
@@ -200,5 +240,6 @@ export function ApplyDiffModal({
         </div>
       </div>
     </div>
+    </ModalPortal>
   );
 }

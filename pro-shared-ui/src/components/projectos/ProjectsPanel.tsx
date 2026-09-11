@@ -1,9 +1,11 @@
-import { useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { WRITING_MODES, type ProjectDTO } from "@logosforge/ui-contracts";
 import { PanelShell, Corners, type PanelProps } from "../shell/PanelShell";
 import { useStudio, useSelectProject, useRefreshProjects } from "../../adapters/StudioProvider";
 import { parseProjectBundle, importProjectBundle } from "../../adapters/projectBundle";
 import { useProjects } from "../../hooks";
+import { flushPendingProjectSaves, markProjectSavePending, prepareProjectHandoff, registerProjectFlusher } from "../../adapters/projectSaveCoordinator";
+import { useMountedRef } from "../../hooks/useMountedRef";
 
 /**
  * Projects — full lifecycle management (list · open · create · rename · delete)
@@ -41,13 +43,73 @@ export function ProjectsPanel(props: PanelProps) {
 
   const list: ProjectDTO[] = [...(projects.data ?? [])].sort((a, b) => a.id - b.id);
   const sync = () => { projects.refetch(); refreshProjects(); };
+  const mounted = useMountedRef();
+  const syncRef = useRef(sync);
+  syncRef.current = sync;
+  const renameDraftRef = useRef<{ id: number; original: string; text: string } | null>(null);
+  const renameInFlightRef = useRef<Promise<boolean> | null>(null);
+  const persistRenameRef = useRef<() => Promise<boolean>>(async () => true);
+  persistRenameRef.current = async () => {
+    if (renameInFlightRef.current) return renameInFlightRef.current;
+    const draft = renameDraftRef.current;
+    if (!draft) return true;
+    const title = draft.text.trim();
+    if (!title || title === draft.original) {
+      renameDraftRef.current = null;
+      if (mounted.current) setRenamingId(null);
+      return true;
+    }
+    const operation = (async () => {
+      if (mounted.current) { setBusy(true); setErr(null); }
+      try {
+        await api.updateProject(draft.id, { title });
+        const current = renameDraftRef.current;
+        if (current === draft) renameDraftRef.current = null;
+        else if (current?.id === draft.id) renameDraftRef.current = { ...current, original: title };
+        if (mounted.current) {
+          if (renameDraftRef.current == null) setRenamingId(null);
+          syncRef.current();
+        }
+        return true;
+      } catch (error) {
+        if (mounted.current) setErr(error instanceof Error ? error.message : String(error));
+        return false;
+      } finally {
+        if (mounted.current) setBusy(false);
+      }
+    })();
+    renameInFlightRef.current = operation;
+    const saved = await operation;
+    if (renameInFlightRef.current === operation) renameInFlightRef.current = null;
+    if (saved && renameDraftRef.current) return persistRenameRef.current();
+    return saved;
+  };
+  useEffect(() => registerProjectFlusher(() => persistRenameRef.current()), []);
+
+  const startRename = async (project: ProjectDTO) => {
+    if (renameDraftRef.current && renameDraftRef.current.id !== project.id) {
+      if (!await persistRenameRef.current()) return;
+    }
+    renameDraftRef.current = { id: project.id, original: project.title || "", text: project.title || "" };
+    setRenamingId(project.id);
+    setRenameText(project.title || "");
+  };
+  const cancelRename = () => {
+    renameDraftRef.current = null;
+    setRenamingId(null);
+  };
+  const changeRenameText = (text: string) => {
+    setRenameText(text);
+    if (renameDraftRef.current) renameDraftRef.current = { ...renameDraftRef.current, text };
+    markProjectSavePending();
+  };
 
   const create = async () => {
     if (busy) return;
     setBusy(true); setErr(null); setNote(null);
     try {
-      const p = await api.createProject({ title: newTitle.trim() || "Untitled Project", default_writing_format: String(writingMode ?? "") });
-      setNewTitle(""); sync(); selectProject(p.id);
+      const p = await prepareProjectHandoff(() => api.createProject({ title: newTitle.trim() || "Untitled Project", narrative_engine: String(writingMode ?? "novel") }));
+      setNewTitle(""); sync(); await selectProject(p.id);
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   };
 
@@ -62,8 +124,8 @@ export function ProjectsPanel(props: PanelProps) {
       let doc: { title?: string; mode?: string; blocks?: unknown };
       try { doc = JSON.parse(res.content); } catch { setErr("That file isn't valid JSON."); setBusy(false); return; }
       if (!Array.isArray(doc.blocks)) { setErr("That JSON isn't a Whiteboard document (no blocks)."); setBusy(false); return; }
-      const r = await api.importWhiteboard({ title: String(doc.title ?? ""), mode: String(doc.mode ?? "novel"), blocks: doc.blocks as never });
-      sync(); selectProject(r.project_id);
+      const r = await prepareProjectHandoff(() => api.importWhiteboard({ title: String(doc.title ?? ""), mode: String(doc.mode ?? "novel"), blocks: doc.blocks as never }));
+      sync(); await selectProject(r.project_id);
       setNote(`Imported “${r.title}” — ${r.scenes_created} scene${r.scenes_created === 1 ? "" : "s"} (${r.mode}).`);
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   };
@@ -80,19 +142,25 @@ export function ProjectsPanel(props: PanelProps) {
       let bundle;
       try { bundle = parseProjectBundle(res.content); }
       catch (e) { setErr(e instanceof Error ? e.message : String(e)); setBusy(false); return; }
-      const r = await importProjectBundle(api, bundle);
-      sync(); selectProject(r.projectId);
+      const r = await prepareProjectHandoff(() => importProjectBundle(api, bundle));
+      sync(); await selectProject(r.projectId);
       const parts = [
         `${r.scenes} scene${r.scenes === 1 ? "" : "s"}`,
         `${r.entries} bible entr${r.entries === 1 ? "y" : "ies"}`,
         `${r.outlineNodes} outline node${r.outlineNodes === 1 ? "" : "s"}`,
       ];
+      if (r.settingsImported) parts.push("Whiteboard document settings preserved");
       if (r.links > 0) parts.push(`${r.links} section link${r.links === 1 ? "" : "s"}`);   // Phase 3
       // Comments are carried by the bundle but Pro has no inline-comments target
       // yet — say so plainly rather than dropping them silently (Phase 2 decision).
       // Likewise report any outline→scene links that couldn't be resolved.
       const deferredBits: string[] = [];
       if (r.comments > 0) deferredBits.push(`${r.comments} comment${r.comments === 1 ? "" : "s"} not migrated (Pro has no inline comments yet)`);
+      if (r.settingsSkipped) deferredBits.push("Whiteboard document settings couldn't be preserved");
+      if (r.entriesSkipped > 0) deferredBits.push(`${r.entriesSkipped} bible entr${r.entriesSkipped === 1 ? "y" : "ies"} skipped (invalid, duplicate, or failed)`);
+      if (r.outlineSkipped > 0) deferredBits.push(`${r.outlineSkipped} outline node${r.outlineSkipped === 1 ? "" : "s"} skipped after an API failure`);
+      if (r.outlineReparented > 0) deferredBits.push(`${r.outlineReparented} outline node${r.outlineReparented === 1 ? "" : "s"} moved to root because its parent was unavailable`);
+      if (r.outlineDuplicateIds > 0) deferredBits.push(`${r.outlineDuplicateIds} duplicate outline ID${r.outlineDuplicateIds === 1 ? "" : "s"} made parent mapping ambiguous`);
       if (r.linksSkipped > 0) deferredBits.push(`${r.linksSkipped} section link${r.linksSkipped === 1 ? "" : "s"} couldn't be resolved`);
       const deferred = deferredBits.length ? ` ${deferredBits.join("; ")}.` : "";
       setNote(`Imported “${r.title}” — ${parts.join(", ")} (${r.mode}).${deferred}`);
@@ -115,31 +183,32 @@ export function ProjectsPanel(props: PanelProps) {
     const filename = (res.path ?? "").split(/[\\/]/).pop() || "manuscript.txt";
     setBusy(true);
     try {
-      const r = await api.importManuscript({
+      const r = await prepareProjectHandoff(() => api.importManuscript({
         title: filename.replace(/\.[^.]+$/, ""),
         mode: mMode, strategy: mStrategy, filename, content_base64: b64,
-      });
-      sync(); selectProject(r.project_id); setShowManuscript(false);
+      }));
+      sync(); await selectProject(r.project_id); setShowManuscript(false);
       setNote(`Imported “${r.title}” — ${r.scenes_created} scene${r.scenes_created === 1 ? "" : "s"} (${r.mode}). Tip: run Extract to auto-build the story bible.`);
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   };
 
   const rename = async (id: number) => {
-    const t = renameText.trim();
-    if (!t || busy) { setRenamingId(null); return; }
-    setBusy(true); setErr(null);
-    try { await api.updateProject(id, { title: t }); setRenamingId(null); sync(); }
-    catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+    if (renameDraftRef.current?.id !== id) {
+      const project = list.find((item) => item.id === id);
+      renameDraftRef.current = { id, original: project?.title || "", text: renameText };
+    }
+    await persistRenameRef.current();
   };
   const remove = async (id: number) => {
     if (busy) return;
     setBusy(true); setErr(null);
     try {
+      await flushPendingProjectSaves({ commitActiveField: true });
       await api.deleteProject(id);
       setConfirmDelId(null);
       const remaining = list.filter((p) => p.id !== id);
       sync();
-      if (projectId === id) selectProject(remaining[0]?.id ?? 0);
+      if (projectId === id) await selectProject(remaining[0]?.id ?? 0);
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   };
 
@@ -197,9 +266,9 @@ export function ProjectsPanel(props: PanelProps) {
                     <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 9, border: `1px solid ${active ? "var(--accent)" : "var(--line2)"}`, background: active ? "rgba(76,194,255,.06)" : "var(--tint)", padding: "9px 11px" }}>
                       {renamingId === p.id ? (
                         <>
-                          <input autoFocus value={renameText} onChange={(e) => setRenameText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void rename(p.id); if (e.key === "Escape") setRenamingId(null); }} aria-label="Rename project" style={{ ...inp, flex: 1, fontSize: 12.5, color: "var(--strong)" }} />
+                          <input autoFocus value={renameText} disabled={busy} onChange={(e) => changeRenameText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void rename(p.id); if (e.key === "Escape") cancelRename(); }} aria-label="Rename project" style={{ ...inp, flex: 1, fontSize: 12.5, color: "var(--strong)" }} />
                           <button type="button" onClick={() => void rename(p.id)} disabled={busy} style={{ ...btn, color: "var(--green)" }}>✓ SAVE</button>
-                          <button type="button" onClick={() => setRenamingId(null)} style={btn}>✕</button>
+                          <button type="button" onClick={cancelRename} style={btn}>✕</button>
                         </>
                       ) : confirmDelId === p.id ? (
                         <>
@@ -209,12 +278,12 @@ export function ProjectsPanel(props: PanelProps) {
                         </>
                       ) : (
                         <>
-                          <button type="button" onClick={() => selectProject(p.id)} title="Open this project" style={{ flex: 1, textAlign: "left", background: "transparent", border: "none", font: "inherit", cursor: "pointer", padding: 0 }}>
+                          <button type="button" onClick={() => void selectProject(p.id)} title="Open this project" style={{ flex: 1, textAlign: "left", background: "transparent", border: "none", font: "inherit", cursor: "pointer", padding: 0 }}>
                             <span style={{ fontSize: 12.5, color: active ? "var(--strong)" : "var(--txt)" }}>{p.title || `Project ${p.id}`}</span>
-                            <span style={{ fontSize: 8, color: "var(--txt3)", marginLeft: 9, letterSpacing: ".08em" }}>{p.default_writing_format || p.format_mode || "novel"}{active ? " · ACTIVE" : ""}</span>
+                            <span style={{ fontSize: 8, color: "var(--txt3)", marginLeft: 9, letterSpacing: ".08em" }}>{p.narrative_engine || p.format_mode || "novel"}{active ? " · ACTIVE" : ""}</span>
                           </button>
-                          {!active && <button type="button" onClick={() => selectProject(p.id)} style={{ ...btn, color: "var(--accent)", borderColor: "var(--line-cy,#2b6f8f)" }}>OPEN</button>}
-                          <button type="button" onClick={() => { setRenamingId(p.id); setRenameText(p.title || ""); }} title="Rename" style={btn}>✎</button>
+                          {!active && <button type="button" onClick={() => void selectProject(p.id)} style={{ ...btn, color: "var(--accent)", borderColor: "var(--line-cy,#2b6f8f)" }}>OPEN</button>}
+                          <button type="button" onClick={() => void startRename(p)} title="Rename" style={btn}>✎</button>
                           <button type="button" onClick={() => setConfirmDelId(p.id)} title="Delete" style={{ ...btn, color: "var(--txt3)" }}>🗑</button>
                         </>
                       )}

@@ -101,11 +101,11 @@ export function ConnectorPanel(props: PanelProps) {
                   <div key={cat} style={{ marginBottom: 10 }}>
                     <div style={{ fontSize: 7.5, letterSpacing: ".2em", color: "var(--txt3)", padding: "6px 6px 5px" }}>{cat.toUpperCase()}</div>
                     {list.map((a) => (
-                      <div key={a.name} className={selName === a.name ? undefined : "lf-row"} onClick={() => pick(a)}
-                        style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", cursor: "pointer", background: selName === a.name ? "rgba(76,194,255,.1)" : undefined }}>
+                      <button key={a.name} type="button" className={selName === a.name ? undefined : "lf-row"} aria-pressed={selName === a.name} onClick={() => pick(a)}
+                        style={{ width: "100%", border: "none", font: "inherit", textAlign: "left", color: "inherit", display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", cursor: "pointer", background: selName === a.name ? "rgba(76,194,255,.1)" : "transparent" }}>
                         <span style={{ fontSize: 7, letterSpacing: ".1em", color: isWrite(a) ? "var(--amber)" : "var(--green)", border: `1px solid ${isWrite(a) ? "var(--amber)" : "var(--green)"}`, padding: "1px 4px", flex: "none" }}>{isWrite(a) ? "W" : "R"}</span>
                         <span style={{ flex: 1, minWidth: 0, fontSize: 10.5, color: selName === a.name ? "var(--strong)" : "var(--txt)", fontFamily: "'Courier Prime',monospace", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{a.name}</span>
-                      </div>
+                      </button>
                     ))}
                   </div>
                 ))}
@@ -130,6 +130,7 @@ export function ConnectorPanel(props: PanelProps) {
                     <div key={p.name}>
                       <div style={label}>{p.name} <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--txt3)" }}>· {p.param_type}{p.required ? " · required" : ""}</span></div>
                       <input style={input} value={args[p.name] ?? ""} placeholder={p.default == null ? "" : String(p.default)}
+                        aria-label={`${selected.name} parameter ${p.name}`}
                         onChange={(e) => setArgs((s) => ({ ...s, [p.name]: e.target.value }))} />
                     </div>
                   ))}

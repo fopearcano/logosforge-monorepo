@@ -46,11 +46,11 @@ function ChapterRow({ code, title, sc }: { code: string; title: string; sc: stri
 
 function SceneRow({ code, title, tag, tagColor, tagBorder, onClick }: { code: string; title: string; tag?: string; tagColor?: string; tagBorder?: string; onClick?: () => void }) {
   return (
-    <div className="lf-nav" onClick={onClick} title={onClick ? "Open in the Manuscript editor" : undefined} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 6px", fontSize: 10, color: "var(--txt2)", cursor: "pointer" }}>
+    <button type="button" className="lf-nav" onClick={onClick} disabled={!onClick} title={onClick ? "Open in the Manuscript editor" : undefined} style={{ width: "100%", border: "none", background: "transparent", font: "inherit", textAlign: "left", display: "flex", alignItems: "center", gap: 8, padding: "4px 6px", fontSize: 10, color: "var(--txt2)", cursor: onClick ? "pointer" : "default" }}>
       <span style={{ fontFamily: "'Chakra Petch'", fontSize: 9, color: "var(--txt3)", minWidth: 38 }}>{code}</span>
       <span style={{ flex: 1 }}>{title}</span>
       {tag && <span style={{ fontSize: 7, color: tagColor, border: `1px solid ${tagBorder}`, padding: "0 4px" }}>{tag}</span>}
-    </div>
+    </button>
   );
 }
 
@@ -155,9 +155,9 @@ export function StructurePanel(props: PanelProps) {
                         </div>
                         <div style={{ padding: "7px 10px", display: "flex", flexDirection: "column", gap: 5 }}>
                           {unassigned.map((s) => (
-                            <div key={s.id} onClick={() => navigate("Manuscript", { sceneId: s.id })} title="Open in the Manuscript editor" style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 10, color: "var(--txt2)", cursor: "pointer" }}>
+                            <button key={s.id} type="button" onClick={() => navigate("Manuscript", { sceneId: s.id })} title="Open in the Manuscript editor" style={{ width: "100%", border: "none", background: "transparent", padding: 0, font: "inherit", textAlign: "left", display: "flex", alignItems: "center", gap: 8, fontSize: 10, color: "var(--txt2)", cursor: "pointer" }}>
                               <span style={{ color: "var(--amber)" }}>◇</span><span style={{ flex: 1 }}>{s.title}</span><span style={{ fontSize: 7, color: "var(--amber)" }}>ORPHAN</span>
-                            </div>
+                            </button>
                           ))}
                         </div>
                       </div>

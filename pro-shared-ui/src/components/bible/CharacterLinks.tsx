@@ -11,6 +11,7 @@ import type { CharacterDTO } from "@logosforge/ui-contracts";
 import { PanelShell, Corners, type PanelProps } from "../shell/PanelShell";
 import { useCharacters, usePsykeEntries } from "../../hooks";
 import { useStudio } from "../../adapters/StudioProvider";
+import { ConfirmDeleteButton } from "../common/ConfirmDeleteButton";
 
 const panelBox: CSSProperties = {
   position: "relative", width: "100%", height: "100%",
@@ -26,7 +27,7 @@ const message = (text: string) => (
 export function CharacterLinks(props: PanelProps) {
   const { api, projectId } = useStudio();
   const { data: characters, loading, error, refetch } = useCharacters();
-  const { data: psyke } = usePsykeEntries();
+  const { data: psyke, loading: psykeLoading, error: psykeError, refetch: refetchPsyke } = usePsykeEntries();
   const [busy, setBusy] = useState<number | "auto" | "create" | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
@@ -109,7 +110,7 @@ export function CharacterLinks(props: PanelProps) {
             <span style={{ color: "var(--accent)" }}>{linked}</span> / {cast.length} BOUND TO BIBLE
           </span>
           <div style={{ flex: 1 }} />
-          <button
+          <button type="button"
             onClick={autoLink}
             disabled={busy != null || projectId == null}
             style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9, letterSpacing: ".12em", color: busy === "auto" ? "var(--txt3)" : "var(--accent)", background: "rgba(76,194,255,.08)", border: "1px solid var(--line-cy)", padding: "4px 10px", cursor: busy != null || projectId == null ? "default" : "pointer" }}
@@ -120,11 +121,12 @@ export function CharacterLinks(props: PanelProps) {
             value={newName}
             disabled={busy != null || projectId == null}
             placeholder="new character…"
+            aria-label="New character name"
             onChange={(e) => setNewName(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") void createCharacter(); }}
             style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9, letterSpacing: ".04em", color: "var(--txt)", background: "var(--raised)", border: "1px solid var(--line2)", padding: "4px 7px", width: 120 }}
           />
-          <button
+          <button type="button"
             onClick={createCharacter}
             disabled={busy != null || projectId == null || !newName.trim()}
             style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9, letterSpacing: ".12em", color: busy === "create" ? "var(--txt3)" : "var(--cyan)", background: "rgba(76,194,255,.08)", border: "1px solid var(--line-cy)", padding: "4px 10px", cursor: busy != null || projectId == null || !newName.trim() ? "default" : "pointer" }}
@@ -134,10 +136,10 @@ export function CharacterLinks(props: PanelProps) {
         </div>
 
         {/* body */}
-        {loading
+        {loading || psykeLoading
           ? message("Loading characters…")
-          : error
-          ? message(`Couldn't load characters — ${error}`)
+          : error || psykeError
+          ? <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10, padding: "34px 0", textAlign: "center", fontSize: 11, color: "var(--blocking)" }}>Couldn't load Character Links — {error || psykeError}<button type="button" onClick={() => { refetch(); refetchPsyke(); }} style={{ font: "inherit", fontSize: 9, letterSpacing: ".1em", color: "var(--accent)", border: "1px solid var(--accent)", background: "transparent", padding: "5px 11px", cursor: "pointer" }}>RETRY</button></div>
           : cast.length === 0
           ? message("No characters yet — run the extractor to build the cast")
           : (
@@ -158,6 +160,7 @@ export function CharacterLinks(props: PanelProps) {
                     <select
                       value={isLinked ? String(c.psyke_entry_id) : ""}
                       disabled={busy != null || projectId == null}
+                      aria-label={`PSYKE entry linked to ${c.name}`}
                       onChange={(e) => setLink(c, e.target.value ? Number(e.target.value) : null)}
                       style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 11, color: "var(--txt)", background: "var(--raised)", border: "1px solid var(--line2)", padding: "4px 7px", minWidth: 200 }}
                     >
@@ -166,14 +169,12 @@ export function CharacterLinks(props: PanelProps) {
                         <option key={e.id} value={String(e.id)}>{e.name}</option>
                       ))}
                     </select>
-                    <button
-                      onClick={() => removeCharacter(c)}
+                    <ConfirmDeleteButton
+                      label={c.name || `character ${c.id}`}
+                      onConfirm={() => { void removeCharacter(c); }}
                       disabled={busy != null || projectId == null}
-                      title={`Delete ${c.name}`}
-                      style={{ flex: "none", fontFamily: "'JetBrains Mono',monospace", fontSize: 9, color: "var(--crimson)", background: "rgba(255,82,96,.06)", border: "1px solid rgba(255,82,96,.35)", padding: "4px 7px", cursor: busy != null || projectId == null ? "default" : "pointer" }}
-                    >
-                      ✕
-                    </button>
+                      triggerStyle={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9, color: "var(--crimson)", background: "rgba(255,82,96,.06)", borderColor: "rgba(255,82,96,.35)", padding: "4px 7px" }}
+                    />
                   </div>
                 );
               })}

@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { LogosActionDTO, LogosResultDTO, LogosSuggestionDTO } from "@logosforge/ui-contracts";
 import { PanelShell, Corners, type PanelProps } from "../shell/PanelShell";
 import { useStudio } from "../../adapters/StudioProvider";
 import { useSelection } from "../../adapters/selection";
-import { useApplyToScene, ApplyDiffModal } from "./applyToScene";
+import { useApplyToScene, ApplyDiffModal, type SceneTarget } from "./applyToScene";
+import { createLatestRequestGate } from "../../hooks/latestRequest";
 
 /**
  * Logos — the inline/contextual action panel on the core `logosforge.logos` engine.
@@ -51,44 +52,78 @@ export function Logos(props: PanelProps) {
   const { api, projectId, writingMode } = useStudio();
   const { selection } = useSelection();
   const { target, apply } = useApplyToScene();
+  const requests = useRef(createLatestRequestGate()).current;
+  useEffect(() => { requests.open(); return () => requests.close(); }, [requests]);
   const mode = typeof writingMode === "string" ? writingMode : (writingMode ?? "");
   const [section, setSection] = useState("Inline");
   const [actions, setActions] = useState<LogosActionDTO[]>([]);
+  const [catalogError, setCatalogError] = useState("");
+  const [catalogNonce, setCatalogNonce] = useState(0);
   const [text, setText] = useState("");
   const [running, setRunning] = useState<string | null>(null);
   const [result, setResult] = useState<LogosResultDTO | null>(null);
   const [err, setErr] = useState("");
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (copiedTimer.current) clearTimeout(copiedTimer.current); }, []);
   const [copied, setCopied] = useState(false);
   const [suggestions, setSuggestions] = useState<LogosSuggestionDTO[]>([]);
+  const [proactiveError, setProactiveError] = useState("");
+  const [proactiveLoading, setProactiveLoading] = useState(false);
   const [ranPassage, setRanPassage] = useState("");
-  const [applyOpen, setApplyOpen] = useState(false);
+  const [ranTarget, setRanTarget] = useState<SceneTarget | null>(null);
+  const [applyRequest, setApplyRequest] = useState<{ proposed: string; target: SceneTarget } | null>(null);
+  const runningRef = useRef(false);
 
   // A generative result is a replacement for the PASSAGE that was transformed,
   // not the whole scene. Apply it surgically: splice the replacement in place of
   // that passage inside the active scene's content. If the passage isn't found in
   // the scene (e.g. a hand-pasted excerpt), applying precisely isn't possible.
   const applyProposed = useMemo<string | null>(() => {
-    if (!target || !result?.generative || !result.message) return null;
+    if (!ranTarget || !result?.generative || !result.message) return null;
     const passage = ranPassage;
     if (!passage) return null;
-    const idx = target.content.indexOf(passage);
+    const idx = ranTarget.content.indexOf(passage);
     if (idx < 0) return null;
-    return target.content.slice(0, idx) + result.message + target.content.slice(idx + passage.length);
-  }, [target, result, ranPassage]);
+    return ranTarget.content.slice(0, idx) + result.message + ranTarget.content.slice(idx + passage.length);
+  }, [ranTarget, result, ranPassage]);
 
   useEffect(() => {
-    if (projectId == null) { setActions([]); return; }
-    let cancelled = false;
-    api.listLogosActions(projectId, section, String(mode || ""))
-      .then((a) => { if (!cancelled) setActions(a); }).catch(() => { if (!cancelled) setActions([]); });
-    return () => { cancelled = true; };
-  }, [api, projectId, mode, section]);
+    if (projectId == null) { setActions([]); setCatalogError(""); return; }
+    const token = requests.begin("catalog");
+    setActions([]);
+    setCatalogError("");
+    void api.listLogosActions(projectId, section, String(mode || ""))
+      .then((value) => { if (requests.isCurrent(token)) { setActions(value); setCatalogError(""); } })
+      .catch((error) => { if (requests.isCurrent(token)) setCatalogError(error instanceof Error ? error.message : String(error)); });
+    return () => requests.invalidate("catalog");
+  }, [api, projectId, mode, section, catalogNonce, requests]);
 
-  const loadProactive = useCallback(() => {
-    if (projectId == null) { setSuggestions([]); return; }
-    api.listLogosProactive(projectId).then(setSuggestions).catch(() => setSuggestions([]));
-  }, [api, projectId]);
-  useEffect(() => { loadProactive(); }, [loadProactive]);
+  const loadProactive = useCallback(async () => {
+    if (projectId == null) { setSuggestions([]); setProactiveLoading(false); setProactiveError(""); return; }
+    const token = requests.begin("proactive");
+    setSuggestions([]);
+    setProactiveLoading(true);
+    setProactiveError("");
+    try {
+      const value = await api.listLogosProactive(projectId);
+      if (requests.isCurrent(token)) { setSuggestions(value); setProactiveError(""); }
+    } catch (error) {
+      if (requests.isCurrent(token)) setProactiveError(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (requests.isCurrent(token)) setProactiveLoading(false);
+    }
+  }, [api, projectId, requests]);
+  useEffect(() => {
+    void loadProactive();
+    return () => requests.invalidate("proactive");
+  }, [loadProactive, requests]);
+
+  useEffect(() => {
+    requests.invalidate("run");
+    runningRef.current = false;
+    setRunning(null); setResult(null); setErr(""); setApplyRequest(null);
+    if (projectId == null) { setSuggestions([]); setProactiveError(""); setProactiveLoading(false); }
+  }, [api, projectId, requests]);
 
   // Auto re-scan the proactive stream when the project changes (debounced — the scan
   // is project-wide, so a burst of edits collapses into one re-scan).
@@ -124,8 +159,10 @@ export function Logos(props: PanelProps) {
   };
 
   const run = async (actionName: string, sectionOverride?: string) => {
-    if (projectId == null || running) return;
-    setRunning(actionName); setErr(""); setResult(null); setCopied(false); setApplyOpen(false); setRanPassage(text);
+    if (projectId == null || runningRef.current) return;
+    const token = requests.begin("run");
+    runningRef.current = true;
+    setRunning(actionName); setErr(""); setResult(null); setCopied(false); setApplyRequest(null); setRanPassage(text); setRanTarget(target ? { ...target } : null);
     try {
       const r = await api.runLogos(projectId, {
         // a proactive suggested-action can belong to any section, so it runs with an
@@ -134,18 +171,43 @@ export function Logos(props: PanelProps) {
         writing_mode: String(mode || ""), current_scene_id: selection.sceneId ?? null,
         ...nodeContext(),
       });
-      setResult(r);
-      if (!r.ok && r.error) setErr(r.error);
+      if (requests.isCurrent(token)) {
+        setResult(r);
+        if (!r.ok && r.error) setErr(r.error);
+      }
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      if (requests.isCurrent(token)) setErr(e instanceof Error ? e.message : String(e));
     } finally {
-      setRunning(null);
+      if (requests.isCurrent(token)) {
+        runningRef.current = false;
+        setRunning(null);
+      }
     }
+  };
+
+  const selectSection = (next: string) => {
+    if (next === section) return;
+    requests.invalidate("run");
+    runningRef.current = false;
+    setRunning(null); setSection(next); setResult(null); setErr(""); setCopied(false); setApplyRequest(null);
+  };
+  const changePassage = (next: string) => {
+    requests.invalidate("run");
+    runningRef.current = false;
+    setRunning(null); setText(next); setResult(null); setErr(""); setCopied(false); setApplyRequest(null);
   };
 
   const copyReplacement = async () => {
     if (!result?.message) return;
-    try { await navigator.clipboard.writeText(result.message); setCopied(true); setTimeout(() => setCopied(false), 1600); } catch { /* blocked */ }
+    setErr("");
+    try {
+      await navigator.clipboard.writeText(result.message);
+      setCopied(true);
+      if (copiedTimer.current) clearTimeout(copiedTimer.current);
+      copiedTimer.current = setTimeout(() => { copiedTimer.current = null; setCopied(false); }, 1600);
+    } catch (error) {
+      setErr(`Copy failed — ${error instanceof Error ? error.message : String(error)}`);
+    }
   };
 
   const generative = actions.filter((a) => a.generative);
@@ -175,7 +237,7 @@ export function Logos(props: PanelProps) {
               {/* section switcher */}
               <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
                 {SECTIONS.map((s) => (
-                  <button key={s} type="button" onClick={() => { setSection(s); setResult(null); setErr(""); setCopied(false); }} aria-pressed={section === s}
+                  <button key={s} type="button" onClick={() => selectSection(s)} aria-pressed={section === s}
                     style={{ ...actionBtn, width: "auto", padding: "3px 8px", fontSize: 8.5, color: section === s ? "var(--on-accent)" : "var(--txt2)", background: section === s ? "var(--accent)" : "transparent", fontWeight: section === s ? 600 : 400, cursor: "pointer" }}>{s}</button>
                 ))}
               </div>
@@ -183,9 +245,9 @@ export function Logos(props: PanelProps) {
               <div>
                 <div style={{ ...groupLabel, display: "flex", justifyContent: "space-between" }}>
                   <span>PASSAGE {sel ? `· ${sel.split(/\s+/).length} words` : ""}</span>
-                  {canPull && <button type="button" onClick={() => setText(selection.text)} style={{ ...actionBtn, width: "auto", padding: "1px 7px", fontSize: 8, color: "var(--accent)", cursor: "pointer" }}>↩ USE SELECTION ({busSel.split(/\s+/).length}w)</button>}
+                  {canPull && <button type="button" onClick={() => changePassage(selection.text)} style={{ ...actionBtn, width: "auto", padding: "1px 7px", fontSize: 8, color: "var(--accent)", cursor: "pointer" }}>↩ USE SELECTION ({busSel.split(/\s+/).length}w)</button>}
                 </div>
-                <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="Paste/write the passage, or select text in the Manuscript and pull it in…" spellCheck
+                <textarea value={text} onChange={(e) => changePassage(e.target.value)} placeholder="Paste/write the passage, or select text in the Manuscript and pull it in…" aria-label="Passage for Logos" spellCheck
                   style={{ width: "100%", minHeight: 84, resize: "vertical", background: "var(--tint)", border: "1px solid var(--line2)", outline: "none", color: "var(--txt)", fontFamily: "'Courier Prime',monospace", fontSize: 11, lineHeight: 1.5, padding: "8px 9px", caretColor: "var(--accent)" }} />
               </div>
 
@@ -197,7 +259,8 @@ export function Logos(props: PanelProps) {
                 <div><div style={groupLabel}>ANALYZE</div>
                   <div style={grid2}>{diagnostic.map((a) => <CatalogBtn key={a.name} a={a} on={() => run(a.name)} disabled={disabledFor(a)} busy={running === a.name} />)}</div></div>
               )}
-              {actions.length === 0 && <div style={{ fontSize: 9.5, color: "var(--txt3)", fontStyle: "italic" }}>No actions in {section} for this mode.</div>}
+              {actions.length === 0 && !catalogError && <div style={{ fontSize: 9.5, color: "var(--txt3)", fontStyle: "italic" }}>No actions in {section} for this mode.</div>}
+              {catalogError && <div role="alert" style={{ fontSize: 9.5, color: "var(--blocking)", lineHeight: 1.45 }}>Action catalog failed — {catalogError} <button type="button" onClick={() => setCatalogNonce((value) => value + 1)} style={{ font: "inherit", color: "var(--accent)", border: "none", background: "transparent", cursor: "pointer", padding: "0 3px" }}>RETRY</button></div>}
             </div>
 
             {/* result + proactive — wraps below the actions column when narrow */}
@@ -218,8 +281,8 @@ export function Logos(props: PanelProps) {
                           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                             <span style={{ fontSize: 7.5, letterSpacing: ".12em", color: "var(--cyan)" }}>SUGGESTED REPLACEMENT</span>
                             <div style={{ flex: 1 }} />
-                            <button type="button" onClick={() => setApplyOpen(true)} disabled={applyProposed == null}
-                              title={applyProposed != null ? `Apply to ${target?.title} (diff + confirm)` : target == null ? "Open a scene in the Manuscript to apply" : "Pull the passage from the open scene to apply it precisely"}
+                            <button type="button" onClick={() => { if (applyProposed != null && ranTarget) setApplyRequest({ proposed: applyProposed, target: { ...ranTarget } }); }} disabled={applyProposed == null}
+                              title={applyProposed != null ? `Apply to ${ranTarget?.title} (diff + confirm)` : ranTarget == null ? "Open a scene in the Manuscript to apply" : "Pull the passage from the open scene to apply it precisely"}
                               style={{ ...actionBtn, width: "auto", fontSize: 8, padding: "2px 9px", color: applyProposed != null ? "var(--green)" : "var(--txt3)", cursor: applyProposed != null ? "pointer" : "default", opacity: applyProposed != null ? 1 : 0.5, marginRight: 6 }}>✎ APPLY</button>
                             <button type="button" onClick={copyReplacement} style={{ ...actionBtn, width: "auto", fontSize: 8, padding: "2px 9px", color: copied ? "var(--green)" : "var(--accent)", cursor: "pointer" }}>{copied ? "✓ COPIED" : "⧉ COPY"}</button>
                           </div>
@@ -239,9 +302,11 @@ export function Logos(props: PanelProps) {
                 <div style={{ display: "flex", alignItems: "center", marginBottom: 8 }}>
                   <span style={{ fontSize: 7.5, letterSpacing: ".2em", color: "var(--txt3)" }}>PROACTIVE STREAM{suggestions.length ? ` · ${suggestions.length}` : ""}</span>
                   <div style={{ flex: 1 }} />
-                  <button type="button" onClick={loadProactive} title="Re-scan the project" aria-label="Re-scan" style={{ background: "transparent", border: "none", color: "var(--txt3)", cursor: "pointer", fontSize: 11, padding: 0 }}>⟳</button>
+                  <button type="button" onClick={() => { void loadProactive(); }} disabled={proactiveLoading} title="Re-scan the project" aria-label="Re-scan" style={{ background: "transparent", border: "none", color: "var(--txt3)", cursor: proactiveLoading ? "default" : "pointer", fontSize: 11, padding: 0, opacity: proactiveLoading ? 0.5 : 1 }}>⟳</button>
                 </div>
-                {suggestions.length === 0 ? <div style={{ fontSize: 9, color: "var(--txt3)", fontStyle: "italic" }}>No proactive signals right now.</div>
+                {proactiveError && <div role="alert" style={{ fontSize: 9, color: "var(--blocking)", lineHeight: 1.45, marginBottom: 7 }}>Proactive scan failed — {proactiveError}</div>}
+                {proactiveLoading && suggestions.length === 0 ? <div style={{ fontSize: 9, color: "var(--txt3)", fontStyle: "italic" }}>Scanning the project…</div>
+                  : suggestions.length === 0 ? <div style={{ fontSize: 9, color: "var(--txt3)", fontStyle: "italic" }}>No proactive signals right now.</div>
                   : suggestions.map((s) => (
                     <div key={s.id} style={{ border: "1px solid var(--line2)", borderLeft: `2px solid ${SEV_COLOR[s.severity] || "var(--cyan)"}`, background: "var(--tint)", padding: "7px 9px", marginBottom: 7 }}>
                       <div style={{ fontSize: 9, color: "var(--txt2)", lineHeight: 1.4 }}><span style={{ color: SEV_COLOR[s.severity] || "var(--cyan)" }}>{s.title}</span> — {s.message}</div>
@@ -266,14 +331,14 @@ export function Logos(props: PanelProps) {
           </div>
         )}
 
-        {applyOpen && target && applyProposed != null && (
+        {applyRequest && (
           <ApplyDiffModal
-            title={target.title.toUpperCase()}
+            title={applyRequest.target.title.toUpperCase()}
             badge="REWRITE"
-            original={target.content}
-            proposed={applyProposed}
-            onConfirm={() => apply(applyProposed)}
-            onClose={() => setApplyOpen(false)}
+            original={applyRequest.target.content}
+            proposed={applyRequest.proposed}
+            onConfirm={() => apply(applyRequest.proposed, applyRequest.target)}
+            onClose={() => setApplyRequest(null)}
           />
         )}
       </div>

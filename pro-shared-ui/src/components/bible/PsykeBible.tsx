@@ -1,9 +1,13 @@
-import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from "react";
-import type { PsykeEntryDTO, PsykeProgressionDTO } from "@logosforge/ui-contracts";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import type { PsykeEntryCreateDTO, PsykeEntryDTO, PsykeProgressionDTO } from "@logosforge/ui-contracts";
 import { useSelection } from "../../adapters/selection";
 import { useStudio } from "../../adapters/StudioProvider";
 import { PanelShell, type PanelProps } from "../shell/PanelShell";
 import { usePsykeEntries, usePsykeRelations, usePsykeProgressions } from "../../hooks";
+import { markProjectSavePending, registerProjectFlusher } from "../../adapters/projectSaveCoordinator";
+import { createSceneSaveQueue, type SceneSaveQueue } from "../manuscript/sceneSaveQueue";
+import { ConfirmDeleteButton } from "../common/ConfirmDeleteButton";
+import { useMountedRef } from "../../hooks/useMountedRef";
 
 const panelBox: CSSProperties = {
   position: "relative",
@@ -46,23 +50,23 @@ const subLabel = (t: string, pt = 4) => <div style={{ fontSize: 7.5, letterSpaci
 
 function TypeRow({ icon, iconColor, label, count, active = false, onClick }: { icon: string; iconColor: string; label: string; count: number; active?: boolean; onClick?: () => void }) {
   return (
-    <div className={active ? undefined : "lf-row"} onClick={onClick} style={{ display: "flex", alignItems: "center", gap: 9, height: 25, padding: "0 8px", background: active ? "rgba(76,194,255,.08)" : undefined, color: active ? "var(--strong)" : "var(--txt2)", fontSize: 10, cursor: "pointer" }}>
+    <button type="button" className={active ? undefined : "lf-row"} onClick={onClick} aria-pressed={active} style={{ width: "100%", border: "none", font: "inherit", display: "flex", alignItems: "center", gap: 9, height: 25, padding: "0 8px", background: active ? "rgba(76,194,255,.08)" : "transparent", color: active ? "var(--strong)" : "var(--txt2)", fontSize: 10, cursor: "pointer" }}>
       <span style={{ color: iconColor }}>{icon}</span><span style={{ flex: 1 }}>{label}</span><span style={{ color: active ? "var(--txt2)" : "var(--txt3)" }}>{count}</span>
-    </div>
+    </button>
   );
 }
 
 function EntryRow({ icon, iconColor, barColor, border = "var(--line2)", name, sub, active = false, right, onClick }: { icon: string; iconColor: string; barColor: string; border?: string; name: string; sub: ReactNode; active?: boolean; right?: ReactNode; onClick?: () => void }) {
   return (
-    <div className={active ? undefined : "lf-row2"} onClick={onClick} style={{ position: "relative", display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", cursor: "pointer", background: active ? "linear-gradient(90deg,rgba(76,194,255,.12),transparent)" : undefined, borderBottom: "1px solid var(--line2)" }}>
-      {active && <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 2, background: barColor, boxShadow: `0 0 8px ${barColor}` }} />}
+    <button type="button" className={active ? undefined : "lf-row2"} onClick={onClick} aria-pressed={active} style={{ position: "relative", width: "100%", border: "none", borderBottom: "1px solid var(--line2)", font: "inherit", textAlign: "left", display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", cursor: "pointer", color: "inherit", background: active ? "linear-gradient(90deg,rgba(76,194,255,.12),transparent)" : "transparent" }}>
+      {active && <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 2, background: barColor, boxShadow: `0 0 8px ${barColor}` }} />}
       <span style={{ width: 22, height: 22, display: "grid", placeItems: "center", border: `1px solid ${border}`, color: iconColor, fontSize: 11 }}>{icon}</span>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 12, color: active ? "var(--strong)" : "var(--txt)", fontFamily: "'Chakra Petch'", letterSpacing: active ? ".04em" : undefined, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{name}</div>
-        <div style={{ fontSize: 8, color: "var(--txt3)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{sub}</div>
-      </div>
+      <span style={{ flex: 1, minWidth: 0 }}>
+        <span style={{ display: "block", fontSize: 12, color: active ? "var(--strong)" : "var(--txt)", fontFamily: "'Chakra Petch'", letterSpacing: active ? ".04em" : undefined, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{name}</span>
+        <span style={{ display: "block", fontSize: 8, color: "var(--txt3)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{sub}</span>
+      </span>
       {right}
-    </div>
+    </button>
   );
 }
 
@@ -102,11 +106,36 @@ const efield: CSSProperties = { background: "var(--tint)", border: "1px solid va
 
 const ROLES = ["", "Protagonist", "Deuteragonist", "Antagonist", "Supporting", "Mentor", "Foil"];
 
+interface PsykeDraft {
+  name: string;
+  type: string;
+  aliases: string;
+  notes: string;
+  isGlobal: boolean;
+  details: Record<string, unknown>;
+}
+
+function psykeBody(draft: PsykeDraft): PsykeEntryCreateDTO {
+  const details: Record<string, unknown> = { ...draft.details };
+  for (const key of ["want", "need", "lie", "wound", "role"]) {
+    if (details[key] === "") delete details[key];
+  }
+  return {
+    name: draft.name.trim() || "New entry",
+    type: draft.type,
+    aliases: draft.aliases.split(",").map((alias) => alias.trim()).filter(Boolean),
+    notes: draft.notes,
+    is_global: draft.isGlobal,
+    details,
+  };
+}
+
 /** Create/edit a PSYKE bible entry: name / type / aliases / role / is_global,
  * the WANT·NEED·LIE·WOUND psychology triptych, and notes. Psychology + role live
  * in the loose `details` dict, written back via updatePsyke. */
 function PsykeEditor({ entry, onClose, onChanged }: { entry: PsykeEntryDTO; onClose: () => void; onChanged: () => void }) {
   const { api, projectId } = useStudio();
+  const ownerProjectId = useRef(projectId).current;
   const [name, setName] = useState(entry.name);
   const [type, setType] = useState(entry.type);
   const [aliases, setAliases] = useState(entry.aliases.join(", "));
@@ -114,42 +143,94 @@ function PsykeEditor({ entry, onClose, onChanged }: { entry: PsykeEntryDTO; onCl
   const [isGlobal, setIsGlobal] = useState(entry.is_global);
   // Psychology + role: seed from the entry's details, preserve any other keys.
   const [details, setDetails] = useState<Record<string, unknown>>({ ...(entry.details ?? {}) });
-  const setD = (k: string, v: string) => setDetails((d) => ({ ...d, [k]: v }));
   const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
   const isNew = entry.id <= 0;   // a blank entry from ＋ NEW — create on save
+  const mounted = useMountedRef();
+  const onChangedRef = useRef(onChanged);
+  onChangedRef.current = onChanged;
+  const draftRef = useRef<PsykeDraft>({ name, type, aliases, notes, isGlobal, details });
+  const createInFlightRef = useRef<Promise<unknown> | null>(null);
+  const writeRef = useRef<(draft: PsykeDraft) => Promise<void>>(async () => {});
+  writeRef.current = async (draft) => {
+    if (ownerProjectId == null || isNew) throw new Error("This PSYKE entry has not been created yet.");
+    await api.updatePsyke(ownerProjectId, entry.id, psykeBody(draft));
+    onChangedRef.current();
+  };
+  const queueRef = useRef<SceneSaveQueue<PsykeDraft> | null>(null);
+  if (!queueRef.current) {
+    queueRef.current = createSceneSaveQueue({
+      initial: draftRef.current,
+      write: (draft) => writeRef.current(draft),
+      onDirty: markProjectSavePending,
+      onStatus: (status) => {
+        if (!mounted.current) return;
+        setBusy(status === "saving");
+        if (status === "error") setErr("Couldn't save the PSYKE entry — your draft is still open.");
+        else if (status === "saving") setErr(null);
+      },
+    });
+  }
+  const patchDraft = (patch: Partial<PsykeDraft>) => {
+    const next = { ...draftRef.current, ...patch };
+    draftRef.current = next;
+    queueRef.current!.update(next);
+  };
+  const setD = (key: string, value: string) => {
+    const next = { ...draftRef.current.details, [key]: value };
+    setDetails(next);
+    patchDraft({ details: next });
+  };
+  useEffect(() => {
+    const queue = queueRef.current!;
+    const unregister = registerProjectFlusher(async () => {
+      if (createInFlightRef.current) {
+        await createInFlightRef.current;
+        return true;
+      }
+      if (isNew && queue.isDirty()) {
+        throw new Error("A new PSYKE entry is unfinished. Save or discard it before leaving.");
+      }
+      return queue.flush();
+    });
+    return () => { unregister(); queue.cancel(); };
+  }, [isNew]);
+
   const save = async () => {
-    if (projectId == null) return;
+    if (ownerProjectId == null) return;
     setBusy(true);
+    setErr(null);
     try {
-      // Drop empty psychology keys so the dossier only shows recorded fields.
-      const cleaned: Record<string, unknown> = { ...details };
-      for (const k of ["want", "need", "lie", "wound", "role"]) if (cleaned[k] === "") delete cleaned[k];
-      const aliasList = aliases.split(",").map((s) => s.trim()).filter(Boolean);
       if (isNew) {
-        const created = await api.createPsyke(projectId, { name: name.trim() || "New entry", type, aliases: aliasList, notes });
-        if (isGlobal || Object.keys(cleaned).length) {
-          await api.updatePsyke(projectId, created.id, { is_global: isGlobal, details: cleaned });
-        }
+        const creating = api.createPsyke(ownerProjectId, psykeBody(draftRef.current));
+        createInFlightRef.current = creating;
+        await creating;
+        queueRef.current!.cancel();
       } else {
-        await api.updatePsyke(projectId, entry.id, {
-          name, type, aliases: aliasList, notes, is_global: isGlobal, details: cleaned,
-        });
+        if (!await queueRef.current!.flush()) return;
       }
       onChanged();
       onClose();
+    } catch (error) {
+      setErr(error instanceof Error ? error.message : "Couldn't save the PSYKE entry");
     } finally {
+      createInFlightRef.current = null;
       setBusy(false);
     }
   };
   const remove = async () => {
-    if (isNew) { onClose(); return; }  // nothing persisted yet
-    if (projectId == null) return;
+    if (isNew) { queueRef.current!.cancel(); onClose(); return; }  // nothing persisted yet
+    if (ownerProjectId == null) return;
     setBusy(true);
     try {
-      await api.deletePsyke(projectId, entry.id);
+      if (!await queueRef.current!.flush()) return;
+      await api.deletePsyke(ownerProjectId, entry.id);
+      queueRef.current!.cancel();
       onChanged();
       onClose();
+    } catch (error) {
+      setErr(error instanceof Error ? error.message : "Couldn't delete the PSYKE entry");
     } finally {
       setBusy(false);
     }
@@ -158,7 +239,7 @@ function PsykeEditor({ entry, onClose, onChanged }: { entry: PsykeEntryDTO; onCl
   const pField = (key: string, label: string, color: string) => (
     <div>
       <div style={{ fontSize: 8, letterSpacing: ".16em", color, marginBottom: 4 }}>{label}</div>
-      <textarea value={str(details, key)} onChange={(e) => setD(key, e.target.value)} aria-label={label}
+      <textarea value={str(details, key)} disabled={busy} onChange={(e) => setD(key, e.target.value)} aria-label={label}
         style={{ ...efield, width: "100%", boxSizing: "border-box", fontSize: 12, minHeight: 46, resize: "vertical", lineHeight: 1.4 }} />
     </div>
   );
@@ -168,27 +249,27 @@ function PsykeEditor({ entry, onClose, onChanged }: { entry: PsykeEntryDTO; onCl
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <span style={{ fontFamily: "'Chakra Petch'", fontSize: 12, letterSpacing: ".16em", color: "var(--accent)" }}>{isNew ? "NEW ENTRY" : "EDIT ENTRY"}</span>
         <div style={{ flex: 1 }} />
-        <button type="button" onClick={remove} disabled={busy} style={{ ...ebtn(), color: "var(--crimson)", borderColor: "var(--crimson)" }}>{isNew ? "DISCARD" : "DELETE"}</button>
-        <button type="button" onClick={onClose} disabled={busy} style={ebtn()}>CANCEL</button>
-        <button type="button" onClick={save} disabled={busy} style={ebtn(true)}>{busy ? "SAVING…" : "SAVE"}</button>
+        <ConfirmDeleteButton label={isNew ? "unsaved PSYKE draft" : (entry.name || `PSYKE entry ${entry.id}`)} trigger={isNew ? "DISCARD" : "DELETE"} onConfirm={() => { void remove(); }} disabled={busy} triggerStyle={{ ...ebtn(), color: "var(--crimson)", borderColor: "var(--crimson)" }} />
+        <button type="button" onClick={() => { queueRef.current!.cancel(); onClose(); }} disabled={busy} style={ebtn()}>CANCEL</button>
+        <button type="button" onClick={() => void save()} disabled={busy} style={ebtn(true)}>{busy ? "SAVING…" : "SAVE"}</button>
       </div>
       <div style={{ display: "flex", gap: 12 }}>
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" aria-label="Entry name" style={{ ...efield, flex: 2, fontFamily: "'Chakra Petch'", fontSize: 16 }} />
-        <select value={type} onChange={(e) => setType(e.target.value)} aria-label="Entry type" style={{ ...efield, flex: 1 }}>
+        <input value={name} disabled={busy} onChange={(e) => { setName(e.target.value); patchDraft({ name: e.target.value }); }} placeholder="Name" aria-label="Entry name" style={{ ...efield, flex: 2, fontFamily: "'Chakra Petch'", fontSize: 16 }} />
+        <select value={type} disabled={busy} onChange={(e) => { setType(e.target.value); patchDraft({ type: e.target.value }); }} aria-label="Entry type" style={{ ...efield, flex: 1 }}>
           {TYPES.map((t) => (
             <option key={t.type} value={t.type}>{t.label}</option>
           ))}
         </select>
       </div>
       <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-        <select value={str(details, "role")} onChange={(e) => setD("role", e.target.value)} aria-label="Role" style={{ ...efield, flex: 1 }}>
+        <select value={str(details, "role")} disabled={busy} onChange={(e) => setD("role", e.target.value)} aria-label="Role" style={{ ...efield, flex: 1 }}>
           {ROLES.map((r) => <option key={r} value={r}>{r || "— role —"}</option>)}
         </select>
         <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 10, color: "var(--txt2)", flex: 1 }}>
-          <input type="checkbox" checked={isGlobal} onChange={(e) => setIsGlobal(e.target.checked)} /> global (shared across the series)
+          <input type="checkbox" checked={isGlobal} disabled={busy} onChange={(e) => { setIsGlobal(e.target.checked); patchDraft({ isGlobal: e.target.checked }); }} /> global (shared across the series)
         </label>
       </div>
-      <input value={aliases} onChange={(e) => setAliases(e.target.value)} placeholder="Aliases (comma-separated)" aria-label="Aliases" style={efield} />
+      <input value={aliases} disabled={busy} onChange={(e) => { setAliases(e.target.value); patchDraft({ aliases: e.target.value }); }} placeholder="Aliases (comma-separated)" aria-label="Aliases" style={efield} />
       <div style={{ fontSize: 8, letterSpacing: ".2em", color: "var(--txt3)", marginTop: 2 }}>PSYCHOLOGY · WANT / NEED / LIE / WOUND</div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
         {pField("want", "WANT · external", "var(--cyan)")}
@@ -196,16 +277,18 @@ function PsykeEditor({ entry, onClose, onChanged }: { entry: PsykeEntryDTO; onCl
         {pField("lie", "LIE · misbelief", "var(--blocking)")}
         {pField("wound", "WOUND · ghost", "var(--amber)")}
       </div>
-      <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Notes — who they are, what they want…" aria-label="Notes" style={{ ...efield, minHeight: 90, resize: "vertical", fontFamily: "'Courier Prime',monospace", lineHeight: 1.6 }} />
+      {err && <div role="alert" style={{ fontSize: 9, color: "var(--crimson)", lineHeight: 1.5 }}>⚠ {err}</div>}
+      <textarea value={notes} disabled={busy} onChange={(e) => { setNotes(e.target.value); patchDraft({ notes: e.target.value }); }} placeholder="Notes — who they are, what they want…" aria-label="Notes" style={{ ...efield, minHeight: 90, resize: "vertical", fontFamily: "'Courier Prime',monospace", lineHeight: 1.6 }} />
     </div>
   );
 }
 
 export function PsykeBible(props: PanelProps) {
   const { api, projectId } = useStudio();
+  const ownerProjectId = useRef(projectId).current;
   const { data: entriesData, loading, error, refetch } = usePsykeEntries();
-  const { data: relData, refetch: refetchRelations } = usePsykeRelations();
-  const { data: progData, refetch: refetchProgressions } = usePsykeProgressions();
+  const { data: relData, loading: relationsLoading, error: relationsError, refetch: refetchRelations } = usePsykeRelations();
+  const { data: progData, loading: progressionsLoading, error: progressionsError, refetch: refetchProgressions } = usePsykeProgressions();
   const entries = entriesData ?? [];
   const relations = relData ?? [];
   const progressions = progData ?? [];
@@ -221,6 +304,81 @@ export function PsykeBible(props: PanelProps) {
   const [activeTab, setActiveTab] = useState("overview");
   const [roleFilter, setRoleFilter] = useState<string | null>(null);
   const q = query.trim().toLowerCase();
+  const mounted = useMountedRef();
+  const progressionDraftRef = useRef<{
+    progression: PsykeProgressionDTO;
+    original: string;
+    text: string;
+  } | null>(null);
+  const progressionInFlightRef = useRef<Promise<boolean> | null>(null);
+  const persistProgressionRef = useRef<() => Promise<boolean>>(async () => true);
+  persistProgressionRef.current = async () => {
+    if (progressionInFlightRef.current) return progressionInFlightRef.current;
+    const draft = progressionDraftRef.current;
+    if (!draft) return true;
+    const text = draft.text.trim();
+    if (!text) {
+      if (mounted.current) setMutErr("Progression text cannot be empty — enter text or cancel the edit.");
+      return false;
+    }
+    if (text === draft.original) {
+      progressionDraftRef.current = null;
+      if (mounted.current) setEditProgId(null);
+      return true;
+    }
+    const operation = (async () => {
+      if (mounted.current) { setBusy(true); setMutErr(null); }
+      try {
+        if (ownerProjectId == null) throw new Error("No owning project for this progression.");
+        await api.updateProgression(ownerProjectId, draft.progression.id, {
+          text,
+          scene_id: draft.progression.scene_id ?? null,
+        });
+        const current = progressionDraftRef.current;
+        if (current === draft) progressionDraftRef.current = null;
+        else if (current?.progression.id === draft.progression.id) {
+          progressionDraftRef.current = { ...current, original: text };
+        }
+        if (mounted.current) {
+          if (progressionDraftRef.current == null) setEditProgId(null);
+          refetchProgressions();
+        }
+        return true;
+      } catch (error) {
+        if (mounted.current) setMutErr(error instanceof Error ? error.message : "Couldn't save progression");
+        return false;
+      } finally {
+        if (mounted.current) setBusy(false);
+      }
+    })();
+    progressionInFlightRef.current = operation;
+    const saved = await operation;
+    if (progressionInFlightRef.current === operation) progressionInFlightRef.current = null;
+    if (saved && progressionDraftRef.current) return persistProgressionRef.current();
+    return saved;
+  };
+  useEffect(() => registerProjectFlusher(() => persistProgressionRef.current()), []);
+
+  const startProgressionEdit = async (progression: PsykeProgressionDTO) => {
+    if (progressionDraftRef.current?.progression.id !== progression.id) {
+      if (!await persistProgressionRef.current()) return;
+    }
+    progressionDraftRef.current = { progression, original: progression.text, text: progression.text };
+    setEditProgId(progression.id);
+    setEditProgText(progression.text);
+  };
+  const changeProgressionText = (text: string) => {
+    setEditProgText(text);
+    if (progressionDraftRef.current) {
+      progressionDraftRef.current = { ...progressionDraftRef.current, text };
+    }
+    markProjectSavePending();
+  };
+  const cancelProgressionEdit = () => {
+    progressionDraftRef.current = null;
+    setEditProgId(null);
+    setMutErr(null);
+  };
 
   const deleteRelation = useCallback(async (relationId: string) => {
     if (projectId == null || busy) return;
@@ -236,20 +394,14 @@ export function PsykeBible(props: PanelProps) {
     }
   }, [api, projectId, busy, refetchRelations]);
 
-  const saveProgression = useCallback(async (p: PsykeProgressionDTO, text: string) => {
-    if (projectId == null || busy) return;
-    setBusy(true);
-    setMutErr(null);
-    try {
-      await api.updateProgression(projectId, p.id, { text, scene_id: p.scene_id ?? null });
-      setEditProgId(null);
-      refetchProgressions();
-    } catch (e) {
-      setMutErr(e instanceof Error ? e.message : "Couldn't save progression");
-    } finally {
-      setBusy(false);
+  const saveProgression = async (progression: PsykeProgressionDTO, text: string) => {
+    if (progressionDraftRef.current?.progression.id !== progression.id) {
+      progressionDraftRef.current = { progression, original: progression.text, text };
+    } else {
+      progressionDraftRef.current = { ...progressionDraftRef.current, text };
     }
-  }, [api, projectId, busy, refetchProgressions]);
+    await persistProgressionRef.current();
+  };
 
   const deleteProgression = useCallback(async (progressionId: number) => {
     if (projectId == null || busy) return;
@@ -257,7 +409,10 @@ export function PsykeBible(props: PanelProps) {
     setMutErr(null);
     try {
       await api.deleteProgression(projectId, progressionId);
-      if (editProgId === progressionId) setEditProgId(null);
+      if (editProgId === progressionId) {
+        progressionDraftRef.current = null;
+        setEditProgId(null);
+      }
       refetchProgressions();
     } catch (e) {
       setMutErr(e instanceof Error ? e.message : "Couldn't delete progression");
@@ -270,10 +425,15 @@ export function PsykeBible(props: PanelProps) {
   // Opening synchronously in the click handler (rather than create-then-open,
   // which raced the refetch re-render and dropped the modal) is what makes it
   // reliable — the same path the ✎ EDIT button uses.
-  const createNew = useCallback(() => {
+  const createNew = useCallback(async () => {
     if (projectId == null) return;
+    if (!await persistProgressionRef.current()) return;
     setEditing({ id: 0, name: "", type: "character", aliases: [], notes: "", is_global: false, details: {} });
   }, [projectId]);
+  const openEntryEditor = async (entry: PsykeEntryDTO) => {
+    if (!await persistProgressionRef.current()) return;
+    setEditing(entry);
+  };
 
   const byId = new Map<number, PsykeEntryDTO>(entries.map((e) => [e.id, e]));
   const relCountOf = (id: number) => relations.filter((r) => r.source_id === id || r.target_id === id).length;
@@ -326,8 +486,8 @@ export function PsykeBible(props: PanelProps) {
               {["Protagonist", "Deuteragonist", "Antagonist", "Supporting", "Mentor", "Foil"].map((r) => {
                 const on = roleFilter === r;
                 return (
-                  <span key={r} onClick={() => setRoleFilter(on ? null : r)} className={on ? undefined : "lf-row"}
-                    style={{ fontSize: 8, color: on ? "var(--on-accent)" : "var(--txt2)", background: on ? "var(--accent)" : "transparent", border: `1px solid ${on ? "var(--accent)" : "var(--line2)"}`, padding: "2px 7px", cursor: "pointer" }}>{r}</span>
+                  <button key={r} type="button" onClick={() => setRoleFilter(on ? null : r)} aria-pressed={on} className={on ? undefined : "lf-row"}
+                    style={{ font: "inherit", fontSize: 8, color: on ? "var(--on-accent)" : "var(--txt2)", background: on ? "var(--accent)" : "transparent", border: `1px solid ${on ? "var(--accent)" : "var(--line2)"}`, padding: "2px 7px", cursor: "pointer" }}>{r}</button>
                 );
               })}
             </div>
@@ -344,7 +504,7 @@ export function PsykeBible(props: PanelProps) {
         <div style={{ width: 330, flex: "none", borderRight: "1px solid var(--line)", display: "flex", flexDirection: "column" }}>
           <div style={{ height: 38, display: "flex", alignItems: "center", gap: 8, padding: "0 11px", borderBottom: "1px solid var(--line2)" }}>
             <span style={{ color: "var(--accent)" }}>⌕</span>
-            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search name · aliases…" style={{ flex: 1, minWidth: 0, background: "transparent", border: "none", outline: "none", fontSize: 10, color: "var(--txt)", fontFamily: "inherit" }} />
+            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search name · aliases…" aria-label="Search PSYKE names and aliases" style={{ flex: 1, minWidth: 0, background: "transparent", border: "none", outline: "none", fontSize: 10, color: "var(--txt)", fontFamily: "inherit" }} />
             <button type="button" onClick={createNew} disabled={busy || projectId == null} style={{ fontSize: 8, color: "var(--on-accent)", background: "var(--accent)", padding: "4px 9px", fontWeight: 600, border: "none", cursor: busy ? "default" : "pointer", opacity: busy || projectId == null ? 0.5 : 1 }}>＋ NEW</button>
           </div>
           <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column" }}>
@@ -389,7 +549,7 @@ export function PsykeBible(props: PanelProps) {
           ) : (
             <>
               <div style={{ padding: "18px 22px 14px", borderBottom: "1px solid var(--line)", background: "linear-gradient(180deg,rgba(76,194,255,.06),transparent)", position: "relative" }}>
-                <button type="button" onClick={() => setEditing(selected)} style={{ position: "absolute", top: 14, right: 18, zIndex: 2, ...ebtn() }}>✎ EDIT</button>
+                <button type="button" onClick={() => void openEntryEditor(selected)} style={{ position: "absolute", top: 14, right: 18, zIndex: 2, ...ebtn() }}>✎ EDIT</button>
                 <div style={{ display: "flex", alignItems: "flex-start", gap: 16 }}>
                   <div style={{ width: 54, height: 54, flex: "none", display: "grid", placeItems: "center", border: `1px solid ${selMeta.color}`, color: selMeta.color, fontSize: 24, boxShadow: "0 0 18px rgba(76,194,255,.25) inset" }}>{selMeta.icon}</div>
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -401,8 +561,8 @@ export function PsykeBible(props: PanelProps) {
                     {selected.aliases.length > 0 && <div style={{ fontSize: 9, color: "var(--txt3)", marginTop: 4 }}>a.k.a. {selected.aliases.join(" · ")}</div>}
                     <div style={{ display: "flex", gap: 18, marginTop: 7, fontSize: 10, color: "var(--txt2)", flexWrap: "wrap" }}>
                       <span>ROLE <span style={{ color: "var(--txt)" }}>{str(selected.details, "role") || "—"}</span></span>
-                      <span>RELATIONS <span style={{ color: "var(--accent)" }}>{selRelations.length}</span></span>
-                      <span>STATES <span style={{ color: "var(--accent)" }}>{selProg.length}</span></span>
+                      <span>RELATIONS <span style={{ color: "var(--accent)" }}>{relationsLoading ? "…" : selRelations.length}</span></span>
+                      <span>STATES <span style={{ color: "var(--accent)" }}>{progressionsLoading ? "…" : selProg.length}</span></span>
                     </div>
                   </div>
                 </div>
@@ -411,14 +571,16 @@ export function PsykeBible(props: PanelProps) {
                     ["overview", <>OVERVIEW</>],
                     ["details", <>DETAILS</>],
                     ["memory", <>MEMORY</>],
-                    ["relations", <>RELATIONS <span style={{ color: "var(--txt2)" }}>{selRelations.length}</span></>],
-                    ["progressions", <>PROGRESSIONS <span style={{ color: "var(--txt2)" }}>{selProg.length}</span></>],
+                    ["relations", <>RELATIONS <span style={{ color: "var(--txt2)" }}>{relationsLoading ? "…" : selRelations.length}</span></>],
+                    ["progressions", <>PROGRESSIONS <span style={{ color: "var(--txt2)" }}>{progressionsLoading ? "…" : selProg.length}</span></>],
                     ["appearances", <>APPEARANCES</>],
                   ] as [string, ReactNode][]).map(([k, label]) => (
                     <button key={k} type="button" onClick={() => setActiveTab(k)} style={{ background: "transparent", border: "none", cursor: "pointer", font: "inherit", letterSpacing: "inherit" }}>{tab(label, activeTab === k)}</button>
                   ))}
                 </div>
               </div>
+
+              {(relationsError || progressionsError) && <div role="alert" style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", borderBottom: "1px solid var(--amber)", background: "rgba(245,177,51,.07)", color: "var(--amber)", fontSize: 9 }}><span style={{ flex: 1 }}>Some PSYKE data couldn't load — {[relationsError && `relations: ${relationsError}`, progressionsError && `progressions: ${progressionsError}`].filter(Boolean).join(" · ")}</span><button type="button" onClick={() => { refetchRelations(); refetchProgressions(); }} style={{ font: "inherit", fontSize: 8.5, color: "var(--accent)", border: "1px solid var(--accent)", background: "transparent", padding: "3px 7px", cursor: "pointer" }}>RETRY</button></div>}
 
               <div style={{ flex: 1, overflowY: "auto", padding: "18px 22px" }}>
                 {(activeTab === "overview" || activeTab === "details") && (
@@ -471,7 +633,7 @@ export function PsykeBible(props: PanelProps) {
                   {(activeTab === "overview" || activeTab === "relations") && (
                   <div style={{ flex: 1, minWidth: 220 }}>
                     {sectLabel("KEY RELATIONS")}
-                    {selRelations.length === 0 ? (
+                    {relationsLoading ? muted("Loading relations…") : selRelations.length === 0 ? (
                       muted("No relations.")
                     ) : (
                       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -485,7 +647,7 @@ export function PsykeBible(props: PanelProps) {
                               <span style={{ color: m.color }}>{m.icon} {otherName}</span>
                               <span style={{ color: "var(--txt3)" }}>— {outgoing ? "" : "← "}{r.relation_type}{outgoing ? " →" : ""}</span>
                               <span style={{ flex: 1 }} />
-                              <button type="button" onClick={() => deleteRelation(r.id)} disabled={busy} title="Delete relation" aria-label={`Delete relation with ${otherName}`} style={{ background: "transparent", border: "none", color: "var(--crimson)", fontSize: 9, cursor: busy ? "default" : "pointer", padding: "1px 4px", opacity: busy ? 0.5 : 1 }}>✕</button>
+                              <ConfirmDeleteButton label={`relation with ${otherName}`} onConfirm={() => { void deleteRelation(r.id); }} disabled={busy} triggerStyle={{ border: "none", color: "var(--crimson)", fontSize: 9, padding: "1px 4px" }} />
                             </div>
                           );
                         })}
@@ -496,7 +658,7 @@ export function PsykeBible(props: PanelProps) {
                   {(activeTab === "overview" || activeTab === "progressions") && (
                   <div style={{ flex: 1, minWidth: 220 }}>
                     {sectLabel("PROGRESSION · scene-pinned states")}
-                    {selProg.length === 0 ? (
+                    {progressionsLoading ? muted("Loading progression states…") : selProg.length === 0 ? (
                       muted("No progression states yet.")
                     ) : (
                       <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
@@ -504,15 +666,15 @@ export function PsykeBible(props: PanelProps) {
                           <div key={p.id} className={editProgId === p.id ? undefined : "lf-row"} style={{ borderLeft: "2px solid var(--accent)", padding: "2px 0 2px 10px" }}>
                             {editProgId === p.id ? (
                               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                                <input value={editProgText} onChange={(e) => setEditProgText(e.target.value)} aria-label="Progression text" autoFocus onKeyDown={(e) => { if (e.key === "Enter") saveProgression(p, editProgText.trim()); if (e.key === "Escape") setEditProgId(null); }} style={{ flex: 1, minWidth: 0, background: "var(--tint)", border: "1px solid var(--line2)", color: "var(--strong)", fontSize: 11, padding: "3px 6px", outline: "none", fontFamily: "inherit" }} />
-                                <button type="button" onClick={() => saveProgression(p, editProgText.trim())} disabled={busy || !editProgText.trim()} title="Save" aria-label="Save progression" style={{ background: "transparent", border: "none", color: "var(--cyan)", fontSize: 9, cursor: busy ? "default" : "pointer", padding: "1px 4px", opacity: busy || !editProgText.trim() ? 0.5 : 1 }}>✓</button>
-                                <button type="button" onClick={() => setEditProgId(null)} disabled={busy} title="Cancel" aria-label="Cancel edit" style={{ background: "transparent", border: "none", color: "var(--txt3)", fontSize: 9, cursor: busy ? "default" : "pointer", padding: "1px 4px" }}>✕</button>
+                                <input value={editProgText} disabled={busy} onChange={(e) => changeProgressionText(e.target.value)} aria-label="Progression text" autoFocus onKeyDown={(e) => { if (e.key === "Enter") void saveProgression(p, editProgText); if (e.key === "Escape") cancelProgressionEdit(); }} style={{ flex: 1, minWidth: 0, background: "var(--tint)", border: "1px solid var(--line2)", color: "var(--strong)", fontSize: 11, padding: "3px 6px", outline: "none", fontFamily: "inherit" }} />
+                                <button type="button" onClick={() => void saveProgression(p, editProgText)} disabled={busy || !editProgText.trim()} title="Save" aria-label="Save progression" style={{ background: "transparent", border: "none", color: "var(--cyan)", fontSize: 9, cursor: busy ? "default" : "pointer", padding: "1px 4px", opacity: busy || !editProgText.trim() ? 0.5 : 1 }}>✓</button>
+                                <button type="button" onClick={cancelProgressionEdit} disabled={busy} title="Cancel" aria-label="Cancel edit" style={{ background: "transparent", border: "none", color: "var(--txt3)", fontSize: 9, cursor: busy ? "default" : "pointer", padding: "1px 4px" }}>✕</button>
                               </div>
                             ) : (
                               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                                 <div style={{ flex: 1, minWidth: 0, fontSize: 11, color: "var(--txt)", lineHeight: 1.4 }}>{p.text}</div>
-                                <button type="button" onClick={() => { setEditProgId(p.id); setEditProgText(p.text); }} disabled={busy} title="Edit progression" aria-label="Edit progression" style={{ background: "transparent", border: "none", color: "var(--accent)", fontSize: 9, cursor: busy ? "default" : "pointer", padding: "1px 4px", opacity: busy ? 0.5 : 1 }}>✎</button>
-                                <button type="button" onClick={() => deleteProgression(p.id)} disabled={busy} title="Delete progression" aria-label="Delete progression" style={{ background: "transparent", border: "none", color: "var(--crimson)", fontSize: 9, cursor: busy ? "default" : "pointer", padding: "1px 4px", opacity: busy ? 0.5 : 1 }}>✕</button>
+                                <button type="button" onClick={() => void startProgressionEdit(p)} disabled={busy} title="Edit progression" aria-label="Edit progression" style={{ background: "transparent", border: "none", color: "var(--accent)", fontSize: 9, cursor: busy ? "default" : "pointer", padding: "1px 4px", opacity: busy ? 0.5 : 1 }}>✎</button>
+                                <ConfirmDeleteButton label={`progression ${p.id}`} onConfirm={() => { void deleteProgression(p.id); }} disabled={busy} triggerStyle={{ border: "none", color: "var(--crimson)", fontSize: 9, padding: "1px 4px" }} />
                               </div>
                             )}
                             {p.scene_title && <div style={{ fontSize: 8, color: "var(--txt3)", marginTop: 2 }}>↳ {p.scene_title}</div>}

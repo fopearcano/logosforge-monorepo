@@ -1,8 +1,12 @@
-import { useCallback, useState, type CSSProperties } from "react";
-import type { NoteDTO } from "@logosforge/ui-contracts";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import type { NoteDTO, NoteUpdateDTO } from "@logosforge/ui-contracts";
 import { PanelShell, Corners, type PanelProps } from "../shell/PanelShell";
 import { useStudio } from "../../adapters/StudioProvider";
 import { useNotes } from "../../hooks";
+import { markProjectSavePending, registerProjectFlusher } from "../../adapters/projectSaveCoordinator";
+import { createSceneSaveQueue, type SceneSaveQueue } from "./sceneSaveQueue";
+import { ConfirmDeleteButton } from "../common/ConfirmDeleteButton";
+import { useMountedRef } from "../../hooks/useMountedRef";
 
 const panelBox: CSSProperties = {
   position: "relative",
@@ -26,8 +30,7 @@ function NoteCard({ note, onClick }: { note: NoteDTO; onClick: () => void }) {
     ...note.psyke_links.map((id) => ({ text: `◆ #${id}`, color: "var(--cyan)", border: "var(--line-cy)" })),
   ];
   return (
-    <button
-      type="button"
+    <button type="button"
       onClick={onClick}
       style={{ textAlign: "left", cursor: "pointer", font: "inherit", border: pinned ? "1px solid var(--accent)" : "1px solid var(--line2)", borderTop: pinned ? "2px solid var(--accent)" : undefined, background: pinned ? "rgba(76,194,255,.05)" : "var(--tint)", padding: 11, boxShadow: pinned ? "0 0 14px rgba(76,194,255,.1)" : undefined }}
     >
@@ -56,8 +59,11 @@ const btn = (accent = false): CSSProperties => ({
   fontWeight: accent ? 600 : 400,
 });
 
+type NoteDraft = Required<Pick<NoteUpdateDTO, "title" | "content" | "pinned" | "tags">>;
+
 function NoteEditor({ note, onClose, onChanged }: { note: NoteDTO; onClose: () => void; onChanged: () => void }) {
   const { api, projectId } = useStudio();
+  const ownerProjectId = useRef(projectId).current;
   const [title, setTitle] = useState(note.title);
   const [content, setContent] = useState(note.content);
   const [pinned, setPinned] = useState(note.pinned);
@@ -68,14 +74,58 @@ function NoteEditor({ note, onClose, onChanged }: { note: NoteDTO; onClose: () =
   const [sceneDraft, setSceneDraft] = useState("");
   const [psykeDraft, setPsykeDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  const mounted = useMountedRef();
+  const onChangedRef = useRef(onChanged);
+  onChangedRef.current = onChanged;
+  const draftRef = useRef<NoteDraft>({ title, content, pinned, tags });
+  const writeRef = useRef<(draft: NoteDraft) => Promise<void>>(async () => {});
+  writeRef.current = async (draft) => {
+    if (ownerProjectId == null) throw new Error("No owning project for this note.");
+    await api.updateNote(ownerProjectId, note.id, draft);
+    onChangedRef.current();
+  };
+  const queueRef = useRef<SceneSaveQueue<NoteDraft> | null>(null);
+  if (!queueRef.current) {
+    queueRef.current = createSceneSaveQueue({
+      initial: draftRef.current,
+      write: (draft) => writeRef.current(draft),
+      onDirty: markProjectSavePending,
+      onStatus: (status) => {
+        if (!mounted.current) return;
+        setSaving(status === "saving");
+        if (status === "error") setErr("Couldn't save note — your draft is still open.");
+        else if (status === "saving") setErr(null);
+      },
+    });
+  }
+  const patchDraft = (patch: Partial<NoteDraft>) => {
+    const next = { ...draftRef.current, ...patch };
+    draftRef.current = next;
+    queueRef.current!.update(next);
+  };
+  useEffect(() => {
+    const queue = queueRef.current!;
+    const unregister = registerProjectFlusher(() => queue.flush());
+    return () => { unregister(); queue.cancel(); };
+  }, []);
 
   const commitTag = () => {
     const t = tagDraft.trim();
-    if (t && !tags.includes(t)) setTags((prev) => [...prev, t]);
+    if (t && !draftRef.current.tags.includes(t)) {
+      const next = [...draftRef.current.tags, t];
+      setTags(next);
+      patchDraft({ tags: next });
+    }
     setTagDraft("");
   };
-  const removeTag = (t: string) => setTags((prev) => prev.filter((x) => x !== t));
+  const removeTag = (t: string) => {
+    const next = draftRef.current.tags.filter((x) => x !== t);
+    setTags(next);
+    patchDraft({ tags: next });
+  };
 
   const linkScene = async () => {
     if (projectId == null) return;
@@ -141,26 +191,23 @@ function NoteEditor({ note, onClose, onChanged }: { note: NoteDTO; onClose: () =
   };
 
   const save = async () => {
-    if (projectId == null) return;
-    setBusy(true);
+    if (ownerProjectId == null) return;
     setErr(null);
-    try {
-      await api.updateNote(projectId, note.id, { title, content, pinned, tags });
-      onChanged();
-      onClose();
-    } catch {
-      setErr("Couldn't save note");
-    } finally {
-      setBusy(false);
-    }
+    if (await queueRef.current!.flush()) onClose();
   };
   const remove = async () => {
-    if (projectId == null) return;
+    if (ownerProjectId == null) return;
     setBusy(true);
     try {
-      await api.deleteNote(projectId, note.id);
+      // Persist first so a failed delete never discards the writer's draft. Once
+      // clean, the global barrier only has to wait for the tracked DELETE.
+      if (!await queueRef.current!.flush()) return;
+      await api.deleteNote(ownerProjectId, note.id);
+      queueRef.current!.cancel();
       onChanged();
       onClose();
+    } catch (error) {
+      setErr(error instanceof Error ? error.message : "Couldn't delete the note");
     } finally {
       setBusy(false);
     }
@@ -171,16 +218,17 @@ function NoteEditor({ note, onClose, onChanged }: { note: NoteDTO; onClose: () =
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <span style={{ fontFamily: "'Chakra Petch'", fontSize: 12, letterSpacing: ".16em", color: "var(--accent)" }}>EDIT NOTE</span>
         <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 9, color: "var(--txt2)", letterSpacing: ".1em", cursor: "pointer" }}>
-          <input type="checkbox" checked={pinned} onChange={(e) => setPinned(e.target.checked)} /> PIN
+          <input type="checkbox" checked={pinned} disabled={busy || saving} onChange={(e) => { setPinned(e.target.checked); patchDraft({ pinned: e.target.checked }); }} /> PIN
         </label>
         <div style={{ flex: 1 }} />
-        <button type="button" onClick={remove} disabled={busy} style={{ ...btn(), color: "var(--crimson)", borderColor: "var(--crimson)" }}>DELETE</button>
-        <button type="button" onClick={onClose} disabled={busy} style={btn()}>CANCEL</button>
-        <button type="button" onClick={save} disabled={busy} style={btn(true)}>{busy ? "SAVING…" : "SAVE"}</button>
+        <ConfirmDeleteButton label={note.title || `note ${note.id}`} trigger="DELETE" onConfirm={() => { void remove(); }} disabled={busy || saving} triggerStyle={{ ...btn(), color: "var(--crimson)", borderColor: "var(--crimson)" }} />
+        <button type="button" onClick={() => { queueRef.current!.cancel(); onClose(); }} disabled={busy || saving} style={btn()}>CANCEL</button>
+        <button type="button" onClick={() => void save()} disabled={busy || saving} style={btn(true)}>{saving ? "SAVING…" : "SAVE"}</button>
       </div>
       <input
         value={title}
-        onChange={(e) => setTitle(e.target.value)}
+        disabled={busy || saving}
+        onChange={(e) => { setTitle(e.target.value); patchDraft({ title: e.target.value }); }}
         placeholder="Note title"
         aria-label="Note title"
         style={{ background: "var(--tint)", border: "1px solid var(--line2)", color: "var(--strong)", fontFamily: "'Chakra Petch'", fontSize: 15, padding: "9px 11px", outline: "none" }}
@@ -190,11 +238,12 @@ function NoteEditor({ note, onClose, onChanged }: { note: NoteDTO; onClose: () =
         {tags.map((t) => (
           <span key={t} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 8, color: "var(--txt2)", border: "1px solid var(--line2)", padding: "1px 3px 1px 6px" }}>
             {t}
-            <button type="button" onClick={() => removeTag(t)} aria-label={`Remove tag ${t}`} style={{ font: "inherit", fontSize: 8, background: "transparent", border: "none", color: "var(--crimson)", cursor: "pointer", padding: 0, lineHeight: 1 }}>✕</button>
+            <button type="button" onClick={() => removeTag(t)} disabled={busy || saving} aria-label={`Remove tag ${t}`} style={{ font: "inherit", fontSize: 8, background: "transparent", border: "none", color: "var(--crimson)", cursor: "pointer", padding: 0, lineHeight: 1 }}>✕</button>
           </span>
         ))}
         <input
           value={tagDraft}
+          disabled={busy || saving}
           onChange={(e) => setTagDraft(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" || e.key === ",") {
@@ -249,7 +298,8 @@ function NoteEditor({ note, onClose, onChanged }: { note: NoteDTO; onClose: () =
       {err && <span style={{ fontSize: 9, color: "var(--crimson)", letterSpacing: ".04em" }}>{err}</span>}
       <textarea
         value={content}
-        onChange={(e) => setContent(e.target.value)}
+        disabled={busy || saving}
+        onChange={(e) => { setContent(e.target.value); patchDraft({ content: e.target.value }); }}
         placeholder="Write your note…"
         aria-label="Note content"
         style={{ flex: 1, resize: "none", background: "var(--tint)", border: "1px solid var(--line2)", color: "var(--txt)", fontFamily: "'JetBrains Mono',monospace", fontSize: 13, lineHeight: 1.6, padding: "11px 12px", outline: "none" }}
@@ -267,18 +317,20 @@ export function NotesPanel(props: PanelProps) {
   const { data: notes, loading, error, refetch } = useNotes();
   const [editing, setEditing] = useState<NoteDTO | null>(null);
   const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const count = notes?.length ?? 0;
   const pinned = notes?.filter((n) => n.pinned).length ?? 0;
 
   const createNote = useCallback(async () => {
     if (projectId == null || busy) return;
     setBusy(true);
+    setActionError(null);
     try {
       const created = await api.createNote(projectId, { title: "Untitled note", content: "" });
       refetch();
       setEditing(created);
-    } catch {
-      /* no-op */
+    } catch (createError) {
+      setActionError(`Couldn't create the note — ${createError instanceof Error ? createError.message : String(createError)}`);
     } finally {
       setBusy(false);
     }
@@ -294,6 +346,7 @@ export function NotesPanel(props: PanelProps) {
           <div style={{ flex: 1 }} />
           <button type="button" onClick={createNote} disabled={busy || projectId == null} style={{ fontSize: 9, color: "var(--on-accent)", background: "var(--accent)", padding: "5px 11px", fontWeight: 600, letterSpacing: ".08em", border: "none", cursor: busy ? "default" : "pointer", opacity: busy || projectId == null ? 0.5 : 1 }}>＋ NEW NOTE</button>
         </div>
+        {actionError && <button type="button" role="alert" title="Dismiss" onClick={() => setActionError(null)} style={{ flex: "none", width: "100%", textAlign: "left", border: "none", borderBottom: "1px solid var(--crimson)", background: "rgba(255,82,96,.08)", color: "var(--crimson)", padding: "7px 16px", font: "inherit", fontSize: 9.5, cursor: "pointer" }}>{actionError}</button>}
         <div style={{ position: "relative", flex: 1, minHeight: 0 }}>
           <div style={{ position: "absolute", inset: 0, overflowY: "auto", padding: 13, display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 11, alignContent: "start" }}>
             {loading

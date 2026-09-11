@@ -1,7 +1,9 @@
-import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import type { PluginDTO, SeasonDTO, EpisodeDTO, SeriesArcDTO } from "@logosforge/ui-contracts";
 import { PanelShell, Corners, type PanelProps } from "../shell/PanelShell";
 import { useStudio } from "../../adapters/StudioProvider";
+import { createLatestRequestGate } from "../../hooks/latestRequest";
+import { loadSeriesSnapshot } from "../../hooks/seriesSnapshot";
 
 /**
  * Two small read-only views: the installed analysis Plugins registry (/plugins)
@@ -29,11 +31,13 @@ export function PluginsPanel(props: PanelProps) {
   const { api } = useStudio();
   const [plugins, setPlugins] = useState<PluginDTO[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
   useEffect(() => {
     let alive = true;
-    api.listPlugins().then((p) => { if (alive) setPlugins(p); }).catch((e) => { if (alive) setErr(String(e)); });
+    setPlugins(null); setErr(null);
+    api.listPlugins().then((p) => { if (alive) setPlugins(p); }).catch((e) => { if (alive) setErr(e instanceof Error ? e.message : String(e)); });
     return () => { alive = false; };
-  }, [api]);
+  }, [api, reload]);
   return (
     <PanelShell {...props}>
       <div data-screen-label="Plugins" style={panelBox}>
@@ -44,7 +48,7 @@ export function PluginsPanel(props: PanelProps) {
           {plugins && <span style={{ fontSize: 9, color: "var(--txt3)", letterSpacing: ".1em" }}>{plugins.length}</span>}
         </div>
         <div style={{ flex: 1, overflowY: "auto", padding: 14 }}>
-          {err ? centered(err, "var(--blocking)")
+          {err ? <div style={{ padding: "44px 0", textAlign: "center", fontSize: 11, color: "var(--blocking)", lineHeight: 1.6 }}>Couldn't load plugins — {err}<div><button type="button" onClick={() => setReload((value) => value + 1)} style={{ marginTop: 10, font: "inherit", fontSize: 9, letterSpacing: ".1em", color: "var(--accent)", border: "1px solid var(--accent)", background: "transparent", padding: "5px 11px", cursor: "pointer" }}>RETRY</button></div></div>
             : !plugins ? centered("Loading…")
             : plugins.length === 0 ? centered("No analysis plugins registered.")
             : <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -74,18 +78,35 @@ export function SeriesNavigator(props: PanelProps) {
   const [episodes, setEpisodes] = useState<EpisodeDTO[]>([]);
   const [arcs, setArcs] = useState<SeriesArcDTO[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const requests = useRef(createLatestRequestGate()).current;
+  useEffect(() => { requests.open(); return () => requests.close(); }, [requests]);
+
+  const load = useCallback(async () => {
+    if (projectId == null) {
+      setSeasons([]); setEpisodes([]); setArcs([]); setError(null); setLoading(false);
+      return;
+    }
+    const token = requests.begin("series");
+    setLoading(true);
+    setError(null);
+    try {
+      const snapshot = await loadSeriesSnapshot(api, projectId);
+      if (!requests.isCurrent(token)) return;
+      setSeasons(snapshot.seasons); setEpisodes(snapshot.episodes); setArcs(snapshot.arcs);
+    } catch (loadError) {
+      if (requests.isCurrent(token)) {
+        setError(loadError instanceof Error ? loadError.message : String(loadError));
+      }
+    } finally {
+      if (requests.isCurrent(token)) setLoading(false);
+    }
+  }, [api, projectId, requests]);
 
   useEffect(() => {
-    if (projectId == null) { setLoading(false); return; }
-    let alive = true;
-    setLoading(true);
-    Promise.all([
-      api.listSeasons(projectId).catch(() => [] as SeasonDTO[]),
-      api.listEpisodes(projectId).catch(() => [] as EpisodeDTO[]),
-      api.listSeriesArcs(projectId).catch(() => [] as SeriesArcDTO[]),
-    ]).then(([s, e, a]) => { if (!alive) return; setSeasons(s); setEpisodes(e); setArcs(a); setLoading(false); });
-    return () => { alive = false; };
-  }, [api, projectId]);
+    void load();
+    return () => requests.invalidate("series");
+  }, [load, requests]);
 
   const epsOf = (seasonId?: number) => episodes.filter((e) => e.season_id === seasonId).sort((a, b) => (a.episode_number ?? 0) - (b.episode_number ?? 0));
 
@@ -101,10 +122,11 @@ export function SeriesNavigator(props: PanelProps) {
         <div style={{ flex: 1, overflowY: "auto", padding: 14 }}>
           {projectId == null ? centered("Open a project.")
             : loading ? centered("Loading…")
+            : error ? <div style={{ padding: "44px 0", textAlign: "center", fontSize: 11, color: "var(--blocking)", lineHeight: 1.6 }}>Couldn't load the Series structure — {error}<div><button type="button" onClick={() => void load()} style={{ marginTop: 10, font: "inherit", fontSize: 9, letterSpacing: ".1em", color: "var(--accent)", border: "1px solid var(--accent)", background: "transparent", padding: "5px 11px", cursor: "pointer" }}>RETRY</button></div></div>
             : seasons.length === 0 && arcs.length === 0 ? centered("No series structure yet — author seasons, episodes and arcs in Format Studio → SERIES.")
             : (
               <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-                {seasons.sort((a, b) => (a.season_number ?? 0) - (b.season_number ?? 0)).map((s) => (
+                {[...seasons].sort((a, b) => (a.season_number ?? 0) - (b.season_number ?? 0)).map((s) => (
                   <div key={s.id}>
                     <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
                       <span style={{ fontFamily: "'Chakra Petch'", fontSize: 12, color: "var(--strong)", letterSpacing: ".04em" }}>S{s.season_number ?? "?"} · {s.title || "Untitled season"}</span>

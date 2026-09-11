@@ -5,10 +5,9 @@ writing workstation over the `logosforge` core. Consumed by **pro-desktop**
 (Electron, local AI) and **pro-web** (browser, remote AI). Platform-neutral:
 host apps inject an `ApiClient` + `PlatformAdapter`.
 
-> **This is a scaffold.** The structure, adapters, tokens, and per-panel stubs
-> are in place; the actual panel UIs are designed in **Claude Design** (see
-> `STUDIO_UI_DESIGN_BRIEF.md` + `design-tickets/`) and then recoded here in
-> Claude Code, each wired to `@logosforge/ui-contracts` + the injected `ApiClient`.
+> **Development stage: integrated alpha.** The shared panels are implemented and
+> wired to `@logosforge/ui-contracts` through the injected `ApiClient`. The design
+> brief and tickets remain historical design inputs, not descriptions of stubs.
 
 ## Layout
 
@@ -16,7 +15,7 @@ host apps inject an `ApiClient` + `PlatformAdapter`.
 src/
   adapters/      ApiClient + PlatformAdapter interfaces, <StudioProvider>
   theme/         design tokens (dark-first, cinematic, per-mode bands)
-  components/    one folder per panel area (stubs today)
+  components/    implemented panel areas + shared recovery/accessibility controls
   index.ts       public surface
 STUDIO_UI_DESIGN_BRIEF.md   the full design brief (read this)
 design-tickets/             one focused ticket per panel area
@@ -30,6 +29,24 @@ design-tickets/             one focused ticket per panel area
   `logosforge.api`). Data shapes come from `@logosforge/ui-contracts`.
 - **Never** import or resemble the Whiteboard (Free) UI — Studio is its own
   visual identity.
+
+## HTTP transport guarantees
+
+The reference HTTP adapter owns its requests and live transports. Replacing a
+client aborts outstanding fetches and closes polling/SSE. Health checks, reads,
+and explicitly long AI/voice/export operations have separate configurable
+timeouts; mutations deliberately have no client abort by default because a
+disconnect after commit has an ambiguous outcome.
+
+Simultaneous identical GETs share one network request but not one mutable result:
+each caller receives a cloned JSON value. The entry disappears immediately after
+settlement, and every mutation invalidates pending coalescing before and after the
+write. This is request coalescing, not a response cache.
+
+The Manuscript uses viewport-aware editor activation. Scene state and save queues
+remain mounted, while expensive ProseMirror instances are limited to visible,
+active, recently used, or unsaved scenes. The browser preview includes a
+`?large-manuscript-harness` fixture with 180 scenes for regression measurement.
 
 ## Conventions (already wired into the scaffold)
 

@@ -23,36 +23,44 @@ const REL_COLOR: Record<string, string> = {
   visual_motif: "var(--cyan)",
 };
 
-function Check({ on, onClick }: { on: boolean; onClick: () => void }) {
+function Check({ on, onClick, label = "Include proposal" }: { on: boolean; onClick: () => void; label?: string }) {
   return (
-    <span
+    <button type="button"
       onClick={onClick}
-      style={{ width: 13, height: 13, flex: "none", cursor: "pointer", border: `1px solid ${on ? "var(--accent)" : "var(--line2)"}`, background: on ? "var(--accent)" : "transparent", display: "grid", placeItems: "center", fontSize: 9, lineHeight: 1, color: "var(--on-accent)", marginTop: 1 }}
+      aria-pressed={on}
+      aria-label={label}
+      style={{ width: 13, height: 13, flex: "none", cursor: "pointer", border: `1px solid ${on ? "var(--accent)" : "var(--line2)"}`, background: on ? "var(--accent)" : "transparent", display: "grid", placeItems: "center", font: "inherit", padding: 0, fontSize: 9, lineHeight: 1, color: "var(--on-accent)", marginTop: 1 }}
     >
       {on ? "✓" : ""}
-    </span>
+    </button>
   );
 }
 
 export function ExtractionReview(props: PanelProps) {
   const { api, projectId } = useStudio();
-  const { propose, apply, revert, proposals, report, running, applying, reverting, error, progress } = useExtraction();
+  const { propose, cancel, resume, apply, revert, proposals, report, running, applying, reverting, error, progress, jobStatus } = useExtraction();
   const [useLlm, setUseLlm] = useState(true);
   const [model, setModel] = useState("");
   const [models, setModels] = useState<string[]>([]);
+  const [modelError, setModelError] = useState("");
+  const [modelReload, setModelReload] = useState(0);
   const [rejected, setRejected] = useState<Set<string>>(new Set());
+  const needsJobDecision = jobStatus === "timeout" || jobStatus === "poll_error" || jobStatus === "cancel_error";
+  const canStart = !running && !applying && !reverting && !needsJobDecision;
 
   // Best-effort: populate the override picker with the active provider's loaded
   // models. Stays free-text — an empty list (provider unreachable) just means no
   // suggestions, not a broken input.
   useEffect(() => {
     let cancelled = false;
-    if (projectId == null) return;
+    if (projectId == null) { setModels([]); setModelError(""); return; }
+    setModels([]);
+    setModelError("");
     api.listExtractionModels(projectId)
-      .then((r) => { if (!cancelled) setModels(r.models ?? []); })
-      .catch(() => { /* no suggestions */ });
+      .then((r) => { if (!cancelled) { setModels(r.models ?? []); setModelError(""); } })
+      .catch((loadError) => { if (!cancelled) setModelError(loadError instanceof Error ? loadError.message : String(loadError)); });
     return () => { cancelled = true; };
-  }, [api, projectId]);
+  }, [api, projectId, modelReload]);
 
   const isOn = (key: string) => !rejected.has(key);
   const toggle = (key: string) =>
@@ -102,7 +110,7 @@ export function ExtractionReview(props: PanelProps) {
     const dupes = [dupBadge(rel.source, rel.source_hint), dupBadge(rel.target, rel.target_hint)].filter(Boolean);
     return (
       <div key={key} style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 10, color: isOn(key) ? "var(--txt2)" : "var(--txt3)", opacity: isOn(key) ? 1 : 0.5 }}>
-        <Check on={isOn(key)} onClick={() => toggle(key)} />
+        <Check on={isOn(key)} onClick={() => toggle(key)} label={`Include ${rel.source} ${rel.rel_type} ${rel.target}`} />
         <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
           <span><span style={{ color: "var(--strong)" }}>{rel.source}</span> <span style={{ color: REL_COLOR[rel.rel_type] ?? "var(--txt3)" }}>{rel.rel_type}</span> <span style={{ color: "var(--strong)" }}>{rel.target}</span>{rel.why ? <span style={{ color: "var(--txt3)" }}> · {rel.why}</span> : null}</span>
           {dupes.length > 0 && <span style={{ fontSize: 8.5, display: "flex", gap: 8, flexWrap: "wrap" }}>{dupes}</span>}
@@ -120,15 +128,17 @@ export function ExtractionReview(props: PanelProps) {
         <div style={{ height: 42, flex: "none", display: "flex", alignItems: "center", gap: 11, padding: "0 16px", borderBottom: "1px solid var(--line)" }}>
           <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".1em", color: "var(--strong)" }}>EXTRACT STRUCTURE</span>
           <div style={{ display: "flex", border: "1px solid var(--line2)", fontSize: 8, letterSpacing: ".08em" }}>
-            <span onClick={() => setUseLlm(false)} style={{ padding: "4px 8px", cursor: "pointer", color: useLlm ? "var(--txt3)" : "var(--on-accent)", background: useLlm ? undefined : "var(--accent)", fontWeight: useLlm ? 400 : 600 }}>TIER 1 ONLY</span>
-            <span onClick={() => setUseLlm(true)} style={{ padding: "4px 8px", cursor: "pointer", borderLeft: "1px solid var(--line2)", color: useLlm ? "var(--on-accent)" : "var(--txt3)", background: useLlm ? "var(--accent)" : undefined, fontWeight: useLlm ? 600 : 400 }}>+ AI INFERENCE</span>
+            <button type="button" disabled={running} aria-pressed={!useLlm} onClick={() => setUseLlm(false)} style={{ font: "inherit", border: "none", padding: "4px 8px", cursor: running ? "default" : "pointer", color: useLlm ? "var(--txt3)" : "var(--on-accent)", background: useLlm ? "transparent" : "var(--accent)", fontWeight: useLlm ? 400 : 600, opacity: running ? 0.6 : 1 }}>TIER 1 ONLY</button>
+            <button type="button" disabled={running} aria-pressed={useLlm} onClick={() => setUseLlm(true)} style={{ font: "inherit", border: "none", padding: "4px 8px", cursor: running ? "default" : "pointer", borderLeft: "1px solid var(--line2)", color: useLlm ? "var(--on-accent)" : "var(--txt3)", background: useLlm ? "var(--accent)" : "transparent", fontWeight: useLlm ? 600 : 400, opacity: running ? 0.6 : 1 }}>+ AI INFERENCE</button>
           </div>
           {useLlm && (
             <>
               <input
                 value={model}
+                disabled={running}
                 onChange={(e) => setModel(e.target.value)}
                 list="extract-model-list"
+                aria-label="Extraction model override"
                 placeholder={models.length ? "model override (blank = default)" : "model override (free-text)"}
                 spellCheck={false}
                 title="Optional: run AI inference with a specific (e.g. stronger) model — kept on the active provider's endpoint. Pick a loaded model or type any name."
@@ -137,15 +147,17 @@ export function ExtractionReview(props: PanelProps) {
               <datalist id="extract-model-list">
                 {models.map((m) => <option key={m} value={m} />)}
               </datalist>
+              {modelError && <button type="button" onClick={() => setModelReload((value) => value + 1)} title={`Model suggestions unavailable: ${modelError}`} style={{ font: "inherit", fontSize: 8, color: "var(--amber)", border: "1px solid var(--amber)", background: "transparent", padding: "3px 6px", cursor: "pointer" }}>MODELS ⚠ RETRY</button>}
             </>
           )}
           <div style={{ flex: 1 }} />
-          <span
-            onClick={running ? undefined : () => { setRejected(new Set()); propose(useLlm, model.trim() || undefined); }}
-            style={{ fontSize: 9.5, color: "var(--on-accent)", background: running ? "var(--line2)" : "var(--accent)", padding: "6px 13px", fontWeight: 600, letterSpacing: ".08em", cursor: running ? "default" : "pointer", boxShadow: running ? undefined : "0 0 14px rgba(176,124,255,.35)" }}
+          <button type="button"
+            disabled={!canStart}
+            onClick={() => { setRejected(new Set()); void propose(useLlm, model.trim() || undefined); }}
+            style={{ font: "inherit", border: "none", fontSize: 9.5, color: "var(--on-accent)", background: canStart ? "var(--accent)" : "var(--line2)", padding: "6px 13px", fontWeight: 600, letterSpacing: ".08em", cursor: canStart ? "pointer" : "default", boxShadow: canStart ? "0 0 14px rgba(176,124,255,.35)" : undefined }}
           >
-            {running ? "EXTRACTING…" : "⟳ EXTRACT FROM MANUSCRIPT"}
-          </span>
+            {running ? (jobStatus === "cancelling" ? "CANCELLING…" : jobStatus === "resuming" ? "RESUMING…" : "EXTRACTING…") : "⟳ EXTRACT FROM MANUSCRIPT"}
+          </button>
         </div>
 
         {/* body */}
@@ -159,9 +171,12 @@ export function ExtractionReview(props: PanelProps) {
                 <div style={{ width: progress && progress.total ? `${Math.round((progress.done / progress.total) * 100)}%` : "6%", height: "100%", background: "var(--accent)", transition: "width .3s" }} />
               </div>
               <div style={{ fontSize: 8.5, color: "var(--txt3)", marginTop: 7 }}>Runs as a background job — Tier-1 cues are instant; AI inference runs per scene. You can keep working.</div>
+              {jobStatus !== "starting" && <button type="button" onClick={() => { void cancel(); }} disabled={jobStatus === "cancelling"} style={{ marginTop: 10, font: "inherit", fontSize: 8.5, letterSpacing: ".08em", color: "var(--blocking)", border: "1px solid var(--blocking)", background: "transparent", padding: "5px 10px", cursor: jobStatus === "cancelling" ? "default" : "pointer" }}>CANCEL JOB</button>}
             </div>
           ) : error ? (
-            <div style={{ color: "var(--blocking)", fontSize: 11.5, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>Extraction failed.{"\n"}<span style={{ color: "var(--txt3)", fontSize: 10 }}>{error}</span></div>
+            <div style={{ color: "var(--blocking)", fontSize: 11.5, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>Extraction stopped.{"\n"}<span style={{ color: "var(--txt3)", fontSize: 10 }}>{error}</span>{needsJobDecision && <div style={{ display: "flex", gap: 8, marginTop: 10 }}><button type="button" onClick={() => { void resume(); }} style={{ font: "inherit", fontSize: 8.5, color: "var(--accent)", border: "1px solid var(--accent)", background: "transparent", padding: "5px 10px", cursor: "pointer" }}>RESUME</button><button type="button" onClick={() => { void cancel(); }} style={{ font: "inherit", fontSize: 8.5, color: "var(--blocking)", border: "1px solid var(--blocking)", background: "transparent", padding: "5px 10px", cursor: "pointer" }}>CANCEL JOB</button></div>}</div>
+          ) : jobStatus === "cancelled" ? (
+            <div style={{ color: "var(--txt3)", fontSize: 11.5, lineHeight: 1.6 }}>Extraction cancelled. No proposals were applied.</div>
           ) : !proposals ? (
             <div style={{ color: "var(--txt3)", fontSize: 11.5, lineHeight: 1.6, maxWidth: 560 }}>
               Turn your authored scenes into structured story-data — scene↔character links, who-knows-what, and typed PSYKE relations (setup/payoff, subtext, motifs). <span style={{ color: "var(--accent)" }}>Extract</span> proposes; nothing is written until you review and apply.
@@ -181,7 +196,7 @@ export function ExtractionReview(props: PanelProps) {
                     <div style={{ fontFamily: "'Chakra Petch'", fontSize: 11, color: "var(--strong)", letterSpacing: ".04em", marginBottom: 7 }}>{s.title || `Scene ${s.scene_id}`}</div>
                     {s.characters.length > 0 && (
                       <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 6 }}>
-                        <Check on={isOn(charKey)} onClick={() => toggle(charKey)} />
+                        <Check on={isOn(charKey)} onClick={() => toggle(charKey)} label={`Include cast for ${s.title || `scene ${s.scene_id}`}`} />
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 5, opacity: isOn(charKey) ? 1 : 0.5 }}>
                           <span style={{ fontSize: 8, color: "var(--txt3)", letterSpacing: ".1em", alignSelf: "center" }}>CAST</span>
                           {s.characters.map((c) => (
@@ -192,7 +207,7 @@ export function ExtractionReview(props: PanelProps) {
                     )}
                     {(s.who_knows_what ?? "").trim() && (
                       <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 6, opacity: isOn(wkwKey) ? 1 : 0.5 }}>
-                        <Check on={isOn(wkwKey)} onClick={() => toggle(wkwKey)} />
+                        <Check on={isOn(wkwKey)} onClick={() => toggle(wkwKey)} label={`Include who-knows-what for ${s.title || `scene ${s.scene_id}`}`} />
                         <span style={{ fontSize: 10, color: "var(--txt2)", lineHeight: 1.45 }}><span style={{ fontSize: 8, color: "var(--amber)", letterSpacing: ".1em" }}>KNOWS </span>{s.who_knows_what}</span>
                       </div>
                     )}
@@ -229,20 +244,22 @@ export function ExtractionReview(props: PanelProps) {
           )}
           <div style={{ flex: 1 }} />
           {report?.receipt ? (
-            <span
-              onClick={reverting ? undefined : () => revert()}
+            <button type="button"
+              disabled={reverting}
+              onClick={() => { void revert(); }}
               title="Undo this apply — removes exactly what was written"
-              style={{ fontSize: 9.5, color: reverting ? "var(--txt3)" : "var(--amber)", border: "1px solid rgba(245,177,51,.4)", padding: "5px 12px", letterSpacing: ".08em", cursor: reverting ? "default" : "pointer" }}
+              style={{ font: "inherit", background: "transparent", fontSize: 9.5, color: reverting ? "var(--txt3)" : "var(--amber)", border: "1px solid rgba(245,177,51,.4)", padding: "5px 12px", letterSpacing: ".08em", cursor: reverting ? "default" : "pointer" }}
             >
               {reverting ? "REVERTING…" : "↶ REVERT THIS APPLY"}
-            </span>
+            </button>
           ) : proposals ? (
-            <span
-              onClick={applying || accepted === 0 ? undefined : () => apply(request)}
-              style={{ fontSize: 9.5, color: "var(--on-accent)", background: applying || accepted === 0 ? "var(--line2)" : "var(--green)", padding: "6px 13px", fontWeight: 600, letterSpacing: ".08em", cursor: applying || accepted === 0 ? "default" : "pointer" }}
+            <button type="button"
+              disabled={applying || accepted === 0}
+              onClick={() => { void apply(request); }}
+              style={{ font: "inherit", border: "none", fontSize: 9.5, color: "var(--on-accent)", background: applying || accepted === 0 ? "var(--line2)" : "var(--green)", padding: "6px 13px", fontWeight: 600, letterSpacing: ".08em", cursor: applying || accepted === 0 ? "default" : "pointer" }}
             >
               {applying ? "APPLYING…" : `APPLY ${accepted} ACCEPTED ▸`}
-            </span>
+            </button>
           ) : null}
         </div>
       </div>

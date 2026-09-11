@@ -50,9 +50,9 @@ const message = (text: string) => (
 );
 
 export function KnowledgeGraph(props: PanelProps) {
-  const { data: entriesData, loading, error } = usePsykeEntries();
-  const { data: relData } = usePsykeRelations();
-  const { data: gravity } = useGraphGravity();
+  const { data: entriesData, loading, error, refetch: refetchEntries } = usePsykeEntries();
+  const { data: relData, loading: relationsLoading, error: relationsError, refetch: refetchRelations } = usePsykeRelations();
+  const { data: gravity, error: gravityError, refetch: refetchGravity } = useGraphGravity();
   const entries = entriesData ?? [];
   const relations = relData ?? [];
 
@@ -102,7 +102,9 @@ export function KnowledgeGraph(props: PanelProps) {
   const useGrav = gravityOn && gravAvailable;
   const sizeOf = (id: number) =>
     useGrav ? 30 + (gravOf(id)?.total ?? 0) * 40 : 30 + (deg(id) / maxDeg) * 34;
-  const empty = !loading && !error && entries.length === 0;
+  const graphLoading = loading || relationsLoading;
+  const graphError = error || relationsError;
+  const empty = !graphLoading && !graphError && entries.length === 0;
 
   return (
     <PanelShell {...props}>
@@ -114,11 +116,14 @@ export function KnowledgeGraph(props: PanelProps) {
           <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 14, letterSpacing: ".12em", color: "var(--strong)" }}>KNOWLEDGE GRAPH</span>
           <span style={{ fontSize: 7.5, color: "var(--txt3)", border: "1px solid var(--line2)", padding: "2px 7px", letterSpacing: ".12em" }}>DERIVED FROM PSYKE</span>
           <div style={{ flex: 1 }} />
-          <span
-            onClick={() => gravAvailable && setGravityOn((v) => !v)}
+          <button type="button"
+            disabled={!gravAvailable}
+            aria-pressed={useGrav}
+            onClick={() => setGravityOn((v) => !v)}
             title={gravAvailable ? "Size nodes by story gravity" : "Gravity unavailable for this project"}
-            style={{ fontSize: 9, color: useGrav ? "var(--on-accent)" : gravAvailable ? "var(--accent)" : "var(--txt3)", background: useGrav ? "var(--accent)" : undefined, padding: useGrav ? "3px 7px" : undefined, letterSpacing: ".1em", cursor: gravAvailable ? "pointer" : "default" }}
-          >⊹ GRAVITY</span>
+            style={{ font: "inherit", border: "none", fontSize: 9, color: useGrav ? "var(--on-accent)" : gravAvailable ? "var(--accent)" : "var(--txt3)", background: useGrav ? "var(--accent)" : "transparent", padding: useGrav ? "3px 7px" : 0, letterSpacing: ".1em", cursor: gravAvailable ? "pointer" : "default" }}
+          >⊹ GRAVITY</button>
+          {gravityError && <button type="button" onClick={refetchGravity} title={gravityError} style={{ font: "inherit", fontSize: 8, color: "var(--amber)", border: "1px solid var(--amber)", background: "transparent", padding: "3px 6px", cursor: "pointer" }}>GRAVITY ⚠ RETRY</button>}
         </div>
 
         <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
@@ -131,9 +136,9 @@ export function KnowledgeGraph(props: PanelProps) {
                 const count = entries.filter((e) => e.type === t).length;
                 const on = !hidden.has(t);
                 return (
-                  <label key={t} onClick={() => toggleType(t)} style={{ display: "flex", alignItems: "center", gap: 8, color: on ? "var(--txt)" : "var(--txt3)", cursor: "pointer", opacity: count === 0 ? 0.4 : 1 }}>
+                  <button key={t} type="button" onClick={() => toggleType(t)} aria-pressed={on} style={{ width: "100%", border: "none", background: "transparent", padding: 0, font: "inherit", display: "flex", alignItems: "center", gap: 8, color: on ? "var(--txt)" : "var(--txt3)", cursor: "pointer", opacity: count === 0 ? 0.4 : 1 }}>
                     <span style={{ width: 10, height: 10, background: on ? m.color : undefined, border: on ? undefined : "1px solid var(--txt3)" }} /><span style={{ color: m.color }}>{m.icon}</span>{m.label}<span style={{ marginLeft: "auto", color: "var(--txt3)" }}>{count}</span>
-                  </label>
+                  </button>
                 );
               })}
             </div>
@@ -149,7 +154,7 @@ export function KnowledgeGraph(props: PanelProps) {
 
           {/* GRAPH CANVAS */}
           <div style={{ flex: 1, minWidth: 0, position: "relative", overflow: "hidden", display: "grid", placeItems: "center" }}>
-            {loading ? message("Building graph…") : error ? message(`Couldn't load graph — ${error}`) : empty ? message("No PSYKE entities yet — the graph builds from your story bible") : (
+            {graphLoading ? message("Building graph…") : graphError ? <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, fontSize: 11, color: "var(--blocking)" }}>Couldn't load the complete graph — {graphError}<button type="button" onClick={() => { refetchEntries(); refetchRelations(); }} style={{ font: "inherit", fontSize: 9, letterSpacing: ".1em", color: "var(--accent)", border: "1px solid var(--accent)", background: "transparent", padding: "5px 11px", cursor: "pointer" }}>RETRY</button></div> : empty ? message("No PSYKE entities yet — the graph builds from your story bible") : (
               <div style={{ position: "relative", width: CW, height: CH, maxWidth: "100%", maxHeight: "100%" }}>
                 {/* edges */}
                 <svg viewBox={`0 0 ${CW} ${CH}`} preserveAspectRatio="xMidYMid meet" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", zIndex: 1 }}>
@@ -177,13 +182,13 @@ export function KnowledgeGraph(props: PanelProps) {
                   const isSel = selected?.id === e.id;
                   const highGrav = useGrav && (gravOf(e.id)?.total ?? 0) >= glowThreshold;
                   return (
-                    <div key={e.id} onClick={() => setSelId(e.id)} style={{ position: "absolute", left: p.x, top: p.y, transform: "translate(-50%,-50%)", zIndex: isSel ? 4 : 3, textAlign: "center", cursor: "pointer" }}>
-                      {highGrav && <div style={{ position: "absolute", left: "50%", top: size / 2, transform: "translate(-50%,-50%)", width: size + 48, height: size + 48, borderRadius: "50%", background: `radial-gradient(circle, ${m.color}40, transparent 68%)`, pointerEvents: "none", zIndex: 0 }} />}
-                      {(isHub || isSel) && <div style={{ position: "absolute", left: "50%", top: size / 2, transform: "translate(-50%,-50%)", width: size + 30, height: size + 30, borderRadius: "50%", border: `1px solid ${m.color}`, animation: "lf-halo 3s ease-in-out infinite" }} />}
-                      <div style={{ width: size, height: size, borderRadius: "50%", border: `${isSel ? 2.5 : 2}px solid ${m.color}`, background: "var(--tint)", display: "grid", placeItems: "center", color: m.color, fontSize: Math.round(size * 0.34), boxShadow: isSel || isHub ? `0 0 20px ${m.color}` : undefined }}>{m.icon}</div>
-                      <div style={{ fontFamily: "'Chakra Petch'", fontSize: size >= 50 ? 12 : 9.5, color: isSel ? "var(--strong)" : "var(--txt)", marginTop: 4, letterSpacing: ".04em", whiteSpace: "nowrap" }}>{e.name}</div>
-                      {isHub && <div style={{ fontSize: 7, color: "var(--accent)", letterSpacing: ".16em" }}>◉ MOST CONNECTED</div>}
-                    </div>
+                    <button key={e.id} type="button" aria-pressed={isSel} aria-label={`Select ${e.name}, ${metaOf(e.type).label}`} onClick={() => setSelId(e.id)} style={{ position: "absolute", left: p.x, top: p.y, transform: "translate(-50%,-50%)", zIndex: isSel ? 4 : 3, textAlign: "center", cursor: "pointer", border: "none", background: "transparent", padding: 0, font: "inherit" }}>
+                      {highGrav && <span style={{ position: "absolute", left: "50%", top: size / 2, transform: "translate(-50%,-50%)", width: size + 48, height: size + 48, borderRadius: "50%", background: `radial-gradient(circle, ${m.color}40, transparent 68%)`, pointerEvents: "none", zIndex: 0 }} />}
+                      {(isHub || isSel) && <span style={{ position: "absolute", left: "50%", top: size / 2, transform: "translate(-50%,-50%)", width: size + 30, height: size + 30, borderRadius: "50%", border: `1px solid ${m.color}`, animation: "lf-halo 3s ease-in-out infinite" }} />}
+                      <span style={{ width: size, height: size, borderRadius: "50%", border: `${isSel ? 2.5 : 2}px solid ${m.color}`, background: "var(--tint)", display: "grid", placeItems: "center", color: m.color, fontSize: Math.round(size * 0.34), boxShadow: isSel || isHub ? `0 0 20px ${m.color}` : undefined }}>{m.icon}</span>
+                      <span style={{ display: "block", fontFamily: "'Chakra Petch'", fontSize: size >= 50 ? 12 : 9.5, color: isSel ? "var(--strong)" : "var(--txt)", marginTop: 4, letterSpacing: ".04em", whiteSpace: "nowrap" }}>{e.name}</span>
+                      {isHub && <span style={{ display: "block", fontSize: 7, color: "var(--accent)", letterSpacing: ".16em" }}>◉ MOST CONNECTED</span>}
+                    </button>
                   );
                 })}
                 {/* legend */}
@@ -225,9 +230,9 @@ export function KnowledgeGraph(props: PanelProps) {
                 ) : (
                   <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
                     {neighbors.map((n, i) => (
-                      <div key={`${n.id}-${i}`} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 9.5, color: "var(--txt2)", cursor: "pointer" }} onClick={() => setSelId(n.id)}>
+                      <button type="button" key={`${n.id}-${i}`} style={{ width: "100%", border: "none", background: "transparent", padding: 0, font: "inherit", display: "flex", alignItems: "center", gap: 7, fontSize: 9.5, color: "var(--txt2)", cursor: "pointer" }} onClick={() => setSelId(n.id)}>
                         <span style={{ color: "var(--txt3)" }}>{n.out ? "→" : "←"}</span><span style={{ color: "var(--strong)" }}>{n.name}</span><span style={{ color: "var(--accent)" }}>{n.rel}</span>
-                      </div>
+                      </button>
                     ))}
                   </div>
                 )}

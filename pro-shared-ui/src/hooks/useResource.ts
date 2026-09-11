@@ -30,6 +30,14 @@ export function useResource<T>(
   const [nonce, setNonce] = useState(0);
   const refetch = useCallback(() => setNonce((n) => n + 1), []);
 
+  // A resource value belongs to one exact key + API instance. Keeping A's data
+  // visible while B loads leaks project context and can enable actions against a
+  // stale row. Manual refetches keep the current value; identity changes clear it.
+  useEffect(() => {
+    setData(undefined);
+    setError(null);
+  }, [key, api]);
+
   useEffect(() => {
     if (key == null) {
       setLoading(false);

@@ -16,7 +16,7 @@ export interface NavTarget {
   manuscriptTargetSceneId?: number | null;
   clearManuscriptTarget?: () => void;
   /** Switch the active project (host owns projectId state). */
-  selectProject?: (id: number) => void;
+  selectProject?: (id: number) => Promise<boolean>;
   /** Ask the host to re-fetch its project list (after create/rename/delete). */
   refreshProjects?: () => void;
 }
@@ -83,9 +83,9 @@ export function useNavigate(): (panel: string, opts?: { sceneId?: number }) => v
 }
 
 /** Switch the active project from any panel (no-op outside a provider or if the host didn't inject it). */
-export function useSelectProject(): (id: number) => void {
+export function useSelectProject(): (id: number) => Promise<boolean> {
   const fn = useContext(StudioContext)?.selectProject;
-  return fn ?? (() => {});
+  return fn ?? (async () => false);
 }
 
 /** Ask the host to re-fetch its project list (after a create/rename/delete). */

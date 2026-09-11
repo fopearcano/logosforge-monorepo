@@ -1,7 +1,8 @@
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { AssistantSettingsDTO } from "@logosforge/ui-contracts";
 import { PanelShell, Corners, type PanelProps } from "../shell/PanelShell";
 import { useStudio } from "../../adapters/StudioProvider";
+import { markProjectSavePending, registerProjectFlusher } from "../../adapters/projectSaveCoordinator";
 
 /**
  * AI Settings — point Billy / Logos / Counterpart / Dexter-Billy at the model
@@ -38,38 +39,103 @@ const PRESETS: Record<string, string> = {
 
 export function AiSettingsPanel(props: PanelProps) {
   const { api, projectId } = useStudio();
+  const projectIdRef = useRef(projectId);
+  projectIdRef.current = projectId;
   const [s, setS] = useState<AssistantSettingsDTO | null>(null);
   const [apiKey, setApiKey] = useState("");            // write-only; blank = unchanged
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const savedRef = useRef<AssistantSettingsDTO | null>(null);
+  const dirtyRef = useRef(false);
+  const draftRevisionRef = useRef(0);
+  const saveInFlightRef = useRef<Promise<AssistantSettingsDTO> | null>(null);
 
   useEffect(() => {
+    setS(null); setApiKey(""); setBusy(false); setNote(null); setErr(null);
+    savedRef.current = null;
+    dirtyRef.current = false;
+    saveInFlightRef.current = null;
     if (projectId == null) return;
     let alive = true;
     api.getAssistantSettings(projectId)
-      .then((v) => { if (alive) setS(v); })
+      .then((v) => {
+        if (alive) {
+          savedRef.current = v;
+          dirtyRef.current = false;
+          setS(v);
+        }
+      })
       .catch((e) => { if (alive) setErr(String(e)); });
     return () => { alive = false; };
   }, [api, projectId]);
 
-  const set = (patch: Partial<AssistantSettingsDTO>) => setS((cur) => (cur ? { ...cur, ...patch } : cur));
+  useEffect(() => registerProjectFlusher(async () => {
+    if (saveInFlightRef.current) {
+      await saveInFlightRef.current;
+      if (dirtyRef.current) {
+        throw new Error("AI Settings changed again while saving. Save or revert the newer draft before leaving.");
+      }
+      return true;
+    }
+    if (dirtyRef.current) {
+      throw new Error("AI Settings have unsaved changes. Save or revert them before leaving.");
+    }
+    return true;
+  }), []);
+
+  const markDirty = () => {
+    dirtyRef.current = true;
+    draftRevisionRef.current += 1;
+    setNote(null);
+    markProjectSavePending();
+  };
+  const set = (patch: Partial<AssistantSettingsDTO>) => {
+    setS((cur) => (cur ? { ...cur, ...patch } : cur));
+    markDirty();
+  };
+  const setKey = (value: string) => {
+    setApiKey(value);
+    markDirty();
+  };
+  const revert = () => {
+    if (savedRef.current) setS(savedRef.current);
+    setApiKey("");
+    dirtyRef.current = false;
+    draftRevisionRef.current += 1;
+    setErr(null);
+    setNote("Unsaved changes reverted.");
+  };
 
   const save = async () => {
     if (projectId == null || !s) return;
+    const ownerProjectId = projectId;
     setBusy(true); setErr(null); setNote(null);
+    const draftRevision = draftRevisionRef.current;
     try {
       const body: AssistantSettingsDTO = {
         provider: s.provider, model: s.model, base_url: s.base_url, timeout: s.timeout,
         ...(apiKey ? { api_key: apiKey } : {}),
       };
-      const saved = await api.patchAssistantSettings(projectId, body);
-      setS(saved); setApiKey("");
-      setNote("Saved. Billy, Logos, Counterpart and voice-Billy now use this model.");
+      const request = api.patchAssistantSettings(ownerProjectId, body);
+      saveInFlightRef.current = request;
+      const saved = await request;
+      if (projectIdRef.current !== ownerProjectId) return;
+      savedRef.current = saved;
+      if (draftRevisionRef.current === draftRevision) {
+        dirtyRef.current = false;
+        setS(saved); setApiKey("");
+        setNote("Saved. Billy, Logos, Counterpart and voice-Billy now use this model.");
+      } else {
+        setNote("Saved the previous values; newer edits still need Save or Revert.");
+      }
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      if (projectIdRef.current === ownerProjectId) setErr(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      if (projectIdRef.current === ownerProjectId) {
+        saveInFlightRef.current = null;
+        setBusy(false);
+      }
     }
   };
 
@@ -91,6 +157,8 @@ export function AiSettingsPanel(props: PanelProps) {
                 <div style={field}>
                   <div style={label}>Provider</div>
                   <select value={PROVIDERS.includes(s.provider) ? s.provider : "Custom"}
+                    disabled={busy}
+                    aria-label="AI provider"
                     onChange={(e) => { const v = e.target.value; set({ provider: v, base_url: PRESETS[v] ?? s.base_url }); }}
                     style={input}>
                     {PROVIDERS.map((p) => <option key={p} value={p}>{p}</option>)}
@@ -100,6 +168,8 @@ export function AiSettingsPanel(props: PanelProps) {
                 <div style={field}>
                   <div style={label}>Base URL</div>
                   <input style={input} value={s.base_url} placeholder="http://192.168.1.141:1234/v1"
+                    disabled={busy}
+                    aria-label="AI provider base URL"
                     onChange={(e) => set({ base_url: e.target.value })} />
                   <div style={{ fontSize: 8.5, color: "var(--txt3)", marginTop: 4 }}>
                     A LAN LM Studio looks like <code>http://192.168.1.141:1234/v1</code>. Local is <code>http://localhost:1234/v1</code>.
@@ -109,6 +179,8 @@ export function AiSettingsPanel(props: PanelProps) {
                 <div style={field}>
                   <div style={label}>Model</div>
                   <input style={input} value={s.model}
+                    disabled={busy}
+                    aria-label="AI model"
                     placeholder={s.provider === "OpenRouter" ? "anthropic/claude-opus-4-8" : "llama-3.2-3b-instruct"}
                     onChange={(e) => set({ model: e.target.value })} />
                   {s.provider === "OpenRouter" && (
@@ -121,12 +193,14 @@ export function AiSettingsPanel(props: PanelProps) {
                 <div style={field}>
                   <div style={label}>API key <span style={{ textTransform: "none", letterSpacing: 0 }}>(only for hosted providers — leave blank to keep the current key)</span></div>
                   <input style={input} type="password" value={apiKey} placeholder="•••• (unchanged)"
-                    autoComplete="off" onChange={(e) => setApiKey(e.target.value)} />
+                    aria-label="AI provider API key" autoComplete="off" disabled={busy} onChange={(e) => setKey(e.target.value)} />
                 </div>
 
                 <div style={field}>
                   <div style={label}>Timeout (seconds, 0 = default)</div>
                   <input style={input} type="number" min={0} value={s.timeout}
+                    disabled={busy}
+                    aria-label="AI request timeout in seconds"
                     onChange={(e) => set({ timeout: Number(e.target.value) || 0 })} />
                 </div>
 
@@ -134,6 +208,10 @@ export function AiSettingsPanel(props: PanelProps) {
                   <button type="button" onClick={() => void save()} disabled={busy}
                     style={{ fontSize: 10, letterSpacing: ".1em", fontWeight: 600, color: "var(--on-accent)", background: "var(--accent)", border: "1px solid var(--accent)", padding: "8px 18px", cursor: busy ? "default" : "pointer" }}>
                     {busy ? "SAVING…" : "SAVE"}
+                  </button>
+                  <button type="button" onClick={revert} disabled={busy || !dirtyRef.current}
+                    style={{ fontSize: 10, letterSpacing: ".1em", color: "var(--txt2)", background: "transparent", border: "1px solid var(--line2)", padding: "8px 14px", cursor: busy || !dirtyRef.current ? "default" : "pointer", opacity: busy || !dirtyRef.current ? 0.45 : 1 }}>
+                    REVERT
                   </button>
                   {note && <span style={{ fontSize: 9.5, color: "var(--green)" }}>✓ {note}</span>}
                   {err && <span style={{ fontSize: 9.5, color: "var(--crimson)" }}>⚠ {err}</span>}

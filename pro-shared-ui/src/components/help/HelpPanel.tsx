@@ -17,10 +17,12 @@ const panelBox: CSSProperties = {
 // ── Keyboard shortcuts (verified against the app) ──────────────────────────
 const SHORTCUTS: [string, string][] = [
   ["⌘K  /  Ctrl+K", "Command palette — jump to any section, open an AI tool, or toggle Focus"],
+  ["Tab  /  Shift+Tab", "Move through controls; inside a dialog, focus remains safely inside it"],
+  ["Enter  /  Space", "Activate the focused button, toggle or selectable card"],
   ["↑ ↓ · Enter · Esc", "In the palette: move · run the highlighted command · close"],
   ["⌘S  /  Ctrl+S", "Save now in the Manuscript (scenes also autosave as you type)"],
   ["Enter", "Send your message to Billy   (Shift+Enter = new line)"],
-  ["⌘/Ctrl + Enter", "Apply an AI edit in the Controlled-Apply diff   (Esc = cancel)"],
+  ["⌘/Ctrl + Enter", "Apply an AI edit in the Controlled-Apply diff   (Esc = cancel; focus returns where you started)"],
   ["Enter  /  Esc", "Confirm / cancel an inline rename or field (Outline, Projects, PSYKE, Notes)"],
   ["Esc", "Leave Focus mode"],
 ];
@@ -28,25 +30,27 @@ const SHORTCUTS: [string, string][] = [
 // ── Guide sections ─────────────────────────────────────────────────────────
 const GUIDE: { title: string; items: [string, string][] }[] = [
   { title: "① Get started", items: [
-    ["Projects", "Create a project — pick a writing mode (novel · screenplay · graphic novel · stage) — or open one. You can also ⇩ Import Whiteboard (.json) or ⇩ Import Project (.lfbundle)."],
-    ["AI Settings", "Point Studio at your AI model — a local server (LM Studio / Ollama) or a cloud provider. This powers Billy, Logos, Quantum and ✨ AI Generate."],
-    ["Manuscript", "Write. Scenes autosave; formatting is live as you type (Fountain for screenplays). ＋ SCENE adds one; FOCUS hides everything but the page."],
+    ["Projects", "Create a project — pick a project mode (novel · screenplay · graphic novel · stage · series) — or open one. The mode follows each project and locks once it contains work, preventing accidental reinterpretation. You can also ⇩ Import Whiteboard (.json) or ⇩ Import Project (.lfbundle)."],
+    ["AI Settings", "Point Studio at your AI model — LM Studio, Ollama, OpenAI, Anthropic, OpenRouter or a custom endpoint. Use Save to accept credentials/configuration or Revert to discard them; Studio will stop navigation while this sensitive form is unsaved."],
+    ["Manuscript", "Write. Scenes autosave; panel changes, project changes, and app close wait for pending manuscript, Note and PSYKE saves. Create, delete, reorder and manual-save failures stay visible. If a scene changed elsewhere, your local draft is preserved and you choose Reload or an explicit Overwrite. In very long manuscripts, off-screen scenes remain readable but use a lightweight view; scrolling near them or clicking their prose activates the full editor. ＋ SCENE adds one; FOCUS hides everything but the page."],
+    ["Panel recovery", "If one screen or AI companion fails while rendering, only that area is replaced by a visible error card. RETRY remounts that area; the rest of the workspace and your project data remain available."],
+    ["Unexpected errors", "Failures outside React panels — such as an unhandled background task — appear in a dismissible error banner and remain in the developer console for diagnosis. Stalled health checks, reads and AI operations end with a visible timeout; ordinary data writes are not cut off mid-commit. Normal request cancellations stay quiet."],
   ] },
   { title: "② The workspace", items: [
     ["Left rail", "Every section, grouped: Plan · Structure · Analytics · Bible · Export. Click to switch — or press ⌘K and type where you want to go."],
-    ["AI dock (right)", "Your AI companions, available in any section. Drag its left edge to resize (340–900px); click › to collapse it to a strip, ‹ AI to reopen."],
+    ["AI dock (right)", "Your AI companions, available in any section. Drag its left edge to resize (340–900px), or focus the divider and use Left/Right arrows (Shift = larger step; Home/End = limits). Click › to collapse it to a strip, ‹ AI to reopen."],
     ["FOCUS / COCKPIT", "Top-right toggle: FOCUS is distraction-free (just the page — Esc to exit); COCKPIT shows the full workstation."],
   ] },
   { title: "③ AI companions (right dock)", items: [
-    ["◇ Billy", "Project-aware chat — he reads your scenes, outline and bible. Ask a question, then apply his suggestion straight to the active scene."],
-    ["❖ Logos", "Targeted transforms — Rewrite / Expand / Compress / Improve Dialogue, plus analyzers. Pull in a selection, run it, then apply the result."],
-    ["ψ Quantum", "Enter a premise → it fans out branching possibilities in superposition; inspect a branch and materialize it as a new scene."],
+    ["◇ Billy", "Project-aware chat — he reads your scenes, outline and bible. New Chat invalidates an unfinished response; stale replies from an earlier conversation or project are never inserted."],
+    ["❖ Logos", "Targeted transforms and analyzers. Changing passage or section invalidates the previous run; catalog/proactive failures remain visible and can be retried."],
+    ["ψ Quantum", "Enter a premise → fan out possibilities, inspect a branch and materialize it as a scene. Scoring changes are serialized; stale generations and double-click collapses are rejected."],
     ["☯ Counterpart", "A devil's-advocate second opinion that pressure-tests your draft."],
-    ["⛭ Extract", "Reads your prose and proposes structured bible / plot data you can review and add."],
+    ["⛭ Extract", "Reads your prose and proposes structured bible / plot data you can review and add. A long extraction survives panel changes, resumes when you return, and can be cancelled; Apply remains explicit and reversible."],
   ] },
   { title: "④ Plan & structure", items: [
-    ["Outline", "Acts → Chapters → Scenes. Build it by hand (＋ ACT), or ✨ AI GENERATE a full outline. The ✨ on any act or chapter generates one level deeper under it."],
-    ["PSYKE bible", "Characters, places, objects, lore and themes — each with the WANT · NEED · LIE · WOUND psychology and role."],
+    ["Outline", "Acts → Chapters → Scenes. Build it by hand (＋ ACT), or ✨ AI GENERATE a full outline. Inline renames and Structure fields finish saving before navigation; stale background loads are ignored and failures stay visible for retry. Delete is always a two-step confirm."],
+    ["PSYKE bible", "Characters, places, objects, lore and themes — each with WANT · NEED · LIE · WOUND and role. Existing-entry drafts save safely during navigation; an unfinished new entry asks you to Save or Discard before leaving. Destructive deletes require a second explicit click."],
     ["Timeline · Canvas Plot · Story Grid", "See the same story as a timeline, plot lanes, or a scene grid."],
   ] },
   { title: "⑤ Story intelligence", items: [
@@ -56,7 +60,7 @@ const GUIDE: { title: string; items: [string, string][] }[] = [
     ["Review · Adapt", "A format-aware readiness dashboard, plus adaptive-mode suggestions."],
   ] },
   { title: "⑥ Voice, import & export", items: [
-    ["Voice — Dexter's Room", "Dictate: local GPU transcription (faster-whisper) turns speech into text you can commit to a scene."],
+    ["Voice — Dexter's Room", "Dictate with local faster-whisper, then clean a transcript, ask Billy, or commit it to the active scene, a Note or PSYKE. Voice history is project-isolated; finish or dismiss a preview before navigating. If newer scene text blocks an insertion, the returned text is preserved for Retry or explicit Discard without rerunning Billy. Stop, cancel, setup failure and leaving the panel all release the microphone."],
     ["Import", "From Projects: bring a Free Whiteboard draft (.json) or a whole project bundle (.lfbundle — manuscript + bible + outline) into a new Pro project."],
     ["Export", "Fountain / PDF / FDX / DOCX from the Export panel."],
   ] },

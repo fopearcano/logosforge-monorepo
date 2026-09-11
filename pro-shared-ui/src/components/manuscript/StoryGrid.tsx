@@ -3,6 +3,7 @@ import type { SceneDTO } from "@logosforge/ui-contracts";
 import { PanelShell, Corners, type PanelProps } from "../shell/PanelShell";
 import { useStudio, useNavigate } from "../../adapters/StudioProvider";
 import { useScenes } from "../../hooks";
+import { trackProjectWrite } from "../../adapters/projectSaveCoordinator";
 
 const panelBox: CSSProperties = {
   position: "relative",
@@ -24,22 +25,22 @@ function Card({ left, leftDashed = false, code, codeColor = "var(--txt3)", statu
   const border = active ? "1px solid var(--accent)" : flag ? "1px solid rgba(255,82,96,.4)" : "1px solid var(--line2)";
   const bg = active ? "rgba(76,194,255,.1)" : flag ? "rgba(255,82,96,.05)" : "var(--tint)";
   return (
-    <div onClick={onClick} title={onClick ? "Open in the Manuscript editor" : undefined} style={{ position: "relative", border, borderLeft: `3px ${leftDashed ? "dashed" : "solid"} ${left}`, background: bg, padding: "9px 10px", boxShadow: active ? "0 0 16px rgba(76,194,255,.18)" : undefined, cursor: onClick ? "pointer" : undefined }}>
-      {flag && <div style={{ position: "absolute", top: 7, right: 9, fontSize: 7, color: "var(--blocking)", letterSpacing: ".1em" }}>⚑ {flag}</div>}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 5 }}>
+    <button type="button" onClick={onClick} disabled={!onClick} title={onClick ? "Open in the Manuscript editor" : undefined} style={{ position: "relative", width: "100%", textAlign: "left", font: "inherit", color: "inherit", border, borderLeft: `3px ${leftDashed ? "dashed" : "solid"} ${left}`, background: bg, padding: "9px 10px", boxShadow: active ? "0 0 16px rgba(76,194,255,.18)" : undefined, cursor: onClick ? "pointer" : undefined }}>
+      {flag && <span style={{ position: "absolute", top: 7, right: 9, fontSize: 7, color: "var(--blocking)", letterSpacing: ".1em" }}>⚑ {flag}</span>}
+      <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 5 }}>
         <span style={{ fontSize: 8, color: codeColor }}>{code}</span>
         {status && <span style={{ fontSize: 7.5, letterSpacing: ".1em", color: statusColor, border: `1px solid ${statusBorder}`, padding: "1px 5px" }}>{status}</span>}
-      </div>
-      <div style={{ fontSize: 11, color: titleColor, fontFamily: "'Chakra Petch'", letterSpacing: ".03em", marginBottom: 3 }}>{title}</div>
-      <div style={{ fontSize: 9, color: "var(--txt2)", lineHeight: 1.4, marginBottom: dots || meta || energy ? 7 : 0 }}>{desc}</div>
+      </span>
+      <span style={{ display: "block", fontSize: 11, color: titleColor, fontFamily: "'Chakra Petch'", letterSpacing: ".03em", marginBottom: 3 }}>{title}</span>
+      <span style={{ display: "block", fontSize: 9, color: "var(--txt2)", lineHeight: 1.4, marginBottom: dots || meta || energy ? 7 : 0 }}>{desc}</span>
       {(dots || meta) && (
-        <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
           <span style={{ display: "flex", gap: 3 }}>{dots}</span>
           {meta && <span style={{ fontSize: 7.5, color: "var(--txt3)", marginLeft: "auto" }}>{meta}</span>}
-        </div>
+        </span>
       )}
-      {energy && <div style={{ height: 3, marginTop: 6, background: energy, opacity: 0.7 }} />}
-    </div>
+      {energy && <span style={{ display: "block", height: 3, marginTop: 6, background: energy, opacity: 0.7 }} />}
+    </button>
   );
 }
 
@@ -88,17 +89,19 @@ export function StoryGrid(props: PanelProps) {
   const navigate = useNavigate();
   const { data: scenes, loading, error, refetch } = useScenes();
   const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const sorted = [...(scenes ?? [])].sort((a, b) => a.sort_order - b.sort_order);
   const columns = byAct(sorted);
 
   const addScene = useCallback(async () => {
     if (projectId == null || busy) return;
     setBusy(true);
+    setActionError(null);
     try {
-      await api.createScene(projectId, { title: `Scene ${sorted.length + 1}` });
+      await trackProjectWrite(api.createScene(projectId, { title: `Scene ${sorted.length + 1}` }));
       refetch();
-    } catch {
-      /* no-op */
+    } catch (error) {
+      setActionError(`Couldn't create the scene — ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setBusy(false);
     }
@@ -116,6 +119,7 @@ export function StoryGrid(props: PanelProps) {
           <span style={{ fontSize: 8, color: "var(--txt3)", letterSpacing: ".06em" }}>DRAFT · EDITED</span>
           <button type="button" onClick={addScene} disabled={busy || projectId == null} style={{ fontSize: 9, color: "var(--on-accent)", background: "var(--accent)", padding: "5px 11px", fontWeight: 600, letterSpacing: ".08em", border: "none", cursor: busy ? "default" : "pointer", opacity: busy || projectId == null ? 0.5 : 1 }}>＋ SCENE</button>
         </div>
+        {actionError && <button type="button" role="alert" title="Dismiss" onClick={() => setActionError(null)} style={{ flex: "none", width: "100%", textAlign: "left", border: "none", borderBottom: "1px solid var(--crimson)", background: "rgba(255,82,96,.08)", color: "var(--crimson)", padding: "7px 16px", font: "inherit", fontSize: 9.5, cursor: "pointer" }}>{actionError}</button>}
         <div style={{ flex: 1, display: "flex", gap: 14, padding: "14px 16px", minHeight: 0 }}>
           {loading
             ? message("Loading scenes…")

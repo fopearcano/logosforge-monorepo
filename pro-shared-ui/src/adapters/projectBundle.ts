@@ -26,6 +26,7 @@ export interface ProjectBundleOutlineNode {
   parentId?: string | null;
   type?: string;            // act | part | chapter | sequence | scene | beat | custom
   title?: string;
+  summary?: string;         // writer-authored synopsis / intent
   order?: number;
   status?: string;          // none | todo | drafting | done | …
   colorLabel?: string;      // none | blue | green | …
@@ -33,8 +34,11 @@ export interface ProjectBundleOutlineNode {
   completed?: boolean;
   // Phase 3 — optional hard link to a manuscript block ("this node owns the
   // manuscript from here"). `blockIndex` is 0-based into project.manuscript.blocks;
-  // `quote` is a snapshot of that block's text, used as a re-anchor sanity check.
-  link?: { blockIndex: number; quote?: string } | null;
+  // `quote` is a snapshot used as a sanity check. Newer Whiteboard bundles also
+  // carry `blockId`; Pro still resolves through blockIndex because scene
+  // segmentation is index-based, but recognizing the additive field keeps the
+  // reader contract honest and forward-compatible.
+  link?: { blockIndex: number; quote?: string; blockId?: string } | null;
 }
 
 export interface ProjectBundle {
@@ -44,6 +48,7 @@ export interface ProjectBundle {
     id?: string;
     title?: string;
     mode?: string;          // novel | screenplay | scene | graphic_novel | stage_script
+    settings?: Record<string, unknown>; // project-scoped Whiteboard voice/format settings
     manuscript?: { blocks?: WhiteboardImportBlockDTO[] };
     psyke?: { elements?: ProjectBundlePsykeElement[] };
     outline?: ProjectBundleOutlineNode[];   // Phase 2 — imported
@@ -56,14 +61,24 @@ export interface BundleImportResult {
   title: string;
   mode: string;
   scenes: number;
+  settingsImported: boolean;
+  settingsSkipped: boolean;
   entries: number;          // PSYKE bible entries created
+  entriesSkipped: number;   // invalid, duplicate, or failed PSYKE rows
   outlineNodes: number;     // outline nodes recreated (Phase 2)
+  outlineSkipped: number;   // outline rows whose create call failed
+  outlineReparented: number;// missing/cyclic/failed parents that fell back to root
+  outlineDuplicateIds: number; // duplicate source ids (all rows still imported)
   comments: number;         // comments the bundle carries but that were NOT migrated (deferred)
   links: number;            // outline→scene hard links reconstructed (Phase 3)
   linksSkipped: number;     // outline nodes that carried a link that couldn't be resolved
 }
 
 export const BUNDLE_FORMAT = "logosforge-project-bundle";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
 
 /**
  * Parse + validate a `.lfbundle`'s text. Throws a user-facing `Error` on bad
@@ -72,19 +87,54 @@ export const BUNDLE_FORMAT = "logosforge-project-bundle";
  * smaller bundles — treated as empty).
  */
 export function parseProjectBundle(text: string): ProjectBundle {
-  let bundle: ProjectBundle;
+  let parsed: unknown;
   try {
-    bundle = JSON.parse(text) as ProjectBundle;
+    parsed = JSON.parse(text);
   } catch {
     throw new Error("That file isn't valid JSON.");
   }
-  if (!bundle || bundle.format !== BUNDLE_FORMAT) {
+  if (!isRecord(parsed) || parsed.format !== BUNDLE_FORMAT) {
     throw new Error("That isn't a LogosForge project bundle (.lfbundle).");
   }
-  if (!bundle.project) {
+  if (!isRecord(parsed.project)) {
     throw new Error("This bundle has no project data.");
   }
-  return bundle;
+  const project = parsed.project;
+  if (!isRecord(project.manuscript) || !Array.isArray(project.manuscript.blocks)) {
+    throw new Error("This bundle has no manuscript block list.");
+  }
+  if (project.manuscript.blocks.some((block) => !isRecord(block))) {
+    throw new Error("This bundle contains an invalid manuscript block.");
+  }
+  if (project.title != null && typeof project.title !== "string") {
+    throw new Error("This bundle has an invalid project title.");
+  }
+  if (project.mode != null && typeof project.mode !== "string") {
+    throw new Error("This bundle has an invalid writing mode.");
+  }
+  if (project.settings != null && !isRecord(project.settings)) {
+    throw new Error("This bundle has an invalid document settings section.");
+  }
+  if (project.psyke != null) {
+    if (!isRecord(project.psyke) ||
+        (project.psyke.elements != null && !Array.isArray(project.psyke.elements))) {
+      throw new Error("This bundle has an invalid PSYKE section.");
+    }
+    if (Array.isArray(project.psyke.elements) &&
+        project.psyke.elements.some((element) => !isRecord(element))) {
+      throw new Error("This bundle contains an invalid PSYKE entry.");
+    }
+  }
+  if (project.outline != null && !Array.isArray(project.outline)) {
+    throw new Error("This bundle has an invalid outline section.");
+  }
+  if (Array.isArray(project.outline) && project.outline.some((node) => !isRecord(node))) {
+    throw new Error("This bundle contains an invalid outline node.");
+  }
+  if (project.comments != null && !Array.isArray(project.comments)) {
+    throw new Error("This bundle has an invalid comments section.");
+  }
+  return parsed as ProjectBundle;
 }
 
 /** A short human line preserving the Whiteboard outline metadata Pro's simpler
@@ -100,6 +150,15 @@ function foldOutlineMeta(wb: ProjectBundleOutlineNode): string {
   if (wb.colorLabel && wb.colorLabel !== "none") parts.push(wb.colorLabel);
   if (Array.isArray(wb.tags)) for (const t of wb.tags) if (t) parts.push(`#${t}`);
   return parts.join(" · ");
+}
+
+/** Preserve the writer's actual summary first, then clearly label metadata that
+ * Pro does not yet model as structured fields. */
+function outlineDescription(wb: ProjectBundleOutlineNode): string {
+  const summary = typeof wb.summary === "string" ? wb.summary.trim() : "";
+  const meta = foldOutlineMeta(wb);
+  if (summary && meta) return `${summary}\n\n[Whiteboard: ${meta}]`;
+  return summary || meta;
 }
 
 /** Order the flat outline so every node comes after its parent — parents are
@@ -202,6 +261,27 @@ export async function importProjectBundle(api: ApiClient, bundle: ProjectBundle)
   });
   const projectId = res.project_id;
 
+  // Whiteboard owns a few voice/format controls Pro does not expose yet. Keep
+  // the complete normalized payload in the new project's generic settings bag
+  // so graduation is lossless and a future Pro control can adopt it.
+  const sourceSettings = isRecord(project.settings) ? project.settings : null;
+  let settingsImported = false;
+  let settingsSkipped = false;
+  if (sourceSettings && Object.keys(sourceSettings).length) {
+    try {
+      const current = await api.getSettings(projectId);
+      await api.patchSettings(projectId, {
+        settings: {
+          ...(isRecord(current.settings) ? current.settings : {}),
+          whiteboard_document_settings: { ...sourceSettings },
+        },
+      });
+      settingsImported = true;
+    } catch {
+      settingsSkipped = true;
+    }
+  }
+
   // `elements` may be absent or, in a hand-edited/corrupt bundle, not an array —
   // guard it (like `aliases` below) so a bad shape degrades to an empty import
   // instead of throwing after the project + scenes were already created.
@@ -211,12 +291,13 @@ export async function importProjectBundle(api: ApiClient, bundle: ProjectBundle)
   // count. Dedupe on the same (case-sensitive) key the core uses.
   const seen = new Set<string>();
   let entries = 0;
+  let entriesSkipped = 0;
   for (const el of elements) {
     const name = el?.name?.trim();
-    if (!name) continue;   // a nameless entry can't be created
+    if (!name) { entriesSkipped += 1; continue; }   // a nameless entry can't be created
     const type = el.entry_type || "other";
-    const key = `${type} ${name}`;
-    if (seen.has(key)) continue;
+    const key = JSON.stringify([type, name]);
+    if (seen.has(key)) { entriesSkipped += 1; continue; }
     seen.add(key);
     try {
       await api.createPsyke(projectId, {
@@ -228,6 +309,7 @@ export async function importProjectBundle(api: ApiClient, bundle: ProjectBundle)
       });
       entries += 1;
     } catch {
+      entriesSkipped += 1;
       /* skip one bad element — keep migrating the rest */
     }
   }
@@ -236,6 +318,14 @@ export async function importProjectBundle(api: ApiClient, bundle: ProjectBundle)
   // Whiteboard tree as Pro outline nodes, parents first so each child's numeric
   // parent_id already exists. `idMap` maps the source string uuid → the created id.
   const outline = Array.isArray(project.outline) ? project.outline : [];
+  const sourceIds = new Set<string>();
+  let outlineDuplicateIds = 0;
+  for (const node of outline) {
+    if (node?.id == null) continue;
+    const id = String(node.id);
+    if (sourceIds.has(id)) outlineDuplicateIds += 1;
+    else sourceIds.add(id);
+  }
 
   // Phase 3: the Phase-1 import returns block index → scene id; a node's `link`
   // (blockIndex + quote) resolves to the scene it now lives in. Fetch the scene
@@ -253,17 +343,21 @@ export async function importProjectBundle(api: ApiClient, bundle: ProjectBundle)
 
   const idMap = new Map<string, number>();
   let outlineNodes = 0;
+  let outlineSkipped = 0;
+  let outlineReparented = 0;
   let links = 0;
   let linksSkipped = 0;
   for (const wb of topoSortOutline(outline)) {
     const pid = wb.parentId != null ? String(wb.parentId) : null;
+    const parentId = pid != null ? (idMap.get(pid) ?? null) : null;
+    if (pid != null && parentId == null) outlineReparented += 1;
     const hasLink = !!(wb.link && typeof wb.link.blockIndex === "number");
     const sceneId = hasLink ? resolveSceneLink(wb.link!, sceneIdsByBlock, sceneTextById) : null;
     try {
       const created = await api.createOutlineNode(projectId, {
         title: (wb.title ?? "").trim() || "Untitled",
-        description: foldOutlineMeta(wb),
-        parent_id: pid != null ? (idMap.get(pid) ?? null) : null,   // missing/cyclic parent → root
+        description: outlineDescription(wb),
+        parent_id: parentId,   // missing/cyclic/failed parent → root
         sort_order: Number.isFinite(wb.order) ? (wb.order as number) : 0,   // NaN/Infinity → 0 (serialize to null → core 422)
         scene_id: sceneId,   // Phase 3: the reconstructed section↔scene hard link (or null)
       });
@@ -271,6 +365,7 @@ export async function importProjectBundle(api: ApiClient, bundle: ProjectBundle)
       outlineNodes += 1;
       if (hasLink) { if (sceneId != null) links += 1; else linksSkipped += 1; }
     } catch {
+      outlineSkipped += 1;
       /* skip a bad node — its descendants fall back to the root via `?? null` */
       if (hasLink) linksSkipped += 1;   // its link couldn't be migrated
     }
@@ -279,5 +374,21 @@ export async function importProjectBundle(api: ApiClient, bundle: ProjectBundle)
   // ── Comments: DEFERRED (see the function doc) — carry only the count.
   const comments = Array.isArray(project.comments) ? project.comments.length : 0;
 
-  return { projectId, title: res.title, mode: res.mode, scenes: res.scenes_created, entries, outlineNodes, comments, links, linksSkipped };
+  return {
+    projectId,
+    title: res.title,
+    mode: res.mode,
+    scenes: res.scenes_created,
+    settingsImported,
+    settingsSkipped,
+    entries,
+    entriesSkipped,
+    outlineNodes,
+    outlineSkipped,
+    outlineReparented,
+    outlineDuplicateIds,
+    comments,
+    links,
+    linksSkipped,
+  };
 }

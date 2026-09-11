@@ -48,41 +48,61 @@ export async function startMic(): Promise<MicRecorder> {
     audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
   });
   const AC: typeof AudioContext = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-  let ctx: AudioContext;
-  try { ctx = new AC({ sampleRate: 16000 }); } catch { ctx = new AC(); }
-  const source = ctx.createMediaStreamSource(stream);
-  const node = ctx.createScriptProcessor(4096, 1, 1);
-  // A muted sink keeps the ScriptProcessor "pulled" (so onaudioprocess fires)
-  // without routing the mic back out the speakers.
-  const mute = ctx.createGain();
-  mute.gain.value = 0;
+  let ctx: AudioContext | null = null;
+  let source: MediaStreamAudioSourceNode | null = null;
+  let node: ScriptProcessorNode | null = null;
+  let mute: GainNode | null = null;
+  let closed = false;
   const chunks: Float32Array[] = [];
-  node.onaudioprocess = (e) => { chunks.push(new Float32Array(e.inputBuffer.getChannelData(0))); };
-  source.connect(node);
-  node.connect(mute);
-  mute.connect(ctx.destination);
-  // The context is created after an await (past the user-gesture), so it can start
-  // suspended — resume it or no audio is ever captured.
-  if (ctx.state === "suspended") { try { await ctx.resume(); } catch { /* ignore */ } }
 
   const cleanup = () => {
-    try { node.disconnect(); mute.disconnect(); source.disconnect(); } catch { /* ignore */ }
-    stream.getTracks().forEach((t) => t.stop());
-    void ctx.close();
+    if (closed) return;
+    closed = true;
+    if (node) node.onaudioprocess = null;
+    try { node?.disconnect(); } catch { /* already disconnected */ }
+    try { mute?.disconnect(); } catch { /* already disconnected */ }
+    try { source?.disconnect(); } catch { /* already disconnected */ }
+    for (const track of stream.getTracks()) {
+      try { track.stop(); } catch { /* best-effort release of every track */ }
+    }
+    if (ctx && ctx.state !== "closed") {
+      try { void ctx.close().catch(() => undefined); } catch { /* already closing/closed */ }
+    }
   };
 
-  return {
-    cancel: cleanup,
-    stop: async () => {
-      const rate = ctx.sampleRate;
-      cleanup();
-      const total = chunks.reduce((n, c) => n + c.length, 0);
-      if (total === 0) return null;
-      const merged = new Float32Array(total);
-      let o = 0;
-      for (const c of chunks) { merged.set(c, o); o += c.length; }
-      const pcm = resample(merged, rate, 16000);
-      return { base64: toBase64Int16(pcm), sampleRate: 16000 };
-    },
-  };
+  try {
+    try { ctx = new AC({ sampleRate: 16000 }); } catch { ctx = new AC(); }
+    source = ctx.createMediaStreamSource(stream);
+    node = ctx.createScriptProcessor(4096, 1, 1);
+    // A muted sink keeps the ScriptProcessor "pulled" (so onaudioprocess fires)
+    // without routing the mic back out the speakers.
+    mute = ctx.createGain();
+    mute.gain.value = 0;
+    node.onaudioprocess = (e) => { chunks.push(new Float32Array(e.inputBuffer.getChannelData(0))); };
+    source.connect(node);
+    node.connect(mute);
+    mute.connect(ctx.destination);
+    // The context is created after an await (past the user-gesture), so it can start
+    // suspended — resume it or no audio is ever captured.
+    if (ctx.state === "suspended") { try { await ctx.resume(); } catch { /* stop/cancel still releases it */ } }
+
+    return {
+      cancel: cleanup,
+      stop: async () => {
+        if (closed || !ctx) return null;
+        const rate = ctx.sampleRate;
+        cleanup();
+        const total = chunks.reduce((n, c) => n + c.length, 0);
+        if (total === 0) return null;
+        const merged = new Float32Array(total);
+        let o = 0;
+        for (const c of chunks) { merged.set(c, o); o += c.length; }
+        const pcm = resample(merged, rate, 16000);
+        return { base64: toBase64Int16(pcm), sampleRate: 16000 };
+      },
+    };
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
 }

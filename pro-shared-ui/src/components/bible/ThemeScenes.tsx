@@ -24,12 +24,13 @@ const message = (text: string) => (
 
 export function ThemeScenes(props: PanelProps) {
   const { api, projectId } = useStudio();
-  const { data: psyke, loading, error } = usePsykeEntries();
-  const { data: scenes } = useScenes();
+  const { data: psyke, loading, error, refetch: refetchPsyke } = usePsykeEntries();
+  const { data: scenes, loading: scenesLoading, error: scenesError, refetch: refetchScenes } = useScenes();
   const [selected, setSelected] = useState<number | null>(null);
   const [tagged, setTagged] = useState<Set<number>>(new Set());
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
 
   const themes = useMemo(
     () => (psyke ?? []).filter((e) => e.type === "theme").sort((a, b) => a.name.localeCompare(b.name)),
@@ -46,15 +47,17 @@ export function ThemeScenes(props: PanelProps) {
   // Load the active theme's tagged scenes whenever it (or the project) changes.
   useEffect(() => {
     let cancelled = false;
-    if (projectId == null || activeId == null) { setTagged(new Set()); return; }
+    if (projectId == null || activeId == null) { setTagged(new Set()); setActionError(null); return; }
+    setActionError(null);
     api.getThemeScenes(projectId, activeId)
-      .then((r) => { if (!cancelled) setTagged(new Set(r.scene_ids)); })
+      .then((r) => { if (!cancelled) { setTagged(new Set(r.scene_ids)); setActionError(null); } })
       .catch((e) => { if (!cancelled) setActionError(`Couldn't load theme scenes — ${e instanceof Error ? e.message : String(e)}`); });
     return () => { cancelled = true; };
-  }, [api, projectId, activeId]);
+  }, [api, projectId, activeId, reload]);
 
   async function toggle(sceneId: number) {
     if (projectId == null || activeId == null || busy) return;
+    const previous = new Set(tagged);
     const next = new Set(tagged);
     next.has(sceneId) ? next.delete(sceneId) : next.add(sceneId);
     setTagged(next);  // optimistic
@@ -64,9 +67,15 @@ export function ThemeScenes(props: PanelProps) {
       const r = await api.setThemeScenes(projectId, activeId, [...next]);
       setTagged(new Set(r.scene_ids));  // reconcile with the server's filtered set
     } catch (e) {
-      setActionError(`Couldn't save — ${e instanceof Error ? e.message : String(e)}`);
-      const r = await api.getThemeScenes(projectId, activeId).catch(() => null);
-      if (r) setTagged(new Set(r.scene_ids));  // revert to the stored truth
+      const saveMessage = e instanceof Error ? e.message : String(e);
+      setTagged(previous);
+      try {
+        const stored = await api.getThemeScenes(projectId, activeId);
+        setTagged(new Set(stored.scene_ids));
+        setActionError(`Couldn't save — ${saveMessage}`);
+      } catch (reloadError) {
+        setActionError(`Couldn't save — ${saveMessage}. Reconciliation also failed — ${reloadError instanceof Error ? reloadError.message : String(reloadError)}`);
+      }
     } finally {
       setBusy(false);
     }
@@ -84,6 +93,7 @@ export function ThemeScenes(props: PanelProps) {
               value={activeId != null ? String(activeId) : ""}
               onChange={(e) => setSelected(e.target.value ? Number(e.target.value) : null)}
               disabled={busy || projectId == null}
+              aria-label="Theme to map across scenes"
               style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 11, color: "var(--txt)", background: "var(--raised)", border: "1px solid var(--line2)", padding: "4px 7px", minWidth: 160 }}
             >
               {themes.map((t) => <option key={t.id} value={String(t.id)}>{t.name}</option>)}
@@ -96,10 +106,10 @@ export function ThemeScenes(props: PanelProps) {
         </div>
 
         {/* body */}
-        {loading
+        {loading || scenesLoading
           ? message("Loading themes…")
-          : error
-          ? message(`Couldn't load themes — ${error}`)
+          : error || scenesError
+          ? <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10, padding: "34px 0", textAlign: "center", fontSize: 11, color: "var(--blocking)" }}>Couldn't load Theme Scenes — {error || scenesError}<button type="button" onClick={() => { refetchPsyke(); refetchScenes(); }} style={{ font: "inherit", fontSize: 9, letterSpacing: ".1em", color: "var(--accent)", border: "1px solid var(--accent)", background: "transparent", padding: "5px 11px", cursor: "pointer" }}>RETRY</button></div>
           : themes.length === 0
           ? message("No themes in the bible yet — add a 'theme' PSYKE entry")
           : sceneList.length === 0
@@ -107,20 +117,22 @@ export function ThemeScenes(props: PanelProps) {
           : (
             <div style={{ flex: 1, overflowY: "auto", padding: "10px 14px", display: "flex", flexDirection: "column", gap: 5 }}>
               {actionError && (
-                <div style={{ fontSize: 10, color: "var(--blocking)", border: "1px solid rgba(255,82,96,.35)", background: "rgba(255,82,96,.06)", padding: "6px 9px" }}>{actionError}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 10, color: "var(--blocking)", border: "1px solid rgba(255,82,96,.35)", background: "rgba(255,82,96,.06)", padding: "6px 9px" }}><span style={{ flex: 1 }}>{actionError}</span><button type="button" disabled={busy} onClick={() => setReload((value) => value + 1)} style={{ font: "inherit", fontSize: 8.5, color: "var(--accent)", border: "1px solid var(--accent)", background: "transparent", padding: "3px 7px", cursor: busy ? "default" : "pointer" }}>RETRY</button></div>
               )}
               {sceneList.map((s, i) => {
                 const on = tagged.has(s.id);
                 return (
-                  <div
+                  <button type="button"
                     key={s.id}
                     onClick={() => toggle(s.id)}
-                    style={{ display: "flex", alignItems: "center", gap: 11, padding: "7px 11px", cursor: busy ? "default" : "pointer", border: `1px solid ${on ? "var(--line-cy)" : "var(--line2)"}`, background: on ? "rgba(76,194,255,.07)" : "var(--tint)", opacity: busy ? 0.6 : 1 }}
+                    disabled={busy}
+                    aria-pressed={on}
+                    style={{ width: "100%", font: "inherit", textAlign: "left", color: "inherit", display: "flex", alignItems: "center", gap: 11, padding: "7px 11px", cursor: busy ? "default" : "pointer", border: `1px solid ${on ? "var(--line-cy)" : "var(--line2)"}`, background: on ? "rgba(76,194,255,.07)" : "var(--tint)", opacity: busy ? 0.6 : 1 }}
                   >
                     <span style={{ width: 11, height: 11, flex: "none", border: on ? "1px solid var(--line-cy)" : "1px solid var(--line2)", background: on ? "var(--accent)" : undefined }} />
                     <span style={{ fontSize: 8.5, color: "var(--txt3)", width: 24, flex: "none" }}>{s.sort_order ?? i + 1}</span>
                     <span style={{ fontFamily: "'Chakra Petch'", fontSize: 11.5, color: on ? "var(--strong)" : "var(--txt2)", letterSpacing: ".02em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{s.title || `Scene ${s.id}`}</span>
-                  </div>
+                  </button>
                 );
               })}
             </div>

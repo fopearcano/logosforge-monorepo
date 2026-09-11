@@ -1,7 +1,7 @@
 import { useEffect, useRef, type CSSProperties } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
-import Placeholder from "@tiptap/extension-placeholder";
+import { Placeholder } from "@tiptap/extensions";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import type { Node as PMNode } from "@tiptap/pm/model";
 import { classifyLines, fountainLineStyle, type FountainType } from "../../format/fountain";
@@ -123,7 +123,8 @@ export function ProseEditor({
       StarterKit.configure({
         heading: false, blockquote: false, bulletList: false, orderedList: false, listItem: false,
         codeBlock: false, code: false, bold: false, italic: false, strike: false,
-        horizontalRule: false, hardBreak: false,
+        horizontalRule: false, hardBreak: false, link: false, underline: false,
+        listKeymap: false,
       }),
       Placeholder.configure({ placeholder: placeholder ?? "Write the scene…" }),
     ],
@@ -159,7 +160,7 @@ export function ProseEditor({
     if (!editor || editor.isFocused) return;
     if (value === emitted.current) return;
     if (value === docToText(editor.state.doc)) { emitted.current = value; return; }
-    editor.commands.setContent(textToDoc(value), false);
+    editor.commands.setContent(textToDoc(value), { emitUpdate: false });
     emitted.current = value;
   }, [value, editor]);
 
