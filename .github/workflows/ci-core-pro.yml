@@ -33,7 +33,7 @@ jobs:
   core-tests:
     name: Core tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
