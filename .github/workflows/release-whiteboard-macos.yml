@@ -34,13 +34,14 @@ on:
   workflow_dispatch:
     inputs:
       publish_release:
-        description: "Attach the build to a GitHub Release"
+        description: "Attach the build to the existing GitHub prerelease"
         type: boolean
         default: false
       release_tag:
-        description: "Release tag to attach the DMG to (when publishing a manual run)"
+        description: "Existing Whiteboard tag to build and publish"
         type: string
-        default: "whiteboard-v0.1.0"
+        required: false
+        default: "whiteboard-v0.1.13"
 
 permissions:
   contents: write
@@ -58,8 +59,149 @@ jobs:
         shell: bash
 
     steps:
+      - name: Verify Intel macOS 13+ release host
+        run: |
+          set -euo pipefail
+
+          host_arch="$(uname -m)"
+          if [ "$host_arch" != "x86_64" ]; then
+            echo "::error::Whiteboard's Intel release requires x86_64; runner reported $host_arch."
+            exit 1
+          fi
+          translated="$(sysctl -in sysctl.proc_translated 2>/dev/null || printf '0')"
+          if [ "$translated" = "1" ]; then
+            echo "::error::Whiteboard's Intel release requires a native x86_64 host; this process is running under Rosetta."
+            exit 1
+          fi
+
+          host_version="$(sw_vers -productVersion)"
+          host_major="${host_version%%.*}"
+          case "$host_major" in
+            ""|*[!0-9]*)
+              echo "::error::Could not parse the macOS version: $host_version"
+              exit 1
+              ;;
+          esac
+          if [ "$host_major" -lt 13 ]; then
+            echo "::error::Whiteboard's Intel release requires macOS 13 or newer; runner reported $host_version."
+            exit 1
+          fi
+          echo "release host OK: macOS $host_version ($host_arch)"
+
       - name: Checkout monorepo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Resolve and verify Whiteboard release metadata
+        id: release
+        env:
+          MANUAL_PUBLISH: ${{ inputs.publish_release }}
+          MANUAL_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          publish=false
+          release_tag=""
+
+          case "$GITHUB_EVENT_NAME" in
+            push)
+              if [ "$GITHUB_REF_TYPE" != "tag" ]; then
+                echo "::error::Release push is not a tag."
+                exit 1
+              fi
+              publish=true
+              release_tag="$GITHUB_REF_NAME"
+              ;;
+            workflow_dispatch)
+              if [ "${MANUAL_PUBLISH:-false}" = "true" ]; then
+                publish=true
+                release_tag="${MANUAL_TAG:-}"
+              fi
+              ;;
+            *)
+              echo "::error::Unsupported event: $GITHUB_EVENT_NAME"
+              exit 1
+              ;;
+          esac
+
+          if [ "$publish" = "true" ]; then
+            if [ -z "$release_tag" ]; then
+              echo "::error::A release tag is required when publishing."
+              exit 1
+            fi
+            case "$release_tag" in
+              whiteboard-v*) ;;
+              *)
+                echo "::error::Release tag must start with whiteboard-v."
+                exit 1
+                ;;
+            esac
+            if ! git check-ref-format "refs/tags/$release_tag" >/dev/null; then
+              echo "::error::Invalid release tag: $release_tag"
+              exit 1
+            fi
+            tag_commit="$(git rev-parse --verify --quiet "refs/tags/${release_tag}^{commit}")" || {
+              echo "::error::Release tag does not exist: $release_tag"
+              exit 1
+            }
+            if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+              git checkout --detach --quiet "$tag_commit"
+            fi
+            if [ "$(git rev-parse HEAD)" != "$tag_commit" ]; then
+              echo "::error::The checkout does not match $release_tag."
+              exit 1
+            fi
+          fi
+
+          version="$(
+            node -e '
+              const fs = require("node:fs");
+              const pkg = JSON.parse(fs.readFileSync("whiteboard-desktop/desktop/package.json", "utf8"));
+              const lock = JSON.parse(fs.readFileSync("whiteboard-desktop/desktop/package-lock.json", "utf8"));
+              const versions = {
+                packageJson: pkg.version,
+                packageLock: lock.version,
+                packageLockRoot: lock.packages?.[""]?.version,
+              };
+              const values = Object.values(versions);
+              const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+              if (values.some((value) => typeof value !== "string") || new Set(values).size !== 1 || !semver.test(pkg.version)) {
+                console.error("::error::Invalid or inconsistent Whiteboard versions: " + JSON.stringify(versions));
+                process.exit(1);
+              }
+              process.stdout.write(pkg.version);
+            '
+          )"
+
+          expected_tag="whiteboard-v${version}"
+          notes_path="whiteboard-desktop/release-notes/${expected_tag}.md"
+
+          if [ "$publish" = "true" ] && [ "$release_tag" != "$expected_tag" ]; then
+            echo "::error::Tag $release_tag does not match package version $version; expected $expected_tag."
+            exit 1
+          fi
+          if [ "$publish" = "true" ] && [ ! -s "$notes_path" ]; then
+            echo "::error::Missing or empty release notes: $notes_path"
+            exit 1
+          fi
+          if [ "$publish" != "true" ]; then
+            release_tag="$expected_tag"
+          fi
+
+          {
+            echo "publish=$publish"
+            echo "version=$version"
+            echo "tag=$release_tag"
+            echo "notes_path=$notes_path"
+            echo "source_sha=$(git rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Verify monorepo layout
         run: |
@@ -72,11 +214,6 @@ jobs:
             exit 1
           fi
           echo "monorepo layout OK"
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
 
       # actions/setup-python@v5 does NOT work on a self-hosted macOS runner when
       # it has to download a version — it assumes the hosted `/Users/runner`
@@ -112,16 +249,106 @@ jobs:
 
       - name: Smoke-test the bundled backend
         run: |
-          ./whiteboard-desktop/backend/dist/logosforge-whiteboard-backend/logosforge-whiteboard-backend --host 127.0.0.1 --port 8799 &
-          BPID=$!
+          set -euo pipefail
+
+          python_cmd="./build-venv/bin/python"
+          port="$("$python_cmd" -c 'import socket; sock = socket.socket(); sock.bind(("127.0.0.1", 0)); print(sock.getsockname()[1]); sock.close()')"
+          expected_core_version="$("$python_cmd" -c 'import logosforge; print(logosforge.__version__)')"
+          instance_nonce="$("$python_cmd" -c 'import secrets; print(secrets.token_hex(16))')"
+          backend_pid=""
+          smoke_data_dir=""
+          backend_log=""
+          temp_root="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
+          temp_root="$(cd "$temp_root" && pwd -P)"
+          case "$temp_root" in
+            ""|"/")
+              echo "::error::Unsafe runner temp directory: $temp_root"
+              exit 1
+              ;;
+          esac
+
+          cleanup() {
+            local rc="${1:-$?}"
+            trap - EXIT INT TERM
+            if [ -n "$backend_pid" ]; then
+              if kill -0 "$backend_pid" 2>/dev/null; then
+                kill "$backend_pid" 2>/dev/null || true
+                for ((stop_attempt = 1; stop_attempt <= 5; stop_attempt++)); do
+                  kill -0 "$backend_pid" 2>/dev/null || break
+                  sleep 1
+                done
+                if kill -0 "$backend_pid" 2>/dev/null; then
+                  kill -KILL "$backend_pid" 2>/dev/null || true
+                fi
+              fi
+              wait "$backend_pid" 2>/dev/null || true
+            fi
+            if [ "$rc" -ne 0 ] && [ -n "$backend_log" ] && [ -f "$backend_log" ]; then
+              echo "::group::bundled backend log"
+              cat -- "$backend_log" || true
+              echo "::endgroup::"
+            fi
+            if [ -n "$smoke_data_dir" ]; then
+              case "$smoke_data_dir" in
+                "$temp_root"/logosforge-whiteboard-smoke.??????)
+                  if ! rm -rf -- "$smoke_data_dir"; then
+                    echo "::error::Failed to remove smoke data directory: $smoke_data_dir"
+                    rc=1
+                  fi
+                  ;;
+                *)
+                  echo "::error::Refusing unsafe smoke data cleanup target: $smoke_data_dir"
+                  rc=1
+                  ;;
+              esac
+            fi
+            if [ -n "$backend_log" ]; then
+              rm -f -- "$backend_log" || true
+            fi
+            exit "$rc"
+          }
+          trap 'cleanup $?' EXIT
+          trap 'cleanup 130' INT
+          trap 'cleanup 143' TERM
+
+          smoke_data_dir="$(mktemp -d "$temp_root/logosforge-whiteboard-smoke.XXXXXX")"
+          case "$smoke_data_dir" in
+            "$temp_root"/logosforge-whiteboard-smoke.??????) ;;
+            *)
+              echo "::error::Unsafe smoke data directory returned by mktemp: $smoke_data_dir"
+              exit 1
+              ;;
+          esac
+          backend_log="${smoke_data_dir}.backend.log"
+
+          LOGOSFORGE_WHITEBOARD_INSTANCE_NONCE="$instance_nonce" \
+            LOGOSFORGE_DATA_DIR="$smoke_data_dir" \
+            LOGOSFORGE_DB_PATH="$smoke_data_dir/logosforge-smoke.db" \
+            ./whiteboard-desktop/backend/dist/logosforge-whiteboard-backend/logosforge-whiteboard-backend --host 127.0.0.1 --port "$port" >"$backend_log" 2>&1 &
+          backend_pid=$!
+
           ok=""
-          for i in $(seq 1 30); do
+          for ((attempt = 1; attempt <= 30; attempt++)); do
             sleep 1
-            code=$(curl -s --max-time 2 -o /dev/null -w "%{http_code}" http://127.0.0.1:8799/health || true)
-            if [ "$code" = "200" ]; then ok="yes"; echo "backend healthy after ${i}s"; break; fi
+            if ! kill -0 "$backend_pid" 2>/dev/null; then
+              break
+            fi
+            health_json="$(curl -fsS --max-time 2 "http://127.0.0.1:${port}/health" 2>/dev/null || true)"
+            if printf '%s' "$health_json" | \
+              EXPECTED_CORE_VERSION="$expected_core_version" \
+              EXPECTED_INSTANCE_NONCE="$instance_nonce" \
+              "$python_cmd" -c 'import json, os, sys; data = json.load(sys.stdin); expected = {"status": "ok", "service": "logosforge-whiteboard-backend", "core_version": os.environ["EXPECTED_CORE_VERSION"], "instance_nonce": os.environ["EXPECTED_INSTANCE_NONCE"]}; raise SystemExit(0 if all(data.get(key) == value for key, value in expected.items()) else 1)' 2>/dev/null
+            then
+              kill -0 "$backend_pid" 2>/dev/null || break
+              ok="yes"
+              echo "backend healthy after ${attempt}s (core $expected_core_version)"
+              break
+            fi
           done
-          kill "$BPID" 2>/dev/null || true
-          if [ -z "$ok" ]; then echo "::error::bundled backend failed /health"; exit 1; fi
+          if [ -z "$ok" ]; then
+            echo "::error::bundled backend failed verified /health on port $port (expected core $expected_core_version)"
+            exit 1
+          fi
 
       # --- 2. Build + package the Electron app (DMG) -----------------------
       - name: Install whiteboard-desktop deps
@@ -150,14 +377,18 @@ jobs:
           path: whiteboard-desktop/desktop/release/*.dmg
           if-no-files-found: error
 
-      - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/whiteboard-v') || inputs.publish_release
-        uses: softprops/action-gh-release@v2
+      - name: Publish GitHub prerelease
+        if: steps.release.outputs.publish == 'true'
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
-          # On a tag push, tag_name is empty and the action falls back to the tag
-          # ref. On a manual run (dispatched from a branch) it targets the chosen
-          # existing release instead of trying to create one named after the branch.
-          tag_name: ${{ inputs.release_tag }}
-          files: whiteboard-desktop/desktop/release/*.dmg
+          tag_name: ${{ steps.release.outputs.tag }}
+          name: LogosForge Whiteboard ${{ steps.release.outputs.version }} (Alpha)
+          body_path: ${{ steps.release.outputs.notes_path }}
+          append_body: false
+          generate_release_notes: false
           draft: false
-          generate_release_notes: true
+          prerelease: true
+          make_latest: "false"
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          files: whiteboard-desktop/desktop/release/*.dmg

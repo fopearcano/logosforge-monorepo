@@ -1,133 +1,235 @@
 #!/usr/bin/env bash
 #
-# validate-macos.sh — build + smoke-test the LogosForge Whiteboard macOS (Intel x64)
-# release LOCALLY on the target Mac, mirroring the GitHub Actions workflow
-# (.github/workflows/release-whiteboard-macos.yml). This is the way to validate
-# the unsigned Intel DMG on a Monterey (incl. OCLP) Intel Mac.
+# Build and smoke-test the unsigned LogosForge Whiteboard Intel release on the
+# same kind of Mac used by .github/workflows/release-whiteboard-macos.yml.
 #
+# Prerequisites: Intel macOS 13 Ventura or newer, Node.js 22.12+, Python 3.11+,
+# npm, Xcode Command Line Tools, curl, file, and lsof. The source checkout must
+# contain sibling logosforge/ and whiteboard-desktop/ directories.
+#
+# Usage from anywhere inside the checkout:
 #   bash whiteboard-desktop/scripts/validate-macos.sh
-#
-# It freezes the backend (PyInstaller), packages the DMG (electron-builder),
-# launches the .app, and confirms the bundled backend answers /health on :8777.
-#
-# Prereqs on the Mac: Node 20, Python 3.11, Xcode Command Line Tools
-# (`xcode-select --install`), and the monorepo source — logosforge/ +
-# whiteboard-desktop/ as SIBLINGS, copied WITHOUT any node_modules/.venv/dist/
-# build/release (those are Windows/platform-specific). Intel only (x86_64).
-#
-# A locally-built .app is NOT quarantined, so it launches with no Gatekeeper
-# prompt. To instead validate the DOWNLOADED-DMG experience a tester hits, see
-# the "simulate a download" notes printed at the end.
 
-set -uo pipefail
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"          # monorepo root (…/Logosforge Alphatest)
+ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BACKEND="$ROOT/whiteboard-desktop/backend"
 DESKTOP="$ROOT/whiteboard-desktop/desktop"
-VENV="$ROOT/build-venv"
-SMOKE_PORT=8799   # isolated smoke port (matches CI)
-APP_PORT=8777     # the app's real backend port (backend-entry.py default)
+
+VALIDATION_DIR=""
+BPID=""
+APP_PID=""
+APP_BACKEND_PID=""
+EXPECTED_CORE_VERSION=""
 
 say() { printf '\n\033[1;36m=== %s\033[0m\n' "$*"; }
 die() { printf '\n\033[1;31mFAIL: %s\033[0m\n' "$*" >&2; exit 1; }
 
+cleanup() {
+  result=$?
+  trap - EXIT INT TERM
+  for pid in "$APP_PID" "$APP_BACKEND_PID" "$BPID"; do
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+    fi
+  done
+  case "$VALIDATION_DIR" in
+    */logosforge-whiteboard-validate.*)
+      rm -rf -- "$VALIDATION_DIR"
+      ;;
+  esac
+  exit "$result"
+}
+trap cleanup EXIT INT TERM
+
+free_port() {
+  python3 -c 'import socket
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+print(s.getsockname()[1])
+s.close()'
+}
+
+healthy_body() {
+  body=$1
+  [[ "$body" == *'"status":"ok"'* \
+    && "$body" == *'"service":"logosforge-whiteboard-backend"'* \
+    && "$body" == *"\"core_version\":\"${EXPECTED_CORE_VERSION}\""* ]]
+}
+
 # --- 0. Environment guards -------------------------------------------------
-say "0. Environment"
-[ "$(uname -s)" = "Darwin" ] || die "not macOS"
+say "0. Validate the release host"
+[ "$(uname -s)" = "Darwin" ] || die "this validator must run on macOS"
+
+for command_name in node npm python3 xcode-select curl file lsof; do
+  command -v "$command_name" >/dev/null 2>&1 || die "$command_name is required"
+done
+
 ARCH="$(uname -m)"
-echo "arch: $ARCH | node $(node -v 2>&1) | $(python3 --version 2>&1) | $(sw_vers -productName) $(sw_vers -productVersion)"
-[ "$ARCH" = "x86_64" ] || echo "WARNING: arch is '$ARCH', not x86_64 — this DMG is Intel-only. On Apple Silicon it runs under Rosetta and an unsigned Mach-O can be Killed:9."
-command -v node >/dev/null   || die "node not found (install Node 20)"
-command -v python3 >/dev/null || die "python3 not found (install Python 3.11)"
-[ -d "$ROOT/logosforge" ] && [ -d "$ROOT/whiteboard-desktop" ] || die "expected siblings logosforge/ + whiteboard-desktop/ under $ROOT"
+[ "$ARCH" = "x86_64" ] || die "this release is Intel-only; expected x86_64, found $ARCH"
 
-# --- 1. Clean any copied (Windows) backend build artifact ------------------
-say "1. Remove stale backend build artifacts (a copied Windows PyInstaller tree would mismatch)"
-rm -rf "$BACKEND/dist" "$BACKEND/build"
+MACOS_VERSION="$(sw_vers -productVersion)"
+MACOS_MAJOR="${MACOS_VERSION%%.*}"
+[ "$MACOS_MAJOR" -ge 13 ] || die "macOS 13 Ventura or newer is required; found $MACOS_VERSION"
 
-# --- 2. Build venv + deps (mirrors CI) -------------------------------------
-say "2. Create build venv + install logosforge[export] + wrapper deps + pyinstaller"
-rm -rf "$VENV"
-python3 -m venv "$VENV" || die "venv create failed"
-"$VENV/bin/python" -m pip install --upgrade pip -q || die "pip upgrade failed"
-( cd "$ROOT" && "$VENV/bin/python" -m pip install "./logosforge[export]" fastapi "uvicorn[standard]" httpx pyinstaller ) \
-  || die "pip install failed"
+node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 12) ? 0 : 1)' \
+  || die "Node.js 22.12 or newer is required; found $(node -v)"
+python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' \
+  || die "Python 3.11 or newer is required; found $(python3 --version)"
+xcode-select -p >/dev/null 2>&1 || die "Xcode Command Line Tools are missing; run xcode-select --install"
 
-# --- 3. Freeze the backend -------------------------------------------------
-say "3. PyInstaller freeze (cwd = backend/, the spec uses a relative entry)"
-( cd "$BACKEND" && "$VENV/bin/python" -m PyInstaller logosforge-whiteboard-backend.spec --noconfirm --clean --log-level WARN ) \
-  || die "PyInstaller failed"
+[ -d "$ROOT/logosforge/logosforge" ] || die "shared core not found under $ROOT/logosforge"
+[ -f "$BACKEND/logosforge-whiteboard-backend.spec" ] || die "backend spec not found under $BACKEND"
+[ -f "$DESKTOP/package-lock.json" ] || die "desktop lockfile not found under $DESKTOP"
+
+printf 'arch: %s | macOS %s | node %s | %s\n' \
+  "$ARCH" "$MACOS_VERSION" "$(node -v)" "$(python3 --version)"
+
+VALIDATION_DIR="$(mktemp -d "${TMPDIR:-/tmp}/logosforge-whiteboard-validate.XXXXXX")"
+VENV="$VALIDATION_DIR/build-venv"
+SMOKE_DATA="$VALIDATION_DIR/backend-smoke"
+APP_DATA="$VALIDATION_DIR/packaged-app-data"
+APP_PROFILE="$VALIDATION_DIR/electron-profile"
+BACKEND_LOG="$VALIDATION_DIR/backend-smoke.log"
+APP_LOG="$VALIDATION_DIR/packaged-app.log"
+mkdir -p "$SMOKE_DATA" "$APP_DATA" "$APP_PROFILE"
+
+# --- 1. Python environment and backend gates -------------------------------
+say "1. Install backend build and test dependencies"
+python3 -m venv "$VENV"
+PYTHON="$VENV/bin/python"
+"$PYTHON" -m pip install --upgrade pip
+( cd "$ROOT" && "$PYTHON" -m pip install "./logosforge[export]" -r "$BACKEND/requirements.txt" pytest pyinstaller )
+EXPECTED_CORE_VERSION="$("$PYTHON" -c 'import logosforge; print(logosforge.__version__)')"
+printf 'expected bundled core: %s\n' "$EXPECTED_CORE_VERSION"
+
+say "2. Run backend tests, byte-compile, and dependency check"
+( cd "$ROOT" && "$PYTHON" -m pytest "$BACKEND/tests" -q -p no:cacheprovider )
+PYTHONPYCACHEPREFIX="$VALIDATION_DIR/pycache" "$PYTHON" -m compileall -q "$BACKEND/app"
+"$PYTHON" -m pip check
+
+# --- 2. Freeze and smoke-test the native backend ---------------------------
+say "3. Build the native PyInstaller backend"
+rm -rf -- "$BACKEND/dist" "$BACKEND/build"
+( cd "$BACKEND" && "$PYTHON" -m PyInstaller logosforge-whiteboard-backend.spec --noconfirm --clean --log-level WARN )
+
 BE="$BACKEND/dist/logosforge-whiteboard-backend/logosforge-whiteboard-backend"
-[ -f "$BE" ] || die "frozen backend not produced at $BE"
-echo "frozen: $(file "$BE")"
-file "$BE" | grep -q "x86_64" || echo "WARNING: frozen backend is not x86_64"
-[ -x "$BE" ] || die "frozen backend is not executable"
+[ -f "$BE" ] || die "frozen backend was not produced at $BE"
+[ -x "$BE" ] || die "frozen backend is not executable: $BE"
+file "$BE"
+file "$BE" | grep -q 'x86_64' || die "frozen backend is not an Intel x86_64 executable"
 
-# --- 4. Smoke-test the frozen backend (BODY-checked, not just HTTP 200) -----
-say "4. Smoke-test frozen backend on :$SMOKE_PORT (require {\"status\":\"ok\"})"
-LOGOSFORGE_DB_PATH="$ROOT/.mac-smoke.db" "$BE" --host 127.0.0.1 --port "$SMOKE_PORT" &
+SMOKE_PORT="$(free_port)"
+say "4. Smoke-test the frozen backend on dynamic port $SMOKE_PORT"
+LOGOSFORGE_DATA_DIR="$SMOKE_DATA" \
+LOGOSFORGE_DB_PATH="$SMOKE_DATA/whiteboard.db" \
+  "$BE" --host 127.0.0.1 --port "$SMOKE_PORT" >"$BACKEND_LOG" 2>&1 &
 BPID=$!
-ok=""
-for i in $(seq 1 30); do
+
+body=""
+for attempt in $(seq 1 30); do
   sleep 1
-  body="$(curl -s --max-time 2 "http://127.0.0.1:$SMOKE_PORT/health" || true)"
-  case "$body" in *'"status":"ok"'*) ok="yes"; echo "healthy after ${i}s: $body"; break;; esac
+  body="$(curl -fsS --max-time 2 "http://127.0.0.1:$SMOKE_PORT/health" 2>/dev/null || true)"
+  if healthy_body "$body"; then
+    printf 'healthy after %ss: %s\n' "$attempt" "$body"
+    break
+  fi
 done
+
+if ! healthy_body "$body"; then
+  tail -n 80 "$BACKEND_LOG" >&2 || true
+  die "frozen backend failed its identity/core health check"
+fi
 kill "$BPID" 2>/dev/null || true
-rm -f "$ROOT/.mac-smoke.db"
-[ -n "$ok" ] || die "frozen backend never returned status:ok — run it in the foreground to read the traceback: \"$BE\" --host 127.0.0.1 --port $SMOKE_PORT"
+wait "$BPID" 2>/dev/null || true
+BPID=""
 
-# --- 5/6. Install desktop deps + package the unsigned DMG ------------------
-say "5. npm ci (electron-builder 25 + electron 31)"
-( cd "$DESKTOP" && npm ci ) || die "npm ci failed"
-say "6. Build + package unsigned DMG (npm run dist:mac)"
-( cd "$DESKTOP" && CSC_IDENTITY_AUTO_DISCOVERY=false npm run dist:mac ) || die "electron-builder failed"
+# --- 3. Desktop dependency and build gates ---------------------------------
+say "5. Install desktop dependencies and verify Electron toolchain"
+( cd "$DESKTOP" && npm ci )
+ELECTRON_VERSION="$(cd "$DESKTOP" && node -p 'require("./node_modules/electron/package.json").version')"
+BUILDER_VERSION="$(cd "$DESKTOP" && node -p 'require("./node_modules/electron-builder/package.json").version')"
+case "$ELECTRON_VERSION" in 44.*) ;; *) die "expected Electron 44.x, found $ELECTRON_VERSION" ;; esac
+case "$BUILDER_VERSION" in 26.*) ;; *) die "expected electron-builder 26.x, found $BUILDER_VERSION" ;; esac
+printf 'Electron %s | electron-builder %s\n' "$ELECTRON_VERSION" "$BUILDER_VERSION"
 
-DMG="$(ls "$DESKTOP"/release/*.dmg 2>/dev/null | head -1)"
+say "6. Run desktop tests, build, and moderate-or-higher audit gate"
+( cd "$DESKTOP" && npm test && npm run build && npm audit --audit-level=moderate )
+
+# --- 4. Package and inspect the app ----------------------------------------
+PACKAGE_VERSION="$(cd "$DESKTOP" && node -p 'require("./package.json").version')"
+DMG="$DESKTOP/release/LogosForge Whiteboard-${PACKAGE_VERSION}-x64.dmg"
 APP="$DESKTOP/release/mac/LogosForge Whiteboard.app"
-[ -n "$DMG" ] && [ -d "$APP" ] || die "DMG/.app not produced under $DESKTOP/release"
-
-# --- 7. Verify the bundled sidecar inside the .app -------------------------
-say "7. Verify the bundled backend inside the .app (arch + exec bit)"
 APP_BE="$APP/Contents/Resources/backend/logosforge-whiteboard-backend"
-[ -f "$APP_BE" ] || die "bundled backend missing from the .app at $APP_BE"
-ls -l "$APP_BE"; file "$APP_BE"
-[ -x "$APP_BE" ] || { echo "exec bit missing — restoring"; chmod +x "$APP_BE"; }
+APP_EXE="$APP/Contents/MacOS/LogosForge Whiteboard"
 
-# --- 8. Launch the locally-built app + verify the backend on :8777 ---------
-say "8. Launch the app (locally built => not quarantined => no Gatekeeper prompt)"
-if lsof -i ":$APP_PORT" >/dev/null 2>&1; then
-  echo "WARNING: something already listens on :$APP_PORT — kill it (lsof -i :$APP_PORT) or the app will attach to it and mask a broken bundle."
-fi
-open "$APP"
-ok=""
-for i in $(seq 1 30); do
+say "7. Build the unsigned Intel DMG"
+rm -rf -- "$DESKTOP/release/mac"
+rm -f -- "$DMG"
+( cd "$DESKTOP" && CSC_IDENTITY_AUTO_DISCOVERY=false npm run dist:mac )
+
+[ -f "$DMG" ] || die "DMG was not produced at $DMG"
+[ -d "$APP" ] || die "packaged app was not produced at $APP"
+[ -f "$APP_BE" ] || die "bundled backend is missing from $APP"
+[ -x "$APP_BE" ] || die "bundled backend lost its executable bit: $APP_BE"
+[ -x "$APP_EXE" ] || die "packaged Electron executable is missing: $APP_EXE"
+file "$APP_BE"
+file "$APP_BE" | grep -q 'x86_64' || die "bundled backend is not Intel x86_64"
+
+# --- 5. Launch the actual packaged app with isolated state -----------------
+APP_PORT="$(free_port)"
+lsof -nP -iTCP:"$APP_PORT" -sTCP:LISTEN >/dev/null 2>&1 \
+  && die "dynamic app port $APP_PORT became occupied before launch"
+
+say "8. Launch the packaged app with isolated state on dynamic port $APP_PORT"
+LOGOSFORGE_HOST=127.0.0.1 \
+LOGOSFORGE_PORT="$APP_PORT" \
+LOGOSFORGE_DATA_DIR="$APP_DATA" \
+LOGOSFORGE_DB_PATH="$APP_DATA/whiteboard.db" \
+  "$APP_EXE" --user-data-dir="$APP_PROFILE" >"$APP_LOG" 2>&1 &
+APP_PID=$!
+
+body=""
+for attempt in $(seq 1 45); do
   sleep 1
-  body="$(curl -s --max-time 2 "http://127.0.0.1:$APP_PORT/health" || true)"
-  case "$body" in *'"status":"ok"'*) ok="yes"; echo "app's bundled backend healthy after ${i}s: $body"; break;; esac
+  body="$(curl -fsS --max-time 2 "http://127.0.0.1:$APP_PORT/health" 2>/dev/null || true)"
+  if healthy_body "$body"; then
+    printf 'packaged backend healthy after %ss: %s\n' "$attempt" "$body"
+    break
+  fi
 done
 
-echo
-if [ -n "$ok" ]; then
-  printf '\033[1;32mPASS — the packaged app launched and its bundled backend is live on :%s.\033[0m\n' "$APP_PORT"
-else
-  printf '\033[1;33mApp launched but :%s never returned status:ok. Triage:\033[0m\n' "$APP_PORT"
-  echo "  • blank/black WINDOW on a non-Metal OCLP GPU → quit, relaunch: open \"$APP\" --args --disable-gpu"
-  echo "  • 'spawn EACCES'  → chmod +x \"$APP_BE\" ; relaunch"
-  echo "  • read the error  → run the bundled binary directly: \"$APP_BE\" --host 127.0.0.1 --port $APP_PORT"
+if ! healthy_body "$body"; then
+  tail -n 120 "$APP_LOG" >&2 || true
+  die "the packaged app did not launch the expected core $EXPECTED_CORE_VERSION backend"
 fi
-echo
-echo "Installer (share/test the downloaded-DMG path with this): $DMG"
+
+APP_BACKEND_PID="$(lsof -nP -iTCP:"$APP_PORT" -sTCP:LISTEN -t 2>/dev/null | head -n 1 || true)"
+[ -n "$APP_BACKEND_PID" ] || die "health responded but the backend listener PID could not be identified"
+
+kill "$APP_PID" 2>/dev/null || true
+wait "$APP_PID" 2>/dev/null || true
+APP_PID=""
+sleep 2
+if kill -0 "$APP_BACKEND_PID" 2>/dev/null; then
+  kill "$APP_BACKEND_PID" 2>/dev/null || true
+  wait "$APP_BACKEND_PID" 2>/dev/null || true
+fi
+APP_BACKEND_PID=""
+
+printf '\n\033[1;32mPASS — backend tests, compile, pip check, desktop tests, build, audit, DMG packaging, and packaged-app health all passed.\033[0m\n'
+printf 'Installer: %s\n' "$DMG"
+
 cat <<EOF
 
-To validate the END-USER (downloaded) experience — Monterey quarantines nested
-binaries and only clears the .app ROOT on first run, so the bundled backend
-stays blocked unless you clear quarantine RECURSIVELY:
-    hdiutil attach "$DMG"
-    cp -R "/Volumes/LogosForge Whiteboard/LogosForge Whiteboard.app" /Applications/
-    hdiutil detach "/Volumes/LogosForge Whiteboard"
-    xattr -cr "/Applications/LogosForge Whiteboard.app"   # RECURSIVE — required on Monterey
-    open "/Applications/LogosForge Whiteboard.app"
-(The non-recursive 'xattr -d com.apple.quarantine' leaves the sidecar quarantined.)
+To validate the downloaded unsigned-DMG experience on macOS 13+:
+  1. Mount "$DMG" and copy LogosForge Whiteboard.app to /Applications.
+  2. Clear quarantine recursively so the bundled backend is included:
+       xattr -cr "/Applications/LogosForge Whiteboard.app"
+  3. Open the app normally and repeat the persistence/import/export checks in
+     whiteboard-desktop/RELEASING.md.
+
+The build is unsigned and unnotarized; Gatekeeper warnings are expected.
 EOF

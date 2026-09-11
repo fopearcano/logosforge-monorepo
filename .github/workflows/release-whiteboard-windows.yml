@@ -6,8 +6,9 @@ name: Release — LogosForge Whiteboard (Windows)
 # core) — no Python needed on the user's machine.
 #
 # Triggers:
-#   * push a tag like  whiteboard-v0.1.0  -> builds AND publishes a GitHub Release
-#   * manual "Run workflow"               -> builds + uploads artifacts (no Release)
+#   * push a tag like whiteboard-vX.Y.Z -> builds AND publishes a GitHub prerelease
+#   * manual "Run workflow"            -> builds artifacts; optionally publishes
+#                                          to an existing Whiteboard tag
 #
 # NOTE: Pro's Windows release lives in release-windows.yml and triggers on v*
 # tags; this one uses whiteboard-v* so the two products release independently
@@ -26,9 +27,14 @@ on:
   workflow_dispatch:
     inputs:
       publish_release:
-        description: "Attach the build to a GitHub Release"
+        description: "Attach the build to the existing GitHub prerelease"
         type: boolean
         default: false
+      release_tag:
+        description: "Existing Whiteboard tag to build and publish"
+        type: string
+        required: false
+        default: "whiteboard-v0.1.13"
 
 permissions:
   contents: write
@@ -48,6 +54,118 @@ jobs:
     steps:
       - name: Checkout monorepo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Resolve and verify Whiteboard release metadata
+        id: release
+        env:
+          MANUAL_PUBLISH: ${{ inputs.publish_release }}
+          MANUAL_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          publish=false
+          release_tag=""
+
+          case "$GITHUB_EVENT_NAME" in
+            push)
+              if [ "$GITHUB_REF_TYPE" != "tag" ]; then
+                echo "::error::Release push is not a tag."
+                exit 1
+              fi
+              publish=true
+              release_tag="$GITHUB_REF_NAME"
+              ;;
+            workflow_dispatch)
+              if [ "${MANUAL_PUBLISH:-false}" = "true" ]; then
+                publish=true
+                release_tag="${MANUAL_TAG:-}"
+              fi
+              ;;
+            *)
+              echo "::error::Unsupported event: $GITHUB_EVENT_NAME"
+              exit 1
+              ;;
+          esac
+
+          if [ "$publish" = "true" ]; then
+            if [ -z "$release_tag" ]; then
+              echo "::error::A release tag is required when publishing."
+              exit 1
+            fi
+            case "$release_tag" in
+              whiteboard-v*) ;;
+              *)
+                echo "::error::Release tag must start with whiteboard-v."
+                exit 1
+                ;;
+            esac
+            if ! git check-ref-format "refs/tags/$release_tag" >/dev/null; then
+              echo "::error::Invalid release tag: $release_tag"
+              exit 1
+            fi
+            tag_commit="$(git rev-parse --verify --quiet "refs/tags/${release_tag}^{commit}")" || {
+              echo "::error::Release tag does not exist: $release_tag"
+              exit 1
+            }
+            if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+              git checkout --detach --quiet "$tag_commit"
+            fi
+            if [ "$(git rev-parse HEAD)" != "$tag_commit" ]; then
+              echo "::error::The checkout does not match $release_tag."
+              exit 1
+            fi
+          fi
+
+          version="$(
+            node -e '
+              const fs = require("node:fs");
+              const pkg = JSON.parse(fs.readFileSync("whiteboard-desktop/desktop/package.json", "utf8"));
+              const lock = JSON.parse(fs.readFileSync("whiteboard-desktop/desktop/package-lock.json", "utf8"));
+              const versions = {
+                packageJson: pkg.version,
+                packageLock: lock.version,
+                packageLockRoot: lock.packages?.[""]?.version,
+              };
+              const values = Object.values(versions);
+              const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+              if (values.some((value) => typeof value !== "string") || new Set(values).size !== 1 || !semver.test(pkg.version)) {
+                console.error("::error::Invalid or inconsistent Whiteboard versions: " + JSON.stringify(versions));
+                process.exit(1);
+              }
+              process.stdout.write(pkg.version);
+            '
+          )"
+
+          expected_tag="whiteboard-v${version}"
+          notes_path="whiteboard-desktop/release-notes/${expected_tag}.md"
+
+          if [ "$publish" = "true" ] && [ "$release_tag" != "$expected_tag" ]; then
+            echo "::error::Tag $release_tag does not match package version $version; expected $expected_tag."
+            exit 1
+          fi
+          if [ "$publish" = "true" ] && [ ! -s "$notes_path" ]; then
+            echo "::error::Missing or empty release notes: $notes_path"
+            exit 1
+          fi
+          if [ "$publish" != "true" ]; then
+            release_tag="$expected_tag"
+          fi
+
+          {
+            echo "publish=$publish"
+            echo "version=$version"
+            echo "tag=$release_tag"
+            echo "notes_path=$notes_path"
+            echo "source_sha=$(git rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Verify monorepo layout
         run: |
@@ -60,11 +178,6 @@ jobs:
             exit 1
           fi
           echo "monorepo layout OK"
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -84,18 +197,203 @@ jobs:
           ../../build-venv/Scripts/python.exe -m PyInstaller logosforge-whiteboard-backend.spec --noconfirm --clean --log-level WARN
 
       - name: Smoke-test the bundled backend
+        shell: pwsh
         run: |
-          ./whiteboard-desktop/backend/dist/logosforge-whiteboard-backend/logosforge-whiteboard-backend.exe --host 127.0.0.1 --port 8799 &
-          ok=""
-          for i in $(seq 1 30); do
-            sleep 1
-            code=$(curl -s --max-time 2 -o /dev/null -w "%{http_code}" http://127.0.0.1:8799/health || true)
-            if [ "$code" = "200" ]; then ok="yes"; echo "backend healthy after ${i}s"; break; fi
-          done
-          # Reliable teardown on Windows: signals from git-bash don't stop a
-          # native console exe, so kill the image directly (//-escaped for bash).
-          taskkill //F //IM logosforge-whiteboard-backend.exe //T 2>/dev/null || true
-          if [ -z "$ok" ]; then echo "::error::bundled backend failed /health"; exit 1; fi
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $pythonCmd = Join-Path $PWD.Path "build-venv\Scripts\python.exe"
+          $backendExe = Join-Path $PWD.Path "whiteboard-desktop\backend\dist\logosforge-whiteboard-backend\logosforge-whiteboard-backend.exe"
+          $expectedCoreVersion = (& $pythonCmd -c 'import logosforge; print(logosforge.__version__)')
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not read the installed LogosForge core version."
+          }
+          $expectedCoreVersion = ([string]$expectedCoreVersion).Trim()
+          if ([string]::IsNullOrWhiteSpace($expectedCoreVersion)) {
+            throw "The installed LogosForge core reported an empty version."
+          }
+
+          $portProbe = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+          try {
+            $portProbe.Start()
+            $port = ([System.Net.IPEndPoint]$portProbe.LocalEndpoint).Port
+          }
+          finally {
+            $portProbe.Stop()
+          }
+
+          $instanceNonce = [Guid]::NewGuid().ToString("N")
+          $tempRoot = if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
+            [System.IO.Path]::GetTempPath()
+          }
+          else {
+            $env:RUNNER_TEMP
+          }
+          $tempRoot = [System.IO.Path]::GetFullPath($tempRoot)
+          if (
+            -not (Test-Path -LiteralPath $tempRoot -PathType Container) -or
+            [string]::Equals($tempRoot, [System.IO.Path]::GetPathRoot($tempRoot), [StringComparison]::OrdinalIgnoreCase)
+          ) {
+            throw "Unsafe or missing runner temp directory: $tempRoot"
+          }
+          $tempRoot = $tempRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+          $runId = [Guid]::NewGuid().ToString("N")
+          $dataDirName = "logosforge-whiteboard-smoke-$runId"
+          $smokeDataDir = [System.IO.Path]::GetFullPath((Join-Path $tempRoot $dataDirName))
+          $dataParent = [System.IO.Directory]::GetParent($smokeDataDir)
+          if (
+            $null -eq $dataParent -or
+            -not [string]::Equals($dataParent.FullName, $tempRoot, [StringComparison]::OrdinalIgnoreCase) -or
+            [System.IO.Path]::GetFileName($smokeDataDir) -cne $dataDirName
+          ) {
+            throw "Refusing unsafe smoke data directory: $smokeDataDir"
+          }
+          $smokeDbPath = Join-Path $smokeDataDir "logosforge-smoke.db"
+          $stdoutPath = Join-Path $tempRoot "$dataDirName.stdout.log"
+          $stderrPath = Join-Path $tempRoot "$dataDirName.stderr.log"
+          $hadPreviousNonce = Test-Path Env:LOGOSFORGE_WHITEBOARD_INSTANCE_NONCE
+          $previousNonce = $env:LOGOSFORGE_WHITEBOARD_INSTANCE_NONCE
+          $hadPreviousDataDir = Test-Path Env:LOGOSFORGE_DATA_DIR
+          $previousDataDir = $env:LOGOSFORGE_DATA_DIR
+          $hadPreviousDbPath = Test-Path Env:LOGOSFORGE_DB_PATH
+          $previousDbPath = $env:LOGOSFORGE_DB_PATH
+          $process = $null
+          $smokeError = $null
+          $cleanupError = $null
+
+          try {
+            $null = [System.IO.Directory]::CreateDirectory($smokeDataDir)
+            $env:LOGOSFORGE_WHITEBOARD_INSTANCE_NONCE = $instanceNonce
+            $env:LOGOSFORGE_DATA_DIR = $smokeDataDir
+            $env:LOGOSFORGE_DB_PATH = $smokeDbPath
+            $startArgs = @{
+              FilePath = $backendExe
+              ArgumentList = @("--host", "127.0.0.1", "--port", [string]$port)
+              RedirectStandardOutput = $stdoutPath
+              RedirectStandardError = $stderrPath
+              PassThru = $true
+              WindowStyle = "Hidden"
+            }
+            $process = Start-Process @startArgs
+
+            $lastHealthError = "no response"
+            $healthy = $false
+            for ($attempt = 1; $attempt -le 30; $attempt++) {
+              Start-Sleep -Seconds 1
+              $process.Refresh()
+              if ($process.HasExited) {
+                $lastHealthError = "process exited with code $($process.ExitCode)"
+                break
+              }
+
+              try {
+                $health = Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:$port/health" -TimeoutSec 2
+                if (
+                  [string]$health.status -ceq "ok" -and
+                  [string]$health.service -ceq "logosforge-whiteboard-backend" -and
+                  [string]$health.core_version -ceq $expectedCoreVersion -and
+                  [string]$health.instance_nonce -ceq $instanceNonce
+                ) {
+                  $process.Refresh()
+                  if (-not $process.HasExited) {
+                    $healthy = $true
+                    Write-Host "backend healthy after ${attempt}s (core $expectedCoreVersion, PID $($process.Id))"
+                    break
+                  }
+                }
+                $lastHealthError = "health identity or version mismatch"
+              }
+              catch {
+                $lastHealthError = $_.Exception.Message
+              }
+            }
+
+            if (-not $healthy) {
+              $smokeError = "bundled backend failed verified /health on port $port (expected core $expectedCoreVersion): $lastHealthError"
+            }
+          }
+          catch {
+            $smokeError = $_.Exception.Message
+          }
+          finally {
+            if ($hadPreviousNonce) {
+              $env:LOGOSFORGE_WHITEBOARD_INSTANCE_NONCE = $previousNonce
+            }
+            else {
+              Remove-Item Env:LOGOSFORGE_WHITEBOARD_INSTANCE_NONCE -ErrorAction SilentlyContinue
+            }
+            if ($hadPreviousDataDir) {
+              $env:LOGOSFORGE_DATA_DIR = $previousDataDir
+            }
+            else {
+              Remove-Item Env:LOGOSFORGE_DATA_DIR -ErrorAction SilentlyContinue
+            }
+            if ($hadPreviousDbPath) {
+              $env:LOGOSFORGE_DB_PATH = $previousDbPath
+            }
+            else {
+              Remove-Item Env:LOGOSFORGE_DB_PATH -ErrorAction SilentlyContinue
+            }
+
+            if ($null -ne $process) {
+              $process.Refresh()
+              if (-not $process.HasExited) {
+                & taskkill.exe /PID "$($process.Id)" /T /F *> $null
+                $taskkillExit = $LASTEXITCODE
+                $process.Refresh()
+                if ($taskkillExit -ne 0 -and -not $process.HasExited) {
+                  $cleanupError = "taskkill failed for backend PID $($process.Id) with exit code $taskkillExit"
+                }
+              }
+              if (-not $process.HasExited) {
+                $null = $process.WaitForExit(5000)
+                $process.Refresh()
+              }
+              if (-not $process.HasExited) {
+                $cleanupError = "backend PID $($process.Id) remained alive after PID/tree teardown"
+              }
+            }
+
+            if (Test-Path -LiteralPath $smokeDataDir) {
+              $cleanupParent = [System.IO.Directory]::GetParent($smokeDataDir)
+              if (
+                $null -eq $cleanupParent -or
+                -not [string]::Equals($cleanupParent.FullName, $tempRoot, [StringComparison]::OrdinalIgnoreCase) -or
+                [System.IO.Path]::GetFileName($smokeDataDir) -cne $dataDirName
+              ) {
+                $dataCleanupError = "refusing unsafe smoke data cleanup target: $smokeDataDir"
+                $cleanupError = if ($null -eq $cleanupError) { $dataCleanupError } else { "$cleanupError; $dataCleanupError" }
+              }
+              else {
+                try {
+                  Remove-Item -LiteralPath $smokeDataDir -Recurse -Force
+                }
+                catch {
+                  $dataCleanupError = "failed to remove smoke data directory $smokeDataDir`: $($_.Exception.Message)"
+                  $cleanupError = if ($null -eq $cleanupError) { $dataCleanupError } else { "$cleanupError; $dataCleanupError" }
+                }
+              }
+            }
+          }
+
+          if ($null -ne $cleanupError) {
+            $smokeError = if ($null -eq $smokeError) { $cleanupError } else { "$smokeError; $cleanupError" }
+          }
+          if ($null -ne $smokeError) {
+            foreach ($logPath in @($stdoutPath, $stderrPath)) {
+              if (Test-Path -LiteralPath $logPath) {
+                Write-Host "::group::$([System.IO.Path]::GetFileName($logPath))"
+                Get-Content -LiteralPath $logPath
+                Write-Host "::endgroup::"
+              }
+            }
+          }
+          foreach ($logPath in @($stdoutPath, $stderrPath)) {
+            Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
+          }
+          if ($null -ne $smokeError) {
+            throw $smokeError
+          }
 
       # --- 2. Build + package the Electron app -----------------------------
       - name: Install whiteboard-desktop deps
@@ -126,10 +424,18 @@ jobs:
           path: whiteboard-desktop/desktop/release/*.exe
           if-no-files-found: error
 
-      - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/whiteboard-v') || inputs.publish_release
-        uses: softprops/action-gh-release@v2
+      - name: Publish GitHub prerelease
+        if: steps.release.outputs.publish == 'true'
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
-          files: whiteboard-desktop/desktop/release/*.exe
+          tag_name: ${{ steps.release.outputs.tag }}
+          name: LogosForge Whiteboard ${{ steps.release.outputs.version }} (Alpha)
+          body_path: ${{ steps.release.outputs.notes_path }}
+          append_body: false
+          generate_release_notes: false
           draft: false
-          generate_release_notes: true
+          prerelease: true
+          make_latest: "false"
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          files: whiteboard-desktop/desktop/release/*.exe
