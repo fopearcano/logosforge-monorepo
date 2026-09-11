@@ -5,11 +5,29 @@
  * user-chosen file. A document stays dirty until an explicit file Save/Open/New.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
 
+import { isModalDialogOpen } from '../../components/useModalDialog';
+import { flushPendingDocSaves, getCurrentDocId } from '../../state/currentDocument';
+import { isDocumentInteractionLocked } from '../whiteboard/documentOperationGuard';
 import type { WhiteboardBlock } from '../whiteboard/types';
+import { freshBlockIds } from '../whiteboard/blockIdentity';
 import { fileApi, onMenuFile } from './fileApi';
 import { baseName, blocksToText, suggestedFileName, textToBlocks } from './fileSerialize';
+import {
+  captureFileSession,
+  completeFileSessionSave,
+  getFileSessionState,
+  isFileSessionContextCurrent,
+  markFileSessionDirty,
+  replaceFileSessionContext,
+  runSerializedFileSave,
+  setFileSessionStatusIfCurrent,
+  subscribeFileSessionState,
+  updateFileSessionState,
+  waitForPendingFileSaves,
+  type FileSessionToken,
+} from './fileSessionStore';
 import type { FileStatus } from './fileTypes';
 
 const BLANK: WhiteboardBlock[] = [{ id: 'b0', type: 'paragraph', text: '' }];
@@ -25,7 +43,7 @@ interface Options {
    * left orphaned against an empty manuscript. When omitted, New falls back to
    * blanking the editor in place (the file-only behaviour).
    */
-  onNewDocument?: () => void | Promise<void>;
+  onNewDocument?: () => void | boolean | Promise<void | boolean>;
 }
 
 export interface FileActionsApi {
@@ -39,6 +57,8 @@ export interface FileActionsApi {
   openDocument: () => void;
   saveDocument: () => void;
   saveDocumentAs: () => void;
+  /** Clear the disk-file association after switching backend documents. */
+  resetForDocument: () => void;
   /**
    * Run the unsaved-changes guard (Save / Don't Save / Cancel) before a
    * destructive action like an import-replace. Resolves true to proceed, false
@@ -47,10 +67,32 @@ export interface FileActionsApi {
   confirmProceedPastUnsavedChanges: (reason: string) => Promise<boolean>;
 }
 
+interface SaveRequest {
+  allowInteractionLock?: boolean;
+  expectedContext?: FileSessionToken;
+  forceSaveAs?: boolean;
+}
+
+function isOperationCurrent(token: FileSessionToken, allowInteractionLock = false): boolean {
+  return (
+    isFileSessionContextCurrent(token, getCurrentDocId()) &&
+    (allowInteractionLock || !isDocumentInteractionLocked())
+  );
+}
+
+function isOperationUnchanged(token: FileSessionToken, allowInteractionLock = false): boolean {
+  return (
+    isOperationCurrent(token, allowInteractionLock) &&
+    token.contentRevision === getFileSessionState().contentRevision
+  );
+}
+
 export function useFileActions({ getBlocks, loadBlocks, mode, onNewDocument }: Options): FileActionsApi {
-  const [filePath, setFilePath] = useState<string | null>(null);
-  const [dirty, setDirty] = useState(false);
-  const [status, setStatus] = useState<FileStatus>('saved');
+  const { filePath, dirty, status } = useSyncExternalStore(
+    subscribeFileSessionState,
+    getFileSessionState,
+    getFileSessionState,
+  );
 
   const getBlocksRef = useRef(getBlocks);
   getBlocksRef.current = getBlocks;
@@ -58,13 +100,12 @@ export function useFileActions({ getBlocks, loadBlocks, mode, onNewDocument }: O
   loadBlocksRef.current = loadBlocks;
   const modeRef = useRef(mode);
   modeRef.current = mode;
-  const filePathRef = useRef(filePath);
-  filePathRef.current = filePath;
-  const dirtyRef = useRef(dirty);
-  dirtyRef.current = dirty;
   const onNewDocumentRef = useRef(onNewDocument);
   onNewDocumentRef.current = onNewDocument;
   const suppressDirty = useRef(false);
+  const updateStatus = useCallback((next: FileStatus) => {
+    updateFileSessionState({ status: next });
+  }, []);
 
   // Mirror dirty state to main (drives the close/quit save prompt).
   useEffect(() => {
@@ -73,114 +114,179 @@ export function useFileActions({ getBlocks, loadBlocks, mode, onNewDocument }: O
 
   const markDirty = useCallback(() => {
     if (suppressDirty.current) return;
-    setDirty(true);
-    setStatus('unsaved');
+    markFileSessionDirty();
   }, []);
 
   const loadInto = useCallback((blocks: WhiteboardBlock[], path: string | null) => {
     suppressDirty.current = true;
     loadBlocksRef.current(blocks);
-    setFilePath(path);
-    setDirty(false);
-    setStatus('saved');
+    replaceFileSessionContext(path);
     setTimeout(() => {
       suppressDirty.current = false;
     }, 0);
   }, []);
 
-  const doSaveAs = useCallback(async (): Promise<boolean> => {
-    try {
-      setStatus('saving');
-      const res = await fileApi.saveAs(
-        blocksToText(getBlocksRef.current()),
-        suggestedFileName(filePathRef.current, modeRef.current),
-      );
-      if (res.canceled) {
-        setStatus(dirtyRef.current ? 'unsaved' : 'saved');
-        return false;
-      }
-      if (!res.ok) {
-        setStatus('error');
-        return false;
-      }
-      setFilePath(res.filePath ?? null);
-      setDirty(false);
-      setStatus('saved');
-      return true;
-    } catch (err) {
-      console.error('[files] saveAs failed:', err);
-      setStatus('error');
-      return false;
-    }
+  const resetForDocument = useCallback(() => {
+    replaceFileSessionContext(null);
   }, []);
 
-  const doSave = useCallback(async (): Promise<boolean> => {
-    const path = filePathRef.current;
-    if (!path) return doSaveAs();
-    try {
-      setStatus('saving');
-      const res = await fileApi.saveToPath(path, blocksToText(getBlocksRef.current()));
-      if (!res.ok) {
-        setStatus('error');
+  const runSave = useCallback(async (request: SaveRequest = {}): Promise<boolean> => {
+    const allowInteractionLock = request.allowInteractionLock ?? false;
+    const requestedContext = request.expectedContext ?? captureFileSession(getCurrentDocId());
+    if (!isOperationCurrent(requestedContext, allowInteractionLock)) return false;
+
+    return runSerializedFileSave(async () => {
+      // The document or file context may have changed while this request waited
+      // behind an earlier disk write. Never save or mutate the replacement.
+      if (!isOperationCurrent(requestedContext, allowInteractionLock)) return false;
+
+      const snapshot = captureFileSession(getCurrentDocId());
+      const session = getFileSessionState();
+      const saveAs = request.forceSaveAs || !session.filePath;
+      const content = blocksToText(getBlocksRef.current());
+      setFileSessionStatusIfCurrent(snapshot, getCurrentDocId(), 'saving');
+
+      try {
+        const result = saveAs
+          ? await fileApi.saveAs(
+              content,
+              suggestedFileName(session.filePath, modeRef.current),
+            )
+          : await fileApi.saveToPath(session.filePath as string, content);
+
+        // Save dialogs and IPC writes yield to document navigation. The write may
+        // already have happened, but its response must never update a new context.
+        if (!isFileSessionContextCurrent(snapshot, getCurrentDocId())) return false;
+        if (!allowInteractionLock && isDocumentInteractionLocked()) {
+          setFileSessionStatusIfCurrent(
+            snapshot,
+            getCurrentDocId(),
+            getFileSessionState().dirty ? 'unsaved' : 'saved',
+          );
+          return false;
+        }
+        if (result.canceled) {
+          setFileSessionStatusIfCurrent(
+            snapshot,
+            getCurrentDocId(),
+            getFileSessionState().dirty ? 'unsaved' : 'saved',
+          );
+          return false;
+        }
+        if (!result.ok) {
+          setFileSessionStatusIfCurrent(snapshot, getCurrentDocId(), 'error');
+          return false;
+        }
+        if (saveAs && !result.filePath) {
+          console.error('[files] saveAs succeeded without returning a file path');
+          setFileSessionStatusIfCurrent(snapshot, getCurrentDocId(), 'error');
+          return false;
+        }
+
+        const completion = completeFileSessionSave(
+          snapshot,
+          getCurrentDocId(),
+          saveAs ? result.filePath : undefined,
+        );
+        // An edit made while the write was in flight remains dirty. Callers that
+        // plan to discard/navigate must treat that as an incomplete save.
+        return completion.currentContext && completion.clean;
+      } catch (err) {
+        console.error(saveAs ? '[files] saveAs failed:' : '[files] save failed:', err);
+        if (isOperationCurrent(snapshot, allowInteractionLock)) {
+          setFileSessionStatusIfCurrent(snapshot, getCurrentDocId(), 'error');
+        }
         return false;
       }
-      setDirty(false);
-      setStatus('saved');
-      return true;
-    } catch (err) {
-      console.error('[files] save failed:', err);
-      setStatus('error');
-      return false;
-    }
-  }, [doSaveAs]);
+    });
+  }, []);
+
+  const doSaveAs = useCallback(
+    (request: Omit<SaveRequest, 'forceSaveAs'> = {}): Promise<boolean> =>
+      runSave({ ...request, forceSaveAs: true }),
+    [runSave],
+  );
+
+  const doSave = useCallback(
+    (request: Omit<SaveRequest, 'forceSaveAs'> = {}): Promise<boolean> => runSave(request),
+    [runSave],
+  );
 
   // If there are unsaved changes, ask; returns false to abort the operation.
   const confirmProceed = useCallback(
     async (reason: string): Promise<boolean> => {
-      if (!dirtyRef.current) return true;
+      const operation = captureFileSession(getCurrentDocId());
+      if (!isOperationCurrent(operation)) return false;
+      if (!getFileSessionState().dirty) return true;
       const choice = await fileApi.confirmSaveChanges(reason);
+      if (!isOperationCurrent(operation)) return false;
       if (choice === 'cancel') return false;
-      if (choice === 'save') return doSave();
-      return true; // dont-save
+      if (choice === 'save') {
+        const saved = await doSave({ expectedContext: operation });
+        return saved && isOperationCurrent(operation);
+      }
+      // "Don't Save" covers only the revision visible when the dialog opened.
+      return isOperationUnchanged(operation);
     },
     [doSave],
   );
 
   const newDocument = useCallback(async () => {
-    if (!(await confirmProceed('Save changes before creating a new document?'))) return;
+    let operation = captureFileSession(getCurrentDocId());
+    if (!isOperationCurrent(operation)) return;
     const createFresh = onNewDocumentRef.current;
+    // In the document-backed app, an unassociated draft remains safely in the
+    // library, so creating another document is not destructive. Ask only when
+    // leaving an external disk file behind (or in file-only fallback mode).
+    if (
+      (!createFresh || getFileSessionState().filePath) &&
+      !(await confirmProceed('Save changes before creating a new document?'))
+    ) return;
+    operation = captureFileSession(getCurrentDocId());
+    if (!isOperationUnchanged(operation)) return;
     if (createFresh) {
       // Create a genuinely fresh document (blank manuscript + its own empty
       // outline/comments); the editor re-mounts on the new doc id. Reset the file
       // association so the new document starts as an unsaved, clean slate.
-      await createFresh();
-      setFilePath(null);
-      setDirty(false);
-      setStatus('saved');
+      const created = await createFresh();
+      if (created === false) return;
+      resetForDocument();
     } else {
       loadInto(BLANK, null);
     }
-  }, [confirmProceed, loadInto]);
+  }, [confirmProceed, loadInto, resetForDocument]);
 
   const openDocument = useCallback(async () => {
+    let operation = captureFileSession(getCurrentDocId());
+    if (!isOperationCurrent(operation)) return;
     if (!(await confirmProceed('Save changes before opening another document?'))) return;
+    operation = captureFileSession(getCurrentDocId());
+    if (!isOperationUnchanged(operation)) return;
     try {
+      // Do not let an older Save-to-the-same-path finish after Open has read and
+      // installed that file as a clean context.
+      await waitForPendingFileSaves();
+      if (!isOperationUnchanged(operation)) return;
       const res = await fileApi.open();
+      if (!isOperationUnchanged(operation)) return;
       if (res.canceled) return;
       if (!res.ok) {
-        setStatus('error');
+        updateStatus('error');
         return;
       }
-      loadInto(textToBlocks(res.content ?? ''), res.filePath ?? null);
+      const parsed = textToBlocks(res.content ?? '');
+      const ids = freshBlockIds(parsed.length);
+      loadInto(parsed.map((block, index) => ({ ...block, id: ids[index] })), res.filePath ?? null);
     } catch (err) {
       console.error('[files] open failed:', err);
-      setStatus('error');
+      if (isOperationCurrent(operation)) updateStatus('error');
     }
-  }, [confirmProceed, loadInto]);
+  }, [confirmProceed, loadInto, updateStatus]);
 
   // Native File-menu actions (mouse + accelerators).
   useEffect(() => {
     return onMenuFile((action) => {
+      if (isModalDialogOpen() || isDocumentInteractionLocked()) return;
       if (action === 'new') void newDocument();
       else if (action === 'open') void openDocument();
       else if (action === 'save') void doSave();
@@ -189,13 +295,31 @@ export function useFileActions({ getBlocks, loadBlocks, mode, onNewDocument }: O
   }, [newDocument, openDocument, doSave, doSaveAs]);
 
   // Main asks us to save during a window close / quit; reply with the result.
-  useEffect(
-    () =>
-      fileApi.onSaveBeforeClose(() => {
-        void doSave().then((ok) => fileApi.sendCloseResult(ok));
-      }),
-    [doSave],
-  );
+  useEffect(() => {
+    const unsubscribe = fileApi.onSaveBeforeClose((requestId) => {
+      void (async () => {
+        try {
+          // Capture edits made after the app-lifetime close drain but before
+          // the external file snapshot is written.
+          await flushPendingDocSaves();
+          fileApi.sendCloseResult(
+            requestId,
+            await doSave({ allowInteractionLock: true }),
+          );
+        } catch (error) {
+          console.error('[close] save-before-close failed:', error);
+          fileApi.sendCloseResult(requestId, false);
+        }
+      })();
+    });
+    // Unlike document autosave readiness, this capability belongs to the
+    // faultable App tree because doSave captures the mounted editor instance.
+    fileApi.setExternalSaveHandshakeReady(true);
+    return () => {
+      fileApi.setExternalSaveHandshakeReady(false);
+      unsubscribe();
+    };
+  }, [doSave]);
 
   return {
     filePath,
@@ -207,6 +331,7 @@ export function useFileActions({ getBlocks, loadBlocks, mode, onNewDocument }: O
     openDocument: () => void openDocument(),
     saveDocument: () => void doSave(),
     saveDocumentAs: () => void doSaveAs(),
+    resetForDocument,
     confirmProceedPastUnsavedChanges: confirmProceed,
   };
 }

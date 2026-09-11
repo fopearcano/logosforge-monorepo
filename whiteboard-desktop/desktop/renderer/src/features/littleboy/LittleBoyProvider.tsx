@@ -16,6 +16,7 @@
 import type { Editor } from '@tiptap/react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { isModalDialogOpen } from '../../components/useModalDialog';
 import {
   publishLittleBoyOpenState,
   registerLittleBoyToggles,
@@ -80,6 +81,10 @@ export function LittleBoyProvider({ editor, mode, baseUrl, documentTitle, screen
   // Shortcuts + ESC, in the capture phase (beats editor keymap + app ESC).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Window-capture runs before the modal's document-capture listener. Yield
+      // while a true modal is open so one Escape cannot close both surfaces and
+      // AI shortcuts cannot mutate the background through its inert app tree.
+      if (isModalDialogOpen()) return;
       const mod = e.metaKey || e.ctrlKey;
       if (e.key === 'Escape') {
         if (logosOpenRef.current) {

@@ -8,7 +8,8 @@ import { useEffect, useReducer, useRef, useState } from 'react';
 
 import type { Editor } from '@tiptap/react';
 
-import { selectionToDraft } from './commentsAnchor';
+import { isModalDialogOpen } from '../../components/useModalDialog';
+import { locate, selectionToDraft } from './commentsAnchor';
 import { CommentPopover } from './CommentPopover';
 import {
   useCommentsPanelOpen,
@@ -17,6 +18,7 @@ import {
   toggleResolvedHidden,
 } from './commentsPanelStore';
 import { CommentsWindow } from './CommentsWindow';
+import type { Comment } from './commentsApi';
 import type { CommentsApi } from './useComments';
 
 interface Props {
@@ -38,6 +40,16 @@ function absPos(editor: Editor, blockIndex: number, charOffset: number): number 
     i += 1;
   });
   return pos;
+}
+
+function resolvedLocation(editor: Editor, comment: Comment) {
+  const texts: string[] = [];
+  const ids: string[] = [];
+  editor.state.doc.forEach((node) => {
+    texts.push(node.textContent);
+    ids.push(typeof node.attrs.lfId === 'string' ? node.attrs.lfId : '');
+  });
+  return locate(comment, texts, ids);
 }
 
 export function CommentsLayer({ editor, api, activeId, setActiveId }: Props) {
@@ -99,7 +111,8 @@ export function CommentsLayer({ editor, api, activeId, setActiveId }: Props) {
   const jumpTo = (id: string) => {
     const c = api.comments.find((x) => x.id === id);
     if (editor && c) {
-      const pos = absPos(editor, c.anchor.block_index, c.anchor.from_offset);
+      const location = resolvedLocation(editor, c);
+      const pos = location ? absPos(editor, location.blockIndex, location.from) : null;
       if (pos != null) editor.chain().focus().setTextSelection(pos).scrollIntoView().run();
     }
     setActiveId(id);
@@ -110,11 +123,16 @@ export function CommentsLayer({ editor, api, activeId, setActiveId }: Props) {
   // around. Ref-backed so the listener stays stable while reading the latest state.
   const navRef = useRef<(dir: 1 | -1) => void>(() => {});
   navRef.current = (dir) => {
+    if (!editor) return;
     const list = api.comments
       .filter((c) => !c.resolved)
       .sort(
-        (a, b) =>
-          a.anchor.block_index - b.anchor.block_index || a.anchor.from_offset - b.anchor.from_offset,
+        (a, b) => {
+          const al = resolvedLocation(editor, a);
+          const bl = resolvedLocation(editor, b);
+          return (al?.blockIndex ?? a.anchor.block_index) - (bl?.blockIndex ?? b.anchor.block_index) ||
+            (al?.from ?? a.anchor.from_offset) - (bl?.from ?? b.anchor.from_offset);
+        },
       );
     if (!list.length) return;
     const cur = list.findIndex((c) => c.id === activeId);
@@ -124,6 +142,7 @@ export function CommentsLayer({ editor, api, activeId, setActiveId }: Props) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (isModalDialogOpen()) return;
       if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
       if (e.key === 'ArrowDown') {
         e.preventDefault();
@@ -140,7 +159,8 @@ export function CommentsLayer({ editor, api, activeId, setActiveId }: Props) {
   const active = api.comments.find((c) => c.id === activeId) ?? null;
   let popoverPos: { top: number; left: number } | null = null;
   if (editor && active) {
-    const pos = absPos(editor, active.anchor.block_index, active.anchor.from_offset);
+    const location = resolvedLocation(editor, active);
+    const pos = location ? absPos(editor, location.blockIndex, location.from) : null;
     if (pos != null) {
       try {
         const c = editor.view.coordsAtPos(pos);
@@ -202,11 +222,6 @@ export function CommentsLayer({ editor, api, activeId, setActiveId }: Props) {
         />
       )}
 
-      {api.error && (
-        <div className="wb-toast wb-toast-error" role="alert">
-          {api.error}
-        </div>
-      )}
     </>
   );
 }

@@ -21,6 +21,17 @@ import { buildProjectContext, prependProjectContext, PROJECT_MAX } from './conte
 import { parseBillyMessage, stripActionBlocks } from './billy/billyText';
 import type { WhiteboardBlock } from '../whiteboard/types';
 import { DEFAULT_SETTINGS, narrativeProfileContext } from '../whiteboard/documentSettings';
+import { billyChat } from './littleboyApi';
+import {
+  StaleLittleBoyResponseError,
+  runLittleBoyDocumentRequest,
+  sameDocumentIdentity,
+} from './littleboyRequestLifecycle';
+import {
+  captureDocumentIdentity,
+  flushPendingDocSaves,
+  setCurrentDocumentIdentity,
+} from '../../state/currentDocument';
 
 let passed = 0;
 const failures: string[] = [];
@@ -143,6 +154,79 @@ check('removes the tag even with attributes/whitespace', !stripActionBlocks('Tex
   // plain prose yields no cards
   check('parse: plain prose yields no actions', parseBillyMessage('Just prose.').actions.length === 0);
 }
+
+// 8. Long LittleBoy work is scoped to the captured durable identity. The same
+// SQLite id in another incarnation is a different document.
+const oldIncarnation = '0123456789abcdef0123456789abcdef';
+const newIncarnation = 'fedcba9876543210fedcba9876543210';
+setCurrentDocumentIdentity('4242', oldIncarnation);
+const oldIdentity = captureDocumentIdentity();
+check(
+  'identity equality includes incarnation',
+  sameDocumentIdentity(oldIdentity, { ...oldIdentity })
+    && !sameDocumentIdentity(oldIdentity, { documentId: '4242', incarnation: newIncarnation }),
+);
+
+// A handoff/close drain must wait for the long request, while an ordinary AI
+// transport failure remains an AI error rather than an unsaved-data failure.
+let releaseTrackedRequest!: (value: string) => void;
+const trackedRequest = runLittleBoyDocumentRequest(
+  oldIdentity,
+  () => new Promise<string>((resolve) => { releaseTrackedRequest = resolve; }),
+);
+let drainFinished = false;
+const draining = flushPendingDocSaves().then(() => { drainFinished = true; });
+await Promise.resolve();
+check('document drain waits for active LittleBoy request', !drainFinished);
+releaseTrackedRequest('complete');
+check('tracked LittleBoy result is preserved', (await trackedRequest) === 'complete');
+await draining;
+check('document drain finishes after LittleBoy settles', drainFinished);
+
+// Model a DELETE followed by SQLite numeric-id reuse while Billy's response is
+// in flight. The wire request stays pinned to the old token and the late result
+// is rejected before any hook can publish it into the replacement document.
+const originalFetch = globalThis.fetch;
+let requestedUrl = '';
+let requestedHeaders = new Headers();
+let resolveFetch!: (response: Response) => void;
+globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+  requestedUrl = String(input);
+  requestedHeaders = new Headers(init?.headers);
+  return new Promise<Response>((resolve) => { resolveFetch = resolve; });
+}) as typeof fetch;
+
+const lateBilly = billyChat(
+  'http://127.0.0.1:8777',
+  { message: 'Old document question' },
+  undefined,
+  oldIdentity,
+);
+setCurrentDocumentIdentity('4242', newIncarnation);
+resolveFetch(new Response(JSON.stringify({
+  ok: true,
+  conversation_id: 'old-conversation',
+  message: { role: 'assistant', content: 'late old answer' },
+  provider: 'test',
+}), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+let rejectedLateResponse = false;
+try {
+  await lateBilly;
+} catch (error) {
+  rejectedLateResponse = error instanceof StaleLittleBoyResponseError;
+} finally {
+  globalThis.fetch = originalFetch;
+}
+check(
+  'LittleBoy URL uses captured numeric id',
+  requestedUrl === 'http://127.0.0.1:8777/api/littleboy/billy/chat?doc=4242',
+);
+check(
+  'LittleBoy header uses captured incarnation',
+  requestedHeaders.get('X-LogosForge-Document-Incarnation') === oldIncarnation,
+);
+check('late response from deleted incarnation is discarded', rejectedLateResponse);
 
 // --- report ---
 console.log(`LittleBoy tests: ${passed} passed, ${failures.length} failed`);

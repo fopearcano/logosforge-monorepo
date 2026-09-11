@@ -15,9 +15,10 @@ import { app, BrowserWindow, Menu, type MenuItemConstructorOptions } from 'elect
 
 interface MenuDeps {
   getWindow: () => BrowserWindow | null;
+  reloadWindow: () => void | Promise<void>;
 }
 
-export function setAppMenu({ getWindow }: MenuDeps): void {
+export function setAppMenu({ getWindow, reloadWindow }: MenuDeps): void {
   const isMac = process.platform === 'darwin';
   const fileAction = (action: string) => {
     console.log(`[menu] ${action} clicked`);
@@ -138,7 +139,11 @@ export function setAppMenu({ getWindow }: MenuDeps): void {
       { type: 'separator' },
       { label: 'Toggle Theme', click: () => viewAction('toggleTheme') },
       { type: 'separator' },
-      { role: 'reload' },
+      {
+        label: 'Reload',
+        accelerator: 'CmdOrCtrl+R',
+        click: () => void reloadWindow(),
+      },
       { role: 'toggleDevTools' },
       { role: 'togglefullscreen' },
     ],

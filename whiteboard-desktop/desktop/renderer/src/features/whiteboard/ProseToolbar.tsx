@@ -23,13 +23,16 @@ const BLOCKS: { label: string; hint: string; level: Level }[] = [
 ];
 
 export function ProseToolbar({ editor, scale, onScale }: Props) {
-  const setBlock = (level: Level, close: () => void) => {
+  const setBlock = (
+    level: Level,
+    close: (options?: { restoreFocus?: boolean }) => void,
+  ) => {
     if (editor) {
       const chain = editor.chain().focus();
       if (level === 0) chain.setParagraph().run();
       else chain.setHeading({ level }).run();
     }
-    close();
+    close({ restoreFocus: false });
   };
   const isActive = (level: Level) =>
     !!editor && (level === 0 ? editor.isActive('paragraph') : editor.isActive('heading', { level }));
@@ -56,7 +59,13 @@ export function ProseToolbar({ editor, scale, onScale }: Props) {
       </Popover>
 
       <span className="wb-tool-group" aria-label="View scale">
-        <button type="button" className="wb-tool" title="Smaller (Ctrl/Cmd+-)" onClick={() => onScale('smaller')}>
+        <button
+          type="button"
+          className="wb-tool"
+          aria-label="Zoom out"
+          title="Smaller (Ctrl/Cmd+-)"
+          onClick={() => onScale('smaller')}
+        >
           −
         </button>
         <button
@@ -67,7 +76,13 @@ export function ProseToolbar({ editor, scale, onScale }: Props) {
         >
           {scaleToPct(scale)}%
         </button>
-        <button type="button" className="wb-tool" title="Bigger (Ctrl/Cmd+=)" onClick={() => onScale('bigger')}>
+        <button
+          type="button"
+          className="wb-tool"
+          aria-label="Zoom in"
+          title="Bigger (Ctrl/Cmd+=)"
+          onClick={() => onScale('bigger')}
+        >
           +
         </button>
       </span>

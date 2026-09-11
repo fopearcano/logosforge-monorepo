@@ -1,7 +1,8 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
-// Root is this `renderer/` directory (passed positionally: `vite renderer`).
+// `.mts` keeps Vite's config unambiguously ESM while Electron's main package
+// remains CommonJS. Root is this `renderer/` directory (`vite renderer`).
 export default defineConfig({
   plugins: [react()],
   // Relative base so the built index.html loads assets over file:// in Electron.
@@ -24,5 +25,30 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          groups: [
+            {
+              name: 'react-vendor',
+              test: /node_modules[\\/](?:react|react-dom|scheduler)[\\/]/,
+              priority: 30,
+            },
+            {
+              name: 'editor-vendor',
+              test: /node_modules[\\/](?:@tiptap|prosemirror-)/,
+              priority: 20,
+              includeDependenciesRecursively: true,
+            },
+            {
+              name: 'vendor',
+              test: /node_modules[\\/]/,
+              priority: 10,
+              minSize: 20_000,
+            },
+          ],
+        },
+      },
+    },
   },
 });

@@ -1,8 +1,9 @@
 /** Debounced PSYKE search backed by GET /api/psyke/search. */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
-import { searchPsyke } from './psykeApi';
+import { getCurrentDocId, waitForPendingDocWrites } from '../../state/currentDocument';
+import { searchPsykeForDocument } from './psykeApi';
 import type { PsykeEntry } from './types';
 
 const DEBOUNCE_MS = 250;
@@ -28,8 +29,10 @@ export function usePsykeSearch({ baseUrl, initialQuery = '' }: Options): Result 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const requestSeq = useRef(0);
 
   useEffect(() => {
+    const seq = (requestSeq.current += 1);
     const q = query.trim();
     if (!q) {
       setResults([]);
@@ -39,18 +42,38 @@ export function usePsykeSearch({ baseUrl, initialQuery = '' }: Options): Result 
     }
     const controller = new AbortController();
     const handle = setTimeout(() => {
-      setLoading(true);
-      setError(null);
-      searchPsyke(baseUrl, q, controller.signal)
-        .then((res) => {
+      const requestDocId = getCurrentDocId();
+      void (async () => {
+        setLoading(true);
+        setError(null);
+        try {
+          // A retrying mutation from a retiring view must settle before this GET
+          // takes its snapshot. Re-check identity on both sides of the request.
+          await waitForPendingDocWrites();
+          if (
+            controller.signal.aborted
+            || seq !== requestSeq.current
+            || requestDocId !== getCurrentDocId()
+          ) return;
+          const res = await searchPsykeForDocument(
+            baseUrl,
+            requestDocId,
+            q,
+            controller.signal,
+          );
+          if (
+            controller.signal.aborted
+            || seq !== requestSeq.current
+            || requestDocId !== getCurrentDocId()
+          ) return;
           setResults(res.results);
-          setLoading(false);
-        })
-        .catch((err: unknown) => {
-          if (controller.signal.aborted) return;
+        } catch (err: unknown) {
+          if (controller.signal.aborted || seq !== requestSeq.current) return;
           setError(err instanceof Error ? err.message : String(err));
-          setLoading(false);
-        });
+        } finally {
+          if (!controller.signal.aborted && seq === requestSeq.current) setLoading(false);
+        }
+      })();
     }, DEBOUNCE_MS);
     return () => {
       clearTimeout(handle);

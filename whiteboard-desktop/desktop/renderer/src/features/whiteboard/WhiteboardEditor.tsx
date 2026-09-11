@@ -30,29 +30,37 @@ import {
 } from '../screenplay/screenplayExtension';
 import { useScreenplayAutocomplete } from '../screenplay/useScreenplayAutocomplete';
 import type { WhiteboardBlock } from './types';
+import { BlockIdentity, newBlockId, normalizeBlockIds } from './blockIdentity';
 import { Bold, Italic, inlineFromText, textAndMarks } from './proseMarks';
 
 // --- block <-> ProseMirror document mapping --------------------------------
 
 export function blocksToDoc(blocks: WhiteboardBlock[]) {
-  const content = blocks.map((b) => {
+  const ids = normalizeBlockIds(blocks.map((block) => block.id));
+  const content = blocks.map((b, index) => {
     const inline = inlineFromText(b.text, b.marks);
     if (b.type === 'heading') {
-      return { type: 'heading', attrs: { level: b.level ?? 1 }, content: inline };
+      return { type: 'heading', attrs: { level: b.level ?? 1, lfId: ids[index] }, content: inline };
     }
-    return { type: 'paragraph', attrs: { sp: b.sp ?? null }, content: inline };
+    return { type: 'paragraph', attrs: { sp: b.sp ?? null, lfId: ids[index] }, content: inline };
   });
-  return { type: 'doc', content: content.length ? content : [{ type: 'paragraph' }] };
+  return {
+    type: 'doc',
+    content: content.length
+      ? content
+      : [{ type: 'paragraph', attrs: { lfId: newBlockId(), sp: null } }],
+  };
 }
 
 export function docToBlocks(json: any): WhiteboardBlock[] {
   const nodes: any[] = Array.isArray(json?.content) ? json.content : [];
-  return nodes.map((n, i) => {
+  return nodes.map((n) => {
     const { text, marks } = textAndMarks(n);
+    const id = typeof n.attrs?.lfId === 'string' && n.attrs.lfId.trim() ? n.attrs.lfId : newBlockId();
     if (n.type === 'heading') {
-      return { id: `b${i}`, type: 'heading', text, level: n.attrs?.level ?? 1, marks };
+      return { id, type: 'heading', text, level: n.attrs?.level ?? 1, marks };
     }
-    return { id: `b${i}`, type: 'paragraph', text, sp: n.attrs?.sp ?? null, marks };
+    return { id, type: 'paragraph', text, sp: n.attrs?.sp ?? null, marks };
   });
 }
 
@@ -62,7 +70,7 @@ interface Props {
   initialBlocks: WhiteboardBlock[];
   mode: string;
   onChangeBlocks: (blocks: WhiteboardBlock[]) => void;
-  onEditorReady?: (editor: Editor) => void;
+  onEditorReady?: (editor: Editor | null) => void;
   /** Reports the inferred screenplay element at the cursor (for the status line). */
   onElementChange?: (type: FountainType | null) => void;
   /** Optional Nerd Mode editor aids (line numbers / folding / syntax). */
@@ -115,8 +123,12 @@ export function WhiteboardEditor({
         bulletList: false,
         orderedList: false,
         listItem: false,
+        listKeymap: false,
         hardBreak: false,
+        link: false,
+        underline: false,
       }),
+      BlockIdentity,
       Bold,
       Italic,
       ScreenplayEditing.configure({ onAutocomplete }),
@@ -127,6 +139,10 @@ export function WhiteboardEditor({
     ],
     content: blocksToDoc(initialBlocks),
     autofocus: 'end',
+    // TipTap 3 no longer rerenders React consumers for every transaction by
+    // default. The toolbar reads editor.isActive(), so preserve the v2 behavior
+    // for selection-only transactions as well as document edits.
+    shouldRerenderOnTransaction: true,
     // React 18 + StrictMode double-invoke / HMR can leave a TipTap editor that
     // renders immediately in a blank or detached state. Defer the first render
     // to a layout effect so the surface always mounts populated.
@@ -179,6 +195,10 @@ export function WhiteboardEditor({
     setAcEditor(editor);
     onReadyRef.current?.(editor);
     onElementRef.current?.(currentFountainType(editor));
+    return () => {
+      setAcEditor(null);
+      onReadyRef.current?.(null);
+    };
   }, [editor, setAcEditor]);
 
   return (

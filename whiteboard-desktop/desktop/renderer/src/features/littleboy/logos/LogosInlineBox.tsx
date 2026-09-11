@@ -132,6 +132,7 @@ export function LogosInlineBox({ editor, context, baseUrl, onClose }: Props) {
           ref={instructionRef}
           className="logos-prompt"
           type="text"
+          aria-label="Optional instruction for Logos"
           placeholder="Optional instruction (then pick an action)…"
           value={instruction}
           onChange={(e) => setInstruction(e.target.value)}

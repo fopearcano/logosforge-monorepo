@@ -1,8 +1,14 @@
-/** React glue for Document Settings — load once, persist on change. */
+/** React glue for project-scoped Document Settings. */
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { DEFAULT_SETTINGS, loadSettings, saveSettings, type DocumentSettings } from './documentSettings';
+import {
+  DEFAULT_SETTINGS,
+  clearLegacySettingsMigration,
+  legacySettingsForDocument,
+  normalizeDocumentSettings,
+  type DocumentSettings,
+} from './documentSettings';
 
 export interface DocumentSettingsApi {
   settings: DocumentSettings;
@@ -11,30 +17,54 @@ export interface DocumentSettingsApi {
   replace: (partial: Partial<DocumentSettings>) => void;
 }
 
-export function useDocumentSettings(): DocumentSettingsApi {
-  const [settings, setSettings] = useState<DocumentSettings>(loadSettings);
+interface Options {
+  documentId: string | null;
+  initialSettings?: unknown;
+  onChange: (settings: DocumentSettings) => void;
+}
+
+export function useDocumentSettings({
+  documentId,
+  initialSettings,
+  onChange,
+}: Options): DocumentSettingsApi {
+  const [settings, setSettings] = useState<DocumentSettings>(DEFAULT_SETTINGS);
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+  const initialRef = useRef(initialSettings);
+  initialRef.current = initialSettings;
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  useEffect(() => {
+    if (!documentId) return;
+    const raw = initialRef.current;
+    const hasPersisted = !!raw && typeof raw === 'object' &&
+      !Array.isArray(raw) && Object.keys(raw as Record<string, unknown>).length > 0;
+    const legacy = hasPersisted ? null : legacySettingsForDocument(documentId);
+    const next = normalizeDocumentSettings(hasPersisted ? raw : legacy);
+    settingsRef.current = next;
+    setSettings(next);
+    if (hasPersisted) clearLegacySettingsMigration(documentId);
+    else if (legacy) onChangeRef.current(next);
+  }, [documentId]);
 
   const update = useCallback(
     <K extends keyof DocumentSettings>(key: K, value: DocumentSettings[K]) => {
-      setSettings((prev) => {
-        const next = { ...prev, [key]: value };
-        saveSettings(next);
-        return next;
-      });
+      const next = normalizeDocumentSettings({ ...settingsRef.current, [key]: value });
+      settingsRef.current = next;
+      setSettings(next);
+      onChangeRef.current(next);
     },
     [],
   );
 
   const replace = useCallback((partial: Partial<DocumentSettings>) => {
-    setSettings(() => {
-      // Start from defaults so an imported document fully defines its settings;
-      // recognized keys override, anything unexpected in the file is inert (only
-      // known keys are ever read, e.g. by surfaceDataAttrs). JSON has no
-      // `undefined`, so a missing key simply keeps the default.
-      const next: DocumentSettings = { ...DEFAULT_SETTINGS, ...partial };
-      saveSettings(next);
-      return next;
-    });
+    // Start from defaults so an imported document fully defines its settings;
+    // unknown or malformed keys are discarded by normalization.
+    const next = normalizeDocumentSettings(partial);
+    settingsRef.current = next;
+    setSettings(next);
+    onChangeRef.current(next);
   }, []);
 
   return { settings, update, replace };

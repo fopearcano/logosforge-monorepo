@@ -6,6 +6,8 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 
+import { ModalPortal } from '../../components/ModalPortal';
+import { useModalDialog } from '../../components/useModalDialog';
 import { TYPE_LABELS, type OutlineItemType } from './outlineModel';
 import {
   OUTLINE_TEMPLATES,
@@ -39,30 +41,17 @@ export function OutlineTemplatesDialog({ open, hasExisting, onApply, onClose }: 
   const [selectedId, setSelectedId] = useState<string>(OUTLINE_TEMPLATES[0].id);
   const [replace, setReplace] = useState(false);
   const firstRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
 
-  // Reset the picks + focus ONLY on an open transition (deps: [open]). If this
-  // shared an effect with the Escape listener (which must depend on the unstable
-  // inline `onClose`), any parent re-render while the dialog is open — e.g. a
-  // debounced autosave settling ~600ms after an edit — would silently reset the
-  // chosen template and uncheck "Replace", risking the wrong template/mode.
+  useModalDialog({ open, dialogRef, initialFocusRef: firstRef, onClose });
+
+  // Reset the picks ONLY on an open transition. Parent rerenders (for example
+  // an autosave settling) must not reset the user's chosen template or mode.
   useEffect(() => {
     if (!open) return;
     setReplace(false);
     setSelectedId(OUTLINE_TEMPLATES[0].id);
-    firstRef.current?.focus();
   }, [open]);
-
-  useEffect(() => {
-    if (!open) return undefined;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
 
   const selected = useMemo(
     () => OUTLINE_TEMPLATES.find((t) => t.id === selectedId) ?? OUTLINE_TEMPLATES[0],
@@ -80,13 +69,22 @@ export function OutlineTemplatesDialog({ open, hasExisting, onApply, onClose }: 
       : 'Create outline';
 
   return (
-    <div
-      className="cf-overlay"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div className="otpl-dialog" role="dialog" aria-modal="true" aria-labelledby="otpl-title">
+    <ModalPortal>
+      <div
+        data-wb-modal-layer
+        className="cf-overlay"
+        onClick={(event) => {
+          if (event.target === event.currentTarget) onClose();
+        }}
+      >
+      <div
+        ref={dialogRef}
+        className="otpl-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="otpl-title"
+        tabIndex={-1}
+      >
         <div className="settings-head">
           <h2 id="otpl-title" className="settings-title">
             Structure templates
@@ -157,6 +155,7 @@ export function OutlineTemplatesDialog({ open, hasExisting, onApply, onClose }: 
           </div>
         </div>
       </div>
-    </div>
+      </div>
+    </ModalPortal>
   );
 }

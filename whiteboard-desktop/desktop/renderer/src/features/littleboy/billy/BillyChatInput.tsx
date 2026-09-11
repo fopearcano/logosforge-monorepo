@@ -29,6 +29,7 @@ export function BillyChatInput({ onSend, disabled }: Props) {
     <div className="billy-input-row">
       <textarea
         className="billy-input"
+        aria-label="Message Billy"
         rows={2}
         placeholder="Message Billy…  (Enter to send · Shift+Enter for a new line)"
         value={text}

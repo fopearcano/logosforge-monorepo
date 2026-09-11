@@ -91,7 +91,13 @@ export function ScreenplayToolbar({
       </Popover>
 
       <span className="wb-tool-group" aria-label="View scale">
-        <button type="button" className="wb-tool" title="Smaller (Ctrl/Cmd+-)" onClick={() => onScale('smaller')}>
+        <button
+          type="button"
+          className="wb-tool"
+          aria-label="Zoom out"
+          title="Smaller (Ctrl/Cmd+-)"
+          onClick={() => onScale('smaller')}
+        >
           −
         </button>
         <button
@@ -102,7 +108,13 @@ export function ScreenplayToolbar({
         >
           {scaleToPct(scale)}%
         </button>
-        <button type="button" className="wb-tool" title="Bigger (Ctrl/Cmd+=)" onClick={() => onScale('bigger')}>
+        <button
+          type="button"
+          className="wb-tool"
+          aria-label="Zoom in"
+          title="Bigger (Ctrl/Cmd+=)"
+          onClick={() => onScale('bigger')}
+        >
           +
         </button>
       </span>
@@ -116,7 +128,7 @@ export function ScreenplayToolbar({
               disabled={!editor || preview}
               onClick={() => {
                 if (editor) cycleSelectionCase(editor);
-                close();
+                close({ restoreFocus: false });
               }}
             >
               Capitalization (cycle)
@@ -127,7 +139,7 @@ export function ScreenplayToolbar({
               disabled={!editor || preview}
               onClick={() => {
                 if (editor) toggleCenterLine(editor);
-                close();
+                close({ restoreFocus: false });
               }}
             >
               Center line (Ctrl/Cmd+\)

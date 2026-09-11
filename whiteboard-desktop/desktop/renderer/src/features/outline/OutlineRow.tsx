@@ -285,6 +285,7 @@ export function OutlineRow({
           <input
             ref={inputRef}
             className="outline-title-input"
+            aria-label="Outline item title"
             value={node.title}
             placeholder="Untitled"
             spellCheck={false}
@@ -347,7 +348,10 @@ export function OutlineRow({
                       <button
                         type="button"
                         className="wb-menu-item"
-                        onClick={() => { if (node.link) onNavigateBlock?.(node.link.blockIndex); close(); }}
+                        onClick={() => {
+                          if (node.link) onNavigateBlock?.(node.link.blockIndex);
+                          close({ restoreFocus: false });
+                        }}
                       >
                         Go to linked passage
                       </button>
@@ -367,16 +371,25 @@ export function OutlineRow({
                       title={canLink
                         ? 'Bind this item to where your cursor is in the manuscript'
                         : 'Put your cursor on a manuscript line that has text'}
-                      onClick={() => { onLinkToCursor?.(node.id); close(); }}
+                      onClick={() => {
+                        onLinkToCursor?.(node.id);
+                        close();
+                      }}
                     >
                       Link to cursor position
                     </button>
                   )}
                   <div className="wb-menu-sep" role="separator" />
-                  <button type="button" className="wb-menu-item" onClick={() => { store.addChild(node.id); close(); }}>
+                  <button type="button" className="wb-menu-item" onClick={() => {
+                    store.addChild(node.id);
+                    close({ restoreFocus: false });
+                  }}>
                     Add child
                   </button>
-                  <button type="button" className="wb-menu-item" onClick={() => { store.selectOnly(node.id); close(); }}>
+                  <button type="button" className="wb-menu-item" onClick={() => {
+                    store.selectOnly(node.id);
+                    close({ restoreFocus: false });
+                  }}>
                     Rename
                   </button>
                   <button
@@ -387,7 +400,10 @@ export function OutlineRow({
                     {detailsOpen ? 'Hide details' : 'Edit details…'}
                   </button>
                   {revealable && (
-                    <button type="button" className="wb-menu-item" onClick={() => { onReveal!(node); close(); }}>
+                    <button type="button" className="wb-menu-item" onClick={() => {
+                      onReveal!(node);
+                      close({ restoreFocus: false });
+                    }}>
                       Reveal in editor
                     </button>
                   )}
@@ -400,7 +416,14 @@ export function OutlineRow({
                   <button type="button" className="wb-menu-item" onClick={() => { store.duplicate(node.id); close(); }}>
                     Duplicate
                   </button>
-                  <button type="button" className="wb-menu-item is-danger" onClick={() => { onDelete(node.id); close(); }}>
+                  <button
+                    type="button"
+                    className="wb-menu-item is-danger"
+                    onClick={() => {
+                      close({ restoreFocus: hasChildren });
+                      onDelete(node.id);
+                    }}
+                  >
                     Delete
                   </button>
                 </div>
@@ -488,6 +511,7 @@ export function OutlineRow({
               ))}
               <input
                 className="outline-tag-input"
+                aria-label="Add tag"
                 placeholder="add tag…"
                 value={tagDraft}
                 onChange={(e) => setTagDraft(e.target.value)}

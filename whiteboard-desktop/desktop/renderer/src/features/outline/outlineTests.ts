@@ -647,6 +647,53 @@ check('dropZone zero height -> child', dropZone(0, 0) === 'child');
   check('activeLinkedNode: same-block tie → first in items order', activeLinkedNodeId(tie, 12) === firstAtBlock10);
 }
 
+// 30. stable manuscript ids — true hard links survive blank blocks, rewrites,
+// and duplicate text while legacy index+quote links upgrade in place.
+{
+  let stable: OutlineNode[] = insertRoot([], createNode('S', 'scene', null, NOW));
+  stable = setLink(stable, 'S', {
+    blockIndex: 1,
+    quote: '',
+    blockId: 'blank-target',
+  }, NOW);
+  const movedBlank = reanchorLinks(
+    stable,
+    ['inserted', 'other', ''],
+    NOW,
+    ['new-block', 'other-block', 'blank-target'],
+  );
+  check('stable id moves an empty-block link', getNode(movedBlank, 'S')!.link!.blockIndex === 2);
+
+  let rewritten: OutlineNode[] = insertRoot([], createNode('R', 'scene', null, NOW));
+  rewritten = setLink(rewritten, 'R', {
+    blockIndex: 3,
+    quote: 'old wording',
+    blockId: 'scene-body',
+  }, NOW);
+  const rewrittenResult = reanchorLinks(
+    rewritten,
+    ['x', 'new wording'],
+    NOW,
+    ['other', 'scene-body'],
+  );
+  check('stable id survives a complete text rewrite', getNode(rewrittenResult, 'R')!.link!.blockIndex === 1);
+  check('stable id refreshes the quote fallback', getNode(rewrittenResult, 'R')!.link!.quote === 'new wording');
+  check(
+    'stable no-op retains array identity',
+    reanchorLinks(rewrittenResult, ['x', 'new wording'], NOW, ['other', 'scene-body']) === rewrittenResult,
+  );
+
+  let legacy: OutlineNode[] = insertRoot([], createNode('L', 'scene', null, NOW));
+  legacy = setLink(legacy, 'L', { blockIndex: 1, quote: 'legacy text' }, NOW);
+  const upgraded = reanchorLinks(
+    legacy,
+    ['x', 'legacy text'],
+    NOW,
+    ['x-id', 'legacy-id'],
+  );
+  check('legacy link adopts a stable id without moving', getNode(upgraded, 'L')!.link!.blockId === 'legacy-id');
+}
+
 // --- report ---
 console.log(`Outline model tests: ${passed} passed, ${failures.length} failed`);
 for (const f of failures) console.log('  FAIL: ' + f);

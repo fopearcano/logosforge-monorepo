@@ -13,6 +13,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { Popover } from '../../components/Popover';
+import { RenderErrorBoundary } from '../../components/RenderErrorBoundary';
+import { useCurrentDocId } from '../../state/currentDocument';
 import { normalizeOutlineTitle } from './outlineColorStore';
 import { OutlineOutliner } from './OutlineOutliner';
 import { OutlineTemplatesDialog } from './OutlineTemplatesDialog';
@@ -80,6 +82,8 @@ interface Props {
   caretBlockIndex?: number | null;
   /** The manuscript block texts (for binding a link's quote + re-anchoring). */
   blockTexts?: string[];
+  /** Stable manuscript block ids; index+quote remain as compatibility fallbacks. */
+  blockIds?: string[];
   /** Which document `blockTexts` belong to — re-anchoring is skipped on a mismatch. */
   blockTextsDocId?: string | null;
   /** Scroll the editor to a manuscript block (a linked node → its passage). */
@@ -102,11 +106,13 @@ export function OutlinePanel({
   mode,
   caretBlockIndex = null,
   blockTexts,
+  blockIds,
   blockTextsDocId = null,
   onNavigateBlock,
   onActivePathChange,
 }: Props) {
   const [view, setView] = useState<View>(loadView);
+  const currentDocId = useCurrentDocId();
   const store = useOutline({ baseUrl, ready, mode });
 
   // A selected outline row is an editing focus, not a permanent app state.
@@ -134,6 +140,54 @@ export function OutlinePanel({
     }
   };
 
+  return (
+    <RenderErrorBoundary
+      name="Outline panel"
+      resetKey={`${currentDocId || 'none'}:${mode}`}
+      className="wb-outline-boundary"
+    >
+      <OutlinePanelContent
+        view={view}
+        selectView={selectView}
+        store={store}
+        derivedItems={derivedItems}
+        onNavigate={onNavigate}
+        caretBlockIndex={caretBlockIndex}
+        blockTexts={blockTexts}
+        blockIds={blockIds}
+        blockTextsDocId={blockTextsDocId}
+        onNavigateBlock={onNavigateBlock}
+        onActivePathChange={onActivePathChange}
+      />
+    </RenderErrorBoundary>
+  );
+}
+
+function OutlinePanelContent({
+  view,
+  selectView,
+  store,
+  derivedItems,
+  onNavigate,
+  caretBlockIndex,
+  blockTexts,
+  blockIds,
+  blockTextsDocId,
+  onNavigateBlock,
+  onActivePathChange,
+}: {
+  view: View;
+  selectView: (next: View) => void;
+  store: ReturnType<typeof useOutline>;
+  derivedItems: OutlineItem[];
+  onNavigate?: (item: OutlineItem) => void;
+  caretBlockIndex: number | null;
+  blockTexts?: string[];
+  blockIds?: string[];
+  blockTextsDocId: string | null;
+  onNavigateBlock?: (blockIndex: number) => void;
+  onActivePathChange?: (path: string[]) => void;
+}) {
   return (
     <aside className="outline-panel" aria-label="Outline">
       <div className="outline-header">
@@ -166,6 +220,7 @@ export function OutlinePanel({
           onNavigate={onNavigate}
           caretBlockIndex={caretBlockIndex}
           blockTexts={blockTexts}
+          blockIds={blockIds}
           blockTextsDocId={blockTextsDocId}
           onNavigateBlock={onNavigateBlock}
           onActivePathChange={onActivePathChange}
@@ -183,6 +238,7 @@ function ManualView({
   onNavigate,
   caretBlockIndex,
   blockTexts,
+  blockIds,
   blockTextsDocId,
   onNavigateBlock,
   onActivePathChange,
@@ -192,6 +248,7 @@ function ManualView({
   onNavigate?: (item: OutlineItem) => void;
   caretBlockIndex: number | null;
   blockTexts?: string[];
+  blockIds?: string[];
   blockTextsDocId?: string | null;
   onNavigateBlock?: (blockIndex: number) => void;
   onActivePathChange?: (path: string[]) => void;
@@ -199,6 +256,7 @@ function ManualView({
   const saveLabel = SAVE_LABEL[store.saveState] ?? '';
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [deletePrompt, setDeletePrompt] = useState<DeletePrompt | null>(null);
+  const addButtonRef = useRef<HTMLButtonElement>(null);
   const filterOn = isFilterActive(store.filter);
   const multiCount = store.selectedIds.length;
 
@@ -211,8 +269,8 @@ function ManualView({
   // `storeItems` is a dep so a late outline load re-triggers the anchor pass.
   const storeItems = store.items;
   useEffect(() => {
-    if (blockTexts) reanchor(blockTexts, blockTextsDocId ?? null);
-  }, [blockTexts, blockTextsDocId, storeItems, reanchor]);
+    if (blockTexts) reanchor(blockTexts, blockTextsDocId ?? null, blockIds);
+  }, [blockTexts, blockIds, blockTextsDocId, storeItems, reanchor]);
 
   // The linked node the caret sits in, and its ancestor titles (the breadcrumb).
   const activeLinkId = useMemo(
@@ -237,14 +295,14 @@ function ManualView({
     onActivePathChangeRef.current?.(activePath);
   }, [activePath]);
 
-  // A link is anchored by the caret block's TEXT (blocks have no stable id), so an
-  // empty line can never be re-anchored after edits — it would silently drift.
-  // Only allow linking when the caret sits on a block that actually has text.
   const caretText = caretBlockIndex != null ? blockTexts?.[caretBlockIndex] ?? '' : '';
-  const canLink = caretBlockIndex != null && caretText.trim().length > 0;
+  const caretBlockId = caretBlockIndex != null ? blockIds?.[caretBlockIndex] ?? '' : '';
+  // Stable ids make empty manuscript blocks valid hard-link targets too. Keep
+  // the text-only fallback for a transient legacy editor snapshot.
+  const canLink = caretBlockIndex != null && (!!caretBlockId || caretText.trim().length > 0);
   const linkToCursor = (id: string) => {
     if (!canLink || caretBlockIndex == null) return;
-    store.linkToBlock(id, caretBlockIndex, caretText);
+    store.linkToBlock(id, caretBlockIndex, caretText, caretBlockId || undefined);
   };
 
   // Primary "+ Add": another item at the current level (sibling of the selection),
@@ -274,6 +332,10 @@ function ManualView({
     if (!node) return;
     if (!hasChildren(store.items, id)) {
       store.remove(id);
+      // The action menu and its trigger disappear with the row. Move focus to a
+      // stable control immediately; when a neighbour is selected its title-input
+      // effect takes over on the next render.
+      addButtonRef.current?.focus({ preventScroll: true });
       return;
     }
     const n = descendantIds(store.items, id).length;
@@ -337,7 +399,13 @@ function ManualView({
     <>
       <div className="outline-toolbar">
         <div className="outline-add-split" role="group" aria-label="Add outline item">
-          <button type="button" className="outline-tool outline-add-main" onClick={smartAdd} title="Add an item at the current level">
+          <button
+            ref={addButtonRef}
+            type="button"
+            className="outline-tool outline-add-main"
+            onClick={smartAdd}
+            title="Add an item at the current level"
+          >
             + Add
           </button>
           <Popover
@@ -356,7 +424,7 @@ function ManualView({
                     className="wb-menu-item"
                     onClick={() => {
                       store.addTyped(t);
-                      close();
+                      close({ restoreFocus: false });
                     }}
                   >
                     {TYPE_LABELS[t]}
@@ -368,7 +436,7 @@ function ManualView({
                   className="wb-menu-item"
                   onClick={() => {
                     setTemplatesOpen(true);
-                    close();
+                    close({ restoreFocus: true });
                   }}
                 >
                   Structure templates…
@@ -392,6 +460,7 @@ function ManualView({
         <input
           className="outline-search"
           type="search"
+          aria-label="Search outline"
           placeholder="Search title, #tag…"
           value={store.filter.query}
           onChange={(e) => store.setFilter({ query: e.target.value })}
@@ -522,6 +591,7 @@ function ManualView({
         title={deletePrompt?.title ?? ''}
         message={deletePrompt?.message ?? ''}
         confirmLabel="Delete"
+        returnFocusFallbackRef={addButtonRef}
         onConfirm={() => deletePrompt?.onConfirm()}
         onCancel={() => setDeletePrompt(null)}
       />

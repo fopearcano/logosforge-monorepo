@@ -8,6 +8,9 @@ import type {
   SaveChoice,
   SaveResult,
 } from './file-manager';
+import type {
+  PendingDocumentWrite,
+} from './pending-document-persistence';
 
 /**
  * IMPORTANT: every method is exposed at the TOP LEVEL (flat), not nested under a
@@ -19,14 +22,23 @@ import type {
 export interface LogosForgeApi {
   getBackendStatus(): Promise<BackendStatus>;
   onBackendStatus(cb: (status: BackendStatus) => void): () => void;
+  persistPendingDocument(write: PendingDocumentWrite): Promise<void>;
+  persistPendingDocumentOnUnload(write: PendingDocumentWrite): boolean;
+  waitForPendingDocumentPersistence(): Promise<void>;
+  deleteDocumentWithPersistenceFence(documentId: string, incarnation: string): Promise<void>;
 
   fileOpen(): Promise<OpenResult>;
   fileSaveAs(content: string, suggestedName: string): Promise<SaveResult>;
   fileSaveToPath(filePath: string, content: string): Promise<SaveResult>;
   fileConfirmSaveChanges(reason?: string): Promise<SaveChoice>;
   fileSetDirty(dirty: boolean): void;
-  fileOnSaveBeforeClose(cb: () => void): () => void;
-  fileSendCloseResult(ok: boolean): void;
+  fileSetCloseHandshakeReady(ready: boolean): void;
+  fileSetExternalSaveHandshakeReady(ready: boolean): void;
+  fileOnSaveBeforeClose(cb: (requestId: number) => void): () => void;
+  fileSendCloseResult(requestId: number, ok: boolean): void;
+  fileOnFlushAutosaveBeforeClose(cb: (requestId: number) => void): () => void;
+  fileSendAutosaveFlushResult(requestId: number, ok: boolean, fileDirty: boolean): void;
+  fileOnCloseCancelled(cb: (requestId: number) => void): () => void;
 
   importOpen(filters: DialogFilter[]): Promise<OpenResult>;
   importConfirmMode(): Promise<ImportMode>;
@@ -45,6 +57,17 @@ function subscribe<T>(channel: string, cb: (payload: T) => void): () => void {
 const api: LogosForgeApi = {
   getBackendStatus: () => ipcRenderer.invoke('backend:get-status'),
   onBackendStatus: (cb) => subscribe<BackendStatus>('backend:status', cb),
+  persistPendingDocument: (write) => ipcRenderer.invoke('document:persist', write),
+  persistPendingDocumentOnUnload: (write) => {
+    try {
+      return ipcRenderer.sendSync('document:persist-on-unload', write) === true;
+    } catch {
+      return false;
+    }
+  },
+  waitForPendingDocumentPersistence: () => ipcRenderer.invoke('document:drain-persistence'),
+  deleteDocumentWithPersistenceFence: (documentId, incarnation) =>
+    ipcRenderer.invoke('document:delete-with-fence', { documentId, incarnation }),
 
   fileOpen: () => ipcRenderer.invoke('file:open-dialog'),
   fileSaveAs: (content, suggestedName) =>
@@ -52,8 +75,17 @@ const api: LogosForgeApi = {
   fileSaveToPath: (filePath, content) => ipcRenderer.invoke('file:save-to-path', { filePath, content }),
   fileConfirmSaveChanges: (reason) => ipcRenderer.invoke('file:confirm-save-changes', { reason }),
   fileSetDirty: (dirty) => ipcRenderer.send('file:set-dirty', dirty),
-  fileOnSaveBeforeClose: (cb) => subscribe<void>('app:save-before-close', () => cb()),
-  fileSendCloseResult: (ok) => ipcRenderer.send('app:close-result', ok),
+  fileSetCloseHandshakeReady: (ready) => ipcRenderer.send('app:set-close-handshake-ready', ready),
+  fileSetExternalSaveHandshakeReady: (ready) => {
+    ipcRenderer.send('app:set-external-save-handshake-ready', ready);
+  },
+  fileOnSaveBeforeClose: (cb) => subscribe<number>('app:save-before-close', cb),
+  fileSendCloseResult: (requestId, ok) => ipcRenderer.send('app:close-result', { requestId, ok }),
+  fileOnFlushAutosaveBeforeClose: (cb) => subscribe<number>('app:flush-autosave-before-close', cb),
+  fileSendAutosaveFlushResult: (requestId, ok, fileDirty) => {
+    ipcRenderer.send('app:autosave-flush-result', { requestId, ok, fileDirty });
+  },
+  fileOnCloseCancelled: (cb) => subscribe<number>('app:close-cancelled', cb),
 
   importOpen: (filters) => ipcRenderer.invoke('import:open-dialog', { filters }),
   importConfirmMode: () => ipcRenderer.invoke('import:confirm-mode'),

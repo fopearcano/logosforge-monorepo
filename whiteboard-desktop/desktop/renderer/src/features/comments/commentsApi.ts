@@ -9,17 +9,31 @@
  * Every call is scoped to the active document via `withDoc` (?doc=<id>).
  */
 
-import { withDoc } from '../../state/currentDocument';
+import {
+  captureDocumentIdentity,
+  captureDocumentIncarnation,
+  type CapturedDocumentIdentity,
+  withDoc,
+} from '../../state/currentDocument';
+import {
+  backendFetch,
+  withDocumentIncarnation,
+  withExpectedDocumentIncarnation,
+} from '../../api/backendAuth';
+import { responseError } from '../../api/responseError';
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:8777';
 
 export interface CommentAnchor {
   block_index: number;
+  /** Stable Whiteboard block identity (new anchors); index remains fallback. */
+  block_id?: string;
   from_offset: number;
   to_offset: number;
   /** Last block of a multi-block selection (defaults to block_index). When set,
    * from_offset is in block_index and to_offset is in end_block_index. */
   end_block_index?: number;
+  end_block_id?: string;
   /** Up to 32 chars before/after the quote — used to disambiguate repeated
    * quotes and to re-anchor through in-span edits. Optional (legacy comments). */
   prefix?: string;
@@ -51,7 +65,7 @@ export interface CommentDraft {
 }
 
 async function asJson<T>(res: Response): Promise<T> {
-  if (!res.ok) throw new Error(`Request failed (HTTP ${res.status})`);
+  if (!res.ok) throw await responseError(res, 'Comment request failed');
   return (await res.json()) as T;
 }
 
@@ -59,8 +73,28 @@ export async function getComments(
   baseUrl: string = DEFAULT_BASE_URL,
   signal?: AbortSignal,
 ): Promise<Comment[]> {
+  const identity = captureDocumentIdentity();
   const data = await asJson<{ comments?: Comment[] }>(
-    await fetch(withDoc(`${baseUrl}/api/comments`), { signal }),
+    await backendFetch(withDoc(`${baseUrl}/api/comments`), {
+      headers: withExpectedDocumentIncarnation(identity.incarnation),
+      signal,
+    }),
+  );
+  return Array.isArray(data.comments) ? data.comments : [];
+}
+
+/** Load a captured document without consulting the active-id singleton. */
+export async function getCommentsForDocument(
+  baseUrl: string,
+  documentId: string,
+  signal?: AbortSignal,
+  incarnation: string = captureDocumentIncarnation(documentId),
+): Promise<Comment[]> {
+  const data = await asJson<{ comments?: Comment[] }>(
+    await backendFetch(
+      `${baseUrl}/api/comments?doc=${encodeURIComponent(documentId)}`,
+      { headers: withExpectedDocumentIncarnation(incarnation), signal },
+    ),
   );
   return Array.isArray(data.comments) ? data.comments : [];
 }
@@ -69,14 +103,18 @@ export async function createComment(
   draft: CommentDraft,
   baseUrl: string = DEFAULT_BASE_URL,
   signal?: AbortSignal,
+  identity: CapturedDocumentIdentity = captureDocumentIdentity(),
 ): Promise<Comment> {
   return asJson<Comment>(
-    await fetch(withDoc(`${baseUrl}/api/comments`), {
+    await backendFetch(
+      `${baseUrl}/api/comments?doc=${encodeURIComponent(identity.documentId)}`,
+      {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: withDocumentIncarnation(identity.incarnation, { 'Content-Type': 'application/json' }),
       body: JSON.stringify(draft),
       signal,
-    }),
+      },
+    ),
   );
 }
 
@@ -85,14 +123,18 @@ export async function updateComment(
   patch: { body?: string; resolved?: boolean; anchor?: CommentAnchor },
   baseUrl: string = DEFAULT_BASE_URL,
   signal?: AbortSignal,
+  identity: CapturedDocumentIdentity = captureDocumentIdentity(),
 ): Promise<Comment> {
   return asJson<Comment>(
-    await fetch(withDoc(`${baseUrl}/api/comments/${encodeURIComponent(id)}`), {
+    await backendFetch(
+      `${baseUrl}/api/comments/${encodeURIComponent(id)}?doc=${encodeURIComponent(identity.documentId)}`,
+      {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: withDocumentIncarnation(identity.incarnation, { 'Content-Type': 'application/json' }),
       body: JSON.stringify(patch),
       signal,
-    }),
+      },
+    ),
   );
 }
 
@@ -100,12 +142,17 @@ export async function deleteComment(
   id: string,
   baseUrl: string = DEFAULT_BASE_URL,
   signal?: AbortSignal,
+  identity: CapturedDocumentIdentity = captureDocumentIdentity(),
 ): Promise<void> {
-  const res = await fetch(withDoc(`${baseUrl}/api/comments/${encodeURIComponent(id)}`), {
-    method: 'DELETE',
-    signal,
-  });
-  if (!res.ok) throw new Error(`Delete failed (HTTP ${res.status})`);
+  const res = await backendFetch(
+    `${baseUrl}/api/comments/${encodeURIComponent(id)}?doc=${encodeURIComponent(identity.documentId)}`,
+    {
+      method: 'DELETE',
+      headers: withDocumentIncarnation(identity.incarnation),
+      signal,
+    },
+  );
+  if (!res.ok) throw await responseError(res, 'Could not delete the comment');
 }
 
 export async function addReply(
@@ -113,14 +160,19 @@ export async function addReply(
   body: string,
   baseUrl: string = DEFAULT_BASE_URL,
   signal?: AbortSignal,
+  clientId?: string,
+  identity: CapturedDocumentIdentity = captureDocumentIdentity(),
 ): Promise<Comment> {
   return asJson<Comment>(
-    await fetch(withDoc(`${baseUrl}/api/comments/${encodeURIComponent(commentId)}/replies`), {
+    await backendFetch(
+      `${baseUrl}/api/comments/${encodeURIComponent(commentId)}/replies?doc=${encodeURIComponent(identity.documentId)}`,
+      {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ body }),
+      headers: withDocumentIncarnation(identity.incarnation, { 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ body, ...(clientId ? { client_id: clientId } : {}) }),
       signal,
-    }),
+      },
+    ),
   );
 }
 
@@ -129,13 +181,17 @@ export async function deleteReply(
   replyId: string,
   baseUrl: string = DEFAULT_BASE_URL,
   signal?: AbortSignal,
+  identity: CapturedDocumentIdentity = captureDocumentIdentity(),
 ): Promise<Comment> {
   return asJson<Comment>(
-    await fetch(
-      withDoc(
-        `${baseUrl}/api/comments/${encodeURIComponent(commentId)}/replies/${encodeURIComponent(replyId)}`,
-      ),
-      { method: 'DELETE', signal },
+    await backendFetch(
+      `${baseUrl}/api/comments/${encodeURIComponent(commentId)}/replies/${encodeURIComponent(replyId)}`
+        + `?doc=${encodeURIComponent(identity.documentId)}`,
+      {
+        method: 'DELETE',
+        headers: withDocumentIncarnation(identity.incarnation),
+        signal,
+      },
     ),
   );
 }

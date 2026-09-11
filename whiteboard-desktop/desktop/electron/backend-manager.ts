@@ -2,7 +2,7 @@
  * Backend manager.
  *
  * Responsibilities (per milestone):
- *  - connect to an already-running backend, or start one in development;
+ *  - reuse only a backend carrying this manager's nonce, otherwise start one;
  *  - wait for GET /health;
  *  - report status to the renderer (via the main process);
  *  - handle startup failure gracefully;
@@ -10,9 +10,13 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as http from 'node:http';
 import * as path from 'node:path';
+
+import { selectAvailablePort } from './port-selection';
+import { isExpectedBackendHealth } from './service-identity';
 
 export type BackendState = 'connecting' | 'connected' | 'error';
 
@@ -23,12 +27,16 @@ export interface BackendStatus {
   service?: string;
   version?: string;
   apiVersion?: string;
+  /** Per-process secret used only by renderer → local wrapper requests. */
+  authToken?: string;
   detail?: string;
 }
 
 const HOST = process.env.LOGOSFORGE_HOST ?? '127.0.0.1';
-const PORT = Number(process.env.LOGOSFORGE_PORT ?? 8777);
-const BASE_URL = `http://${HOST}:${PORT}`;
+const RAW_PORT = process.env.LOGOSFORGE_PORT;
+const INITIAL_PORT = Number(RAW_PORT ?? 8777);
+const PORT_WAS_EXPLICIT = typeof RAW_PORT === 'string' && RAW_PORT.trim().length > 0;
+const HEALTH_RESPONSE_MAX_BYTES = 64 * 1024;
 
 // In a packaged app the PyInstaller-frozen backend ships under resources/backend.
 const FROZEN_EXE =
@@ -40,9 +48,12 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function httpGetJson(url: string, timeoutMs = 1500): Promise<any> {
+function httpGetJson(url: string, timeoutMs = 1500, authToken = ''): Promise<any> {
   return new Promise((resolve, reject) => {
-    const req = http.get(url, (res) => {
+    const options: http.RequestOptions = authToken
+      ? { headers: { Authorization: `Bearer ${authToken}` } }
+      : {};
+    const req = http.get(url, options, (res) => {
       if (res.statusCode !== 200) {
         res.resume();
         reject(new Error(`HTTP ${res.statusCode}`));
@@ -52,7 +63,11 @@ function httpGetJson(url: string, timeoutMs = 1500): Promise<any> {
       res.setEncoding('utf8');
       res.on('data', (chunk) => {
         body += chunk;
+        if (body.length > HEALTH_RESPONSE_MAX_BYTES) {
+          res.destroy(new Error('health response too large'));
+        }
       });
+      res.on('error', reject);
       res.on('end', () => {
         try {
           resolve(JSON.parse(body));
@@ -79,10 +94,15 @@ export class BackendManager {
   private child: ChildProcess | null = null;
   private managed = false;
   private spawnFailed = false;
+  private port = INITIAL_PORT;
+  private baseUrl = `http://${HOST}:${INITIAL_PORT}`;
+  private readonly authToken = randomBytes(32).toString('base64url');
+  private readonly instanceNonce = randomBytes(18).toString('base64url');
   private status: BackendStatus = {
     state: 'connecting',
-    baseUrl: BASE_URL,
+    baseUrl: this.baseUrl,
     managed: false,
+    authToken: this.authToken,
   };
   private readonly listeners = new Set<(status: BackendStatus) => void>();
 
@@ -105,10 +125,31 @@ export class BackendManager {
   async start(): Promise<void> {
     this.setStatus({ state: 'connecting', detail: 'Looking for backend…' });
 
-    // 1. Connect to an already-running backend, if any.
+    // 1. Reuse only a process carrying this manager's one-time nonce (normally
+    // reachable only if start() is called twice on the same manager instance).
     if (await this.ping()) {
-      this.managed = false;
-      await this.markConnected(false);
+      await this.markConnected(this.managed);
+      return;
+    }
+
+    // A backend orphaned by an earlier crash has a different nonce. Keep an
+    // explicit user port strict, but move the default endpoint to a free local
+    // port so the writer can reopen the app without killing processes manually.
+    try {
+      const selectedPort = await selectAvailablePort(
+        HOST, this.port, !PORT_WAS_EXPLICIT,
+      );
+      if (selectedPort !== this.port) {
+        this.port = selectedPort;
+        this.baseUrl = `http://${HOST}:${selectedPort}`;
+        this.setStatus({
+          baseUrl: this.baseUrl,
+          detail: `Default port was occupied; using local port ${selectedPort}.`,
+        });
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.setStatus({ state: 'error', detail });
       return;
     }
 
@@ -141,8 +182,8 @@ export class BackendManager {
 
   private async ping(): Promise<boolean> {
     try {
-      const json = await httpGetJson(`${BASE_URL}/health`);
-      return json?.status === 'ok';
+      const json = await httpGetJson(`${this.baseUrl}/health`);
+      return isExpectedBackendHealth(json, this.instanceNonce);
     } catch {
       return false;
     }
@@ -153,7 +194,7 @@ export class BackendManager {
     let apiVersion: string | undefined;
     let service: string | undefined;
     try {
-      const v = await httpGetJson(`${BASE_URL}/api/version`);
+      const v = await httpGetJson(`${this.baseUrl}/api/version`, 1500, this.authToken);
       version = v.version;
       apiVersion = v.api_version;
       service = v.name;
@@ -181,13 +222,19 @@ export class BackendManager {
   }
 
   private spawnBackend(): void {
-    const env = { ...process.env, LOGOSFORGE_HOST: HOST, LOGOSFORGE_PORT: String(PORT) };
+    const env = {
+      ...process.env,
+      LOGOSFORGE_HOST: HOST,
+      LOGOSFORGE_PORT: String(this.port),
+      LOGOSFORGE_WHITEBOARD_AUTH_TOKEN: this.authToken,
+      LOGOSFORGE_WHITEBOARD_INSTANCE_NONCE: this.instanceNonce,
+    };
 
     // Production: spawn the self-contained, PyInstaller-frozen backend (it embeds
     // the core — no Python needed on the user's machine).
     const frozen = this.frozenBackendPath();
     if (frozen) {
-      const child = spawn(frozen, ['--host', HOST, '--port', String(PORT)], {
+      const child = spawn(frozen, ['--host', HOST, '--port', String(this.port)], {
         cwd: path.dirname(frozen),
         env,
         stdio: 'pipe',
@@ -210,7 +257,7 @@ export class BackendManager {
     const python = resolvePython(backendDir);
     const child = spawn(
       python,
-      ['-m', 'uvicorn', 'app.main:app', '--host', HOST, '--port', String(PORT)],
+      ['-m', 'uvicorn', 'app.main:app', '--host', HOST, '--port', String(this.port)],
       { cwd: backendDir, env, stdio: 'pipe' },
     );
     this.attachChildHandlers(child, 'dev');

@@ -14,12 +14,36 @@ export interface BackendStatus {
   service?: string;
   version?: string;
   apiVersion?: string;
+  authToken?: string;
   detail?: string;
+}
+
+export interface PendingDocumentWrite {
+  kind: 'whiteboard' | 'outline';
+  documentId: string;
+  incarnation: string;
+  revision: number;
+  sessionId: string;
+  payload: object;
+}
+
+export interface PendingDocumentDeleteFloor {
+  whiteboard: number;
+  outline: number;
 }
 
 export interface LogosForgeBridge {
   getBackendStatus(): Promise<BackendStatus>;
   onBackendStatus(cb: (status: BackendStatus) => void): () => void;
+  persistPendingDocument(write: PendingDocumentWrite): Promise<void>;
+  persistPendingDocumentOnUnload(write: PendingDocumentWrite): boolean;
+  waitForPendingDocumentPersistence(): Promise<void>;
+  deleteDocumentWithPersistenceFence(documentId: string, incarnation: string): Promise<void>;
+  fileSetCloseHandshakeReady(ready: boolean): void;
+  fileSetExternalSaveHandshakeReady(ready: boolean): void;
+  fileOnFlushAutosaveBeforeClose(cb: (requestId: number) => void): () => void;
+  fileSendAutosaveFlushResult(requestId: number, ok: boolean, fileDirty: boolean): void;
+  fileOnCloseCancelled(cb: (requestId: number) => void): () => void;
 }
 
 declare global {
@@ -59,6 +83,27 @@ const fallback: LogosForgeBridge = {
     };
   },
   onBackendStatus() {
+    return () => {};
+  },
+  persistPendingDocument() {
+    return Promise.reject(new Error('Native document persistence is unavailable.'));
+  },
+  persistPendingDocumentOnUnload() {
+    return false;
+  },
+  waitForPendingDocumentPersistence() {
+    return Promise.resolve();
+  },
+  deleteDocumentWithPersistenceFence() {
+    return Promise.resolve();
+  },
+  fileSetCloseHandshakeReady() {},
+  fileSetExternalSaveHandshakeReady() {},
+  fileOnFlushAutosaveBeforeClose() {
+    return () => {};
+  },
+  fileSendAutosaveFlushResult() {},
+  fileOnCloseCancelled() {
     return () => {};
   },
 };

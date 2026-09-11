@@ -3,6 +3,7 @@
 
 import { useState } from 'react';
 
+import { getCurrentDocId } from '../../state/currentDocument';
 import { createPsykeElement, updatePsykeElement } from './psykeApi';
 import type { PsykeElementType, PsykeEntry } from './types';
 
@@ -50,11 +51,13 @@ export function PsykeCreateForm({ baseUrl, seed = '', entry, onSaved, onCancel }
     if (!canSave) return;
     setSaving(true);
     setError(null);
+    const operationDocId = getCurrentDocId();
     try {
       const fields = { type, name: name.trim(), description: description.trim(), notes: notes.trim() };
       const res = editing
         ? await updatePsykeElement(baseUrl, entry.id, fields)
         : await createPsykeElement(baseUrl, fields);
+      if (operationDocId !== getCurrentDocId()) return;
       if (!res.ok) {
         setError(editing ? 'Could not save changes.' : 'Could not save the element.');
         setSaving(false);
@@ -62,6 +65,7 @@ export function PsykeCreateForm({ baseUrl, seed = '', entry, onSaved, onCancel }
       }
       onSaved(res.element);
     } catch (err) {
+      if (operationDocId !== getCurrentDocId()) return;
       setError(err instanceof Error ? err.message : String(err));
       setSaving(false);
     }

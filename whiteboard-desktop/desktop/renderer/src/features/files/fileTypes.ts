@@ -27,6 +27,8 @@ export interface FilesBridge {
   saveToPath(filePath: string, content: string): Promise<SaveResult>;
   confirmSaveChanges(reason?: string): Promise<SaveChoice>;
   setDirty(dirty: boolean): void;
-  onSaveBeforeClose(cb: () => void): () => void;
-  sendCloseResult(ok: boolean): void;
+  setCloseHandshakeReady(ready: boolean): void;
+  setExternalSaveHandshakeReady(ready: boolean): void;
+  onSaveBeforeClose(cb: (requestId: number) => void): () => void;
+  sendCloseResult(requestId: number, ok: boolean): void;
 }

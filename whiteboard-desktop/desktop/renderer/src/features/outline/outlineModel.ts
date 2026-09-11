@@ -93,13 +93,14 @@ export const COLOR_LABELS: Record<OutlineColor, string> = {
 };
 
 /**
- * A hard link from an outline node to a place in the manuscript. Anchored by
- * block INDEX (blocks have no stable id) plus a `quote` snapshot of that block's
- * text, so the index can be re-located after edits shift it (see reanchorLinks).
+ * A hard link from an outline node to a place in the manuscript. New links use
+ * a stable block id; index + quote remain as navigation/cache data and preserve
+ * compatibility with legacy Whiteboard files and Pro bundle importers.
  */
 export interface OutlineLink {
   blockIndex: number;
   quote: string;
+  blockId?: string;
 }
 
 export interface OutlineNode {
@@ -521,23 +522,49 @@ export function activeLinkedNodeId(items: OutlineNode[], blockIndex: number | nu
 
 /**
  * Re-locate every link's blockIndex after the manuscript changed: if the block
- * at the stored index no longer matches the stored quote, find the block whose
- * text equals the quote nearest the old index and move the link there. Best-effort
- * and non-destructive — a link whose quote can't be found keeps its old index
- * rather than being dropped. Returns the SAME array when nothing moved (so callers
- * can skip a needless save). A blank quote (empty block) is never re-located.
+ * with the stable block id, then refresh its cached index + quote. Legacy links
+ * fall back to exact quote matching and adopt an id as soon as one is available.
+ * Best-effort and non-destructive — an unresolved link keeps its old index rather
+ * than being dropped. Returns the SAME array when nothing changed.
  *
- * When several blocks share the quote's exact text (e.g. repeated scene slugs),
- * the nearest to the old index wins, ties resolving to the lower index. That can
- * pick a sibling duplicate, but it's cosmetic (the badge/breadcrumb jump one
- * identical-looking block off) and self-corrects the moment the texts diverge.
+ * For a legacy link whose quote occurs more than once, the nearest occurrence
+ * wins (lower index on a tie); once adopted, the id removes that ambiguity.
  */
-export function reanchorLinks(items: OutlineNode[], blockTexts: string[], now: string): OutlineNode[] {
+export function reanchorLinks(
+  items: OutlineNode[],
+  blockTexts: string[],
+  now: string,
+  blockIds: string[] = [],
+): OutlineNode[] {
   let changed = false;
   const next = items.map((n) => {
     const link = n.link;
-    if (!link || !link.quote) return n; // unlinked, or an un-relocatable blank anchor
-    if (blockTexts[link.blockIndex] === link.quote) return n; // still correct
+    if (!link) return n;
+
+    // Stable identity wins even when the linked paragraph's text was rewritten.
+    const stableIndex = link.blockId ? blockIds.indexOf(link.blockId) : -1;
+    if (stableIndex >= 0) {
+      const currentText = blockTexts[stableIndex] ?? '';
+      if (stableIndex === link.blockIndex && currentText === link.quote) return n;
+      changed = true;
+      return {
+        ...n,
+        link: { ...link, blockIndex: stableIndex, quote: currentText },
+        updatedAt: now,
+      };
+    }
+
+    const currentText = blockTexts[link.blockIndex];
+    const currentId = blockIds[link.blockIndex]?.trim();
+    if (currentText === link.quote) {
+      if (!currentId || currentId === link.blockId) return n;
+      changed = true; // upgrade a legacy index+quote anchor in place
+      return { ...n, link: { ...link, blockId: currentId }, updatedAt: now };
+    }
+
+    // Without ids, an empty quote is still ambiguous. With ids available, use
+    // nearest-empty once to migrate the legacy anchor, then it stays exact.
+    if (!link.quote && blockIds.length === 0) return n;
     let best = -1;
     let bestDist = Infinity;
     for (let i = 0; i < blockTexts.length; i += 1) {
@@ -549,9 +576,19 @@ export function reanchorLinks(items: OutlineNode[], blockTexts: string[], now: s
         }
       }
     }
-    if (best === -1 || best === link.blockIndex) return n; // not found (keep) / unchanged
+    if (best === -1) return n; // not found: keep the old non-destructive anchor
     changed = true;
-    return { ...n, link: { ...link, blockIndex: best }, updatedAt: now };
+    const blockId = blockIds[best]?.trim();
+    return {
+      ...n,
+      link: {
+        ...link,
+        blockIndex: best,
+        quote: blockTexts[best] ?? link.quote,
+        ...(blockId ? { blockId } : {}),
+      },
+      updatedAt: now,
+    };
   });
   return changed ? next : items;
 }

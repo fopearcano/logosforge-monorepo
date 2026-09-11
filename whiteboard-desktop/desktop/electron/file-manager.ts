@@ -8,6 +8,8 @@ import { BrowserWindow, dialog } from 'electron';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 
+import { atomicWriteTextFile } from './atomic-file-save';
+
 export interface OpenResult {
   ok: boolean;
   canceled?: boolean;
@@ -53,7 +55,11 @@ export async function readFileFromPath(filePath: string): Promise<OpenResult> {
 export async function saveFileToPath(filePath: string, content: string): Promise<SaveResult> {
   console.log('[files] save to path:', filePath);
   try {
-    await fs.writeFile(filePath, content, 'utf8');
+    await atomicWriteTextFile(filePath, content, {
+      onDirectorySyncError: (error) => {
+        console.warn('[files] saved, but could not sync the containing directory:', error);
+      },
+    });
     return { ok: true, canceled: false, filePath, fileName: path.basename(filePath) };
   } catch (err) {
     console.error('[files] save to path error:', err);
@@ -172,4 +178,26 @@ export async function confirmSaveChanges(
   };
   const res = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options);
   return res.response === 0 ? 'save' : res.response === 1 ? 'dont-save' : 'cancel';
+}
+
+/** Warn before abandoning an external-file edit after the renderer has failed. */
+export async function confirmContinueAfterRendererFailure(
+  win: BrowserWindow | null,
+  action: 'close' | 'reload',
+  hasUnsavedExternalFile: boolean,
+): Promise<boolean> {
+  const verb = action === 'reload' ? 'Reload' : 'Close';
+  const options = {
+    type: 'warning' as const,
+    buttons: [`${verb} Without Saving`, 'Cancel'],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true,
+    message: `The editor is unavailable. ${verb} without saving?`,
+    detail: hasUnsavedExternalFile
+      ? 'Main-owned saves were drained, but unsaved changes to the open external file and other final in-memory operations were not confirmed.'
+      : 'Main-owned saves were drained, but the editor did not confirm its final in-memory operations.',
+  };
+  const res = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options);
+  return res.response === 0;
 }

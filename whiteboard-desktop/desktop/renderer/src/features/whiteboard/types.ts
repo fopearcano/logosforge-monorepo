@@ -23,9 +23,12 @@ export interface WhiteboardBlock {
 
 export interface WhiteboardDocument {
   id: string;
+  /** Opaque generation token; changes even when SQLite reuses the numeric id. */
+  incarnation: string;
   title: string;
   mode: string;
   blocks: WhiteboardBlock[];
+  settings: object;
   updated_at: string;
 }
 
@@ -33,4 +36,5 @@ export interface WhiteboardUpdate {
   title?: string;
   mode?: string;
   blocks?: WhiteboardBlock[];
+  settings?: object;
 }

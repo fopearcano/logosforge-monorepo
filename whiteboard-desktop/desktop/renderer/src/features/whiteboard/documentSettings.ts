@@ -2,8 +2,9 @@
  * Document Settings (Screenplay) — pure types, defaults, and persistence.
  *
  * Kept tiny and writing-first (this is NOT a general preferences system).
- * Persisted in localStorage so it survives restarts without touching the
- * backend document contract. React glue lives in `useDocumentSettings.ts`.
+ * Persisted inside each backend Whiteboard document so projects cannot leak
+ * voice/format choices into one another. React glue lives in
+ * `useDocumentSettings.ts`.
  */
 
 export type SceneHeadingStyle = 'normal' | 'bold' | 'underline' | 'bold-underline';
@@ -63,23 +64,67 @@ export function narrativeProfileContext(settings: DocumentSettings): string {
     : '';
 }
 
-const KEY = 'logosforge-doc-settings';
+const LEGACY_KEY = 'logosforge-doc-settings';
+const LEGACY_TARGET_KEY = 'logosforge-doc-settings-migration-target';
+const PERSONS: NarrativePerson[] = ['unspecified', 'first', 'third-limited', 'third-omniscient'];
+const STYLES: NarrativeStyle[] = ['neutral', 'literary', 'commercial', 'cinematic', 'minimalist', 'lyrical'];
+const REGISTERS: NarrativeRegister[] = ['neutral', 'formal', 'standard', 'colloquial', 'vernacular'];
+const SLANG: SlangLevel[] = ['none', 'light', 'moderate', 'heavy'];
+const HEADING_STYLES: SceneHeadingStyle[] = ['normal', 'bold', 'underline', 'bold-underline'];
+const TYPEFACES: Typeface[] = ['courier-prime', 'courier', 'monospace'];
 
-export function loadSettings(): DocumentSettings {
-  try {
-    const raw = localStorage.getItem(KEY);
-    if (raw) return { ...DEFAULT_SETTINGS, ...(JSON.parse(raw) as Partial<DocumentSettings>) };
-  } catch {
-    /* ignore */
-  }
-  return DEFAULT_SETTINGS;
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
 }
 
-export function saveSettings(s: DocumentSettings): void {
+function oneOf<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
+  return typeof value === 'string' && allowed.includes(value as T) ? value as T : fallback;
+}
+
+/** Defensive normalization for backend, legacy, and imported settings. */
+export function normalizeDocumentSettings(value: unknown): DocumentSettings {
+  const raw = record(value);
+  return {
+    narrativePerson: oneOf(raw.narrativePerson, PERSONS, DEFAULT_SETTINGS.narrativePerson),
+    narrativeStyle: oneOf(raw.narrativeStyle, STYLES, DEFAULT_SETTINGS.narrativeStyle),
+    narrativeRegister: oneOf(raw.narrativeRegister, REGISTERS, DEFAULT_SETTINGS.narrativeRegister),
+    slangLevel: oneOf(raw.slangLevel, SLANG, DEFAULT_SETTINGS.slangLevel),
+    sceneHeadingStyle: oneOf(raw.sceneHeadingStyle, HEADING_STYLES, DEFAULT_SETTINGS.sceneHeadingStyle),
+    blankLinesBeforeScene: raw.blankLinesBeforeScene === 2 ? 2 : 1,
+    includeOutline: typeof raw.includeOutline === 'boolean' ? raw.includeOutline : DEFAULT_SETTINGS.includeOutline,
+    typeface: oneOf(raw.typeface, TYPEFACES, DEFAULT_SETTINGS.typeface),
+    showInvisibles: typeof raw.showInvisibles === 'boolean' ? raw.showInvisibles : DEFAULT_SETTINGS.showInvisibles,
+  };
+}
+
+/** Read the old global value only for its chosen migration target document. */
+export function legacySettingsForDocument(documentId: string): Partial<DocumentSettings> | null {
   try {
-    localStorage.setItem(KEY, JSON.stringify(s));
+    const raw = localStorage.getItem(LEGACY_KEY);
+    if (!raw) return null;
+    let target = localStorage.getItem(LEGACY_TARGET_KEY);
+    if (!target) {
+      target = documentId;
+      localStorage.setItem(LEGACY_TARGET_KEY, target);
+    }
+    if (target !== documentId) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    return normalizeDocumentSettings(parsed);
   } catch {
-    /* ignore */
+    return null;
+  }
+}
+
+/** Clear legacy bytes only after that target loads persisted backend settings. */
+export function clearLegacySettingsMigration(documentId: string): void {
+  try {
+    if (localStorage.getItem(LEGACY_TARGET_KEY) !== documentId) return;
+    localStorage.removeItem(LEGACY_KEY);
+    localStorage.removeItem(LEGACY_TARGET_KEY);
+  } catch {
+    /* storage is optional */
   }
 }
 

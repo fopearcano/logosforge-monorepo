@@ -192,6 +192,19 @@ button { font: inherit; color: inherit; cursor: pointer; }
 /* ---- Work area ---- */
 .workarea { flex: 1; min-height: 0; display: flex; align-items: stretch; }
 
+/* Render-fault containment keeps the existing flex geometry intact while each
+   independently recoverable surface owns its local fallback. */
+.wb-app-boundary { height: 100vh; }
+.wb-app-boundary > .app { height: 100%; }
+.wb-outline-boundary { flex: none; width: var(--outline-w, 300px); display: flex; min-height: 0; }
+.wb-outline-boundary > .outline-panel { flex: 1 1 auto; width: 100%; }
+.wb-document-boundary { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.wb-overlay-boundary { flex: none; }
+.render-error-fallback.wb-overlay-boundary {
+  position: fixed; top: 54px; right: 14px; z-index: 50;
+  width: min(420px, calc(100vw - 28px)); min-height: 0 !important; padding: 12px !important;
+}
+
 /* hide top panel: collapse the titlebar */
 .app.is-top-hidden .titlebar { height: 0; padding: 0; overflow: hidden; border-bottom-color: transparent; }
 .app.is-top-hidden .wb-statusline,
@@ -811,10 +824,18 @@ body.is-col-resizing * { cursor: col-resize !important; }
 /* =============================================================================
  * TOASTS
  * ========================================================================== */
-.wb-toast { position: absolute; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 55; display: inline-flex; align-items: center; gap: 8px; padding: 9px 13px; background: var(--panel-2); border: 1px solid var(--border); border-left-width: 2px; border-radius: var(--r-md); box-shadow: var(--page-shadow); color: var(--text); font: 500 11.5px/1 var(--font-ui); animation: toast-in var(--dur-slow) var(--ease) both; }
+.wb-toast-stack { position: absolute; left: 50%; bottom: 24px; z-index: 55; width: min(720px, calc(100% - 40px)); max-height: calc(100% - 48px); transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 8px; overflow-y: auto; padding: 1px; pointer-events: none; }
+.wb-toast { position: relative; flex: none; width: fit-content; max-width: 100%; box-sizing: border-box; display: inline-flex; align-items: center; gap: 8px; padding: 9px 13px; background: var(--panel-2); border: 1px solid var(--border); border-left-width: 2px; border-radius: var(--r-md); box-shadow: var(--page-shadow); color: var(--text); font: 500 11.5px/1.35 var(--font-ui); pointer-events: auto; animation: wb-toast-in var(--dur-slow) var(--ease) both; }
 .wb-toast::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
 .wb-toast-ok { border-left-color: var(--ok); } .wb-toast-ok::before { background: var(--ok); }
 .wb-toast-error { border-left-color: var(--error); } .wb-toast-error::before { background: var(--error); }
+.wb-toast-message { min-width: 0; overflow-wrap: anywhere; }
+.wb-toast-dismiss { flex: none; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--muted); font: 500 16px/1 var(--font-ui); }
+.wb-toast-dismiss:hover { background: var(--hover); color: var(--text); }
+.wb-toast-document-error { max-width: 100%; }
+.wb-toast-recovery { max-width: min(680px, 100%); border-left-color: var(--accent); }
+.wb-toast-recovery::before { flex: 0 0 auto; background: var(--accent); }
+@keyframes wb-toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
 
 /* =============================================================================
@@ -1234,13 +1255,17 @@ body.is-col-resizing * { cursor: col-resize !important; }
   @page { size: letter; margin: 1in 1in 1in 1.5in; }
 
   /* hide everything that isn't the document itself */
-  .titlebar, .outline-panel, .wb-toolbar, .wb-location, .wb-statusline, .wb-storymap,
+  .titlebar, .outline-panel, .wb-outline-boundary, .wb-toolbar, .wb-location, .wb-statusline, .wb-storymap,
   .statusbar, .wb-popover, .psyke-window, .littleboy-box, .wb-tool,
-  .wb-hint, .sp-titlepage-edit { display: none !important; }
+  .comments-window, .comment-popover, .comment-add-fab,
+  .wb-hint, .sp-titlepage-edit, .wb-toast-stack, .wb-toast,
+  [data-runtime-fault], [data-wb-modal-portal], [data-wb-modal-layer],
+  [data-ui-error-boundary] { display: none !important; }
 
-  html, body, #root, .app, .workarea {
+  html, body, #root, .wb-app-boundary, .app, .workarea, .wb-document-boundary {
     height: auto !important; overflow: visible !important; background: #fff !important;
   }
+  .wb-document-boundary { display: block !important; flex: none !important; width: 100% !important; }
   .wb-surface, .wb-surface.is-preview {
     overflow: visible !important; height: auto !important; padding: 0 !important;
     background: #fff !important; display: block !important;
@@ -1254,6 +1279,11 @@ body.is-col-resizing * { cursor: col-resize !important; }
     font-size: 12pt !important; line-height: 1.4 !important;
   }
   .wb-editor *, .wb-preview * { color: #000 !important; background: transparent !important; }
+  .comment-mark, .comment-mark-active, .comment-mark-resolved {
+    background: transparent !important;
+    border-bottom: 0 !important;
+    border-radius: 0 !important;
+  }
 
   /* respect Fountain page-break conventions */
   .sp-scene_heading { break-after: avoid; break-inside: avoid; }

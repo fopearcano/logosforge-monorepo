@@ -1,11 +1,8 @@
 # LogosForge Whiteboard — Desktop Shell
 
-Minimal **Electron + React + TypeScript** desktop shell for Whiteboard Free. It
-opens a window, loads the React UI, starts (or connects to) the local FastAPI
-backend, checks `/health`, and shows the backend status + API version above a
-blank placeholder whiteboard area.
-
-> Phase 2 foundation — shell only. No real editor and no Pro features yet.
+The **Electron + React + TypeScript** desktop app for Whiteboard Free. It ships
+the multi-format TipTap editor, Outline, Comments, PSYKE, LittleBoy/Logos and
+project import/export over an authenticated local FastAPI wrapper.
 
 ## Layout
 
@@ -14,23 +11,23 @@ desktop/
 ├── electron/
 │   ├── main.ts            # window + app lifecycle, wires backend status to the UI
 │   ├── preload.ts         # contextBridge — exposes a tiny, typed IPC surface
-│   └── backend-manager.ts # start/connect backend, poll /health, report status
+│   └── backend-manager.ts # start/verify backend, poll /health, report status
 ├── renderer/
 │   ├── src/
 │   │   ├── main.tsx
 │   │   ├── App.tsx
 │   │   ├── api/backend.ts # typed bridge to the main process (+ browser fallback)
-│   │   ├── components/    # StatusBar, Whiteboard placeholder
+│   │   ├── features/      # editor, outline, comments, PSYKE, AI, files
 │   │   └── styles/
 │   ├── index.html
-│   └── vite.config.ts
+│   └── vite.config.mts
 └── package.json
 ```
 
 ## Prerequisites
 
-- Node.js 18+ and npm
-- The backend from `../backend` (Python 3.10+). In development the desktop app
+- Node.js 22.12+ and npm
+- The backend from `../backend` (Python 3.11+). In development the desktop app
   auto-starts it using `../backend/.venv` if present.
 
 ## 1. Install frontend dependencies
@@ -52,7 +49,7 @@ source .venv/bin/activate            # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-You can also run it yourself; the app will detect and connect to it:
+For browser-only renderer development, you can also run the wrapper yourself:
 
 ```bash
 # from backend/, with the venv active
@@ -60,7 +57,9 @@ uvicorn app.main:app --host 127.0.0.1 --port 8777
 ```
 
 Override host/port with `LOGOSFORGE_HOST` / `LOGOSFORGE_PORT` (defaults
-`127.0.0.1:8777`).
+`127.0.0.1:8777`). If the default port is occupied, Electron selects another
+free local port; an explicit `LOGOSFORGE_PORT` remains strict and reports a
+clear error instead of silently changing it.
 
 ## 3. Run the Electron app
 
@@ -70,8 +69,9 @@ npm run dev
 ```
 
 This starts the Vite dev server (renderer) and launches Electron once the dev
-server is ready. The backend manager connects to a running backend or starts one
-from `../backend`, polls `/health`, and reports status to the window.
+server is ready. The backend manager starts the wrapper from `../backend`,
+verifies its service identity and one-time nonce, then reports status to the
+window.
 
 ### Production preview (optional)
 
@@ -119,7 +119,7 @@ editor technology chosen in the architecture report — under
 |---|---|
 | `WhiteboardPage.tsx` | Composes load/save state + editor + save indicator; loading/error states. |
 | `WhiteboardEditor.tsx` | The TipTap editor + block ↔ ProseMirror mapping. |
-| `useWhiteboardDocument.ts` | Loads `GET /api/whiteboard`, autosaves via `PUT /api/whiteboard` (700 ms debounce), tracks save status. |
+| `useWhiteboardDocument.ts` | Loads `GET /api/whiteboard`, serializes manuscript + per-document settings through one `PUT` autosave queue (700 ms debounce), tracks save status. |
 | `whiteboardApi.ts` | Frontend HTTP client for the whiteboard endpoints. |
 | `types.ts` | Shared DTO types. |
 

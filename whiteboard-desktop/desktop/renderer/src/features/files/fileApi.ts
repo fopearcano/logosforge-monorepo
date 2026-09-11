@@ -14,6 +14,8 @@ interface FlatBridge {
   fileSaveToPath?: FilesBridge['saveToPath'];
   fileConfirmSaveChanges?: FilesBridge['confirmSaveChanges'];
   fileSetDirty?: FilesBridge['setDirty'];
+  fileSetCloseHandshakeReady?: FilesBridge['setCloseHandshakeReady'];
+  fileSetExternalSaveHandshakeReady?: FilesBridge['setExternalSaveHandshakeReady'];
   fileOnSaveBeforeClose?: FilesBridge['onSaveBeforeClose'];
   fileSendCloseResult?: FilesBridge['sendCloseResult'];
   onMenuFile?(cb: (action: string) => void): () => void;
@@ -37,8 +39,10 @@ export const fileApi: FilesBridge = {
     lf()?.fileSaveToPath?.(filePath, content) ?? Promise.resolve({ ok: false, error: NO_BRIDGE }),
   confirmSaveChanges: (reason) => lf()?.fileConfirmSaveChanges?.(reason) ?? Promise.resolve('dont-save'),
   setDirty: (dirty) => lf()?.fileSetDirty?.(dirty),
+  setCloseHandshakeReady: (ready) => lf()?.fileSetCloseHandshakeReady?.(ready),
+  setExternalSaveHandshakeReady: (ready) => lf()?.fileSetExternalSaveHandshakeReady?.(ready),
   onSaveBeforeClose: (cb) => lf()?.fileOnSaveBeforeClose?.(cb) ?? (() => {}),
-  sendCloseResult: (ok) => lf()?.fileSendCloseResult?.(ok),
+  sendCloseResult: (requestId, ok) => lf()?.fileSendCloseResult?.(requestId, ok),
 };
 
 export function onMenuFile(cb: (action: string) => void): () => void {

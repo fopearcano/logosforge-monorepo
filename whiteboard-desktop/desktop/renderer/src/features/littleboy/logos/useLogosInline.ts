@@ -1,8 +1,10 @@
 /** Runs a single Logos inline request lifecycle (request/response). */
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { captureDocumentIdentity } from '../../../state/currentDocument';
 import { logosInline } from '../littleboyApi';
+import { isCurrentLittleBoyIdentity } from '../littleboyRequestLifecycle';
 import type { LogosInlineRequest, LogosInlineResponse } from '../littleboyTypes';
 import type { LogosStatus } from './logosTypes';
 
@@ -32,21 +34,24 @@ export function useLogosInline({ baseUrl }: Options): Result {
     setError(null);
   }, []);
 
+  useEffect(() => () => controllerRef.current?.abort(), []);
+
   const run = useCallback(
     async (req: LogosInlineRequest) => {
       controllerRef.current?.abort();
       const controller = new AbortController();
+      const requestIdentity = captureDocumentIdentity();
       controllerRef.current = controller;
       setStatus('loading');
       setResponse(null);
       setError(null);
       try {
-        const res = await logosInline(baseUrl, req, controller.signal);
-        if (controller.signal.aborted) return;
+        const res = await logosInline(baseUrl, req, controller.signal, requestIdentity);
+        if (controller.signal.aborted || !isCurrentLittleBoyIdentity(requestIdentity)) return;
         setResponse(res);
         setStatus('done');
       } catch (err: unknown) {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || !isCurrentLittleBoyIdentity(requestIdentity)) return;
         setError(err instanceof Error ? err.message : String(err));
         setStatus('error');
       }

@@ -10,7 +10,10 @@ import {
 } from 'react';
 
 import { bridge, type BackendStatus } from './api/backend';
+import { setBackendAuthToken } from './api/backendAuth';
+import { RenderErrorBoundary } from './components/RenderErrorBoundary';
 import { StatusBar } from './components/StatusBar';
+import { isModalDialogOpen } from './components/useModalDialog';
 import { onMenuView } from './features/files/fileApi';
 import { OutlinePanel } from './features/outline/OutlinePanel';
 import type { OutlineItem } from './features/outline/types';
@@ -22,7 +25,9 @@ import {
 } from './features/comments/commentsPanelStore';
 import { DEFAULT_BASE_URL } from './features/whiteboard/whiteboardApi';
 import { WhiteboardPage } from './features/whiteboard/WhiteboardPage';
+import { isDocumentInteractionLocked } from './features/whiteboard/documentOperationGuard';
 import { getDocumentMenuApi, subscribeDocumentMenu } from './state/documentMenu';
+import { useCurrentDocId } from './state/currentDocument';
 import {
   getLittleBoyOpenState,
   subscribeLittleBoyOpenState,
@@ -38,6 +43,7 @@ import logoUrl from './assets/logo.png';
 function scrollToBlock(index: number) {
   const surface = document.querySelector('.wb-editor');
   const child = surface?.children[index] as HTMLElement | undefined;
+  if (surface instanceof HTMLElement) surface.focus({ preventScroll: true });
   child?.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
@@ -65,6 +71,7 @@ const clampOutlineWidth = (w: number) => Math.min(OUTLINE_W_MAX, Math.max(OUTLIN
 
 export function App() {
   const ui = useUiVisibility();
+  const currentDocId = useCurrentDocId();
   const { themeId, setThemeId } = useTheme();
   const [status, setStatus] = useState<BackendStatus>({
     state: 'connecting',
@@ -90,6 +97,7 @@ export function App() {
   // block texts (for binding + re-anchoring), and the "you are here" breadcrumb.
   const [editorCaret, setEditorCaret] = useState<number | null>(null);
   const [editorBlockTexts, setEditorBlockTexts] = useState<string[]>([]);
+  const [editorBlockIds, setEditorBlockIds] = useState<string[]>([]);
   const [editorBlockTextsDocId, setEditorBlockTextsDocId] = useState<string | null>(null);
   const [activePath, setActivePath] = useState<string[]>([]);
   // Draggable outline↔manuscript divider width (persisted).
@@ -204,6 +212,7 @@ export function App() {
       if (titleWrapRef.current && !titleWrapRef.current.contains(e.target as Node)) setTitleMenuOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
+      if (isModalDialogOpen()) return;
       if (e.key === 'Escape') {
         e.stopPropagation(); // close the menu without also restoring hidden panels
         setTitleMenuOpen(false);
@@ -280,10 +289,14 @@ export function App() {
 
   useEffect(() => {
     let active = true;
+    const applyStatus = (next: BackendStatus) => {
+      setBackendAuthToken(next.authToken);
+      setStatus(next);
+    };
     bridge.getBackendStatus().then((s) => {
-      if (active) setStatus(s);
+      if (active) applyStatus(s);
     });
-    const unsubscribe = bridge.onBackendStatus((s) => setStatus(s));
+    const unsubscribe = bridge.onBackendStatus(applyStatus);
     return () => {
       active = false;
       unsubscribe();
@@ -294,6 +307,7 @@ export function App() {
   useEffect(
     () =>
       onMenuView((action) => {
+        if (isModalDialogOpen() || isDocumentInteractionLocked()) return;
         const a = actionsRef.current;
         if (action === 'toggleTopPanel') a.toggleTopPanel();
         else if (action === 'toggleOutline') a.toggleOutline();
@@ -309,6 +323,7 @@ export function App() {
   // Global view shortcuts + ESC restore. (Cmd/Ctrl+K stays Logos; never bound here.)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (isModalDialogOpen() || isDocumentInteractionLocked()) return;
       const a = actionsRef.current;
       if (e.key === 'Escape') {
         const ae = document.activeElement as HTMLElement | null;
@@ -370,6 +385,7 @@ export function App() {
           className={`icon-toggle${ui.outlineVisible ? ' is-active' : ''}`}
           onClick={ui.toggleOutline}
           aria-pressed={ui.outlineVisible}
+          aria-label="Toggle outline"
           title="Toggle Outline (Ctrl/Cmd+Shift+O)"
         >
           ☰
@@ -477,7 +493,7 @@ export function App() {
           <button
             type="button"
             className={`icon-toggle${settingsOpen ? ' is-active' : ''}`}
-            onClick={() => setSettingsOpen(true)}
+            onClick={() => setSettingsOpen((open) => !open)}
             title="AI provider settings"
             aria-label="AI provider settings"
           >
@@ -533,6 +549,7 @@ export function App() {
             mode={docMode}
             caretBlockIndex={editorCaret}
             blockTexts={editorBlockTexts}
+            blockIds={editorBlockIds}
             blockTextsDocId={editorBlockTextsDocId}
             onNavigateBlock={scrollToBlock}
             onActivePathChange={setActivePath}
@@ -563,15 +580,22 @@ export function App() {
           onModeChange={setDocMode}
           onTitleChange={(name, dirty) => setProject({ name, dirty })}
           locationPath={activePath}
-          onEditorLocation={(caret, texts, docId) => {
+          onEditorLocation={(caret, texts, blockIds, docId) => {
             setEditorCaret(caret);
             setEditorBlockTexts(texts);
+            setEditorBlockIds(blockIds);
             setEditorBlockTextsDocId(docId);
           }}
         />
       </div>
       {psykeOpen && (
-        <PsykeWindow baseUrl={baseUrl} initialQuery={psykeQuery} onClose={() => setPsykeOpen(false)} />
+        <RenderErrorBoundary
+          name="PSYKE panel"
+          resetKey={currentDocId || 'none'}
+          className="wb-overlay-boundary"
+        >
+          <PsykeWindow baseUrl={baseUrl} initialQuery={psykeQuery} onClose={() => setPsykeOpen(false)} />
+        </RenderErrorBoundary>
       )}
       <HelpDialog open={helpOpen} onClose={() => setHelpOpen(false)} />
       {ui.statusBarVisible && <StatusBar status={status} />}

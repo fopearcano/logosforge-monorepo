@@ -8,7 +8,13 @@
  * normalize loaded rows defensively to tolerate partial/legacy data.
  */
 
-import { withDoc } from '../../state/currentDocument';
+import { captureDocumentIdentity, captureDocumentIncarnation, withDoc } from '../../state/currentDocument';
+import {
+  backendFetch,
+  withDocumentIncarnation,
+  withExpectedDocumentIncarnation,
+} from '../../api/backendAuth';
+import { responseError } from '../../api/responseError';
 import {
   OUTLINE_COLORS,
   OUTLINE_STATUSES,
@@ -32,7 +38,11 @@ function parseLink(v: unknown): OutlineLink | null {
   if (!v || typeof v !== 'object') return null;
   const o = v as Record<string, unknown>;
   if (typeof o.blockIndex !== 'number' || o.blockIndex < 0) return null;
-  return { blockIndex: o.blockIndex, quote: typeof o.quote === 'string' ? o.quote : '' };
+  return {
+    blockIndex: o.blockIndex,
+    quote: typeof o.quote === 'string' ? o.quote : '',
+    ...(typeof o.blockId === 'string' && o.blockId.trim() ? { blockId: o.blockId.trim() } : {}),
+  };
 }
 
 function normalize(raw: unknown): OutlineNode | null {
@@ -80,8 +90,26 @@ export async function getOutlineItems(
   baseUrl: string = DEFAULT_BASE_URL,
   signal?: AbortSignal,
 ): Promise<OutlineNode[]> {
-  const res = await fetch(withDoc(`${baseUrl}/api/outline/items`), { signal });
-  if (!res.ok) throw new Error(`Request failed (HTTP ${res.status})`);
+  const identity = captureDocumentIdentity();
+  const res = await backendFetch(withDoc(`${baseUrl}/api/outline/items`), {
+    headers: withExpectedDocumentIncarnation(identity.incarnation),
+    signal,
+  });
+  if (!res.ok) throw await responseError(res, 'Could not load the outline');
+  return toNodes((await res.json()) as OutlineItemsResponse);
+}
+
+export async function getOutlineItemsForDocument(
+  baseUrl: string,
+  documentId: string,
+  signal?: AbortSignal,
+  incarnation: string = captureDocumentIncarnation(documentId),
+): Promise<OutlineNode[]> {
+  const res = await backendFetch(
+    `${baseUrl}/api/outline/items?doc=${encodeURIComponent(documentId)}`,
+    { headers: withExpectedDocumentIncarnation(incarnation), signal },
+  );
+  if (!res.ok) throw await responseError(res, 'Could not load the outline');
   return toNodes((await res.json()) as OutlineItemsResponse);
 }
 
@@ -90,29 +118,65 @@ export async function saveOutlineItems(
   items: OutlineNode[],
   signal?: AbortSignal,
 ): Promise<OutlineNode[]> {
-  const res = await fetch(withDoc(`${baseUrl}/api/outline/items`), {
+  const identity = captureDocumentIdentity();
+  const res = await backendFetch(withDoc(`${baseUrl}/api/outline/items`), {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: withDocumentIncarnation(identity.incarnation, { 'Content-Type': 'application/json' }),
     body: JSON.stringify({ items }),
     signal,
   });
-  if (!res.ok) throw new Error(`Save failed (HTTP ${res.status})`);
+  if (!res.ok) throw await responseError(res, 'Could not save the outline');
+  return toNodes((await res.json()) as OutlineItemsResponse);
+}
+
+export async function saveOutlineItemsForDocument(
+  baseUrl: string,
+  documentId: string,
+  items: OutlineNode[],
+  signal?: AbortSignal,
+  incarnation: string = captureDocumentIncarnation(documentId),
+): Promise<OutlineNode[]> {
+  const res = await backendFetch(
+    `${baseUrl}/api/outline/items?doc=${encodeURIComponent(documentId)}`,
+    {
+      method: 'PUT',
+      headers: withDocumentIncarnation(incarnation, { 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ items }),
+      signal,
+    },
+  );
+  if (!res.ok) throw await responseError(res, 'Could not save the outline');
   return toNodes((await res.json()) as OutlineItemsResponse);
 }
 
 // --- external-change signal -------------------------------------------------
 // The manual outline lives in its own store (OutlinePanel). When something else
 // rewrites the persisted list out-of-band (e.g. a LogosForge import), it emits
-// this so the store reloads from the backend instead of showing stale data.
+// the exact versioned-by-document snapshot so an older GET cannot flash/apply.
 
 const OUTLINE_REFRESH_EVENT = 'lf:outline-refresh';
 
-export function emitOutlineRefresh(): void {
-  if (typeof window !== 'undefined') window.dispatchEvent(new Event(OUTLINE_REFRESH_EVENT));
+export interface OutlineRefreshSnapshot {
+  documentId: string;
+  items: OutlineNode[];
 }
 
-export function onOutlineRefresh(cb: () => void): () => void {
+export function emitOutlineRefresh(documentId: string, items: OutlineNode[]): void {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent<OutlineRefreshSnapshot>(OUTLINE_REFRESH_EVENT, {
+      detail: { documentId, items },
+    }));
+  }
+}
+
+export function onOutlineRefresh(cb: (snapshot: OutlineRefreshSnapshot) => void): () => void {
   if (typeof window === 'undefined') return () => {};
-  window.addEventListener(OUTLINE_REFRESH_EVENT, cb);
-  return () => window.removeEventListener(OUTLINE_REFRESH_EVENT, cb);
+  const listener = (event: Event) => {
+    if (!(event instanceof CustomEvent)) return;
+    const snapshot = event.detail as OutlineRefreshSnapshot;
+    if (!snapshot || typeof snapshot.documentId !== 'string' || !Array.isArray(snapshot.items)) return;
+    cb(snapshot);
+  };
+  window.addEventListener(OUTLINE_REFRESH_EVENT, listener);
+  return () => window.removeEventListener(OUTLINE_REFRESH_EVENT, listener);
 }

@@ -4,9 +4,11 @@
  * the backend with bounded context + recent history.
  */
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { captureDocumentIdentity } from '../../../state/currentDocument';
 import { billyChat } from '../littleboyApi';
+import { isCurrentLittleBoyIdentity } from '../littleboyRequestLifecycle';
 import type { ChatMessage } from '../littleboyTypes';
 import type { BillyContextInput, BillyMessage } from './billyTypes';
 
@@ -32,13 +34,25 @@ export function useBillyChat({ baseUrl }: Options): BillyChatApi {
   const [messages, setMessages] = useState<BillyMessage[]>([]);
   const [sending, setSending] = useState(false);
   const conversationId = useRef<string | undefined>(undefined);
+  const controllerRef = useRef<AbortController | null>(null);
   const messagesRef = useRef<BillyMessage[]>(messages);
   messagesRef.current = messages;
 
   const clear = useCallback(() => {
+    controllerRef.current?.abort();
+    controllerRef.current = null;
     conversationId.current = undefined;
     setMessages([]);
+    setSending(false);
   }, []);
+
+  useEffect(
+    () => () => {
+      controllerRef.current?.abort();
+      controllerRef.current = null;
+    },
+    [],
+  );
 
   const send = useCallback(
     (text: string, ctx: BillyContextInput) => {
@@ -52,19 +66,28 @@ export function useBillyChat({ baseUrl }: Options): BillyChatApi {
 
       const userMsg: BillyMessage = { id: newId(), role: 'user', content };
       const pendingId = newId();
+      const controller = new AbortController();
+      const requestIdentity = captureDocumentIdentity();
+      controllerRef.current = controller;
       setMessages((prev) => [...prev, userMsg, { id: pendingId, role: 'assistant', content: '…', pending: true }]);
       setSending(true);
 
-      billyChat(baseUrl, {
-        message: content,
-        selected_text: ctx.selected_text,
-        nearby_context: ctx.nearby_context,
-        writing_mode: ctx.writing_mode,
-        document_title: ctx.document_title,
-        conversation_id: conversationId.current,
-        history,
-      })
+      billyChat(
+        baseUrl,
+        {
+          message: content,
+          selected_text: ctx.selected_text,
+          nearby_context: ctx.nearby_context,
+          writing_mode: ctx.writing_mode,
+          document_title: ctx.document_title,
+          conversation_id: conversationId.current,
+          history,
+        },
+        controller.signal,
+        requestIdentity,
+      )
         .then((res) => {
+          if (controller.signal.aborted || !isCurrentLittleBoyIdentity(requestIdentity)) return;
           conversationId.current = res.conversation_id;
           setMessages((prev) =>
             prev.map((m) =>
@@ -73,6 +96,7 @@ export function useBillyChat({ baseUrl }: Options): BillyChatApi {
           );
         })
         .catch((err: unknown) => {
+          if (controller.signal.aborted || !isCurrentLittleBoyIdentity(requestIdentity)) return;
           const msg = err instanceof Error ? err.message : String(err);
           setMessages((prev) =>
             prev.map((m) =>
@@ -82,7 +106,11 @@ export function useBillyChat({ baseUrl }: Options): BillyChatApi {
             ),
           );
         })
-        .finally(() => setSending(false));
+        .finally(() => {
+          if (controllerRef.current !== controller) return;
+          controllerRef.current = null;
+          setSending(false);
+        });
     },
     [baseUrl, sending],
   );

@@ -4,7 +4,10 @@
  * Escape or an overlay click closes it.
  */
 
-import { Fragment, useEffect } from 'react';
+import { Fragment, useRef } from 'react';
+
+import { ModalPortal } from '../../components/ModalPortal';
+import { useModalDialog } from '../../components/useModalDialog';
 
 interface Props {
   open: boolean;
@@ -12,15 +15,15 @@ interface Props {
 }
 
 const BASICS: [string, string][] = [
-  ['Documents', 'Your work auto-saves and lives in the app. Manage everything from the File menu — New / Open / Rename / Delete Document.'],
+  ['Documents', 'Your work auto-saves in isolated projects. Each document keeps its own manuscript, voice/format settings, outline, comments, and PSYKE.'],
   ['Writing modes', 'The Mode dropdown reformats the current document: Novel, Screenplay, Graphic Novel, or Stage Play.'],
   ['Three surfaces', 'Editor (centre) to write, Outline (left) for structure, Story Map (bottom) for a visual overview.'],
-  ['Outline', '+ Add ▾ inserts a typed item (auto-nested) or applies a writing-method template. Shift+Enter opens type, status, colour, tags, and the item summary.'],
-  ['Narrative voice', 'Settings ⚙ → Narrative voice sets person, style, register, and slang guidance for Billy and Logos.'],
+  ['Outline', '+ Add ▾ inserts typed items or templates. A row’s ⋯ → Link to cursor position creates a stable manuscript anchor and live breadcrumb. Shift+Enter opens all item details.'],
+  ['Narrative voice', 'Settings ⚙ → Narrative voice sets this document’s person, style, register, and slang guidance for Billy and Logos.'],
   ['PSYKE', 'Your per-project story bible — characters, places, objects, lore, themes. Isolated per document.'],
   ['Comments', 'Highlight text, then click Comment to leave a threaded note pinned to that passage.'],
   ['AI — Billy & Logos', 'Billy is a chat assistant; Logos works inline. Point them at your provider in Settings ⚙.'],
-  ['Export & backup', 'File → Export → Export Project (.lfbundle) saves a whole project in one file — your backup, and the file you hand to Pro.'],
+  ['Export & backup', 'Export Project (.lfbundle) saves manuscript, document settings, outline, comments, and PSYKE. Incomplete exports are blocked.'],
 ];
 
 interface Group {
@@ -181,34 +184,35 @@ function Keys({ combo }: { combo: string }) {
 }
 
 export function HelpDialog({ open, onClose }: Props) {
-  useEffect(() => {
-    if (!open) return undefined;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopPropagation();
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+
+  useModalDialog({ open, dialogRef, initialFocusRef: closeRef, onClose });
 
   if (!open) return null;
 
   return (
-    <div
-      className="cf-overlay"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div className="help-dialog" role="dialog" aria-modal="true" aria-labelledby="help-title">
+    <ModalPortal>
+      <div
+        data-wb-modal-layer
+        className="cf-overlay"
+        onClick={(event) => {
+          if (event.target === event.currentTarget) onClose();
+        }}
+      >
+      <div
+        ref={dialogRef}
+        className="help-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="help-title"
+        tabIndex={-1}
+      >
         <div className="settings-head">
           <h2 id="help-title" className="settings-title">
             Quick Start
           </h2>
-          <button type="button" className="settings-close" aria-label="Close help" onClick={onClose}>
+          <button ref={closeRef} type="button" className="settings-close" aria-label="Close help" onClick={onClose}>
             ×
           </button>
         </div>
@@ -265,6 +269,7 @@ export function HelpDialog({ open, onClose }: Props) {
           </div>
         </div>
       </div>
-    </div>
+      </div>
+    </ModalPortal>
   );
 }

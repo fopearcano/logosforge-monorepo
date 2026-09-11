@@ -8,6 +8,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 
+import { ModalPortal } from '../../components/ModalPortal';
+import { useModalDialog } from '../../components/useModalDialog';
 import {
   AI_PROVIDERS,
   PROVIDER_DEFAULT_URL,
@@ -71,8 +73,13 @@ export function SettingsDialog({ open, baseUrl, writingSettingsApi, onClose }: P
   const [testing, setTesting] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [test, setTest] = useState<{ ok: boolean; msg: string } | null>(null);
-  const firstRef = useRef<HTMLSelectElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
   const loadedProviderRef = useRef(EMPTY.provider);
+
+  // The close button is always mounted, including while the provider form is
+  // replaced by its loading state, so initial focus cannot fall back to <body>.
+  useModalDialog({ open, dialogRef, initialFocusRef: closeRef, onClose });
 
   // Load current settings when opened.
   useEffect(() => {
@@ -97,20 +104,6 @@ export function SettingsDialog({ open, baseUrl, writingSettingsApi, onClose }: P
       .finally(() => setLoading(false));
     return () => ctrl.abort();
   }, [open, baseUrl]);
-
-  // Escape closes; focus the first field.
-  useEffect(() => {
-    if (!open) return undefined;
-    firstRef.current?.focus();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
 
   if (!open) return null;
 
@@ -191,25 +184,34 @@ export function SettingsDialog({ open, baseUrl, writingSettingsApi, onClose }: P
   const updateWriting = writingSettingsApi.update;
 
   return (
-    <div
-      className="cf-overlay"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="set-title">
+    <ModalPortal>
+      <div
+        data-wb-modal-layer
+        className="cf-overlay"
+        onClick={(event) => {
+          if (event.target === event.currentTarget) onClose();
+        }}
+      >
+      <div
+        ref={dialogRef}
+        className="settings-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="set-title"
+        tabIndex={-1}
+      >
         <div className="settings-head">
           <h2 id="set-title" className="settings-title">
             Settings
           </h2>
-          <button type="button" className="settings-close" aria-label="Close settings" onClick={onClose}>
+          <button ref={closeRef} type="button" className="settings-close" aria-label="Close settings" onClick={onClose}>
             ×
           </button>
         </div>
-        <p className="settings-sub">General writing defaults and the AI connection used by Billy &amp; Logos.</p>
+        <p className="settings-sub">Current-document writing defaults and the app-wide AI connection used by Billy &amp; Logos.</p>
 
         <h3 className="settings-section-title">Narrative voice</h3>
-        <p className="settings-section-note">Used as general guidance by Billy and Logos. Saved immediately on this machine.</p>
+        <p className="settings-section-note">Used as guidance by Billy and Logos. Saved with this document and included in project bundles.</p>
         <div className="settings-form">
           <label className="settings-field">
             <span>Person</span>
@@ -246,7 +248,7 @@ export function SettingsDialog({ open, baseUrl, writingSettingsApi, onClose }: P
           <div className="settings-form">
             <label className="settings-field">
               <span>Provider</span>
-              <select ref={firstRef} value={form.provider} onChange={(e) => selectProvider(e.target.value)}>
+              <select value={form.provider} onChange={(e) => selectProvider(e.target.value)}>
                 {AI_PROVIDERS.map((p) => (
                   <option key={p} value={p}>
                     {p}
@@ -328,6 +330,7 @@ export function SettingsDialog({ open, baseUrl, writingSettingsApi, onClose }: P
           </button>
         </div>
       </div>
-    </div>
+      </div>
+    </ModalPortal>
   );
 }

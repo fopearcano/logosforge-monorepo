@@ -4,9 +4,10 @@
  * no Pro workspace.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
-import { subscribeCurrentDoc } from '../../state/currentDocument';
+import { ConfirmDialog } from '../../components/ConfirmDialog';
+import { getCurrentDocId, subscribeCurrentDoc } from '../../state/currentDocument';
 import { PsykeCreateForm } from './PsykeCreateForm';
 import { deletePsykeElement } from './psykeApi';
 import { PsykeSearch } from './PsykeSearch';
@@ -25,12 +26,15 @@ export function PsykeWindow({ baseUrl, initialQuery, onClose }: Props) {
   const [view, setView] = useState<'search' | 'create' | 'edit'>('search');
   const [added, setAdded] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<PsykeEntry | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const addButtonRef = useRef<HTMLButtonElement>(null);
 
   // Esc: leave the create/edit form first (back to search/detail), else close.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
+      if (pendingDelete) return; // the confirmation dialog owns Escape
       if (view === 'create' || view === 'edit') {
         e.stopPropagation();
         setView('search');
@@ -40,7 +44,7 @@ export function PsykeWindow({ baseUrl, initialQuery, onClose }: Props) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose, view]);
+  }, [onClose, pendingDelete, view]);
 
   // Auto-dismiss the confirmation toast.
   useEffect(() => {
@@ -54,6 +58,8 @@ export function PsykeWindow({ baseUrl, initialQuery, onClose }: Props) {
     () =>
       subscribeCurrentDoc(() => {
         setSelected(null);
+        setPendingDelete(null);
+        setDeleting(false);
         setView('search');
         setActionError(null);
         setQuery('');
@@ -80,19 +86,21 @@ export function PsykeWindow({ baseUrl, initialQuery, onClose }: Props) {
 
   const handleDelete = async (entry: PsykeEntry) => {
     if (deleting) return;
-    if (!window.confirm(`Delete “${entry.name}” from the story bible? This can’t be undone.`)) return;
+    const operationDocId = getCurrentDocId();
     setDeleting(true);
     setActionError(null);
     try {
       await deletePsykeElement(baseUrl, entry.id);
+      if (operationDocId !== getCurrentDocId()) return;
       setSelected(null);
       setView('search');
       refresh();
       setAdded(`Deleted “${entry.name}”.`);
     } catch (err) {
+      if (operationDocId !== getCurrentDocId()) return;
       setActionError(err instanceof Error ? err.message : String(err));
     } finally {
-      setDeleting(false);
+      if (operationDocId === getCurrentDocId()) setDeleting(false);
     }
   };
 
@@ -103,6 +111,7 @@ export function PsykeWindow({ baseUrl, initialQuery, onClose }: Props) {
         <div className="psyke-header-actions">
           {view === 'search' && (
             <button
+              ref={addButtonRef}
               type="button"
               className="psyke-add"
               onClick={() => {
@@ -183,7 +192,7 @@ export function PsykeWindow({ baseUrl, initialQuery, onClose }: Props) {
                   <button
                     type="button"
                     className="psyke-btn psyke-btn-danger"
-                    onClick={() => void handleDelete(selected)}
+                    onClick={() => setPendingDelete(selected)}
                     disabled={deleting}
                   >
                     {deleting ? 'Deleting…' : 'Delete'}
@@ -218,6 +227,19 @@ export function PsykeWindow({ baseUrl, initialQuery, onClose }: Props) {
           </div>
         </>
       )}
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title="Delete PSYKE element"
+        message={`Delete “${pendingDelete?.name ?? ''}” from the story bible? This can’t be undone.`}
+        confirmLabel="Delete"
+        returnFocusFallbackRef={addButtonRef}
+        onConfirm={() => {
+          const target = pendingDelete;
+          setPendingDelete(null);
+          if (target) void handleDelete(target);
+        }}
+        onCancel={() => setPendingDelete(null)}
+      />
     </aside>
   );
 }

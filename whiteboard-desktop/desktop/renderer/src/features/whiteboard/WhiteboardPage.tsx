@@ -7,6 +7,10 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { PromptDialog } from '../../components/PromptDialog';
 import { Popover } from '../../components/Popover';
+import { RenderErrorBoundary } from '../../components/RenderErrorBoundary';
+import { isModalDialogOpen } from '../../components/useModalDialog';
+import { getRecoveryNotices, type RecoveryNotice } from '../../api/recoveryApi';
+import { onRecoveryNoticeCheckRequested } from '../../api/recoverySignal';
 import { deriveOutline } from '../outline/deriveOutline';
 import type { OutlineItem } from '../outline/types';
 import { EditorSettingsPopover } from '../editorTools/EditorSettingsPopover';
@@ -19,6 +23,7 @@ import { EXPORT_FORMATS, IMPORT_FORMATS } from '../files/importExportFormats';
 import { useFileActions } from '../files/useFileActions';
 import { useImportExport } from '../files/useImportExport';
 import { setDocumentMenuApi } from '../../state/documentMenu';
+import { captureDocumentIdentity } from '../../state/currentDocument';
 import { LittleBoyProvider } from '../littleboy/LittleBoyProvider';
 import { SettingsDialog } from '../settings/SettingsDialog';
 import { PreviewView } from '../screenplay/PreviewView';
@@ -39,6 +44,15 @@ import { useDocumentSettings } from './useDocumentSettings';
 import { useEditorScale } from './useEditorScale';
 import { useWhiteboardDocument } from './useWhiteboardDocument';
 import { blocksToDoc, WhiteboardEditor } from './WhiteboardEditor';
+import { normalizeBlockIds } from './blockIdentity';
+import { editorRecoveryBlocks } from './editorRecovery';
+import { isDocumentInteractionLocked } from './documentOperationGuard';
+import {
+  flushWhiteboardPatchThrough,
+  type WhiteboardPatchReceipt,
+} from './pendingWhiteboardRecovery';
+import { eligibleOrphanCleanupIds } from './orphanCleanupGate';
+import { restoreFocusAfterNotificationDismiss } from './notificationFocus';
 import { CommentsLayer } from '../comments/CommentsLayer';
 import { findOrphanIds, reconcileMarks } from '../comments/commentsAnchor';
 import { useResolvedHidden } from '../comments/commentsPanelStore';
@@ -52,6 +66,16 @@ const DRAFT_LABEL: Record<SaveStatus, string> = {
   saved: 'Draft saved',
   error: 'Draft error',
 };
+
+interface LiveBlocksPersistence {
+  documentId: string;
+  incarnation: string;
+  generation: number;
+  blocks: WhiteboardBlock[];
+  /** Loaded blocks are already durable; edited blocks need their exact receipt. */
+  durable: boolean;
+  receipt: WhiteboardPatchReceipt | null;
+}
 
 interface Props {
   baseUrl: string;
@@ -67,7 +91,12 @@ interface Props {
   locationPath?: string[];
   /** Report the caret's manuscript block + block texts + which doc they belong to
    *  (the doc id lets the outline skip re-anchoring during a document switch). */
-  onEditorLocation?: (caretBlock: number | null, blockTexts: string[], docId: string | null) => void;
+  onEditorLocation?: (
+    caretBlock: number | null,
+    blockTexts: string[],
+    blockIds: string[],
+    docId: string | null,
+  ) => void;
 }
 
 export function WhiteboardPage({
@@ -86,8 +115,10 @@ export function WhiteboardPage({
     docList,
     loading,
     loadError,
+    dismissError,
     saveStatus,
     onChangeBlocks,
+    onChangeSettings,
     setMode,
     selectDocument,
     newDocument: createNewDoc,
@@ -99,6 +130,10 @@ export function WhiteboardPage({
   const [element, setElement] = useState<FountainType | null>(null);
   const [preview, setPreview] = useState(false);
   const [liveBlocks, setLiveBlocks] = useState<WhiteboardBlock[]>([]);
+  const liveBlocksRef = useRef(liveBlocks);
+  liveBlocksRef.current = liveBlocks;
+  const liveBlocksGenerationRef = useRef(0);
+  const liveBlocksPersistenceRef = useRef<LiveBlocksPersistence | null>(null);
   // The document `liveBlocks` currently belongs to — set in the SAME update as
   // every setLiveBlocks so the two can never diverge. `doc.id` alone is unsafe:
   // it advances (setDoc) one render before the liveBlocks reset, so stamping the
@@ -106,10 +141,21 @@ export function WhiteboardPage({
   // as the NEW doc's, letting the outline re-anchor cross-document mid-switch.
   const [liveBlocksDocId, setLiveBlocksDocId] = useState<string | null>(null);
   const commentsApi = useComments(baseUrl, ready);
+  const commentsRef = useRef(commentsApi.comments);
+  commentsRef.current = commentsApi.comments;
   const hideResolved = useResolvedHidden();
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
+  const [recoveryNotices, setRecoveryNotices] = useState<RecoveryNotice[]>([]);
+  const dismissNotification = useCallback((dismiss: () => void) => {
+    dismiss();
+    window.setTimeout(() => restoreFocusAfterNotificationDismiss(), 0);
+  }, []);
 
-  const settingsApi = useDocumentSettings();
+  const settingsApi = useDocumentSettings({
+    documentId: doc?.id ?? null,
+    initialSettings: doc?.settings,
+    onChange: onChangeSettings,
+  });
   const { scale, apply: applyScale } = useEditorScale();
 
   // Optional Nerd Mode editor aids (all default off → clean by default).
@@ -136,6 +182,65 @@ export function WhiteboardPage({
   const mode = doc?.mode ?? defaultMode;
   const isScreenplay = mode === 'screenplay';
   const showPreview = isScreenplay && preview;
+  const editorInitialBlocks = useMemo<WhiteboardBlock[]>(() => {
+    if (!doc) return [];
+    const source = doc.blocks.length
+      ? doc.blocks
+      : [{ id: '', type: 'paragraph', text: '' }];
+    const ids = normalizeBlockIds(source.map((block) => block.id));
+    return source.map((block, index) => ({ ...block, id: ids[index] }));
+  }, [doc?.id, doc?.blocks]);
+  const editorMountBlocks = useMemo(
+    () => editorRecoveryBlocks(doc?.id ?? null, liveBlocksDocId, liveBlocks, editorInitialBlocks),
+    [doc?.id, liveBlocksDocId, liveBlocks, editorInitialBlocks],
+  );
+
+  // Recovery happens inside whichever store first reads damaged state (document,
+  // outline, or comments). Consume backend notices independently so a successful
+  // automatic restore is visible to the writer instead of living only in logs.
+  useEffect(() => {
+    if (!ready || !baseUrl) return;
+    const controller = new AbortController();
+    let checking = false;
+    let rerun = false;
+    let timer: number | null = null;
+    const check = async () => {
+      timer = null;
+      if (checking) { rerun = true; return; }
+      checking = true;
+      try {
+        const notices = await getRecoveryNotices(baseUrl, controller.signal);
+        if (notices.length) {
+          setRecoveryNotices((current) => {
+            const seen = new Set(current.map((notice) => notice.id));
+            return [...current, ...notices.filter((notice) => !seen.has(notice.id))];
+          });
+        }
+      } catch (err) {
+        if (!(err instanceof DOMException && err.name === 'AbortError')) {
+          console.warn('[recovery] could not check recovery notices:', err);
+        }
+      } finally {
+        checking = false;
+        if (rerun) {
+          rerun = false;
+          schedule();
+        }
+      }
+    };
+    const schedule = () => {
+      if (checking) { rerun = true; return; }
+      if (timer !== null) window.clearTimeout(timer);
+      timer = window.setTimeout(() => void check(), 75);
+    };
+    const unsubscribe = onRecoveryNoticeCheckRequested(schedule);
+    schedule();
+    return () => {
+      controller.abort();
+      unsubscribe();
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [baseUrl, ready]);
 
   // The Mode dropdown PERMANENTLY converts THIS document's format (it is not
   // navigation — switching documents is the title menu). It's easy to nudge by
@@ -179,29 +284,82 @@ export function WhiteboardPage({
       reconcileMarks(
         hideResolved ? commentsApi.comments.filter((c) => !c.resolved) : commentsApi.comments,
         liveBlocks.map((b) => b.text ?? ''),
+        liveBlocks.map((b) => b.id),
       ),
     [commentsApi.comments, liveBlocks, hideResolved],
   );
   // A comment must not outlive its anchor: when an edit deletes the block (or the
   // exact text) a comment is pinned to, the quote is gone from the whole doc —
-  // delete the comment. Debounced past the autosave so it fires only after edits
-  // settle, and guarded on a non-empty doc (findOrphanIds returns [] for no blocks)
-  // so a load/doc-switch transient can never wipe live comments.
+  // delete the comment. Debounce until edits settle, then require the exact block
+  // snapshot to be durably acknowledged and revalidate after that async boundary.
+  // A failed/refused autosave must leave the comment intact with its durable text.
   const removeComment = commentsApi.remove;
   useEffect(() => {
+    if (saveStatus === 'saving' || saveStatus === 'error') return undefined;
     if (!liveBlocks.length || !commentsApi.comments.length) return undefined;
-    const orphans = findOrphanIds(commentsApi.comments, liveBlocks.map((b) => b.text ?? ''));
+    const persistence = liveBlocksPersistenceRef.current;
+    if (
+      !persistence
+      || persistence.blocks !== liveBlocks
+      || persistence.documentId !== liveBlocksDocId
+      || (!persistence.durable && !persistence.receipt)
+    ) return undefined;
+    const orphans = findOrphanIds(
+      commentsApi.comments,
+      liveBlocks.map((b) => b.text ?? ''),
+      liveBlocks.map((b) => b.id),
+    );
     if (!orphans.length) return undefined;
-    const timer = setTimeout(() => {
-      orphans.forEach((id) => void removeComment(id));
+    const captured = {
+      documentId: persistence.documentId,
+      incarnation: persistence.incarnation,
+      generation: persistence.generation,
+      orphanIds: orphans,
+    };
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        if (
+          persistence.receipt
+          && !(await flushWhiteboardPatchThrough(persistence.receipt))
+        ) return;
+        if (cancelled) return;
+
+        const currentPersistence = liveBlocksPersistenceRef.current;
+        const currentBlocks = liveBlocksRef.current;
+        if (!currentPersistence || currentPersistence.blocks !== currentBlocks) return;
+        const identity = captureDocumentIdentity();
+        const currentOrphans = findOrphanIds(
+          commentsRef.current,
+          currentBlocks.map((block) => block.text ?? ''),
+          currentBlocks.map((block) => block.id),
+        );
+        const eligible = eligibleOrphanCleanupIds(
+          captured,
+          {
+            documentId: identity.documentId,
+            incarnation: identity.incarnation,
+            generation: currentPersistence.generation,
+          },
+          currentOrphans,
+        );
+        if (cancelled) return;
+        eligible.forEach((id) => void removeComment(id));
+      })().catch(() => {
+        // The retained queue owns retry/error reporting. Never delete on failure.
+      });
     }, 1200);
-    return () => clearTimeout(timer);
-  }, [liveBlocks, commentsApi.comments, removeComment]);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [liveBlocks, liveBlocksDocId, commentsApi.comments, removeComment, saveStatus]);
   // Scroll the editor to a block (mirrors the shell's scrollToBlock; relies on
   // the `.wb-editor` direct-child-per-block invariant).
   const scrollToBlock = useCallback((blockIndex: number) => {
     const editorEl = document.querySelector('.wb-editor');
     const child = editorEl?.children[blockIndex] as HTMLElement | undefined;
+    if (editorEl instanceof HTMLElement) editorEl.focus({ preventScroll: true });
     child?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }, []);
 
@@ -210,14 +368,12 @@ export function WhiteboardPage({
   // content (which re-autosaves), so the session copy stays in sync.
   const editorRef = useRef(editor);
   editorRef.current = editor;
-  const liveBlocksRef = useRef(liveBlocks);
-  liveBlocksRef.current = liveBlocks;
   // Always-current doc id (handleBlocks' deps don't track doc.id, so its closure
   // can be stale when modes match across a switch — read the ref instead).
   const docIdRef = useRef<string | null>(doc?.id ?? null);
   docIdRef.current = doc?.id ?? null;
   const loadBlocks = useCallback((blocks: WhiteboardBlock[]) => {
-    editorRef.current?.commands.setContent(blocksToDoc(blocks), true);
+    editorRef.current?.commands.setContent(blocksToDoc(blocks), { emitUpdate: true });
   }, []);
 
   // --- outline hard link: report the caret's manuscript block + the block texts,
@@ -246,6 +402,7 @@ export function WhiteboardPage({
     };
   }, [editor]);
   const blockTexts = useMemo(() => liveBlocks.map((b) => b.text ?? ''), [liveBlocks]);
+  const blockIds = useMemo(() => liveBlocks.map((b) => b.id), [liveBlocks]);
   // Stamp the published texts with the doc `liveBlocks` belong to (NOT doc.id — see
   // liveBlocksDocId), so the outline can reject a re-anchor pass whose items are
   // from a different document. Because the stamp is set in the same update as the
@@ -254,8 +411,8 @@ export function WhiteboardPage({
   const onEditorLocationRef = useRef(onEditorLocation);
   onEditorLocationRef.current = onEditorLocation;
   useEffect(() => {
-    onEditorLocationRef.current?.(caretBlock, blockTexts, editorDocId);
-  }, [caretBlock, blockTexts, editorDocId]);
+    onEditorLocationRef.current?.(caretBlock, blockTexts, blockIds, editorDocId);
+  }, [caretBlock, blockTexts, blockIds, editorDocId]);
   // "New" creates a fresh DOCUMENT (blank manuscript + its own empty outline &
   // comments), same as the title-menu "New document" — not just a blank editor,
   // which would leave this document's outline orphaned against empty prose.
@@ -266,23 +423,37 @@ export function WhiteboardPage({
     onNewDocument: () => createNewDoc(),
   });
   const markFileDirty = fileDoc.markDirty;
+  const switchStoredDocument = useCallback(
+    async (id: string) => {
+      if (id === doc?.id) return;
+      if (fileDoc.filePath) {
+        const proceed = await fileDoc.confirmProceedPastUnsavedChanges(
+          'Save file changes before opening another Whiteboard document?',
+        );
+        if (!proceed) return;
+      }
+      if (await selectDocument(id)) fileDoc.resetForDocument();
+    },
+    [doc?.id, fileDoc.filePath, fileDoc.confirmProceedPastUnsavedChanges, fileDoc.resetForDocument, selectDocument],
+  );
+  const deleteStoredDocument = useCallback(
+    async (id: string) => {
+      const deletingCurrent = id === doc?.id;
+      if (deletingCurrent && fileDoc.filePath) {
+        const proceed = await fileDoc.confirmProceedPastUnsavedChanges(
+          'Save file changes before deleting this Whiteboard document?',
+        );
+        if (!proceed) return;
+      }
+      if ((await deleteDoc(id)) && deletingCurrent) fileDoc.resetForDocument();
+    },
+    [deleteDoc, doc?.id, fileDoc.filePath, fileDoc.confirmProceedPastUnsavedChanges, fileDoc.resetForDocument],
+  );
 
   // Import / Export (extends file management; never alters Open/Save semantics).
   const importExport = useImportExport({
     baseUrl,
     getBlocks: () => liveBlocksRef.current,
-    getMode: () => doc?.mode ?? defaultMode,
-    getTitle: () => doc?.title ?? 'Untitled',
-    getFileLabel: () => fileDoc.fileName,
-    getSettings: () => settingsApi.settings,
-    getComments: () =>
-      commentsApi.comments.map((c) => ({
-        quote: c.quote,
-        body: c.body,
-        resolved: c.resolved,
-        blockIndex: c.anchor.block_index,
-        createdAt: c.created_at,
-      })),
     applySettings: settingsApi.replace,
     loadBlocks,
     setMode,
@@ -309,9 +480,9 @@ export function WhiteboardPage({
     setDocumentMenuApi({
       documents: docList,
       currentDocId: doc?.id ?? '',
-      selectDocument,
-      createDocument: () => createNewDoc(),
-      deleteDocument: deleteDoc,
+      selectDocument: (id) => void switchStoredDocument(id),
+      createDocument: () => fileDocRef.current.newDocument(),
+      deleteDocument: (id) => void deleteStoredDocument(id),
       renameCurrent: renameDocument,
       newDocument: () => fileDocRef.current.newDocument(),
       openDocument: () => fileDocRef.current.openDocument(),
@@ -321,22 +492,38 @@ export function WhiteboardPage({
       printDocument: () => printRef.current(),
       hasFileBridge: filesAvailable(),
     });
-  }, [docList, doc?.id, selectDocument, createNewDoc, deleteDoc, renameDocument]);
+  }, [docList, doc?.id, switchStoredDocument, deleteStoredDocument, renameDocument]);
 
   // Clear the menu registration only on unmount (not on every list/id change).
   useEffect(() => () => setDocumentMenuApi(null), []);
 
   // The native File → Export → "Export as PDF" routes here (the data-export handler
   // ignores 'pdf'); PDF is the print path, not a file serializer.
-  useEffect(() => onMenuFile((a) => { if (a === 'export:pdf') printRef.current(); }), []);
+  useEffect(() => onMenuFile((a) => {
+    if (!isModalDialogOpen() && !isDocumentInteractionLocked() && a === 'export:pdf') {
+      printRef.current();
+    }
+  }), []);
 
   // Autosave + recompute the (client-derived) outline + live snapshot on edit.
   const handleBlocks = useCallback(
     (blocks: WhiteboardBlock[]) => {
+      // React state commits later; the file-save getter must see this exact edit
+      // in the same turn in which its synchronous content revision advances.
+      liveBlocksRef.current = blocks;
+      const receipt = onChangeBlocks(blocks);
+      const identity = captureDocumentIdentity();
+      liveBlocksPersistenceRef.current = {
+        documentId: identity.documentId,
+        incarnation: identity.incarnation,
+        generation: ++liveBlocksGenerationRef.current,
+        blocks,
+        durable: false,
+        receipt,
+      };
       markFileDirty();
       setLiveBlocks(blocks);
       setLiveBlocksDocId(docIdRef.current); // these blocks belong to the live doc
-      onChangeBlocks(blocks);
       onOutlineRef.current?.(deriveOutline(blocks, doc?.mode ?? 'novel'));
     },
     [onChangeBlocks, doc?.mode, markFileDirty],
@@ -361,13 +548,25 @@ export function WhiteboardPage({
     if (!doc) return;
     if (doc.id !== lastDocIdRef.current) {
       lastDocIdRef.current = doc.id;
-      setLiveBlocks(doc.blocks);
+      const idsChanged = doc.blocks.length !== editorInitialBlocks.length
+        || doc.blocks.some((block, index) => block.id !== editorInitialBlocks[index]?.id);
+      const receipt = idsChanged ? onChangeBlocks(editorInitialBlocks) : null;
+      liveBlocksRef.current = editorInitialBlocks;
+      liveBlocksPersistenceRef.current = {
+        documentId: doc.id,
+        incarnation: doc.incarnation,
+        generation: ++liveBlocksGenerationRef.current,
+        blocks: editorInitialBlocks,
+        durable: !idsChanged,
+        receipt,
+      };
+      setLiveBlocks(editorInitialBlocks);
       setLiveBlocksDocId(doc.id); // stamp atomically with the blocks
-      onOutlineRef.current?.(deriveOutline(doc.blocks, doc.mode));
+      onOutlineRef.current?.(deriveOutline(editorInitialBlocks, doc.mode));
     } else {
       onOutlineRef.current?.(deriveOutline(liveBlocksRef.current, doc.mode));
     }
-  }, [doc]);
+  }, [doc, editorInitialBlocks, onChangeBlocks]);
 
   // Surface the current writing mode to the shell (Outline mode-aware defaults).
   useEffect(() => {
@@ -382,6 +581,7 @@ export function WhiteboardPage({
   // View scale (Ctrl/Cmd +/-/0), Preview toggle (Ctrl/Cmd+Shift+E), Esc exits.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (isModalDialogOpen() || isDocumentInteractionLocked()) return;
       const mod = e.metaKey || e.ctrlKey;
       if (mod && !e.altKey) {
         if (e.key === '=' || e.key === '+') {
@@ -451,7 +651,12 @@ export function WhiteboardPage({
 
   return (
     <main className="whiteboard">
-      <ConfirmDialog
+      <RenderErrorBoundary
+        name="Writing workspace"
+        resetKey={`${doc?.id ?? 'none'}:${mode}`}
+        className="wb-document-boundary"
+      >
+        <ConfirmDialog
         open={pendingMode !== null}
         title="Change writing mode?"
         message={
@@ -486,7 +691,7 @@ export function WhiteboardPage({
         message={`Delete “${docList.find((d) => d.id === docToDelete)?.title || 'Untitled'}”? This also removes its outline and story bible. This can’t be undone.`}
         confirmLabel="Delete"
         onConfirm={() => {
-          if (docToDelete) deleteDoc(docToDelete);
+          if (docToDelete) void deleteStoredDocument(docToDelete);
           setDocToDelete(null);
         }}
         onCancel={() => setDocToDelete(null)}
@@ -500,7 +705,7 @@ export function WhiteboardPage({
                   type="button"
                   className="wb-menu-item wb-menu-strong"
                   onClick={() => {
-                    createNewDoc();
+                    fileDoc.newDocument();
                     close();
                   }}
                 >
@@ -517,7 +722,7 @@ export function WhiteboardPage({
                       aria-checked={d.id === doc?.id}
                       className={`wb-menu-item wb-doc-item${d.id === doc?.id ? ' is-current' : ''}`}
                       onClick={() => {
-                        selectDocument(d.id);
+                        void switchStoredDocument(d.id);
                         close();
                       }}
                     >
@@ -533,7 +738,7 @@ export function WhiteboardPage({
                       onClick={(e) => {
                         e.stopPropagation();
                         setDocToDelete(d.id);
-                        close();
+                        close({ restoreFocus: true });
                       }}
                     >
                       ×
@@ -547,7 +752,7 @@ export function WhiteboardPage({
                   className="wb-menu-item"
                   onClick={() => {
                     setRenameOpen(true);
-                    close();
+                    close({ restoreFocus: true });
                   }}
                 >
                   Rename current document…
@@ -661,7 +866,7 @@ export function WhiteboardPage({
           <>
             <WhiteboardEditor
               key={doc.id}
-              initialBlocks={doc.blocks}
+              initialBlocks={editorMountBlocks}
               mode={doc.mode}
               onChangeBlocks={handleBlocks}
               onEditorReady={setEditor}
@@ -685,40 +890,129 @@ export function WhiteboardPage({
       </div>
       {!showPreview && <StoryMap items={outlineItems} onNavigate={scrollToBlock} />}
       {editor && doc && (
-        <LittleBoyProvider
-          editor={editor}
-          mode={doc.mode}
-          baseUrl={baseUrl}
-          documentTitle={fileDoc.fileName}
-          screenplayElement={element}
-          narrativeProfile={narrativeProfileContext(settingsApi.settings)}
-        />
+        <RenderErrorBoundary
+          name="LittleBoy tools"
+          resetKey={`${doc.id}:${doc.incarnation}`}
+          className="wb-overlay-boundary"
+        >
+          <LittleBoyProvider
+            key={`${doc.id}:${doc.incarnation}`}
+            editor={editor}
+            mode={doc.mode}
+            baseUrl={baseUrl}
+            documentTitle={fileDoc.fileName}
+            screenplayElement={element}
+            narrativeProfile={narrativeProfileContext(settingsApi.settings)}
+          />
+        </RenderErrorBoundary>
       )}
-      <SettingsDialog
-        open={settingsOpen}
-        baseUrl={baseUrl}
-        writingSettingsApi={settingsApi}
-        onClose={onCloseSettings}
-      />
+      {settingsOpen && (
+        <RenderErrorBoundary
+          name="Settings dialog"
+          resetKey={doc?.id ?? 'none'}
+          className="wb-overlay-boundary"
+        >
+          <SettingsDialog
+            open
+            baseUrl={baseUrl}
+            writingSettingsApi={settingsApi}
+            onClose={onCloseSettings}
+          />
+        </RenderErrorBoundary>
+      )}
       {editor && doc && (
-        <CommentsLayer
-          editor={editor}
-          api={commentsApi}
-          activeId={activeCommentId}
-          setActiveId={setActiveCommentId}
-        />
+        <RenderErrorBoundary
+          name="Comments"
+          resetKey={doc.id}
+          className="wb-overlay-boundary"
+        >
+          <CommentsLayer
+            editor={editor}
+            api={commentsApi}
+            activeId={activeCommentId}
+            setActiveId={setActiveCommentId}
+          />
+        </RenderErrorBoundary>
       )}
 
-      {importExport.feedback && (
-        <div
-          className={`wb-toast wb-toast-${importExport.feedback.kind}`}
-          role="status"
-          onClick={importExport.clearFeedback}
-          title="Dismiss"
-        >
-          {importExport.feedback.message}
+      {(importExport.feedback || (doc && loadError) || recoveryNotices[0] || commentsApi.error) && (
+        <div className="wb-toast-stack" role="region" aria-label="Notifications">
+          {recoveryNotices[0] && (
+            <div
+              className="wb-toast wb-toast-recovery"
+              role="alert"
+              aria-atomic="true"
+            >
+              <span className="wb-toast-message">
+                {recoveryNotices[0].message}
+                {recoveryNotices.length > 1 ? ` (+${recoveryNotices.length - 1} more)` : ''}
+              </span>
+              <button
+                type="button"
+                className="wb-toast-dismiss"
+                onClick={() => dismissNotification(
+                  () => setRecoveryNotices((current) => current.slice(1)),
+                )}
+                title="Dismiss"
+                aria-label="Dismiss recovery notice"
+              >
+                ×
+              </button>
+            </div>
+          )}
+          {doc && loadError && (
+            <div
+              className="wb-toast wb-toast-error wb-toast-document-error"
+              role="alert"
+              aria-atomic="true"
+            >
+              <span className="wb-toast-message">{loadError}</span>
+              <button
+                type="button"
+                className="wb-toast-dismiss"
+                onClick={() => dismissNotification(dismissError)}
+                title="Dismiss"
+                aria-label="Dismiss document error"
+              >
+                ×
+              </button>
+            </div>
+          )}
+          {commentsApi.error && (
+            <div className="wb-toast wb-toast-error wb-toast-comment-error" role="alert" aria-atomic="true">
+              <span className="wb-toast-message">{commentsApi.error}</span>
+              <button
+                type="button"
+                className="wb-toast-dismiss"
+                onClick={() => dismissNotification(commentsApi.dismissError)}
+                title="Dismiss"
+                aria-label="Dismiss comment error"
+              >
+                ×
+              </button>
+            </div>
+          )}
+          {importExport.feedback && (
+            <div
+              className={`wb-toast wb-toast-${importExport.feedback.kind}`}
+              role={importExport.feedback.kind === 'error' ? 'alert' : 'status'}
+              aria-atomic="true"
+            >
+              <span className="wb-toast-message">{importExport.feedback.message}</span>
+              <button
+                type="button"
+                className="wb-toast-dismiss"
+                onClick={() => dismissNotification(importExport.clearFeedback)}
+                title="Dismiss"
+                aria-label="Dismiss import or export notification"
+              >
+                ×
+              </button>
+            </div>
+          )}
         </div>
       )}
+      </RenderErrorBoundary>
     </main>
   );
 }

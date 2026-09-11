@@ -5,7 +5,10 @@
  * + selected on open. Reuses the ConfirmDialog overlay/dialog styling.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
+
+import { ModalPortal } from './ModalPortal';
+import { useModalDialog } from './useModalDialog';
 
 interface Props {
   open: boolean;
@@ -33,6 +36,11 @@ export function PromptDialog({
 }: Props) {
   const [value, setValue] = useState(initialValue);
   const inputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+  const messageId = useId();
+
+  useModalDialog({ open, dialogRef, initialFocusRef: inputRef, onClose: onCancel });
 
   // Seed the field + focus/select it whenever the dialog opens (deps: [open]).
   useEffect(() => {
@@ -54,44 +62,53 @@ export function PromptDialog({
   };
 
   return (
-    <div
-      className="cf-overlay"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onCancel();
-      }}
-    >
-      <div className="cf-dialog" role="dialog" aria-modal="true" aria-labelledby="pd-title">
-        <h2 id="pd-title" className="cf-title">
-          {title}
-        </h2>
-        {message && <p className="cf-msg">{message}</p>}
-        <input
-          ref={inputRef}
-          className="pd-input"
-          type="text"
-          value={value}
-          placeholder={placeholder}
-          spellCheck={false}
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault();
-              submit();
-            } else if (e.key === 'Escape') {
-              e.preventDefault();
-              onCancel();
-            }
-          }}
-        />
-        <div className="cf-actions">
-          <button type="button" className="cf-btn cf-cancel" onClick={onCancel}>
-            {cancelLabel}
-          </button>
-          <button type="button" className="cf-btn cf-confirm" onClick={submit} disabled={!value.trim()}>
-            {confirmLabel}
-          </button>
+    <ModalPortal>
+      <div
+        data-wb-modal-layer
+        className="cf-overlay"
+        onClick={(event) => {
+          if (event.target === event.currentTarget) onCancel();
+        }}
+      >
+        <div
+          ref={dialogRef}
+          className="cf-dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={titleId}
+          aria-describedby={message ? messageId : undefined}
+          tabIndex={-1}
+        >
+          <h2 id={titleId} className="cf-title">
+            {title}
+          </h2>
+          {message && <p id={messageId} className="cf-msg">{message}</p>}
+          <input
+            ref={inputRef}
+            className="pd-input"
+            type="text"
+            aria-label={placeholder || title}
+            value={value}
+            placeholder={placeholder}
+            spellCheck={false}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                submit();
+              }
+            }}
+          />
+          <div className="cf-actions">
+            <button type="button" className="cf-btn cf-cancel" onClick={onCancel}>
+              {cancelLabel}
+            </button>
+            <button type="button" className="cf-btn cf-confirm" onClick={submit} disabled={!value.trim()}>
+              {confirmLabel}
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+    </ModalPortal>
   );
 }

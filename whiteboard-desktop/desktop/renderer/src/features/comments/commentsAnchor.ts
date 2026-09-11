@@ -3,8 +3,8 @@
  * stored anchors against the live text so highlights stay on their words after
  * edits.
  *
- * An anchor is (blockIndex, charFrom, charTo) — ProseMirror does not keep block
- * ids — plus a W3C-style text-quote selector: the exact `quote` with short
+ * New anchors use a stable block id plus index/offset navigation data. Legacy
+ * anchors still use index plus a W3C-style text-quote selector: exact `quote` with short
  * `prefix`/`suffix` context windows. Relocation uses that context to (a) pick the
  * RIGHT occurrence when the quoted text repeats ("the", a character name) instead
  * of blindly taking the first match, and (b) keep the comment attached when the
@@ -38,6 +38,7 @@ export function selectionToDraft(editor: Editor): CommentDraft | null {
   const endBlock = $to.index(0);
   const startBlockStart = $from.start();
   const fromOffset = from - startBlockStart;
+  const startBlockId = String(state.doc.child(startBlock).attrs.lfId ?? '').trim() || undefined;
 
   if (startBlock === endBlock) {
     const blockEnd = $from.end();
@@ -47,6 +48,7 @@ export function selectionToDraft(editor: Editor): CommentDraft | null {
     return {
       anchor: {
         block_index: startBlock,
+        block_id: startBlockId,
         from_offset: fromOffset,
         to_offset: toOffset,
         prefix: blockText.slice(Math.max(0, fromOffset - CONTEXT), fromOffset),
@@ -60,14 +62,17 @@ export function selectionToDraft(editor: Editor): CommentDraft | null {
   // Multi-block: start edge in the first block, end edge in the last. The quote
   // joins the spanned block texts with '\n' (split back out when relocating).
   const endBlockStart = $to.start();
+  const endBlockId = String(state.doc.child(endBlock).attrs.lfId ?? '').trim() || undefined;
   const toOffset = to - endBlockStart;
   const startBlockText = state.doc.textBetween(startBlockStart, $from.end());
   const endBlockText = state.doc.textBetween(endBlockStart, $to.end());
   return {
     anchor: {
       block_index: startBlock,
+      block_id: startBlockId,
       from_offset: fromOffset,
       end_block_index: endBlock,
+      end_block_id: endBlockId,
       to_offset: toOffset,
       prefix: startBlockText.slice(Math.max(0, fromOffset - CONTEXT), fromOffset),
       suffix: endBlockText.slice(toOffset, toOffset + CONTEXT),
@@ -79,7 +84,7 @@ export function selectionToDraft(editor: Editor): CommentDraft | null {
 
 // --- relocation -------------------------------------------------------------
 
-interface Located {
+export interface Located {
   blockIndex: number;
   from: number;
   to: number;
@@ -263,13 +268,17 @@ function locateSpan(
 
   // Pass B — quote edited away → bracket between surviving context landmarks.
   if (prefix.length >= MIN_CONTEXT_MATCH || suffix.length >= MIN_CONTEXT_MATCH) {
-    let bestB: { score: number; loc: Located } | null = null;
+    let bestB: { score: number; dist: number; loc: Located } | null = null;
     for (let bi = 0; bi < texts.length; bi += 1) {
       const t = texts[bi];
       if (typeof t !== 'string') continue;
       const bracket = bracketBetween(t, prefix, suffix, quote.length, hintFrom, hintTo);
-      if (bracket && (!bestB || bracket.score > bestB.score)) {
-        bestB = { score: bracket.score, loc: { blockIndex: bi, from: bracket.from, to: bracket.to } };
+      const dist = bracket
+        ? Math.abs(bi - hintBlock) * 100000 + Math.abs(bracket.from - hintFrom)
+        : Infinity;
+      if (bracket && (!bestB || bracket.score > bestB.score ||
+          (bracket.score === bestB.score && dist < bestB.dist))) {
+        bestB = { score: bracket.score, dist, loc: { blockIndex: bi, from: bracket.from, to: bracket.to } };
       }
     }
     if (bestB) return bestB.loc;
@@ -284,23 +293,27 @@ function locateSpan(
  * is relocated by its EDGES: the start edge (real prefix, block boundary after) and
  * the end edge (block boundary before, real suffix); the blocks between are filled.
  */
-export function commentSpans(comment: Comment, texts: string[]): Located[] {
+export function commentSpans(comment: Comment, texts: string[], blockIds: string[] = []): Located[] {
   const a = comment.anchor;
   const prefix = a.prefix ?? '';
   const suffix = a.suffix ?? '';
-  const endBlock = a.end_block_index ?? a.block_index;
+  const stableStart = a.block_id ? blockIds.indexOf(a.block_id) : -1;
+  const startBlock = stableStart >= 0 ? stableStart : a.block_index;
+  const legacyEnd = a.end_block_index ?? a.block_index;
+  const stableEnd = a.end_block_id ? blockIds.indexOf(a.end_block_id) : -1;
+  const endBlock = stableEnd >= 0 ? stableEnd : legacyEnd;
 
-  if (endBlock === a.block_index) {
+  if (endBlock === startBlock) {
     if (!comment.quote) {
       // No quote to relocate by — keep the stored span while its block exists.
-      return texts[a.block_index] == null ? [] : [{ blockIndex: a.block_index, from: a.from_offset, to: a.to_offset }];
+      return texts[startBlock] == null ? [] : [{ blockIndex: startBlock, from: a.from_offset, to: a.to_offset }];
     }
-    const loc = locateSpan(comment.quote, a.block_index, a.from_offset, prefix, suffix, texts);
+    const loc = locateSpan(comment.quote, startBlock, a.from_offset, prefix, suffix, texts);
     return loc ? [loc] : [];
   }
 
   const lines = comment.quote.split('\n');
-  const start = locateSpan(lines[0], a.block_index, a.from_offset, prefix, '', texts);
+  const start = locateSpan(lines[0], startBlock, a.from_offset, prefix, '', texts);
   const end = locateSpan(lines[lines.length - 1], endBlock, 0, '', suffix, texts);
 
   if (start && end && end.blockIndex >= start.blockIndex) {
@@ -321,8 +334,8 @@ export function commentSpans(comment: Comment, texts: string[]): Located[] {
 }
 
 /** The primary (start) span of a comment — used for popover/nav positioning. */
-export function locate(comment: Comment, texts: string[]): Located | null {
-  const spans = commentSpans(comment, texts);
+export function locate(comment: Comment, texts: string[], blockIds: string[] = []): Located | null {
+  const spans = commentSpans(comment, texts, blockIds);
   return spans.length ? spans[0] : null;
 }
 
@@ -332,10 +345,14 @@ export function locate(comment: Comment, texts: string[]): Located | null {
  * per block it spans). A comment that can't be placed produces no mark (and is
  * cleaned up via findOrphanIds).
  */
-export function reconcileMarks(comments: Comment[], texts: string[]): CommentMark[] {
+export function reconcileMarks(
+  comments: Comment[],
+  texts: string[],
+  blockIds: string[] = [],
+): CommentMark[] {
   const out: CommentMark[] = [];
   for (const c of comments) {
-    for (const s of commentSpans(c, texts)) {
+    for (const s of commentSpans(c, texts, blockIds)) {
       out.push({ id: c.id, blockIndex: s.blockIndex, from: s.from, to: s.to, resolved: c.resolved });
     }
   }
@@ -349,7 +366,11 @@ export function reconcileMarks(comments: Comment[], texts: string[]): CommentMar
  * while an in-span edit (quote changed, context intact) is preserved. Returns [] when
  * there are no blocks at all, so a load/doc-switch transient can't flag everything.
  */
-export function findOrphanIds(comments: Comment[], texts: string[]): string[] {
+export function findOrphanIds(
+  comments: Comment[],
+  texts: string[],
+  blockIds: string[] = [],
+): string[] {
   if (!texts.length) return [];
-  return comments.filter((c) => commentSpans(c, texts).length === 0).map((c) => c.id);
+  return comments.filter((c) => commentSpans(c, texts, blockIds).length === 0).map((c) => c.id);
 }

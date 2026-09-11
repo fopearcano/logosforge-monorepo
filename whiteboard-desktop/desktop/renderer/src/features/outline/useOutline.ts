@@ -13,8 +13,28 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { getCurrentDocId, registerDocFlusher, registerUnloadFlush, useCurrentDocId, withDoc } from '../../state/currentDocument';
-import { getOutlineItems, onOutlineRefresh, saveOutlineItems } from './outlineApi';
+import {
+  captureDocumentIncarnation,
+  getCurrentDocId,
+  markPendingDocSave,
+  useCurrentDocId,
+} from '../../state/currentDocument';
+import { canStartDocumentMutationDuringClose } from '../whiteboard/documentOperationGuard';
+import {
+  persistPendingDocument,
+  persistPendingDocumentOnUnload,
+} from '../../api/pendingDocumentPersistence';
+import {
+  getOutlineItemsForDocument,
+  onOutlineRefresh,
+} from './outlineApi';
+import {
+  flushOutlineSnapshots,
+  newestRetainedOutlineSnapshot,
+  peekRetainedOutlineSnapshot,
+  queueOutlineSnapshot,
+} from './pendingOutlineRecovery';
+import { OutlineLoadCoordinator } from './outlineLoadCoordinator';
 import { publishOutlineColors } from './outlineColorStore';
 import { instantiateTemplate, type OutlineTemplate } from './outlineTemplates';
 import * as M from './outlineModel';
@@ -91,12 +111,12 @@ export interface OutlineStore {
   setStatus: (id: string, status: OutlineStatus) => void;
   setColorLabel: (id: string, color: OutlineColor) => void;
   /** Bind a node to a manuscript block (blockIndex + a text snapshot for re-anchoring). */
-  linkToBlock: (id: string, blockIndex: number, quote: string) => void;
+  linkToBlock: (id: string, blockIndex: number, quote: string, blockId?: string) => void;
   unlink: (id: string) => void;
   /** Re-locate every link after the manuscript changed (no save unless something moved).
    *  `blockTextsDocId` stamps which document the texts belong to — re-anchoring is
    *  skipped unless it matches the loaded outline's document (guards doc switches). */
-  reanchor: (blockTexts: string[], blockTextsDocId: string | null) => void;
+  reanchor: (blockTexts: string[], blockTextsDocId: string | null, blockIds?: string[]) => void;
   toggleCompleted: (id: string) => void;
   addTag: (id: string, tag: string) => void;
   removeTag: (id: string, tag: string) => void;
@@ -161,38 +181,93 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
   baseUrlRef.current = baseUrl;
 
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pending = useRef<OutlineNode[] | null>(null);
+  const timerDocId = useRef('');
+  const loadCoordinator = useRef(new OutlineLoadCoordinator());
   // The document id whose items are currently in the store. Lags `docId` during a
   // switch (the new load hasn't resolved yet); `reanchor` compares against it so
   // it never re-anchors the NEW doc's links against the OLD doc's manuscript text.
   const loadedDocIdRef = useRef<string | null>(null);
 
-  const flush = useCallback(async () => {
-    const next = pending.current;
-    if (!next) return;
-    pending.current = null;
-    setSaveState('saving');
-    try {
-      await saveOutlineItems(baseUrlRef.current, next);
-      setSaveState('saved');
-    } catch {
-      setSaveState('error');
+  const flushDocument = useCallback((documentId: string): Promise<void> => {
+    if (!documentId) return Promise.resolve();
+    if (timer.current && timerDocId.current === documentId) {
+      clearTimeout(timer.current);
+      timer.current = null;
+      timerDocId.current = '';
     }
+    if (!peekRetainedOutlineSnapshot(documentId)) return Promise.resolve();
+    if (loadedDocIdRef.current === documentId) setSaveState('saving');
+    return flushOutlineSnapshots(
+      documentId,
+    ).then(
+      () => {
+        if (loadedDocIdRef.current === documentId) {
+          setSaveState('saved');
+          setError(null);
+        }
+      },
+      (saveError: unknown) => {
+        if (loadedDocIdRef.current === documentId) {
+          setSaveState('error');
+          setError(saveError instanceof Error ? saveError.message : String(saveError));
+        }
+        throw saveError;
+      },
+    );
   }, []);
 
   const scheduleSave = useCallback(
     (next: OutlineNode[]) => {
-      pending.current = next;
+      if (!canStartDocumentMutationDuringClose()) return;
+      const documentId = loadedDocIdRef.current;
+      if (!documentId || documentId !== getCurrentDocId()) return;
+      // A locally-authored snapshot is newer than any active GET, including an
+      // import refresh. Abort/invalidate that read before its stale response can
+      // replace the edit after this PUT is acknowledged.
+      loadCoordinator.current.cancel();
+      const incarnation = captureDocumentIncarnation(documentId);
+      queueOutlineSnapshot(documentId, next, {
+        write: (targetDocumentId, snapshot, revision) => persistPendingDocument(
+          baseUrlRef.current,
+          'outline',
+          targetDocumentId,
+          revision,
+          { items: snapshot },
+          incarnation,
+        ),
+        writeOnUnload: (targetDocumentId, snapshot, revision) => {
+          persistPendingDocumentOnUnload(
+            baseUrlRef.current,
+            'outline',
+            targetDocumentId,
+            revision,
+            { items: snapshot },
+            incarnation,
+          );
+        },
+      });
+      markPendingDocSave();
       setSaveState('saving');
       if (timer.current) clearTimeout(timer.current);
-      timer.current = setTimeout(() => void flush(), SAVE_DEBOUNCE_MS);
+      timerDocId.current = documentId;
+      timer.current = setTimeout(() => {
+        timer.current = null;
+        timerDocId.current = '';
+        void flushDocument(documentId).catch(() => {
+          /* the panel exposes the error and the shared queue retains the snapshot */
+        });
+      }, SAVE_DEBOUNCE_MS);
     },
-    [flush],
+    [flushDocument],
   );
 
   // Apply a pure model mutation, update state + ref, and queue a save.
   const mutate = useCallback(
     (fn: (items: OutlineNode[]) => OutlineNode[]): OutlineNode[] => {
+      if (!canStartDocumentMutationDuringClose()) return itemsRef.current;
+      if (!loadedDocIdRef.current || loadedDocIdRef.current !== getCurrentDocId()) {
+        return itemsRef.current;
+      }
       const next = fn(itemsRef.current);
       itemsRef.current = next;
       setItems(next);
@@ -204,69 +279,65 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
 
   // Load once the backend is reachable.
   useEffect(() => {
-    if (!ready) return;
-    const controller = new AbortController();
+    if (!ready || !docId) return;
+    const requestDocId = docId;
+    const request = loadCoordinator.current.begin(requestDocId);
+    const retainedBeforeLoad = peekRetainedOutlineSnapshot(requestDocId);
+    loadedDocIdRef.current = null;
     setLoading(true);
     setError(null);
-    getOutlineItems(baseUrl, controller.signal)
+    getOutlineItemsForDocument(baseUrl, requestDocId, request.signal)
       .then((loaded) => {
-        itemsRef.current = loaded;
-        loadedDocIdRef.current = docId; // these items belong to this doc
-        setItems(loaded);
+        if (!loadCoordinator.current.isCurrent(request, getCurrentDocId())) return;
+        const retained = newestRetainedOutlineSnapshot(
+          retainedBeforeLoad,
+          peekRetainedOutlineSnapshot(requestDocId),
+        );
+        const next = retained?.items ?? loaded;
+        itemsRef.current = next;
+        loadedDocIdRef.current = requestDocId;
+        setItems(next);
         setLoading(false);
+        if (retained) scheduleSave(retained.items);
       })
       .catch((err: unknown) => {
-        if (controller.signal.aborted) return;
+        if (!loadCoordinator.current.isCurrent(request, getCurrentDocId())) return;
         setError(err instanceof Error ? err.message : String(err));
         setLoading(false);
-      });
-    return () => controller.abort();
-  }, [ready, baseUrl, docId]);
+      })
+      .finally(() => loadCoordinator.current.finish(request));
+    return () => loadCoordinator.current.cancel(request);
+  }, [ready, baseUrl, docId, scheduleSave]);
 
   // Reload when the persisted list is rewritten out-of-band (e.g. a LogosForge
   // import). Keeps the panel in sync without a manual refresh.
   useEffect(() => {
     if (!ready) return undefined;
-    return onOutlineRefresh(() => {
-      getOutlineItems(baseUrl)
-        .then((loaded) => {
-          itemsRef.current = loaded;
-          loadedDocIdRef.current = getCurrentDocId(); // refreshed for the active doc
-          setItems(loaded);
-        })
-        .catch(() => {
-          /* best-effort; the next mount reload will recover */
-        });
+    return onOutlineRefresh((snapshot) => {
+      if (snapshot.documentId !== getCurrentDocId()) return;
+      loadCoordinator.current.cancel();
+      itemsRef.current = snapshot.items;
+      loadedDocIdRef.current = snapshot.documentId;
+      setItems(snapshot.items);
+      setLoading(false);
+      setError(null);
     });
-  }, [ready, baseUrl]);
+  }, [ready]);
+
+  useEffect(() => () => loadCoordinator.current.cancel(), []);
 
   // Flush a pending save on unmount (e.g. when the Outline panel is hidden).
   useEffect(
     () => () => {
+      const documentId = timerDocId.current || loadedDocIdRef.current || getCurrentDocId();
       if (timer.current) clearTimeout(timer.current);
-      if (pending.current) void flush();
+      timer.current = null;
+      timerDocId.current = '';
+      if (peekRetainedOutlineSnapshot(documentId)) {
+        void flushDocument(documentId).catch(() => {});
+      }
     },
-    [flush],
-  );
-
-  // Drain a pending outline save into the OLD document before a switch changes
-  // the active id (the new doc reloads via emitOutlineRefresh).
-  useEffect(() => registerDocFlusher(flush), [flush]);
-
-  // Crash recovery: flush the pending outline with a keepalive PUT on an unclean exit.
-  useEffect(
-    () =>
-      registerUnloadFlush(() => {
-        const items = pending.current;
-        if (!items) return;
-        fetch(withDoc(`${baseUrlRef.current}/api/outline/items`), {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ items }),
-          keepalive: true,
-        });
-      }),
-    [],
+    [flushDocument],
   );
 
   // Keep the zoom root valid — clear it if that node vanishes (delete/import).
@@ -433,8 +504,12 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
     [mutate],
   );
   const linkToBlock = useCallback(
-    (id: string, blockIndex: number, quote: string) =>
-      mutate((list) => M.setLink(list, id, { blockIndex, quote }, now())),
+    (id: string, blockIndex: number, quote: string, blockId?: string) =>
+      mutate((list) => M.setLink(list, id, {
+        blockIndex,
+        quote,
+        ...(blockId ? { blockId } : {}),
+      }, now())),
     [mutate],
   );
   const unlink = useCallback(
@@ -444,7 +519,7 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
   // Re-anchor without the generic `mutate` so an unchanged pass (nothing moved)
   // does NOT schedule a save — this runs on every manuscript edit.
   const reanchor = useCallback(
-    (blockTexts: string[], blockTextsDocId: string | null) => {
+    (blockTexts: string[], blockTextsDocId: string | null, blockIds: string[] = []) => {
       // Doc-identity guard: the caller stamps `blockTexts` with the document they
       // came from. During a switch the editor can emit one doc's text while the
       // store still holds the OTHER doc's links; re-anchoring then would relocate
@@ -452,7 +527,7 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
       // and the loaded items belong to the SAME document.
       if (!blockTextsDocId || blockTextsDocId !== loadedDocIdRef.current) return;
       const cur = itemsRef.current;
-      const next = M.reanchorLinks(cur, blockTexts, now());
+      const next = M.reanchorLinks(cur, blockTexts, now(), blockIds);
       if (next === cur) return;
       itemsRef.current = next;
       setItems(next);

@@ -6,6 +6,7 @@
 import type { WhiteboardBlock } from '../whiteboard/types';
 import { fileStateLabel, windowTitle } from './fileState';
 import { baseName, blocksToText, defaultExtForMode, suggestedFileName, textToBlocks } from './fileSerialize';
+import { FileSessionCoordinator } from './fileSessionStore';
 
 let passed = 0;
 const failures: string[] = [];
@@ -71,6 +72,75 @@ check('state untitled clean', fileStateLabel('Untitled', false, false) === 'Unti
 check('state untitled dirty', fileStateLabel('Untitled', false, true) === 'Untitled — Modified');
 check('state file clean', fileStateLabel('script.fountain', true, false) === 'script.fountain — Saved to file');
 check('state file dirty', fileStateLabel('script.fountain', true, true) === 'script.fountain — Modified');
+
+// 8. Saving revision N must not clear an edit made while its write is pending.
+{
+  const session = new FileSessionCoordinator();
+  session.markDirty();
+  const written = session.capture('doc-a');
+  session.patch({ status: 'saving' });
+  session.markDirty();
+  const completion = session.completeSave(written, 'doc-a', 'C:\\drafts\\story.md');
+  check('save completion remains in the same context', completion.currentContext);
+  check('edit during save prevents clean completion', !completion.clean);
+  check('edit during save remains dirty', session.getSnapshot().dirty);
+  check('Save As still associates the chosen path', session.getSnapshot().filePath === 'C:\\drafts\\story.md');
+  check('newer edit restores unsaved status', session.getSnapshot().status === 'unsaved');
+}
+
+// 9. A late dialog/write response cannot mutate a replacement file context.
+{
+  const session = new FileSessionCoordinator();
+  session.markDirty();
+  const stale = session.capture('doc-a');
+  session.replaceContext('C:\\drafts\\other.md');
+  const completion = session.completeSave(stale, 'doc-b', 'C:\\drafts\\stale.md');
+  check('stale document completion is rejected', !completion.currentContext);
+  check('stale completion cannot replace path', session.getSnapshot().filePath === 'C:\\drafts\\other.md');
+}
+
+// 10. Disk writes are FIFO, and a rejected write cannot poison the queue.
+{
+  const session = new FileSessionCoordinator();
+  const events: string[] = [];
+  let releaseFirst!: () => void;
+  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const first = session.runSave(async () => {
+    events.push('first:start');
+    await firstGate;
+    events.push('first:end');
+  });
+  const second = session.runSave(async () => {
+    events.push('second:start');
+    events.push('second:end');
+  });
+  await Promise.resolve();
+  check('second write waits for first', json(events) === json(['first:start']));
+  releaseFirst();
+  await Promise.all([first, second]);
+  check(
+    'writes finish in request order',
+    json(events) === json(['first:start', 'first:end', 'second:start', 'second:end']),
+  );
+
+  const failed = session.runSave(async () => { throw new Error('expected'); });
+  const recovered = session.runSave(async () => 'recovered');
+  check('failed queue item rejects its own caller', (await Promise.allSettled([failed]))[0]?.status === 'rejected');
+  check('write after failure still runs', (await recovered) === 'recovered');
+  await session.waitForSaves();
+
+  const drainingSession = new FileSessionCoordinator();
+  let releaseDrainHead!: () => void;
+  const drainHeadGate = new Promise<void>((resolve) => { releaseDrainHead = resolve; });
+  void drainingSession.runSave(() => drainHeadGate);
+  await Promise.resolve();
+  const draining = drainingSession.waitForSaves();
+  let appendedRan = false;
+  void drainingSession.runSave(async () => { appendedRan = true; });
+  releaseDrainHead();
+  await draining;
+  check('queue drain includes writes appended while waiting', appendedRan);
+}
 
 // --- report ---
 console.log(`File management tests: ${passed} passed, ${failures.length} failed`);
