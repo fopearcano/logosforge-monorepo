@@ -3,7 +3,7 @@
 # Build and smoke-test the unsigned LogosForge Whiteboard Intel release on the
 # same kind of Mac used by .github/workflows/release-whiteboard-macos.yml.
 #
-# Prerequisites: Intel macOS 13 Ventura or newer, Node.js 22.12+, Python 3.11+,
+# Prerequisites: Intel macOS 12 Monterey or newer, Node.js 22.12+, Python 3.11+,
 # npm, Xcode Command Line Tools, curl, file, and lsof. The source checkout must
 # contain sibling logosforge/ and whiteboard-desktop/ directories.
 #
@@ -72,7 +72,7 @@ ARCH="$(uname -m)"
 
 MACOS_VERSION="$(sw_vers -productVersion)"
 MACOS_MAJOR="${MACOS_VERSION%%.*}"
-[ "$MACOS_MAJOR" -ge 13 ] || die "macOS 13 Ventura or newer is required; found $MACOS_VERSION"
+[ "$MACOS_MAJOR" -ge 12 ] || die "macOS 12 Monterey or newer is required; found $MACOS_VERSION"
 
 node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 12) ? 0 : 1)' \
   || die "Node.js 22.12 or newer is required; found $(node -v)"
@@ -151,7 +151,7 @@ say "5. Install desktop dependencies and verify Electron toolchain"
 ( cd "$DESKTOP" && npm ci )
 ELECTRON_VERSION="$(cd "$DESKTOP" && node -p 'require("./node_modules/electron/package.json").version')"
 BUILDER_VERSION="$(cd "$DESKTOP" && node -p 'require("./node_modules/electron-builder/package.json").version')"
-case "$ELECTRON_VERSION" in 44.*) ;; *) die "expected Electron 44.x, found $ELECTRON_VERSION" ;; esac
+case "$ELECTRON_VERSION" in 43.*) ;; *) die "expected Electron 43.x, found $ELECTRON_VERSION" ;; esac
 case "$BUILDER_VERSION" in 26.*) ;; *) die "expected electron-builder 26.x, found $BUILDER_VERSION" ;; esac
 printf 'Electron %s | electron-builder %s\n' "$ELECTRON_VERSION" "$BUILDER_VERSION"
 
@@ -224,7 +224,7 @@ printf 'Installer: %s\n' "$DMG"
 
 cat <<EOF
 
-To validate the downloaded unsigned-DMG experience on macOS 13+:
+To validate the downloaded unsigned-DMG experience on macOS 12+:
   1. Mount "$DMG" and copy LogosForge Whiteboard.app to /Applications.
   2. Clear quarantine recursively so the bundled backend is included:
        xattr -cr "/Applications/LogosForge Whiteboard.app"

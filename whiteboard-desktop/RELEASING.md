@@ -7,16 +7,22 @@ and a new tag.
 
 ## Release outputs
 
-| Platform | Workflow | Runner | Artifacts |
-|---|---|---|---|
-| Windows x64 | `release-whiteboard-windows.yml` | `windows-latest` | NSIS installer and portable `.exe` |
-| macOS Intel | `release-whiteboard-macos.yml` | `[self-hosted, macOS, X64]` | unsigned `.dmg` |
-| Linux x64 | `release-whiteboard-linux.yml` | `ubuntu-latest` | `.AppImage` |
+| Platform    | Workflow                         | Runner                      | Artifacts                          |
+| ----------- | -------------------------------- | --------------------------- | ---------------------------------- |
+| Windows x64 | `release-whiteboard-windows.yml` | `windows-latest`            | NSIS installer and portable `.exe` |
+| macOS Intel | `release-whiteboard-macos.yml`   | `[self-hosted, macOS, X64]` | unsigned `.dmg`                    |
+| Linux x64   | `release-whiteboard-linux.yml`   | `ubuntu-latest`             | `.AppImage`                        |
 
-The self-hosted Mac must be an Intel (`x86_64`) machine running **macOS 13
-Ventura or newer**, with Python 3.11+, Node.js 22.12+, npm, Xcode Command Line
+The self-hosted Mac must be an Intel (`x86_64`) machine running **macOS 12
+Monterey or newer**, with Python 3.11+, Node.js 22.12+, npm, Xcode Command Line
 Tools, and the runner online. Keep all three labels exactly as shown above;
 changing their case or spelling prevents the job from being assigned.
+
+The Monterey workflow temporarily keeps JavaScript actions on GitHub's Node 20
+action runtime because Node 24 requires macOS 13.5+. GitHub removes that escape
+hatch on **2026-09-23**, after which this runner must be upgraded to macOS 13.5+
+before it can build another release. Already-built Electron 43 packages are not
+affected by that CI deadline.
 
 Every workflow freezes the Python Whiteboard wrapper and shared core with
 PyInstaller, smoke-tests that native backend, packages it beside the Electron

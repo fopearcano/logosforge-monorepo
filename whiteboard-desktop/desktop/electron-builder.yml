@@ -41,9 +41,9 @@ portable:
 # (identity: null): Gatekeeper will warn until an Apple Developer ID + notarization
 # are configured. Apple Silicon / universal are a later milestone.
 mac:
-  # Electron 44 follows Chromium in requiring Ventura or newer. Record the
-  # same floor in Info.plist so Finder reports compatibility accurately.
-  minimumSystemVersion: "13.0.0"
+  # Electron 43 is the final supported line for Monterey. Record that floor in
+  # Info.plist so Finder reports compatibility accurately.
+  minimumSystemVersion: "12.0.0"
   # A 1024×1024 PNG source — electron-builder generates the multi-resolution
   # .icns on the macOS runner (its converter is more reliable than a hand-rolled
   # .icns). The art is a rounded tile with transparent corners, so it reads

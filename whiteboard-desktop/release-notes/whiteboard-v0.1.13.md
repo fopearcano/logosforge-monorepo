@@ -21,7 +21,9 @@
 ## Platforms
 
 - Windows x64: installer and portable executable.
-- macOS Intel x64: DMG. Apple Silicon and universal packages are deferred.
+- macOS Intel x64: DMG for macOS 12 Monterey or newer. This release stays on
+  Electron 43, the final Electron line supporting Monterey. Apple Silicon and
+  universal packages are deferred.
 - Linux x64: AppImage.
 
 Windows SmartScreen and macOS Gatekeeper may warn because the builds are not yet

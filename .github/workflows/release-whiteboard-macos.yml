@@ -1,12 +1,12 @@
 name: Release — LogosForge Whiteboard (macOS, Intel)
 
-# Builds the macOS Intel (x64) DMG for LogosForge Whiteboard desktop on macos-13.
+# Builds the macOS Intel (x64) DMG for LogosForge Whiteboard desktop on macOS 12+.
 # Fully self-contained: the Electron shell + the renderer + a PyInstaller-frozen
 # copy of the Whiteboard backend (which embeds the Python core) — no Python needed
 # on the user's machine.
 #
 # Runs on a SELF-HOSTED Intel Mac (labels: self-hosted, macOS, X64). GitHub's
-# hosted macos-13 (Intel) runner would not allocate on this account (jobs sat
+# hosted Intel runners would not allocate on this account (jobs sat
 # `pending` forever), and you can't produce an x64 build on an arm64 runner
 # (PyInstaller can't cross-compile the backend) — so the build runs on your own
 # Intel Mac, which is also the test target. Set the runner up once via repo
@@ -48,18 +48,23 @@ permissions:
 
 concurrency:
   group: release-whiteboard-macos-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build-macos-intel:
     runs-on: [self-hosted, macOS, X64] # your Intel Mac (self-hosted runner)
     timeout-minutes: 45
+    env:
+      # GitHub's Node 24 action runtime requires macOS 13.5+. Keep the JS
+      # actions on their declared Node 20 runtime for this Monterey release.
+      # GitHub removes this temporary escape hatch on 2026-09-23.
+      ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: "true"
     defaults:
       run:
         shell: bash
 
     steps:
-      - name: Verify Intel macOS 13+ release host
+      - name: Verify Intel macOS 12+ release host
         run: |
           set -euo pipefail
 
@@ -82,20 +87,20 @@ jobs:
               exit 1
               ;;
           esac
-          if [ "$host_major" -lt 13 ]; then
-            echo "::error::Whiteboard's Intel release requires macOS 13 or newer; runner reported $host_version."
+          if [ "$host_major" -lt 12 ]; then
+            echo "::error::Whiteboard's Intel release requires macOS 12 or newer; runner reported $host_version."
             exit 1
           fi
           echo "release host OK: macOS $host_version ($host_arch)"
 
       - name: Checkout monorepo
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
 
@@ -369,9 +374,52 @@ jobs:
           # build doesn't fail looking for a cert; the DMG is un-notarized.
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
+      - name: Verify packaged Monterey app
+        working-directory: whiteboard-desktop/desktop
+        run: |
+          set -euo pipefail
+
+          version="${{ steps.release.outputs.version }}"
+          app="release/mac/LogosForge Whiteboard.app"
+          executable="$app/Contents/MacOS/LogosForge Whiteboard"
+          backend="$app/Contents/Resources/backend/logosforge-whiteboard-backend"
+          dmg="release/LogosForge Whiteboard-${version}-x64.dmg"
+
+          [ -d "$app" ] || { echo "::error::Packaged app is missing: $app"; exit 1; }
+          [ -x "$executable" ] || { echo "::error::Packaged Electron executable is missing: $executable"; exit 1; }
+          [ -x "$backend" ] || { echo "::error::Packaged backend is missing: $backend"; exit 1; }
+          [ -f "$dmg" ] || { echo "::error::Versioned DMG is missing: $dmg"; exit 1; }
+
+          minimum_system_version="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$app/Contents/Info.plist")"
+          if [ "$minimum_system_version" != "12.0.0" ]; then
+            echo "::error::Expected LSMinimumSystemVersion 12.0.0, found $minimum_system_version."
+            exit 1
+          fi
+
+          file "$executable" | grep -q 'x86_64' || {
+            echo "::error::Packaged Electron executable is not Intel x86_64."
+            exit 1
+          }
+          file "$backend" | grep -q 'x86_64' || {
+            echo "::error::Packaged backend is not Intel x86_64."
+            exit 1
+          }
+
+          packaged_electron_version="$(ELECTRON_RUN_AS_NODE=1 "$executable" -p 'process.versions.electron')"
+          case "$packaged_electron_version" in
+            43.*) ;;
+            *)
+              echo "::error::Expected packaged Electron 43.x, found $packaged_electron_version."
+              exit 1
+              ;;
+          esac
+
+          echo "packaged app OK: Electron $packaged_electron_version, macOS $minimum_system_version, Intel x64"
+          shasum -a 256 "$dmg"
+
       # --- 3. Publish ------------------------------------------------------
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: logosforge-whiteboard-macos-x64
           path: whiteboard-desktop/desktop/release/*.dmg
