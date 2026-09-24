@@ -13,7 +13,6 @@ import time
 import urllib.request
 
 import pytest
-
 from logosforge.api.actions import run_action
 from logosforge.db import Database
 from logosforge.live_context import (
@@ -94,6 +93,30 @@ def test_action_get_current_selection():
     assert res["selection"] == "hello" and res["length"] == 5
 
 
+def test_live_context_actions_do_not_expose_another_project():
+    db, live_project, live_scene = _db_with_scene()
+    other_project = db.create_project("Other")
+    set_live_context(
+        project_id=live_project.id,
+        active_scene_id=live_scene.id,
+        selection="private draft text",
+    )
+
+    context = run_action(db, other_project.id, "get_live_context", {})["result"]
+    assert context == {
+        "available": False,
+        "project_id": None,
+        "active_scene_id": None,
+        "has_selection": False,
+        "selection_length": 0,
+    }
+
+    selection = run_action(
+        db, other_project.id, "get_current_selection", {},
+    )["result"]
+    assert selection == {"available": False, "selection": "", "length": 0}
+
+
 def test_action_get_active_scene_returns_scene():
     db, proj, scene = _db_with_scene()
     set_live_context(project_id=proj.id, active_scene_id=scene.id, selection="")
@@ -105,6 +128,21 @@ def test_action_get_active_scene_graceful_when_none():
     db, proj, _ = _db_with_scene()
     res = run_action(db, proj.id, "get_active_scene", {})
     assert res["ok"] is False and "active scene" in res["error"].lower()
+
+
+def test_action_get_active_scene_fails_closed_for_another_project():
+    db, live_project, live_scene = _db_with_scene()
+    other_project = db.create_project("Other")
+    set_live_context(
+        project_id=live_project.id,
+        active_scene_id=live_scene.id,
+        selection="private draft text",
+    )
+
+    res = run_action(db, other_project.id, "get_active_scene", {})
+    assert res["ok"] is False
+    assert "active scene" in res["error"].lower()
+    assert "Opening" not in res["error"]
 
 
 def test_live_actions_are_read_category():
@@ -130,7 +168,7 @@ def _wait_health(url: str, tries: int = 60) -> bool:
             with urllib.request.urlopen(url, timeout=1) as r:
                 if r.status == 200:
                     return True
-        except Exception:
+        except (OSError, urllib.error.URLError):
             time.sleep(0.1)
     return False
 
@@ -163,7 +201,7 @@ def test_embedded_server_serves_live_db_and_context():
 
 def test_embedded_server_double_start_is_idempotent():
     from logosforge.api.embedded import EmbeddedApiServer
-    db, proj, _ = _db_with_scene()
+    db, _proj, _ = _db_with_scene()
     server = EmbeddedApiServer(db, port=_free_port())
     server.start()
     try:
@@ -180,15 +218,19 @@ def test_mcp_live_tools_map_to_actions():
     from logosforge.librechat import mcp_server as M
 
     class _C:
-        def __init__(self): self.calls = []
+        def __init__(self):
+            self.calls = []
+            self.project_id = 1
+
         def execute(self, action, args=None):
             self.calls.append(action)
             return {"ok": True, "result": {"action": action}}
 
     c = _C()
-    M.call_tool(c, "logosforge_get_live_context", {})
-    M.call_tool(c, "logosforge_get_current_scene", {})
-    M.call_tool(c, "logosforge_get_current_selection", {})
+    gateway = M.LogosForgeMcpGateway(c)
+    M.call_tool(gateway, "logosforge_get_live_context", {})
+    M.call_tool(gateway, "logosforge_get_current_scene", {})
+    M.call_tool(gateway, "logosforge_get_current_selection", {})
     assert c.calls == ["get_live_context", "get_active_scene", "get_current_selection"]
 
 

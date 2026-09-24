@@ -65,8 +65,20 @@ jobs:
       - name: Install core and test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r logosforge/requirements.txt httpx pytest
+          python -m pip install -r logosforge/requirements.txt "./logosforge[mcp]" httpx pytest
           python -m pip check
+
+      - name: Verify MCP stdio test dependency
+        run: |
+          python - <<'PY'
+          from importlib.metadata import version
+          from mcp.client.stdio import stdio_client
+          from mcp.server import Server
+
+          assert stdio_client is not None
+          assert Server is not None
+          print(f"MCP SDK {version('mcp')} is available for the real stdio test")
+          PY
 
       - name: Run complete core suite
         working-directory: logosforge

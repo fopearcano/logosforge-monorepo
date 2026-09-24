@@ -10,7 +10,6 @@ from logosforge.connector_registry import ActionDef, ActionParam, register
 from logosforge.db import Database
 from logosforge.live_context import get_live_context
 
-
 # =============================================================================
 # READ ACTIONS
 # =============================================================================
@@ -288,6 +287,17 @@ def _handle_list_available_actions(db: Database, project_id: int, **kwargs) -> l
 
 def _handle_get_live_context(db: Database, project_id: int, **kwargs) -> dict:
     ctx = get_live_context()
+    if not ctx.available or ctx.project_id != project_id:
+        # The store is process-global because it mirrors the one desktop editor.
+        # Treat another project's context exactly like no live context so callers
+        # cannot infer its active scene or selection state.
+        return {
+            "available": False,
+            "project_id": None,
+            "active_scene_id": None,
+            "has_selection": False,
+            "selection_length": 0,
+        }
     return {
         "available": ctx.available,
         "project_id": ctx.project_id,
@@ -299,6 +309,12 @@ def _handle_get_live_context(db: Database, project_id: int, **kwargs) -> dict:
 
 def _handle_get_current_selection(db: Database, project_id: int, **kwargs) -> dict:
     ctx = get_live_context()
+    if not ctx.available or ctx.project_id != project_id:
+        return {
+            "available": False,
+            "selection": "",
+            "length": 0,
+        }
     return {
         "available": ctx.available,
         "selection": ctx.selection,
@@ -308,7 +324,11 @@ def _handle_get_current_selection(db: Database, project_id: int, **kwargs) -> di
 
 def _handle_get_active_scene(db: Database, project_id: int, **kwargs) -> dict:
     ctx = get_live_context()
-    if not ctx.available or ctx.active_scene_id is None:
+    if (
+        not ctx.available
+        or ctx.project_id != project_id
+        or ctx.active_scene_id is None
+    ):
         return {
             "error": "No active scene. The API may not be running inside the "
                      "desktop app, or no scene is currently open.",
