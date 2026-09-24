@@ -18,6 +18,7 @@ import * as http from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+import { removeRuntimeDescriptor, writeRuntimeDescriptor } from './mcp-runtime';
 import { selectAvailablePort } from './port-selection';
 import { isExpectedCoreHealth } from './security';
 
@@ -88,6 +89,8 @@ export interface CoreManagerOptions {
    * to preserve the existing behaviour / connect-to-running-core.
    */
   dbPath?: string;
+  /** Private per-user descriptor used by the packaged stdio MCP launcher. */
+  mcpRuntimePath?: string;
 }
 
 /** The core repo dir (sibling of pro-desktop) and its venv python. Both overridable via env. */
@@ -174,16 +177,61 @@ export class CoreManager {
     for (const cb of this.listeners) cb(this.status);
   }
 
+  private clearRuntimeDescriptor(requireCurrentNonce = true): void {
+    const target = this.opts.mcpRuntimePath;
+    if (!target) return;
+    try {
+      removeRuntimeDescriptor(target, requireCurrentNonce ? this.instanceNonce : undefined);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      console.error(`[mcp] Could not remove the runtime descriptor: ${detail}`);
+    }
+  }
+
+  private publishRuntimeDescriptor(): string | null {
+    const target = this.opts.mcpRuntimePath;
+    if (!target) return null;
+    const corePid = this.child?.pid;
+    if (!corePid) return 'the managed core process id is unavailable';
+    try {
+      writeRuntimeDescriptor(target, {
+        schema_version: 1,
+        base_url: this.endpoint,
+        auth_token: this.authToken,
+        instance_nonce: this.instanceNonce,
+        app_pid: process.pid,
+        core_pid: corePid,
+        created_at: new Date().toISOString(),
+      });
+      return null;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      console.error(`[mcp] Could not publish the runtime descriptor: ${detail}`);
+      return 'the local Codex bridge could not publish its private connection file';
+    }
+  }
+
+  private setConnected(detail: string): void {
+    const bridgeError = this.publishRuntimeDescriptor();
+    this.setStatus({
+      state: 'connected',
+      managed: this.managed,
+      detail: bridgeError ? `${detail} MCP unavailable: ${bridgeError}.` : detail,
+    });
+  }
+
   async start(): Promise<void> {
+    // The single-instance Electron shell owns this exact path. Remove a crash
+    // leftover before a new session can publish credentials.
+    this.clearRuntimeDescriptor(false);
     this.setStatus({ state: 'connecting', detail: 'Looking for the logosforge core…' });
 
     // 1. Reuse only a process carrying this manager's one-time nonce (normally
     // reachable only if start() is called twice on the same manager instance).
     if (await this.ping()) {
-      this.setStatus({
-        state: 'connected', managed: this.managed,
-        detail: this.managed ? 'Core launched by the app.' : 'Connected to a verified core.',
-      });
+      this.setConnected(
+        this.managed ? 'Core launched by the app.' : 'Connected to a verified core.',
+      );
       return;
     }
 
@@ -214,17 +262,19 @@ export class CoreManager {
       if (this.spawnFailed) return;
       if (await this.ping()) {
         this.managed = true;
-        this.setStatus({ state: 'connected', managed: true, detail: 'Core launched by the app.' });
+        this.setConnected('Core launched by the app.');
         return;
       }
       await delay(1000);
     }
     if (this.status.state !== 'error') {
+      this.clearRuntimeDescriptor();
       this.setStatus({ state: 'error', detail: 'Core did not become healthy in time.' });
     }
   }
 
   stop(): void {
+    this.clearRuntimeDescriptor();
     if (this.child && this.managed) {
       const child = this.child;
       this.child = null;
@@ -291,12 +341,14 @@ export class CoreManager {
     child.stderr?.on('data', (d) => console.log('[core]', String(d).trim()));
 
     child.on('error', (err) => {
+      this.clearRuntimeDescriptor();
       this.spawnFailed = true;
       this.child = null;
       const hint = this.opts.bundledCorePath ? 'The bundled core failed to launch.' : 'Is the logosforge venv set up?';
       this.setStatus({ state: 'error', detail: `Failed to start the core (${err.message}). ${hint}` });
     });
     child.on('exit', (code) => {
+      this.clearRuntimeDescriptor();
       this.child = null;
       if (this.status.state !== 'connected') {
         this.spawnFailed = true;

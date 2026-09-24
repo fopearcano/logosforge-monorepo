@@ -5,6 +5,12 @@ import { CoreManager, type CoreStatus } from './core-manager';
 import { serveStatic, type StaticServer } from './static-server';
 import { openFile, saveFile, openExternal, loadLayout, saveLayout, type DialogFilter } from './file-manager';
 import { buildAppMenu } from './menu';
+import { installMcpCompanion, mcpCompanionPath, runtimeDescriptorPath } from './mcp-runtime';
+import {
+  bundledMcpExecutableName,
+  resolveBundledCorePath,
+  resolveBundledMcpPath,
+} from './platform-paths';
 
 // Match the product name so per-user data lands in %APPDATA%\LogosForge Pro\
 // (not the scoped package name @logosforge\pro-desktop). Must precede getPath.
@@ -15,15 +21,20 @@ const isProd = app.isPackaged || process.argv.includes('--prod');
 
 // Packaged builds ship a self-contained core under resources/core; dev spawns
 // the sibling repo's venv (bundledCorePath undefined → CoreManager uses python).
-const CORE_EXE = process.platform === 'win32' ? 'logosforge-core.exe' : 'logosforge-core';
-const bundledCorePath = app.isPackaged ? path.join(process.resourcesPath, 'core', CORE_EXE) : undefined;
+const bundledCorePath = app.isPackaged ? resolveBundledCorePath(process.resourcesPath) : undefined;
+const bundledMcpPath = app.isPackaged ? resolveBundledMcpPath(process.resourcesPath) : undefined;
 // Packaged builds pin the DB to a stable per-user dir (NOT the install/temp dir,
 // which a portable build wipes on exit). Dev leaves it unset (unchanged).
 const dbPath = app.isPackaged ? path.join(app.getPath('userData'), 'logosforge.db') : undefined;
+const mcpRuntimePath = runtimeDescriptorPath(app.getPath('userData'));
+const installedMcpPath = mcpCompanionPath(
+  app.getPath('userData'),
+  bundledMcpExecutableName(process.platform),
+);
 
 let mainWindow: BrowserWindow | null = null;
 let rendererServer: StaticServer | null = null;
-const core = new CoreManager({ bundledCorePath, dbPath });
+const core = new CoreManager({ bundledCorePath, dbPath, mcpRuntimePath });
 let allowClose = false;
 let isQuitting = false;
 let closeInProgress = false;
@@ -162,8 +173,8 @@ function registerIpc(): void {
   });
 }
 
-// Single-instance: a second launch focuses the existing window instead of
-// starting a second app (which would race for the core port and DB).
+// Single-instance: a second GUI launch focuses the existing window instead of
+// starting another process that would race for the core port and DB.
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
@@ -174,7 +185,15 @@ if (!app.requestSingleInstanceLock()) {
     }
   });
 
-  app.whenReady().then(() => {
+  void app.whenReady().then(() => {
+    if (bundledMcpPath) {
+      try {
+        installMcpCompanion(bundledMcpPath, installedMcpPath);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        console.error(`[mcp] Could not install the local MCP companion: ${detail}`);
+      }
+    }
     registerIpc();
     Menu.setApplicationMenu(buildAppMenu(() => mainWindow));
     core.onStatus((s: CoreStatus) => mainWindow?.webContents.send('core:status', s));

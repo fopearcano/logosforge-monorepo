@@ -8,9 +8,10 @@
 #
 # Output: ./dist/logosforge-core/logosforge-core(.exe) + its dependency tree.
 #
-# The build venv must have the core API installed WITHOUT the heavy gui/voice
-# extras: `pip install ./logosforge[export] pyinstaller` (fastapi/uvicorn/
-# sqlmodel + reportlab/python-docx for export — no PySide6/torch/whisper).
+# The build venv must have the headless core plus export/voice support installed,
+# without the heavy GUI/torch extras: `pip install ./logosforge[export,voice,mcp]
+# pyinstaller` (fastapi/uvicorn/sqlmodel + reportlab/python-docx +
+# faster-whisper/CT2 — no PySide6/torch).
 
 import os
 import sys
@@ -63,6 +64,14 @@ for pkg in ("uvicorn", "fastapi", "starlette", "sqlalchemy", "pydantic",
     binaries += b
     hiddenimports += h
 
+# The runtime uses MCP's protocol/client-independent server modules. Exclude
+# its optional developer CLI: importing mcp.cli during PyInstaller discovery
+# exits when the unrelated `typer` extra is not installed.
+datas += collect_data_files("mcp")
+hiddenimports += collect_submodules(
+    "mcp", filter=lambda name: not name.startswith("mcp.cli"),
+)
+
 # Our own package + sqlmodel are imported partly via dynamic registries
 # (providers, deterministic handlers, proactive detectors, route modules).
 # Enumerate LogosForge from the checkout so the frozen app cannot accidentally
@@ -110,10 +119,9 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    # Keep the bundle lean: the headless API never needs the GUI/voice/heavy
-    # ML stacks. (They aren't installed in the build venv either — belt + braces.)
-    # faster_whisper / ctranslate2 / av are now BUNDLED (collected above) for
-    # Dexter's Room voice; only the genuinely-unused heavy stacks stay excluded.
+    # Keep the bundle lean: the headless API never needs GUI or torch. Those
+    # stacks are not installed in the build venv; faster_whisper / ctranslate2 /
+    # av are bundled above for Dexter's Room voice.
     excludes=["PySide6", "PyQt5", "PyQt6", "shiboken6", "torch", "torchaudio",
               "tkinter", "matplotlib", "IPython", "notebook", "pytest"],
     win_no_prefer_redirects=False,
@@ -137,6 +145,8 @@ exe = EXE(
     console=True,  # a server process; Electron spawns it with windowsHide:true
     disable_windowed_traceback=False,
     argv_emulation=False,
+    # Keep this native: PyInstaller does not cross-compile.  The macOS and
+    # Linux release commands reject non-x64 or wrong-OS hosts before packaging.
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,

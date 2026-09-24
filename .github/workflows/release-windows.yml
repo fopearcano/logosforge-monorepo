@@ -1,18 +1,12 @@
-name: Release — LogosForge Pro (Windows)
+name: Release — LogosForge Pro (Native desktop)
 
-# Builds the Windows installer + portable exe for LogosForge Pro desktop.
-# The artifact is fully self-contained: the Electron shell + the renderer +
-# a PyInstaller-bundled copy of the Python core (no Python needed on the
-# user's machine).
-#
-# Triggers:
-#   * push a tag like  v0.1.0   -> builds AND publishes a GitHub Release
-#   * manual "Run workflow"     -> builds + uploads artifacts (no Release)
-#
-# Assumes a single monorepo checkout containing: logosforge/ (core),
-# logosforge-ui-contracts/, pro-shared-ui/, pro-desktop/. If these ever become
-# separate repos, replace the single checkout with multiple checkouts into
-# those sibling paths.
+# Coordinated native release for LogosForge Pro. The historical filename is
+# retained so existing repository links keep working. Manual runs are build-only
+# by default: Windows and Linux are selected, while macOS is opt-in until the
+# self-hosted Intel macOS 13.5+ / Actions Runner 2.327.1+ host is available. A
+# v* tag selects all three platforms. One final job owns GitHub Release mutation,
+# avoiding platform races.
+# All current artifacts are unsigned.
 
 on:
   push:
@@ -20,109 +14,1402 @@ on:
       - "v*"
   workflow_dispatch:
     inputs:
-      publish_release:
-        description: "Attach the build to a GitHub Release"
+      build_windows:
+        description: "Build Windows x64 (NSIS + portable)"
+        type: boolean
+        default: true
+      build_linux:
+        description: "Build Linux x64 (AppImage, Ubuntu 22.04 baseline)"
+        type: boolean
+        default: true
+      build_macos:
+        description: "Build macOS Intel x64 (requires macOS 13.5+ and runner 2.327.1+)"
         type: boolean
         default: false
+      publish_release:
+        description: "Publish selected artifacts to the verified Pro prerelease"
+        type: boolean
+        default: false
+      release_tag:
+        description: "Existing Pro tag to publish (must equal v<package version>)"
+        type: string
+        required: false
+        default: "v0.1.0"
 
 permissions:
-  contents: write
-
-concurrency:
-  group: release-windows-${{ github.ref }}
-  cancel-in-progress: true
+  contents: read
 
 jobs:
-  quality:
-    uses: ./.github/workflows/ci-core-pro.yml
-
-  build-windows:
-    needs: quality
-    runs-on: windows-latest
-    timeout-minutes: 45
+  metadata:
+    name: Resolve immutable release source
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    outputs:
+      build_windows: ${{ steps.release.outputs.build_windows }}
+      build_linux: ${{ steps.release.outputs.build_linux }}
+      build_macos: ${{ steps.release.outputs.build_macos }}
+      publish: ${{ steps.release.outputs.publish }}
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+      notes_path: ${{ steps.release.outputs.notes_path }}
+      source_sha: ${{ steps.release.outputs.source_sha }}
     defaults:
       run:
         shell: bash
 
     steps:
-      - name: Checkout monorepo
-        uses: actions/checkout@v4
-
-      - name: Verify monorepo layout
-        run: |
-          missing=""
-          for d in logosforge logosforge-ui-contracts pro-shared-ui pro-desktop; do
-            [ -d "$d" ] || missing="$missing $d"
-          done
-          if [ -n "$missing" ]; then
-            echo "::error::Missing required sibling dir(s):$missing — this workflow expects a single monorepo checkout containing all four. If these are separate repos, add one actions/checkout per repo (with path:) so they end up as siblings."
-            exit 1
-          fi
-          echo "monorepo layout OK"
+      - name: Checkout monorepo without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (Node 24)
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0 (Node 24)
         with:
           node-version: "22"
 
+      - name: Resolve and verify Pro release metadata
+        id: release
+        env:
+          MANUAL_BUILD_WINDOWS: ${{ inputs.build_windows }}
+          MANUAL_BUILD_LINUX: ${{ inputs.build_linux }}
+          MANUAL_BUILD_MACOS: ${{ inputs.build_macos }}
+          MANUAL_PUBLISH: ${{ inputs.publish_release }}
+          MANUAL_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          publish=false
+          release_tag=""
+          case "$GITHUB_EVENT_NAME" in
+            push)
+              if [ "$GITHUB_REF_TYPE" != "tag" ]; then
+                echo "::error::Release push is not a tag."
+                exit 1
+              fi
+              build_windows=true
+              build_linux=true
+              build_macos=true
+              publish=true
+              release_tag="$GITHUB_REF_NAME"
+              ;;
+            workflow_dispatch)
+              build_windows="${MANUAL_BUILD_WINDOWS:-true}"
+              build_linux="${MANUAL_BUILD_LINUX:-true}"
+              build_macos="${MANUAL_BUILD_MACOS:-false}"
+              if [ "${MANUAL_PUBLISH:-false}" = "true" ]; then
+                publish=true
+                release_tag="${MANUAL_TAG:-}"
+              fi
+              ;;
+            *)
+              echo "::error::Unsupported event: $GITHUB_EVENT_NAME"
+              exit 1
+              ;;
+          esac
+
+          for selection in "$build_windows" "$build_linux" "$build_macos"; do
+            case "$selection" in
+              true|false) ;;
+              *) echo "::error::Invalid platform selection: $selection"; exit 1 ;;
+            esac
+          done
+          if [ "$build_windows" != "true" ] && [ "$build_linux" != "true" ] && [ "$build_macos" != "true" ]; then
+            echo "::error::Select at least one native platform."
+            exit 1
+          fi
+
+          if [ "$publish" = "true" ]; then
+            if [ -z "$release_tag" ]; then
+              echo "::error::A release tag is required when publishing."
+              exit 1
+            fi
+            case "$release_tag" in
+              v*) ;;
+              *) echo "::error::A Pro release tag must start with v."; exit 1 ;;
+            esac
+            if ! git check-ref-format "refs/tags/$release_tag" >/dev/null; then
+              echo "::error::Invalid release tag: $release_tag"
+              exit 1
+            fi
+            tag_commit="$(git rev-parse --verify --quiet "refs/tags/${release_tag}^{commit}")" || {
+              echo "::error::Release tag does not exist: $release_tag"
+              exit 1
+            }
+            if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+              git checkout --detach --quiet "$tag_commit"
+            fi
+            if [ "$(git rev-parse HEAD)" != "$tag_commit" ]; then
+              echo "::error::The checked-out source does not match $release_tag."
+              exit 1
+            fi
+          fi
+
+          # shellcheck disable=SC2016
+          version="$(
+            node -e '
+              const fs = require("node:fs");
+              const roots = [
+                ["desktop", "pro-desktop/package.json", "pro-desktop/package-lock.json", "@logosforge/pro-desktop"],
+                ["sharedUi", "pro-shared-ui/package.json", "pro-shared-ui/package-lock.json", "@logosforge/pro-shared-ui"],
+                ["contracts", "logosforge-ui-contracts/package.json", "logosforge-ui-contracts/package-lock.json", "@logosforge/ui-contracts"],
+              ];
+              let desktopVersion = "";
+              const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+              for (const [label, packagePath, lockPath, expectedName] of roots) {
+                const pkg = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+                const lock = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+                if (pkg.name !== expectedName || lock.name !== expectedName || lock.packages?.[""]?.name !== expectedName) {
+                  console.error(`::error::Unexpected ${label} package identity.`);
+                  process.exit(1);
+                }
+                const versions = [pkg.version, lock.version, lock.packages?.[""]?.version];
+                if (versions.some((value) => typeof value !== "string") || new Set(versions).size !== 1 || !semver.test(pkg.version)) {
+                  console.error(`::error::Invalid or inconsistent ${label} versions: ${JSON.stringify(versions)}`);
+                  process.exit(1);
+                }
+                if (label === "desktop") desktopVersion = pkg.version;
+              }
+              process.stdout.write(desktopVersion);
+            '
+          )"
+
+          expected_tag="v${version}"
+          notes_path="pro-desktop/release-notes/${expected_tag}.md"
+          if [ "$publish" = "true" ] && [ "$release_tag" != "$expected_tag" ]; then
+            echo "::error::Tag $release_tag does not match Pro package version $version; expected $expected_tag."
+            exit 1
+          fi
+          if [ "$publish" = "true" ] && [ ! -s "$notes_path" ]; then
+            echo "::error::Missing or empty versioned Pro release notes: $notes_path"
+            echo "::error::Build-only runs remain available until release-note infrastructure is added."
+            exit 1
+          fi
+          if [ "$publish" != "true" ]; then
+            release_tag="$expected_tag"
+          fi
+
+          {
+            echo "build_windows=$build_windows"
+            echo "build_linux=$build_linux"
+            echo "build_macos=$build_macos"
+            echo "publish=$publish"
+            echo "version=$version"
+            echo "tag=$release_tag"
+            echo "notes_path=$notes_path"
+            echo "source_sha=$(git rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
+
+  quality:
+    name: Complete core release gate
+    needs: metadata
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUTF8: "1"
+
+    steps:
+      - name: Checkout verified source without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (Node 24)
+        with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact release-gate source
+        run: test "$(git rev-parse HEAD)" = "${{ needs.metadata.outputs.source_sha }}"
+
+      - name: Install Linux test runtimes
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1 libportaudio2
+
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0 (Node 24)
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            logosforge/pyproject.toml
+            logosforge/requirements.txt
+
+      - name: Install complete core and test dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -r logosforge/requirements.txt "./logosforge[mcp]" httpx pytest
+          python -m pip check
+
+      - name: Verify MCP stdio test dependency
+        run: |
+          python - <<'PY'
+          from importlib.metadata import version
+          from mcp.client.stdio import stdio_client
+          from mcp.server import Server
+
+          assert stdio_client is not None
+          assert Server is not None
+          print(f"MCP SDK {version('mcp')} is available for the real stdio test")
+          PY
+
+      - name: Run complete core suite
+        working-directory: logosforge
+        run: python -m pytest -q
+
+  build_windows:
+    name: Windows x64 — test, freeze, smoke, package
+    needs: [metadata, quality]
+    if: needs.metadata.outputs.build_windows == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      CI: "true"
+      PYTHONUTF8: "1"
+
+    steps:
+      - name: Checkout verified source without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (Node 24)
+        with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify checkout and monorepo layout
+        run: |
+          set -euo pipefail
+          test "$RUNNER_OS" = "Windows" && test "$RUNNER_ARCH" = "X64"
+          test "$(git rev-parse HEAD)" = "${{ needs.metadata.outputs.source_sha }}"
+          for path in logosforge/pyproject.toml logosforge-ui-contracts/package.json pro-shared-ui/package.json pro-desktop/package.json pro-desktop/core/logosforge-core.spec pro-desktop/core/logosforge-mcp.spec; do
+            test -e "$path" || { echo "::error::Missing required monorepo path: $path"; exit 1; }
+          done
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0 (Node 24)
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            logosforge-ui-contracts/package-lock.json
+            pro-shared-ui/package-lock.json
+            pro-desktop/package-lock.json
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0 (Node 24)
         with:
           python-version: "3.11"
 
-      # --- 1. Bundle the Python core into a standalone onedir exe -----------
-      - name: Build the core bundle (PyInstaller)
+      - name: Build a fresh voice-capable frozen core
         run: |
-          python -m venv core-venv
-          ./core-venv/Scripts/python.exe -m pip install --upgrade pip
-          ./core-venv/Scripts/python.exe -m pip install "./logosforge[export]" pyinstaller
+          set -euo pipefail
+          rm -rf -- pro-desktop/core/build pro-desktop/core/dist build-venv
+          python -m venv build-venv
+          ./build-venv/Scripts/python.exe -m pip install --upgrade pip
+          ./build-venv/Scripts/python.exe -m pip install "./logosforge[export,voice,mcp]" httpx "pyinstaller==6.22.2"
+          ./build-venv/Scripts/python.exe -m pip check
+          ./build-venv/Scripts/python.exe -c "import ctranslate2, faster_whisper, sounddevice; print('voice imports OK', ctranslate2.__version__)"
+          ./build-venv/Scripts/python.exe -m compileall -q logosforge/logosforge pro-desktop/core
+          ./build-venv/Scripts/python.exe - <<'PY'
+          import os
+          from fastapi.testclient import TestClient
+          from logosforge.api import ApiConfig, create_api
+          from logosforge.db import Database
+          os.environ["LOGOSFORGE_VOICE_MODEL"] = os.path.abspath("missing-release-smoke-model")
+          with TestClient(create_api(db=Database(), config=ApiConfig(mode="desktop"))) as client:
+              health = client.get("/api/health").json()
+              assert health["status"] == "ok" and health["service"] == "logosforge-api"
+              voice = client.get("/api/voice/status").json()
+              assert voice["model_configured"] is True and voice["available"] is False
+              assert "Install 'faster-whisper'" not in voice["message"]
+          print("source API and faster-whisper status smoke OK")
+          PY
           cd pro-desktop/core
-          ../../core-venv/Scripts/python.exe -m PyInstaller logosforge-core.spec --noconfirm --clean --log-level WARN
+          ../../build-venv/Scripts/python.exe -m PyInstaller logosforge-core.spec --noconfirm --clean --log-level WARN
+          ../../build-venv/Scripts/python.exe -m PyInstaller logosforge-mcp.spec --noconfirm --clean --log-level WARN
+          ../../build-venv/Scripts/python.exe - <<'PY'
+          from pathlib import Path
+          binary = Path("dist/logosforge-core/logosforge-core.exe")
+          def pe_machine(path):
+              with path.open("rb") as handle:
+                  dos = handle.read(64)
+                  if len(dos) != 64 or dos[:2] != b"MZ": return None
+                  handle.seek(int.from_bytes(dos[60:64], "little"))
+                  return handle.read(4), int.from_bytes(handle.read(2), "little")
+          if not binary.is_file() or pe_machine(binary) != (b"PE\0\0", 0x8664):
+              raise SystemExit("::error::Frozen core is not a native Windows x64 PE executable.")
+          companion = Path("dist/logosforge-mcp.exe")
+          if not companion.is_file() or pe_machine(companion) != (b"PE\0\0", 0x8664):
+              raise SystemExit("::error::Frozen MCP companion is not a native Windows x64 PE executable.")
+          print(f"native Windows x64 frozen core + MCP OK: {binary}, {companion}")
+          PY
+          portaudio_files="$(find dist/logosforge-core -type f -iname '*portaudio*' -print)"
+          [ -n "$portaudio_files" ] || {
+            echo "::error::PyInstaller omitted the PortAudio runtime required by the declared voice extra."
+            exit 1
+          }
 
-      - name: Smoke-test the bundled core
+      - name: Smoke-test frozen core identity and voice import
         run: |
-          ./pro-desktop/core/dist/logosforge-core/logosforge-core.exe --host 127.0.0.1 --port 8799 --mode desktop &
-          ok=""
-          for i in $(seq 1 30); do
-            sleep 1
-            code=$(curl -s --max-time 2 -o /dev/null -w "%{http_code}" http://127.0.0.1:8799/api/health || true)
-            if [ "$code" = "200" ]; then ok="yes"; echo "core healthy after ${i}s"; break; fi
-          done
-          # Reliable teardown on Windows: signals from git-bash don't stop a
-          # native console exe, so kill the image directly (//-escaped for bash).
-          taskkill //F //IM logosforge-core.exe //T 2>/dev/null || true
-          if [ -z "$ok" ]; then echo "::error::bundled core failed /api/health"; exit 1; fi
+          set -euo pipefail
+          CORE_EXE="$PWD/pro-desktop/core/dist/logosforge-core/logosforge-core.exe" \
+          EXPECTED_CORE_VERSION="$(./build-venv/Scripts/python.exe -c 'import logosforge; print(logosforge.__version__)')" \
+          EXPECTED_API_VERSION="$(./build-venv/Scripts/python.exe -c 'from logosforge.api.app import API_CONTRACT_VERSION; print(API_CONTRACT_VERSION)')" \
+          ./build-venv/Scripts/python.exe - <<'PY'
+          import json, os, shutil, socket, subprocess, tempfile, time, urllib.request
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"]).resolve()
+          work = Path(tempfile.mkdtemp(prefix="logosforge-pro-core-smoke-", dir=root)).resolve()
+          if work.parent != root: raise SystemExit(f"unsafe smoke directory: {work}")
+          log_path = work / "core.log"
+          nonce, token = "release-smoke-nonce", "release-smoke-token"
+          with socket.socket() as probe:
+              probe.bind(("127.0.0.1", 0)); port = probe.getsockname()[1]
+          env = os.environ.copy()
+          env.update({"API_AUTH_TOKEN": token, "API_INSTANCE_NONCE": nonce,
+                      "LOGOSFORGE_VOICE_MODEL": str(work / "deliberately-missing-model"),
+                      "LOGOSFORGE_VOICE_DEVICE": "cpu", "LOGOSFORGE_VOICE_COMPUTE": "int8"})
+          command = [os.environ["CORE_EXE"], "--host", "127.0.0.1", "--port", str(port),
+                     "--mode", "desktop", "--db", str(work / "logosforge.db")]
+          proc = None; failure = None
+          def get(path, auth=False):
+              headers = {"Authorization": f"Bearer {token}"} if auth else {}
+              with urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}{path}", headers=headers), timeout=2) as response:
+                  return json.load(response)
+          try:
+              with log_path.open("wb") as log:
+                  proc = subprocess.Popen(command, cwd=Path(os.environ["CORE_EXE"]).parent, env=env,
+                                          stdout=log, stderr=subprocess.STDOUT,
+                                          creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+                  health = None
+                  for attempt in range(45):
+                      time.sleep(1)
+                      if proc.poll() is not None: break
+                      try: health = get("/api/health")
+                      except Exception: continue
+                      if health.get("status") == "ok": print(f"frozen core healthy after {attempt + 1}s"); break
+                  if health is None: raise RuntimeError(f"frozen core did not become healthy (exit={proc.poll()})")
+                  expected = {"status": "ok", "service": "logosforge-api", "mode": "desktop",
+                              "version": os.environ["EXPECTED_API_VERSION"], "api_version": os.environ["EXPECTED_API_VERSION"],
+                              "core_version": os.environ["EXPECTED_CORE_VERSION"], "instance_nonce": nonce}
+                  if any(health.get(k) != v for k, v in expected.items()): raise RuntimeError(f"identity mismatch: {health!r}")
+                  voice = get("/api/voice/status", True)
+                  if voice.get("model_configured") is not True or voice.get("available") is not False: raise RuntimeError(f"voice status: {voice!r}")
+                  if "Install 'faster-whisper'" in str(voice.get("message", "")): raise RuntimeError(f"faster-whisper omitted: {voice!r}")
+                  print("frozen faster-whisper import path OK (model intentionally absent)")
+          except Exception as exc: failure = exc
+          finally:
+              if proc is not None and proc.poll() is None:
+                  subprocess.run(["taskkill.exe", "/PID", str(proc.pid), "/T", "/F"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                  try: proc.wait(timeout=10)
+                  except subprocess.TimeoutExpired: failure = failure or RuntimeError(f"PID {proc.pid} survived teardown")
+              for _ in range(20):
+                  try: get("/api/health")
+                  except Exception: break
+                  time.sleep(.25)
+              else: failure = failure or RuntimeError(f"port {port} remained open")
+              if failure and log_path.exists(): print("--- frozen core log ---\n" + log_path.read_text(errors="replace"))
+              shutil.rmtree(work)
+          if failure: raise failure
+          PY
 
-      # --- 2. Build + package the Electron app -----------------------------
-      - name: Install pro-desktop deps
-        working-directory: pro-desktop
-        # npm ci = deterministic install from the committed lockfile. (The
-        # renderer bundles the shared packages from src via Vite aliases, so the
-        # file: deps install is effectively just a presence check.)
-        run: npm ci
+      - name: Smoke-test frozen MCP descriptor and authenticated read
+        run: >-
+          ./build-venv/Scripts/python.exe pro-desktop/scripts/smoke-frozen-mcp.py
+          pro-desktop/core/dist/logosforge-core/logosforge-core.exe
+          --mcp-executable pro-desktop/core/dist/logosforge-mcp.exe
 
-      - name: Build renderer + main, then package (NSIS + portable)
+      - name: Test contracts and Pro sources
+        run: |
+          set -euo pipefail
+          cd logosforge-ui-contracts && npm ci && npm test && npm audit --audit-level=moderate
+          cd ../pro-shared-ui && npm ci && npm test && npm run build && npm audit --audit-level=moderate
+          cd ../pro-desktop && npm ci && npm test && npm audit --audit-level=moderate
+
+      - name: Package Windows installer and portable app
         working-directory: pro-desktop
-        run: npm run dist:win
         env:
-          # Unsigned build (no code-signing cert configured). Users will see a
-          # Windows SmartScreen prompt until a cert is added — see repo notes.
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          set -euo pipefail
+          rm -rf -- release
+          npm run dist:win
 
-      # --- 3. Publish ------------------------------------------------------
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+      - name: Inspect and launch-smoke packaged Windows app
+        run: |
+          set -euo pipefail
+          installer="pro-desktop/release/LogosForge Pro-${{ needs.metadata.outputs.version }}-x64.exe"
+          portable="pro-desktop/release/LogosForge Pro-${{ needs.metadata.outputs.version }}-x64-portable.exe"
+          set -- pro-desktop/release/*.exe
+          if [ "$#" -ne 2 ] || [ ! -s "$installer" ] || [ ! -s "$portable" ]; then
+            echo "::error::Expected exactly the versioned Windows NSIS and portable executables."
+            exit 1
+          fi
+          test -s "pro-desktop/release/win-unpacked/resources/app.asar"
+          test -f "pro-desktop/release/win-unpacked/resources/core/logosforge-core.exe"
+          test -f "pro-desktop/release/win-unpacked/resources/mcp/logosforge-mcp.exe"
+          portaudio_files="$(find pro-desktop/release/win-unpacked/resources/core -type f -iname '*portaudio*' -print)"
+          test -n "$portaudio_files"
+          APP_EXE="$PWD/pro-desktop/release/win-unpacked/LogosForge Pro.exe" \
+          EXPECTED_CORE_VERSION="$(./build-venv/Scripts/python.exe -c 'import logosforge; print(logosforge.__version__)')" \
+          EXPECTED_API_VERSION="$(./build-venv/Scripts/python.exe -c 'from logosforge.api.app import API_CONTRACT_VERSION; print(API_CONTRACT_VERSION)')" \
+          ./build-venv/Scripts/python.exe - <<'PY'
+          import json, os, shutil, socket, subprocess, tempfile, time, urllib.request
+          from pathlib import Path
+          app = Path(os.environ["APP_EXE"]); core = app.parent / "resources/core/logosforge-core.exe"
+          def pe_machine(path):
+              with path.open("rb") as handle:
+                  dos = handle.read(64)
+                  if len(dos) != 64 or dos[:2] != b"MZ": return None
+                  handle.seek(int.from_bytes(dos[60:64], "little"))
+                  return handle.read(4), int.from_bytes(handle.read(2), "little")
+          if not app.is_file() or pe_machine(app) != (b"PE\0\0", 0x8664): raise SystemExit("::error::Packaged app is not Windows x64.")
+          if not core.is_file() or pe_machine(core) != (b"PE\0\0", 0x8664): raise SystemExit("::error::Packaged core is not Windows x64.")
+          root = Path(os.environ["RUNNER_TEMP"]).resolve()
+          work = Path(tempfile.mkdtemp(prefix="logosforge-pro-app-smoke-", dir=root)).resolve()
+          if work.parent != root: raise SystemExit(f"unsafe smoke directory: {work}")
+          log_path = work / "app.log"
+          with socket.socket() as probe:
+              probe.bind(("127.0.0.1", 0)); port = probe.getsockname()[1]
+          env = os.environ.copy(); env.update({"HOME": str(work), "USERPROFILE": str(work), "LOGOSFORGE_PORT": str(port),
+                                               "LOGOSFORGE_VOICE_MODEL": "", "ELECTRON_ENABLE_LOGGING": "1"})
+          proc = None; failure = None
+          try:
+              with log_path.open("wb") as log:
+                  proc = subprocess.Popen([str(app), "--disable-gpu", f"--user-data-dir={work / 'electron-user-data'}"],
+                                          env=env, stdout=log, stderr=subprocess.STDOUT,
+                                          creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+                  health = None
+                  for attempt in range(60):
+                      time.sleep(1)
+                      if proc.poll() is not None: break
+                      try:
+                          with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=2) as response: health = json.load(response)
+                      except Exception: continue
+                      if health.get("status") == "ok": print(f"packaged app core healthy after {attempt + 1}s"); break
+                  if health is None: raise RuntimeError(f"packaged app did not start core (exit={proc.poll()})")
+                  expected = {"status": "ok", "service": "logosforge-api", "mode": "desktop",
+                              "version": os.environ["EXPECTED_API_VERSION"], "api_version": os.environ["EXPECTED_API_VERSION"],
+                              "core_version": os.environ["EXPECTED_CORE_VERSION"]}
+                  if any(health.get(k) != v for k, v in expected.items()) or not health.get("instance_nonce"): raise RuntimeError(f"identity mismatch: {health!r}")
+          except Exception as exc: failure = exc
+          finally:
+              if proc is not None and proc.poll() is None:
+                  subprocess.run(["taskkill.exe", "/PID", str(proc.pid), "/T", "/F"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                  try: proc.wait(timeout=10)
+                  except subprocess.TimeoutExpired: failure = failure or RuntimeError(f"PID {proc.pid} survived teardown")
+              for _ in range(20):
+                  try: urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=.25).close()
+                  except Exception: break
+                  time.sleep(.25)
+              else: failure = failure or RuntimeError(f"port {port} remained open")
+              if failure and log_path.exists(): print("--- packaged app log ---\n" + log_path.read_text(errors="replace"))
+              shutil.rmtree(work)
+          if failure: raise failure
+          PY
+          ./build-venv/Scripts/python.exe - <<'PY'
+          from pathlib import Path
+          artifacts = sorted(Path("pro-desktop/release").glob("*.exe"))
+          if len(artifacts) != 2 or any(p.stat().st_size == 0 or p.read_bytes()[:2] != b"MZ" for p in artifacts):
+              raise SystemExit("::error::Expected native NSIS and portable executables.")
+          print("Windows artifacts:", ", ".join(p.name for p in artifacts))
+          PY
+
+      - name: Exercise packaged Windows MCP companion
+        run: >-
+          ./build-venv/Scripts/python.exe pro-desktop/scripts/smoke-packaged-mcp.py
+          "pro-desktop/release/win-unpacked/LogosForge Pro.exe"
+
+      - name: Exercise portable Windows MCP companion
+        run: >-
+          ./build-venv/Scripts/python.exe pro-desktop/scripts/smoke-packaged-mcp.py
+          "pro-desktop/release/LogosForge Pro-${{ needs.metadata.outputs.version }}-x64-portable.exe"
+
+      - name: Record Windows dependency and artifact provenance
+        run: |
+          set -euo pipefail
+          provenance="$RUNNER_TEMP/logosforge-pro-windows-x64-provenance"
+          mkdir -p "$provenance"
+          ./build-venv/Scripts/python.exe -m pip freeze --all > "$provenance/pip-freeze.txt"
+          {
+            echo "source_sha=${{ needs.metadata.outputs.source_sha }}"
+            echo "version=${{ needs.metadata.outputs.version }}"
+            echo "platform=windows-x64"
+            echo "runner=$RUNNER_OS/$RUNNER_ARCH"
+            echo "python=$(./build-venv/Scripts/python.exe --version 2>&1)"
+            echo "node=$(node --version)"
+            echo "npm=$(npm --version)"
+            echo "source_tree_manifest_sha256=$(git ls-tree -r --full-tree '${{ needs.metadata.outputs.source_sha }}' | sha256sum | awk '{print $1}')"
+            sha256sum pro-desktop/release/*.exe
+          } > "$provenance/SHA256SUMS-and-build.txt"
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (Node 24)
         with:
-          name: logosforge-pro-windows
-          # The installers. (latest.yml is only emitted when a publish provider
-          # is configured, so it is intentionally not required here.)
+          name: logosforge-pro-windows-x64
           path: pro-desktop/release/*.exe
           if-no-files-found: error
+          retention-days: 14
 
-      - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v') || inputs.publish_release
-        uses: softprops/action-gh-release@v2
+      - name: Upload Windows provenance
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (Node 24)
         with:
-          files: pro-desktop/release/*.exe
+          name: logosforge-pro-windows-x64-provenance
+          path: ${{ runner.temp }}/logosforge-pro-windows-x64-provenance/*
+          if-no-files-found: error
+          retention-days: 30
+
+  build_linux:
+    name: Linux x64 — test, freeze, smoke, AppImage
+    needs: [metadata, quality]
+    if: needs.metadata.outputs.build_linux == 'true'
+    # PyInstaller does not bundle glibc. Pinning Ubuntu 22.04 (glibc 2.35)
+    # deliberately avoids ubuntu-latest's newer 24.04/glibc 2.39 baseline.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      CI: "true"
+      PYTHONUTF8: "1"
+      QT_QPA_PLATFORM: offscreen
+
+    steps:
+      - name: Checkout verified source without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (Node 24)
+        with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify checkout, layout, and Linux baseline
+        run: |
+          set -euo pipefail
+          test "$RUNNER_OS" = "Linux" && test "$RUNNER_ARCH" = "X64"
+          test "$(git rev-parse HEAD)" = "${{ needs.metadata.outputs.source_sha }}"
+          for path in logosforge/pyproject.toml logosforge-ui-contracts/package.json pro-shared-ui/package.json pro-desktop/package.json pro-desktop/core/logosforge-core.spec pro-desktop/core/logosforge-mcp.spec; do
+            test -e "$path" || { echo "::error::Missing required monorepo path: $path"; exit 1; }
+          done
+          ldd --version | head -n 1
+
+      - name: Install Linux package and smoke-test runtimes
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends file libasound2 libatk-bridge2.0-0 libatk1.0-0 libcups2 libdrm2 libfuse2 libgbm1 libgtk-3-0 libnss3 libportaudio2 libx11-xcb1 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libxss1 libxtst6 xauth xdg-utils xvfb
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0 (Node 24)
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            logosforge-ui-contracts/package-lock.json
+            pro-shared-ui/package-lock.json
+            pro-desktop/package-lock.json
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0 (Node 24)
+        with:
+          python-version: "3.11"
+
+      - name: Build a fresh voice-capable frozen core
+        run: |
+          set -euo pipefail
+          rm -rf -- pro-desktop/core/build pro-desktop/core/dist build-venv
+          python -m venv build-venv
+          ./build-venv/bin/python -m pip install --upgrade pip
+          ./build-venv/bin/python -m pip install "./logosforge[export,voice,mcp]" httpx "pyinstaller==6.22.2"
+          ./build-venv/bin/python -m pip check
+          ./build-venv/bin/python -c "import ctranslate2, faster_whisper, sounddevice; print('voice imports OK', ctranslate2.__version__)"
+          ./build-venv/bin/python -m compileall -q logosforge/logosforge pro-desktop/core
+          ./build-venv/bin/python - <<'PY'
+          import os
+          from fastapi.testclient import TestClient
+          from logosforge.api import ApiConfig, create_api
+          from logosforge.db import Database
+          os.environ["LOGOSFORGE_VOICE_MODEL"] = os.path.abspath("missing-release-smoke-model")
+          with TestClient(create_api(db=Database(), config=ApiConfig(mode="desktop"))) as client:
+              assert client.get("/api/health").json()["service"] == "logosforge-api"
+              voice = client.get("/api/voice/status").json()
+              assert voice["model_configured"] is True and voice["available"] is False
+              assert "Install 'faster-whisper'" not in voice["message"]
+          print("source API and faster-whisper status smoke OK")
+          PY
+          cd pro-desktop/core
+          ../../build-venv/bin/python -m PyInstaller logosforge-core.spec --noconfirm --clean --log-level WARN
+          ../../build-venv/bin/python -m PyInstaller logosforge-mcp.spec --noconfirm --clean --log-level WARN
+          file dist/logosforge-core/logosforge-core
+          file dist/logosforge-core/logosforge-core | grep -Eq 'ELF 64-bit.*x86-64'
+          file dist/logosforge-mcp
+          file dist/logosforge-mcp | grep -Eq 'ELF 64-bit.*x86-64'
+          portaudio_files="$(find dist/logosforge-core -type f -iname '*portaudio*' -print)"
+          [ -n "$portaudio_files" ] || {
+            echo "::error::PyInstaller omitted libportaudio from the voice-capable Linux sidecar."
+            exit 1
+          }
+
+      - name: Smoke-test frozen core identity and voice import
+        run: |
+          set -euo pipefail
+          CORE_EXE="$PWD/pro-desktop/core/dist/logosforge-core/logosforge-core" \
+          EXPECTED_CORE_VERSION="$(./build-venv/bin/python -c 'import logosforge; print(logosforge.__version__)')" \
+          EXPECTED_API_VERSION="$(./build-venv/bin/python -c 'from logosforge.api.app import API_CONTRACT_VERSION; print(API_CONTRACT_VERSION)')" \
+          ./build-venv/bin/python - <<'PY'
+          import json, os, shutil, signal, socket, subprocess, tempfile, time, urllib.request
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"]).resolve()
+          work = Path(tempfile.mkdtemp(prefix="logosforge-pro-core-smoke-", dir=root)).resolve()
+          if work.parent != root: raise SystemExit(f"unsafe smoke directory: {work}")
+          log_path = work / "core.log"; nonce, token = "release-smoke-nonce", "release-smoke-token"
+          with socket.socket() as probe:
+              probe.bind(("127.0.0.1", 0)); port = probe.getsockname()[1]
+          env = os.environ.copy(); env.update({"API_AUTH_TOKEN": token, "API_INSTANCE_NONCE": nonce,
+              "LOGOSFORGE_VOICE_MODEL": str(work / "deliberately-missing-model"), "LOGOSFORGE_VOICE_DEVICE": "cpu", "LOGOSFORGE_VOICE_COMPUTE": "int8"})
+          command = [os.environ["CORE_EXE"], "--host", "127.0.0.1", "--port", str(port), "--mode", "desktop", "--db", str(work / "logosforge.db")]
+          proc = None; failure = None
+          def get(path, auth=False):
+              headers = {"Authorization": f"Bearer {token}"} if auth else {}
+              with urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}{path}", headers=headers), timeout=2) as response: return json.load(response)
+          try:
+              with log_path.open("wb") as log:
+                  proc = subprocess.Popen(command, cwd=Path(os.environ["CORE_EXE"]).parent, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                  health = None
+                  for attempt in range(45):
+                      time.sleep(1)
+                      if proc.poll() is not None: break
+                      try: health = get("/api/health")
+                      except Exception: continue
+                      if health.get("status") == "ok": print(f"frozen core healthy after {attempt + 1}s"); break
+                  if health is None: raise RuntimeError(f"frozen core did not become healthy (exit={proc.poll()})")
+                  expected = {"status": "ok", "service": "logosforge-api", "mode": "desktop",
+                              "version": os.environ["EXPECTED_API_VERSION"], "api_version": os.environ["EXPECTED_API_VERSION"],
+                              "core_version": os.environ["EXPECTED_CORE_VERSION"], "instance_nonce": nonce}
+                  if any(health.get(k) != v for k, v in expected.items()): raise RuntimeError(f"identity mismatch: {health!r}")
+                  voice = get("/api/voice/status", True)
+                  if voice.get("model_configured") is not True or voice.get("available") is not False: raise RuntimeError(f"voice status: {voice!r}")
+                  if "Install 'faster-whisper'" in str(voice.get("message", "")): raise RuntimeError(f"faster-whisper omitted: {voice!r}")
+                  print("frozen faster-whisper import path OK (model intentionally absent)")
+          except Exception as exc: failure = exc
+          finally:
+              if proc is not None and proc.poll() is None:
+                  try: os.killpg(proc.pid, signal.SIGTERM)
+                  except ProcessLookupError: pass
+                  try: proc.wait(timeout=10)
+                  except subprocess.TimeoutExpired:
+                      try: os.killpg(proc.pid, signal.SIGKILL)
+                      except ProcessLookupError: pass
+                      proc.wait(timeout=5)
+              for _ in range(20):
+                  try: get("/api/health")
+                  except Exception: break
+                  time.sleep(.25)
+              else: failure = failure or RuntimeError(f"port {port} remained open")
+              if failure and log_path.exists(): print("--- frozen core log ---\n" + log_path.read_text(errors="replace"))
+              shutil.rmtree(work)
+          if failure: raise failure
+          PY
+
+      - name: Smoke-test frozen MCP descriptor and authenticated read
+        run: >-
+          ./build-venv/bin/python pro-desktop/scripts/smoke-frozen-mcp.py
+          pro-desktop/core/dist/logosforge-core/logosforge-core
+          --mcp-executable pro-desktop/core/dist/logosforge-mcp
+
+      - name: Test contracts and Pro sources
+        run: |
+          set -euo pipefail
+          cd logosforge-ui-contracts && npm ci && npm test && npm audit --audit-level=moderate
+          cd ../pro-shared-ui && npm ci && npm test && npm run build && npm audit --audit-level=moderate
+          cd ../pro-desktop && npm ci && npm test && npm audit --audit-level=moderate
+
+      - name: Package Linux x64 AppImage
+        working-directory: pro-desktop
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          set -euo pipefail
+          rm -rf -- release
+          npm run dist:linux
+
+      - name: Inspect and launch-smoke AppImage
+        run: |
+          set -euo pipefail
+          expected="pro-desktop/release/LogosForge Pro-${{ needs.metadata.outputs.version }}-x86_64.AppImage"
+          set -- pro-desktop/release/*.AppImage
+          if [ "$#" -ne 1 ] || [ "$1" != "$expected" ] || [ ! -s "$expected" ]; then
+            echo "::error::Expected exactly $expected."
+            exit 1
+          fi
+          appimage="$(realpath "$expected")"; chmod +x "$appimage"
+          file "$appimage" | grep -Eq 'ELF 64-bit.*x86-64'
+          extract_root="$(mktemp -d "$RUNNER_TEMP/logosforge-pro-appimage.XXXXXX")"
+          cleanup_extract() {
+            case "$extract_root" in
+              "$RUNNER_TEMP"/logosforge-pro-appimage.??????) rm -rf -- "$extract_root" ;;
+              *) echo "::error::Refusing unsafe AppImage cleanup: $extract_root"; return 1 ;;
+            esac
+          }
+          trap cleanup_extract EXIT INT TERM
+          (cd "$extract_root" && "$appimage" --appimage-extract >/dev/null)
+          test -x "$extract_root/squashfs-root/AppRun"
+          test -s "$extract_root/squashfs-root/resources/app.asar"
+          test -x "$extract_root/squashfs-root/resources/core/logosforge-core"
+          test -x "$extract_root/squashfs-root/resources/mcp/logosforge-mcp"
+          file "$extract_root/squashfs-root/resources/core/logosforge-core" | grep -Eq 'ELF 64-bit.*x86-64'
+          file "$extract_root/squashfs-root/resources/mcp/logosforge-mcp" | grep -Eq 'ELF 64-bit.*x86-64'
+          portaudio_files="$(find "$extract_root/squashfs-root/resources/core" -type f -iname '*portaudio*' -print)"
+          test -n "$portaudio_files"
+
+          APP_EXE="$appimage" \
+          EXPECTED_CORE_VERSION="$(./build-venv/bin/python -c 'import logosforge; print(logosforge.__version__)')" \
+          EXPECTED_API_VERSION="$(./build-venv/bin/python -c 'from logosforge.api.app import API_CONTRACT_VERSION; print(API_CONTRACT_VERSION)')" \
+          ./build-venv/bin/python - <<'PY'
+          import json, os, shutil, signal, socket, subprocess, tempfile, time, urllib.request
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"]).resolve()
+          work = Path(tempfile.mkdtemp(prefix="logosforge-pro-app-smoke-", dir=root)).resolve()
+          if work.parent != root: raise SystemExit(f"unsafe smoke directory: {work}")
+          log_path = work / "app.log"
+          with socket.socket() as probe:
+              probe.bind(("127.0.0.1", 0)); port = probe.getsockname()[1]
+          env = os.environ.copy(); env.update({"HOME": str(work), "XDG_CONFIG_HOME": str(work / "config"), "LOGOSFORGE_PORT": str(port),
+              "LOGOSFORGE_VOICE_MODEL": "", "ELECTRON_ENABLE_LOGGING": "1", "APPIMAGE_EXTRACT_AND_RUN": "1"})
+          command = ["xvfb-run", "--auto-servernum", "--server-args=-screen 0 1440x900x24", os.environ["APP_EXE"],
+                     "--disable-gpu", f"--user-data-dir={work / 'electron-user-data'}"]
+          proc = None; failure = None
+          try:
+              with log_path.open("wb") as log:
+                  proc = subprocess.Popen(command, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                  health = None
+                  for attempt in range(60):
+                      time.sleep(1)
+                      if proc.poll() is not None: break
+                      try:
+                          with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=2) as response: health = json.load(response)
+                      except Exception: continue
+                      if health.get("status") == "ok": print(f"AppImage core healthy after {attempt + 1}s"); break
+                  if health is None: raise RuntimeError(f"AppImage did not start core (exit={proc.poll()})")
+                  expected = {"status": "ok", "service": "logosforge-api", "mode": "desktop",
+                              "version": os.environ["EXPECTED_API_VERSION"], "api_version": os.environ["EXPECTED_API_VERSION"],
+                              "core_version": os.environ["EXPECTED_CORE_VERSION"]}
+                  if any(health.get(k) != v for k, v in expected.items()) or not health.get("instance_nonce"): raise RuntimeError(f"identity mismatch: {health!r}")
+          except Exception as exc: failure = exc
+          finally:
+              if proc is not None and proc.poll() is None:
+                  try: os.killpg(proc.pid, signal.SIGTERM)
+                  except ProcessLookupError: pass
+                  try: proc.wait(timeout=10)
+                  except subprocess.TimeoutExpired:
+                      try: os.killpg(proc.pid, signal.SIGKILL)
+                      except ProcessLookupError: pass
+                      proc.wait(timeout=5)
+              for _ in range(20):
+                  try: urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=.25).close()
+                  except Exception: break
+                  time.sleep(.25)
+              else: failure = failure or RuntimeError(f"port {port} remained open")
+              if failure and log_path.exists(): print("--- AppImage log ---\n" + log_path.read_text(errors="replace"))
+              shutil.rmtree(work)
+          if failure: raise failure
+          PY
+
+      - name: Exercise packaged Linux MCP companion
+        run: >-
+          xvfb-run -a ./build-venv/bin/python pro-desktop/scripts/smoke-packaged-mcp.py
+          "pro-desktop/release/LogosForge Pro-${{ needs.metadata.outputs.version }}-x86_64.AppImage"
+          --timeout 120
+
+      - name: Record Linux dependency and artifact provenance
+        run: |
+          set -euo pipefail
+          provenance="$RUNNER_TEMP/logosforge-pro-linux-x64-provenance"
+          mkdir -p "$provenance"
+          ./build-venv/bin/python -m pip freeze --all > "$provenance/pip-freeze.txt"
+          {
+            echo "source_sha=${{ needs.metadata.outputs.source_sha }}"
+            echo "version=${{ needs.metadata.outputs.version }}"
+            echo "platform=linux-x64"
+            echo "runner=$RUNNER_OS/$RUNNER_ARCH"
+            echo "glibc=$(ldd --version | head -n 1)"
+            echo "python=$(./build-venv/bin/python --version 2>&1)"
+            echo "node=$(node --version)"
+            echo "npm=$(npm --version)"
+            echo "source_tree_manifest_sha256=$(git ls-tree -r --full-tree '${{ needs.metadata.outputs.source_sha }}' | sha256sum | awk '{print $1}')"
+            sha256sum pro-desktop/release/*.AppImage
+          } > "$provenance/SHA256SUMS-and-build.txt"
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (Node 24)
+        with:
+          name: logosforge-pro-linux-x64
+          path: pro-desktop/release/*.AppImage
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Linux provenance
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (Node 24)
+        with:
+          name: logosforge-pro-linux-x64-provenance
+          path: ${{ runner.temp }}/logosforge-pro-linux-x64-provenance/*
+          if-no-files-found: error
+          retention-days: 30
+
+  build_macos:
+    name: macOS Intel x64 — test, freeze, smoke, DMG
+    needs: [metadata, quality]
+    if: needs.metadata.outputs.build_macos == 'true'
+    runs-on: [self-hosted, macOS, X64]
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      CI: "true"
+      PYTHONUTF8: "1"
+
+    steps:
+      - name: Verify native Intel macOS 13.5+ release host and current runner
+        run: |
+          set -euo pipefail
+          test "$RUNNER_OS" = "macOS" && test "$RUNNER_ARCH" = "X64"
+          host_arch="$(uname -m)"
+          if [ "$host_arch" != "x86_64" ]; then echo "::error::Pro Intel requires x86_64; runner reported $host_arch."; exit 1; fi
+          translated="$(sysctl -in sysctl.proc_translated 2>/dev/null || printf '0')"
+          if [ "$translated" = "1" ]; then echo "::error::Pro Intel must run natively, not under Rosetta."; exit 1; fi
+          host_version="$(sw_vers -productVersion)"
+          host_major="${host_version%%.*}"
+          host_remainder="${host_version#*.}"
+          host_minor="${host_remainder%%.*}"
+          host_minor="${host_minor:-0}"
+          case "$host_major" in ""|*[!0-9]*) echo "::error::Could not parse macOS version: $host_version"; exit 1 ;; esac
+          case "$host_minor" in ""|*[!0-9]*) echo "::error::Could not parse macOS version: $host_version"; exit 1 ;; esac
+          if [ "$host_major" -lt 13 ] || { [ "$host_major" -eq 13 ] && [ "$host_minor" -lt 5 ]; }; then
+            echo "::error::Node 24 actions require a macOS 13.5+ build host; runner reported $host_version."
+            exit 1
+          fi
+
+          runner_version_raw="${ACTIONS_RUNNER_VERSION:-}"
+          if [ -z "$runner_version_raw" ]; then
+            if [ -z "${RUNNER_WORKSPACE:-}" ]; then
+              echo "::error::RUNNER_WORKSPACE is unavailable; cannot verify Actions Runner >=2.327.1."
+              exit 1
+            fi
+            # Standard installs expose <runner-root>/_work here; tolerate the
+            # repository subdirectories some runner versions append.
+            fixture_workspace="/tmp/actions-runner/_work"
+            test "$(dirname "$fixture_workspace")/bin/Runner.Listener" = "/tmp/actions-runner/bin/Runner.Listener"
+            listener=""
+            runner_probe="$(cd "$RUNNER_WORKSPACE" && pwd -P)"
+            for _ in 0 1 2 3; do
+              if [ -x "$runner_probe/bin/Runner.Listener" ]; then
+                listener="$runner_probe/bin/Runner.Listener"
+                break
+              fi
+              runner_probe="$(dirname "$runner_probe")"
+            done
+            if [ -z "$listener" ]; then
+              echo "::error::Cannot find Runner.Listener above $RUNNER_WORKSPACE to verify Actions Runner >=2.327.1."
+              exit 1
+            fi
+            runner_version_raw="$("$listener" --version 2>&1)"
+          fi
+          runner_version="$(printf '%s\n' "$runner_version_raw" | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | tail -n 1 || true)"
+          if [ -z "$runner_version" ]; then
+            echo "::error::Could not parse Actions Runner version from: $runner_version_raw"
+            exit 1
+          fi
+          runner_major="${runner_version%%.*}"
+          runner_remainder="${runner_version#*.}"
+          runner_minor="${runner_remainder%%.*}"
+          runner_patch="${runner_remainder#*.}"
+          if [ "$runner_major" -lt 2 ] || { [ "$runner_major" -eq 2 ] && [ "$runner_minor" -lt 327 ]; } || { [ "$runner_major" -eq 2 ] && [ "$runner_minor" -eq 327 ] && [ "$runner_patch" -lt 1 ]; }; then
+            echo "::error::Node 24 actions require Actions Runner >=2.327.1; runner reported $runner_version."
+            exit 1
+          fi
+          xcode-select -p >/dev/null
+          echo "release host OK: macOS $host_version ($host_arch), Actions Runner $runner_version"
+
+      - name: Checkout verified source without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (Node 24)
+        with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify checkout and monorepo layout
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ needs.metadata.outputs.source_sha }}"
+          for path in logosforge/pyproject.toml logosforge-ui-contracts/package.json pro-shared-ui/package.json pro-desktop/package.json pro-desktop/core/logosforge-core.spec pro-desktop/core/logosforge-mcp.spec; do
+            test -e "$path" || { echo "::error::Missing required monorepo path: $path"; exit 1; }
+          done
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0 (Node 24)
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            logosforge-ui-contracts/package-lock.json
+            pro-shared-ui/package-lock.json
+            pro-desktop/package-lock.json
+
+      - name: Locate Python 3.11–3.13
+        id: py
+        run: |
+          set -euo pipefail
+          export PATH="/usr/local/bin:/opt/homebrew/bin:/Library/Frameworks/Python.framework/Versions/3.11/bin:/Library/Frameworks/Python.framework/Versions/3.12/bin:/Library/Frameworks/Python.framework/Versions/3.13/bin:$PATH"
+          for candidate in python3.11 python3.12 python3.13 python3; do
+            interpreter="$(command -v "$candidate" 2>/dev/null)" || continue
+            version="$("$interpreter" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null)" || continue
+            case "$version" in
+              3.11|3.12|3.13) echo "python=$interpreter" >> "$GITHUB_OUTPUT"; echo "Using $interpreter (Python $version)"; exit 0 ;;
+            esac
+          done
+          echo "::error::No Python 3.11, 3.12, or 3.13 is installed on the Intel Mac runner."
+          exit 1
+
+      - name: Build a fresh voice-capable frozen core
+        run: |
+          set -euo pipefail
+          rm -rf -- pro-desktop/core/build pro-desktop/core/dist build-venv
+          "${{ steps.py.outputs.python }}" -m venv build-venv
+          ./build-venv/bin/python -m pip install --upgrade pip
+          ./build-venv/bin/python -m pip install "./logosforge[export,voice,mcp]" httpx "pyinstaller==6.22.2"
+          ./build-venv/bin/python -m pip check
+          ./build-venv/bin/python -c "import ctranslate2, faster_whisper, sounddevice; print('voice imports OK', ctranslate2.__version__)"
+          ./build-venv/bin/python -m compileall -q logosforge/logosforge pro-desktop/core
+          ./build-venv/bin/python - <<'PY'
+          import os
+          from fastapi.testclient import TestClient
+          from logosforge.api import ApiConfig, create_api
+          from logosforge.db import Database
+          os.environ["LOGOSFORGE_VOICE_MODEL"] = os.path.abspath("missing-release-smoke-model")
+          with TestClient(create_api(db=Database(), config=ApiConfig(mode="desktop"))) as client:
+              assert client.get("/api/health").json()["service"] == "logosforge-api"
+              voice = client.get("/api/voice/status").json()
+              assert voice["model_configured"] is True and voice["available"] is False
+              assert "Install 'faster-whisper'" not in voice["message"]
+          print("source API and faster-whisper status smoke OK")
+          PY
+          cd pro-desktop/core
+          ../../build-venv/bin/python -m PyInstaller logosforge-core.spec --noconfirm --clean --log-level WARN
+          ../../build-venv/bin/python -m PyInstaller logosforge-mcp.spec --noconfirm --clean --log-level WARN
+          file dist/logosforge-core/logosforge-core
+          file dist/logosforge-core/logosforge-core | grep -Eq 'Mach-O 64-bit executable x86_64'
+          file dist/logosforge-mcp
+          file dist/logosforge-mcp | grep -Eq 'Mach-O 64-bit executable x86_64'
+          portaudio_files="$(find dist/logosforge-core -type f -iname '*portaudio*' -print)"
+          [ -n "$portaudio_files" ] || {
+            echo "::error::PyInstaller omitted PortAudio from the voice-capable macOS sidecar."
+            exit 1
+          }
+
+      - name: Smoke-test frozen core identity and voice import
+        run: |
+          set -euo pipefail
+          CORE_EXE="$PWD/pro-desktop/core/dist/logosforge-core/logosforge-core" \
+          EXPECTED_CORE_VERSION="$(./build-venv/bin/python -c 'import logosforge; print(logosforge.__version__)')" \
+          EXPECTED_API_VERSION="$(./build-venv/bin/python -c 'from logosforge.api.app import API_CONTRACT_VERSION; print(API_CONTRACT_VERSION)')" \
+          ./build-venv/bin/python - <<'PY'
+          import json, os, shutil, signal, socket, subprocess, tempfile, time, urllib.request
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"]).resolve()
+          work = Path(tempfile.mkdtemp(prefix="logosforge-pro-core-smoke-", dir=root)).resolve()
+          if work.parent != root: raise SystemExit(f"unsafe smoke directory: {work}")
+          log_path = work / "core.log"; nonce, token = "release-smoke-nonce", "release-smoke-token"
+          with socket.socket() as probe:
+              probe.bind(("127.0.0.1", 0)); port = probe.getsockname()[1]
+          env = os.environ.copy(); env.update({"API_AUTH_TOKEN": token, "API_INSTANCE_NONCE": nonce,
+              "LOGOSFORGE_VOICE_MODEL": str(work / "deliberately-missing-model"), "LOGOSFORGE_VOICE_DEVICE": "cpu", "LOGOSFORGE_VOICE_COMPUTE": "int8"})
+          command = [os.environ["CORE_EXE"], "--host", "127.0.0.1", "--port", str(port), "--mode", "desktop", "--db", str(work / "logosforge.db")]
+          proc = None; failure = None
+          def get(path, auth=False):
+              headers = {"Authorization": f"Bearer {token}"} if auth else {}
+              with urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}{path}", headers=headers), timeout=2) as response: return json.load(response)
+          try:
+              with log_path.open("wb") as log:
+                  proc = subprocess.Popen(command, cwd=Path(os.environ["CORE_EXE"]).parent, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                  health = None
+                  for attempt in range(45):
+                      time.sleep(1)
+                      if proc.poll() is not None: break
+                      try: health = get("/api/health")
+                      except Exception: continue
+                      if health.get("status") == "ok": print(f"frozen core healthy after {attempt + 1}s"); break
+                  if health is None: raise RuntimeError(f"frozen core did not become healthy (exit={proc.poll()})")
+                  expected = {"status": "ok", "service": "logosforge-api", "mode": "desktop",
+                              "version": os.environ["EXPECTED_API_VERSION"], "api_version": os.environ["EXPECTED_API_VERSION"],
+                              "core_version": os.environ["EXPECTED_CORE_VERSION"], "instance_nonce": nonce}
+                  if any(health.get(k) != v for k, v in expected.items()): raise RuntimeError(f"identity mismatch: {health!r}")
+                  voice = get("/api/voice/status", True)
+                  if voice.get("model_configured") is not True or voice.get("available") is not False: raise RuntimeError(f"voice status: {voice!r}")
+                  if "Install 'faster-whisper'" in str(voice.get("message", "")): raise RuntimeError(f"faster-whisper omitted: {voice!r}")
+                  print("frozen faster-whisper import path OK (model intentionally absent)")
+          except Exception as exc: failure = exc
+          finally:
+              if proc is not None and proc.poll() is None:
+                  try: os.killpg(proc.pid, signal.SIGTERM)
+                  except ProcessLookupError: pass
+                  try: proc.wait(timeout=10)
+                  except subprocess.TimeoutExpired:
+                      try: os.killpg(proc.pid, signal.SIGKILL)
+                      except ProcessLookupError: pass
+                      proc.wait(timeout=5)
+              for _ in range(20):
+                  try: get("/api/health")
+                  except Exception: break
+                  time.sleep(.25)
+              else: failure = failure or RuntimeError(f"port {port} remained open")
+              if failure and log_path.exists(): print("--- frozen core log ---\n" + log_path.read_text(errors="replace"))
+              shutil.rmtree(work)
+          if failure: raise failure
+          PY
+
+      - name: Smoke-test frozen MCP descriptor and authenticated read
+        run: >-
+          ./build-venv/bin/python pro-desktop/scripts/smoke-frozen-mcp.py
+          pro-desktop/core/dist/logosforge-core/logosforge-core
+          --mcp-executable pro-desktop/core/dist/logosforge-mcp
+
+      - name: Test contracts and Pro sources
+        run: |
+          set -euo pipefail
+          cd logosforge-ui-contracts && npm ci && npm test && npm audit --audit-level=moderate
+          cd ../pro-shared-ui && npm ci && npm test && npm run build && npm audit --audit-level=moderate
+          cd ../pro-desktop && npm ci && npm test && npm audit --audit-level=moderate
+
+      - name: Package unsigned macOS Intel DMG
+        working-directory: pro-desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          set -euo pipefail
+          rm -rf -- release
+          npm run dist:mac
+
+      - name: Inspect Mach-O deployment targets
+        run: |
+          set -euo pipefail
+          set -- pro-desktop/release/mac*/LogosForge\ Pro.app
+          if [ "$#" -ne 1 ] || [ ! -d "$1" ]; then
+            echo "::error::Expected exactly one unpacked macOS app bundle."
+            exit 1
+          fi
+          app_dir="$1"
+          APP_DIR="$app_dir" ./build-venv/bin/python - <<'PY'
+          import os, re, subprocess
+          from pathlib import Path
+
+          def deployment_targets(text):
+              current_command = None
+              targets = []
+              for line in text.splitlines():
+                  stripped = line.strip()
+                  if stripped.startswith("Load command "):
+                      current_command = None
+                  elif stripped.startswith("cmd "):
+                      current_command = stripped.split(maxsplit=1)[1]
+                  elif current_command == "LC_BUILD_VERSION" and stripped.startswith("minos "):
+                      targets.append(stripped.split(maxsplit=1)[1])
+                  elif current_command == "LC_VERSION_MIN_MACOSX" and stripped.startswith("version "):
+                      targets.append(stripped.split(maxsplit=1)[1])
+              return targets
+
+          # A linker tool version in LC_BUILD_VERSION is not a macOS floor.
+          parser_fixture = """
+          Load command 1
+                cmd LC_BUILD_VERSION
+              cmdsize 32
+               minos 13.0
+                 sdk 15.0
+               ntools 1
+                 tool LD
+              version 820.1
+          Load command 2
+                cmd LC_VERSION_MIN_MACOSX
+              cmdsize 16
+             version 12.6
+                 sdk 13.3
+          """
+          assert deployment_targets(parser_fixture) == ["13.0", "12.6"]
+
+          app = Path(os.environ["APP_DIR"])
+          checked = 0
+          target_count = 0
+          too_new = []
+          for path in app.rglob("*"):
+              if not path.is_file() or path.is_symlink(): continue
+              kind = subprocess.run(["file", "-b", str(path)], text=True, capture_output=True).stdout
+              if "Mach-O" not in kind: continue
+              checked += 1
+              output = subprocess.run(["otool", "-l", str(path)], text=True, capture_output=True, check=True).stdout
+              for version in deployment_targets(output):
+                  match = re.match(r"^(\d+)(?:\.(\d+))?(?:\.(\d+))?$", version)
+                  if match is None: raise SystemExit(f"::error::Unparseable deployment target {version!r} in {path}")
+                  target_count += 1
+                  target = tuple(int(part or 0) for part in match.groups())
+                  if target > (13, 0, 0): too_new.append((str(path), version))
+          if checked == 0: raise SystemExit("::error::No Mach-O binaries found in packaged app.")
+          if target_count == 0: raise SystemExit("::error::No Mach-O deployment targets could be verified.")
+          if too_new:
+              for path, version in too_new: print(f"::error::{path} requires macOS {version}")
+              raise SystemExit("Packaged native code exceeds the declared macOS 13.0 floor.")
+          print(f"Mach-O deployment-target scan OK ({checked} files, {target_count} targets, all <= macOS 13.0)")
+          PY
+
+      - name: Mount, inspect, and launch-smoke DMG
+        run: |
+          set -euo pipefail
+          expected="pro-desktop/release/LogosForge Pro-${{ needs.metadata.outputs.version }}-x64.dmg"
+          set -- pro-desktop/release/*.dmg
+          if [ "$#" -ne 1 ] || [ "$1" != "$expected" ] || [ ! -s "$expected" ]; then
+            echo "::error::Expected exactly $expected."
+            exit 1
+          fi
+          dmg="$(cd "$(dirname "$expected")" && pwd -P)/$(basename "$expected")"
+          mount_dir="$(mktemp -d "$RUNNER_TEMP/logosforge-pro-dmg.XXXXXX")"; attached=false
+          cleanup_mount() {
+            rc="${1:-$?}"; trap - EXIT INT TERM
+            if [ "$attached" = "true" ]; then hdiutil detach "$mount_dir" -force >/dev/null 2>&1 || rc=1; fi
+            case "$mount_dir" in "$RUNNER_TEMP"/logosforge-pro-dmg.??????) rmdir "$mount_dir" 2>/dev/null || true ;; *) rc=1 ;; esac
+            exit "$rc"
+          }
+          trap 'cleanup_mount $?' EXIT; trap 'cleanup_mount 130' INT; trap 'cleanup_mount 143' TERM
+          hdiutil attach "$dmg" -nobrowse -readonly -mountpoint "$mount_dir" >/dev/null; attached=true
+          app_dir="$mount_dir/LogosForge Pro.app"; app_exe="$app_dir/Contents/MacOS/LogosForge Pro"; core_exe="$app_dir/Contents/Resources/core/logosforge-core"; mcp_exe="$app_dir/Contents/Resources/mcp/logosforge-mcp"; plist="$app_dir/Contents/Info.plist"
+          test -x "$app_exe"; test -x "$core_exe"; test -x "$mcp_exe"; test -s "$app_dir/Contents/Resources/app.asar"; test -s "$plist"
+          portaudio_files="$(find "$app_dir/Contents/Resources/core" -type f -iname '*portaudio*' -print)"
+          test -n "$portaudio_files"
+          file "$app_exe" | grep -Eq 'Mach-O 64-bit executable x86_64'
+          file "$core_exe" | grep -Eq 'Mach-O 64-bit executable x86_64'
+          file "$mcp_exe" | grep -Eq 'Mach-O 64-bit executable x86_64'
+          bundle_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")"
+          test "$bundle_version" = "${{ needs.metadata.outputs.version }}" || { echo "::error::DMG version mismatch: $bundle_version"; exit 1; }
+          minimum_version="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$plist")"
+          test "$minimum_version" = "13.0.0" || { echo "::error::DMG macOS floor mismatch: $minimum_version"; exit 1; }
+          microphone_reason="$(/usr/libexec/PlistBuddy -c 'Print :NSMicrophoneUsageDescription' "$plist")"
+          test -n "$microphone_reason" || { echo "::error::DMG is missing its microphone usage description."; exit 1; }
+
+          APP_EXE="$app_exe" \
+          EXPECTED_CORE_VERSION="$(./build-venv/bin/python -c 'import logosforge; print(logosforge.__version__)')" \
+          EXPECTED_API_VERSION="$(./build-venv/bin/python -c 'from logosforge.api.app import API_CONTRACT_VERSION; print(API_CONTRACT_VERSION)')" \
+          ./build-venv/bin/python - <<'PY'
+          import json, os, shutil, signal, socket, subprocess, tempfile, time, urllib.request
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"]).resolve()
+          work = Path(tempfile.mkdtemp(prefix="logosforge-pro-app-smoke-", dir=root)).resolve()
+          if work.parent != root: raise SystemExit(f"unsafe smoke directory: {work}")
+          log_path = work / "app.log"
+          with socket.socket() as probe:
+              probe.bind(("127.0.0.1", 0)); port = probe.getsockname()[1]
+          env = os.environ.copy(); env.update({"HOME": str(work), "LOGOSFORGE_PORT": str(port), "LOGOSFORGE_VOICE_MODEL": "", "ELECTRON_ENABLE_LOGGING": "1"})
+          command = [os.environ["APP_EXE"], "--disable-gpu", f"--user-data-dir={work / 'electron-user-data'}"]
+          proc = None; failure = None
+          try:
+              with log_path.open("wb") as log:
+                  proc = subprocess.Popen(command, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                  health = None
+                  for attempt in range(60):
+                      time.sleep(1)
+                      if proc.poll() is not None: break
+                      try:
+                          with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=2) as response: health = json.load(response)
+                      except Exception: continue
+                      if health.get("status") == "ok": print(f"DMG app core healthy after {attempt + 1}s"); break
+                  if health is None: raise RuntimeError(f"DMG app did not start core (exit={proc.poll()})")
+                  expected = {"status": "ok", "service": "logosforge-api", "mode": "desktop",
+                              "version": os.environ["EXPECTED_API_VERSION"], "api_version": os.environ["EXPECTED_API_VERSION"],
+                              "core_version": os.environ["EXPECTED_CORE_VERSION"]}
+                  if any(health.get(k) != v for k, v in expected.items()) or not health.get("instance_nonce"): raise RuntimeError(f"identity mismatch: {health!r}")
+          except Exception as exc: failure = exc
+          finally:
+              if proc is not None and proc.poll() is None:
+                  try: os.killpg(proc.pid, signal.SIGTERM)
+                  except ProcessLookupError: pass
+                  try: proc.wait(timeout=10)
+                  except subprocess.TimeoutExpired:
+                      try: os.killpg(proc.pid, signal.SIGKILL)
+                      except ProcessLookupError: pass
+                      proc.wait(timeout=5)
+              for _ in range(20):
+                  try: urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=.25).close()
+                  except Exception: break
+                  time.sleep(.25)
+              else: failure = failure or RuntimeError(f"port {port} remained open")
+              if failure and log_path.exists(): print("--- DMG app log ---\n" + log_path.read_text(errors="replace"))
+              shutil.rmtree(work)
+          if failure: raise failure
+          PY
+
+      - name: Exercise packaged macOS MCP companion
+        run: >-
+          ./build-venv/bin/python pro-desktop/scripts/smoke-packaged-mcp.py
+          "pro-desktop/release/LogosForge Pro-${{ needs.metadata.outputs.version }}-x64.dmg"
+          --timeout 120
+
+      - name: Record macOS dependency and artifact provenance
+        run: |
+          set -euo pipefail
+          provenance="$RUNNER_TEMP/logosforge-pro-macos-intel-x64-provenance"
+          mkdir -p "$provenance"
+          ./build-venv/bin/python -m pip freeze --all > "$provenance/pip-freeze.txt"
+          {
+            echo "source_sha=${{ needs.metadata.outputs.source_sha }}"
+            echo "version=${{ needs.metadata.outputs.version }}"
+            echo "platform=macos-intel-x64"
+            echo "runner=$RUNNER_OS/$RUNNER_ARCH"
+            echo "host=$(sw_vers -productVersion)"
+            echo "python=$(./build-venv/bin/python --version 2>&1)"
+            echo "node=$(node --version)"
+            echo "npm=$(npm --version)"
+            echo "source_tree_manifest_sha256=$(git ls-tree -r --full-tree '${{ needs.metadata.outputs.source_sha }}' | shasum -a 256 | awk '{print $1}')"
+            shasum -a 256 pro-desktop/release/*.dmg
+          } > "$provenance/SHA256SUMS-and-build.txt"
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (Node 24)
+        with:
+          name: logosforge-pro-macos-intel-x64
+          path: pro-desktop/release/*.dmg
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload macOS provenance
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (Node 24)
+        with:
+          name: logosforge-pro-macos-intel-x64-provenance
+          path: ${{ runner.temp }}/logosforge-pro-macos-intel-x64-provenance/*
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Publish verified native prerelease
+    needs: [metadata, quality, build_windows, build_linux, build_macos]
+    if: ${{ always() && needs.metadata.result == 'success' && needs.quality.result == 'success' && needs.metadata.outputs.publish == 'true' && (needs.build_windows.result == 'success' || needs.build_windows.result == 'skipped') && (needs.build_linux.result == 'success' || needs.build_linux.result == 'skipped') && (needs.build_macos.result == 'success' || needs.build_macos.result == 'skipped') }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    concurrency:
+      group: release-pro-publish-${{ needs.metadata.outputs.tag }}
+      cancel-in-progress: false
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout verified release source without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (Node 24)
+        with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Re-verify immutable tag, source, version, and notes
+        run: |
+          set -euo pipefail
+          source_sha="${{ needs.metadata.outputs.source_sha }}"; release_tag="${{ needs.metadata.outputs.tag }}"
+          version="${{ needs.metadata.outputs.version }}"; notes_path="${{ needs.metadata.outputs.notes_path }}"
+          test "$(git rev-parse HEAD)" = "$source_sha"
+          test "$(git rev-parse --verify "refs/tags/${release_tag}^{commit}")" = "$source_sha"
+          test "$release_tag" = "v${version}"
+          test -s "$notes_path"
+          # shellcheck disable=SC2016
+          node -e '
+            const fs = require("node:fs"), expected = process.argv[1];
+            for (const [pkgPath, lockPath] of [["pro-desktop/package.json", "pro-desktop/package-lock.json"], ["pro-shared-ui/package.json", "pro-shared-ui/package-lock.json"], ["logosforge-ui-contracts/package.json", "logosforge-ui-contracts/package-lock.json"]]) {
+              const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+              const lock = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+              if (pkg.version !== lock.version || pkg.version !== lock.packages?.[""]?.version) {
+                console.error(`::error::Version drift between ${pkgPath} and ${lockPath}`); process.exit(1);
+              }
+              if (pkgPath === "pro-desktop/package.json" && pkg.version !== expected) {
+                console.error(`::error::Pro desktop version drift in ${pkgPath}`); process.exit(1);
+              }
+            }
+          ' "$version"
+
+      - name: Download Windows artifact
+        if: needs.metadata.outputs.build_windows == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1 (Node 24)
+        with:
+          name: logosforge-pro-windows-x64
+          path: release-assets/windows
+
+      - name: Download Linux artifact
+        if: needs.metadata.outputs.build_linux == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1 (Node 24)
+        with:
+          name: logosforge-pro-linux-x64
+          path: release-assets/linux
+
+      - name: Download macOS artifact
+        if: needs.metadata.outputs.build_macos == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1 (Node 24)
+        with:
+          name: logosforge-pro-macos-intel-x64
+          path: release-assets/macos
+
+      - name: Stage exactly the selected successful artifacts
+        env:
+          BUILD_WINDOWS: ${{ needs.metadata.outputs.build_windows }}
+          BUILD_LINUX: ${{ needs.metadata.outputs.build_linux }}
+          BUILD_MACOS: ${{ needs.metadata.outputs.build_macos }}
+        run: |
+          set -euo pipefail
+          version="${{ needs.metadata.outputs.version }}"
+          mkdir -p release-assets/selected
+          if [ "$BUILD_WINDOWS" = "true" ]; then
+            installer="release-assets/windows/LogosForge Pro-${version}-x64.exe"
+            portable="release-assets/windows/LogosForge Pro-${version}-x64-portable.exe"
+            set -- release-assets/windows/*.exe
+            if [ "$#" -ne 2 ] || [ ! -s "$installer" ] || [ ! -s "$portable" ]; then
+              echo "::error::Windows artifact contract mismatch."
+              exit 1
+            fi
+            cp -- "$installer" "$portable" release-assets/selected/
+          fi
+          if [ "$BUILD_LINUX" = "true" ]; then
+            appimage="release-assets/linux/LogosForge Pro-${version}-x86_64.AppImage"
+            set -- release-assets/linux/*.AppImage
+            if [ "$#" -ne 1 ] || [ "$1" != "$appimage" ] || [ ! -s "$appimage" ]; then
+              echo "::error::Linux artifact contract mismatch."
+              exit 1
+            fi
+            cp -- "$appimage" release-assets/selected/
+          fi
+          if [ "$BUILD_MACOS" = "true" ]; then
+            dmg="release-assets/macos/LogosForge Pro-${version}-x64.dmg"
+            set -- release-assets/macos/*.dmg
+            if [ "$#" -ne 1 ] || [ "$1" != "$dmg" ] || [ ! -s "$dmg" ]; then
+              echo "::error::macOS artifact contract mismatch."
+              exit 1
+            fi
+            cp -- "$dmg" release-assets/selected/
+          fi
+          count="$(find release-assets/selected -maxdepth 1 -type f | wc -l | tr -d ' ')"
+          if [ "$count" -lt 1 ]; then echo "::error::No verified native artifacts were staged."; exit 1; fi
+          find release-assets/selected -maxdepth 1 -type f -printf '%f\n' | sort
+
+      - name: Publish GitHub prerelease once
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3 (Node 24)
+        with:
+          tag_name: ${{ needs.metadata.outputs.tag }}
+          target_commitish: ${{ needs.metadata.outputs.source_sha }}
+          name: LogosForge Pro ${{ needs.metadata.outputs.version }} (Alpha)
+          body_path: ${{ needs.metadata.outputs.notes_path }}
+          append_body: false
+          generate_release_notes: false
           draft: false
-          generate_release_notes: true
+          prerelease: true
+          make_latest: "false"
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          files: release-assets/selected/*
