@@ -129,6 +129,10 @@ const releaseWorkflow = fs.readFileSync(
   path.join(process.cwd(), '..', '.github', 'workflows', 'release-windows.yml'),
   'utf8',
 );
+const packagedSmoke = fs.readFileSync(
+  path.join(process.cwd(), 'scripts', 'smoke-packaged-mcp.py'),
+  'utf8',
+);
 
 check('the installed app uses a stable per-user MCP companion path',
   electronMain.includes('mcpCompanionPath(') &&
@@ -157,5 +161,12 @@ check('the GUI deploys the MCP companion before starting its core',
     electronMain.indexOf('void core.start()'));
 check('every native release build installs the MCP packaging extra',
   (releaseWorkflow.match(/logosforge\[export,voice,mcp\]/g) || []).length === 3);
+check('packaged smoke tears down descriptor-owned processes before temp cleanup',
+  packagedSmoke.includes('app_pid = descriptor.get("app_pid")') &&
+  packagedSmoke.includes('_stop_process_tree(process, app_pid, core_pid)') &&
+  packagedSmoke.includes('ignore_cleanup_errors=True'));
+check('Windows release CI exercises both unpacked and portable MCP companions',
+  releaseWorkflow.includes('Exercise packaged Windows MCP companion') &&
+  releaseWorkflow.includes('Exercise portable Windows MCP companion'));
 
 console.log(`MCP runtime descriptor tests: ${passed} passed, 0 failed`);

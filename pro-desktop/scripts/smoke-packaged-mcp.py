@@ -57,7 +57,21 @@ async def _exercise_installed_mcp(
             raise RuntimeError("installed MCP gateway returned an invalid result envelope")
 
 
-def _stop_process_tree(process: subprocess.Popen, core_pid: int | None) -> None:
+def _process_is_alive(pid: int | None) -> bool:
+    if not pid or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except (OSError, ProcessLookupError):
+        return False
+    return True
+
+
+def _stop_process_tree(
+    process: subprocess.Popen,
+    app_pid: int | None,
+    core_pid: int | None,
+) -> None:
     if process.poll() is None:
         if os.name == "nt":
             subprocess.run(
@@ -82,13 +96,36 @@ def _stop_process_tree(process: subprocess.Popen, core_pid: int | None) -> None:
                 except ProcessLookupError:
                     pass
             process.wait(timeout=5)
-    if core_pid and os.name == "nt":
-        subprocess.run(
-            ["taskkill.exe", "/PID", str(core_pid), "/T", "/F"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
+    owned_pids = {pid for pid in (app_pid, core_pid) if pid and pid > 0}
+    if os.name == "nt":
+        for pid in owned_pids:
+            subprocess.run(
+                ["taskkill.exe", "/PID", str(pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        return
+
+    # AppImage/xvfb wrappers can exit before Electron and its managed core have
+    # completely drained. The descriptor gives us the exact owned PIDs, so
+    # terminate and verify them instead of relying only on the wrapper group.
+    for pid in owned_pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and any(
+        _process_is_alive(pid) for pid in owned_pids
+    ):
+        time.sleep(0.1)
+    for pid in owned_pids:
+        if _process_is_alive(pid):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
 
 def _exercise_codex(
@@ -146,7 +183,13 @@ def _smoke_app(app: Path, timeout: int, codex_command: str | None = None) -> Non
     app = app.resolve()
     if not app.is_file():
         raise RuntimeError(f"packaged application is missing: {app}")
-    with tempfile.TemporaryDirectory(prefix="logosforge-packaged-mcp-") as temp:
+    with tempfile.TemporaryDirectory(
+        prefix="logosforge-packaged-mcp-",
+        # The process tree is explicitly terminated below. Ignore a final
+        # rmtree race from a just-exited AppImage/Chromium helper so a verified
+        # package is not reported as broken solely by runner-temp cleanup.
+        ignore_cleanup_errors=True,
+    ) as temp:
         work = Path(temp).resolve()
         descriptor_path = work / "mcp-runtime-v1.json"
         installed_mcp_path = work / (
@@ -174,6 +217,7 @@ def _smoke_app(app: Path, timeout: int, codex_command: str | None = None) -> Non
         args = [str(app), "--disable-gpu", f"--user-data-dir={work / 'electron-user-data'}"]
         creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
         process: subprocess.Popen | None = None
+        app_pid: int | None = None
         core_pid: int | None = None
         try:
             with log_path.open("wb") as log:
@@ -210,6 +254,9 @@ def _smoke_app(app: Path, timeout: int, codex_command: str | None = None) -> Non
                     raise RuntimeError(
                         f"packaged app did not publish its MCP descriptor (exit={process.poll()})"
                     )
+                app_pid = descriptor.get("app_pid")
+                if not isinstance(app_pid, int) or app_pid <= 0:
+                    raise RuntimeError("packaged app published an invalid application process id")
                 core_pid = descriptor.get("core_pid")
                 if not isinstance(core_pid, int) or core_pid <= 0:
                     raise RuntimeError("packaged app published an invalid core process id")
@@ -242,7 +289,7 @@ def _smoke_app(app: Path, timeout: int, codex_command: str | None = None) -> Non
             raise
         finally:
             if process is not None:
-                _stop_process_tree(process, core_pid)
+                _stop_process_tree(process, app_pid, core_pid)
         print("Packaged Pro published a verified descriptor and served an authenticated MCP read.")
 
 
