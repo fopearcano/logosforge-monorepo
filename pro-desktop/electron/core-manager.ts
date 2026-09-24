@@ -20,7 +20,7 @@ import * as path from 'node:path';
 
 import { removeRuntimeDescriptor, writeRuntimeDescriptor } from './mcp-runtime';
 import { selectAvailablePort } from './port-selection';
-import { isExpectedCoreHealth } from './security';
+import { isExpectedCoreHealth, resolveCoreHost } from './security';
 
 export type CoreState = 'connecting' | 'connected' | 'error';
 
@@ -33,7 +33,6 @@ export interface CoreStatus {
   authToken?: string;
 }
 
-const HOST = process.env.LOGOSFORGE_HOST ?? '127.0.0.1';
 const RAW_PORT = process.env.LOGOSFORGE_PORT;
 const INITIAL_PORT = Number(RAW_PORT ?? 8765);
 const PORT_WAS_EXPLICIT = typeof RAW_PORT === 'string' && RAW_PORT.trim().length > 0;
@@ -79,6 +78,8 @@ type Launcher =
   | { kind: 'python'; python: string; coreDir: string; args: string[] };
 
 export interface CoreManagerOptions {
+  /** Pin production launches to loopback; source development may opt into LAN binding. */
+  production?: boolean;
   /** Absolute path to the bundled `logosforge-core(.exe)` (packaged builds only). */
   bundledCorePath?: string;
   /**
@@ -149,15 +150,27 @@ export class CoreManager {
   private managed = false;
   private spawnFailed = false;
   private port = INITIAL_PORT;
-  private endpoint = `http://${HOST}:${INITIAL_PORT}`;
+  private readonly host: string;
+  private endpoint: string;
   private readonly authToken = randomBytes(32).toString('base64url');
   private readonly instanceNonce = randomBytes(18).toString('base64url');
-  private status: CoreStatus = {
-    state: 'connecting', baseUrl: this.endpoint, managed: false, authToken: this.authToken,
-  };
+  private status: CoreStatus;
   private readonly listeners = new Set<(s: CoreStatus) => void>();
 
-  constructor(private readonly opts: CoreManagerOptions = {}) {}
+  constructor(private readonly opts: CoreManagerOptions = {}) {
+    const requestedHost = process.env.LOGOSFORGE_HOST?.trim();
+    const production = opts.production ?? Boolean(opts.bundledCorePath);
+    this.host = resolveCoreHost(requestedHost, production);
+    this.endpoint = `http://${this.host}:${INITIAL_PORT}`;
+    this.status = {
+      state: 'connecting', baseUrl: this.endpoint, managed: false, authToken: this.authToken,
+    };
+    if (production && requestedHost && requestedHost !== this.host) {
+      console.warn(
+        `[security] Ignoring LOGOSFORGE_HOST=${requestedHost}; production cores bind to ${this.host}.`,
+      );
+    }
+  }
 
   get baseUrl(): string {
     return this.endpoint;
@@ -237,11 +250,11 @@ export class CoreManager {
 
     try {
       const selectedPort = await selectAvailablePort(
-        HOST, this.port, !PORT_WAS_EXPLICIT,
+        this.host, this.port, !PORT_WAS_EXPLICIT,
       );
       if (selectedPort !== this.port) {
         this.port = selectedPort;
-        this.endpoint = `http://${HOST}:${selectedPort}`;
+        this.endpoint = `http://${this.host}:${selectedPort}`;
         this.setStatus({
           baseUrl: this.endpoint,
           detail: `Default port was occupied; using local port ${selectedPort}.`,
@@ -295,7 +308,7 @@ export class CoreManager {
 
   /** Decide how to launch the core: the bundled exe (packaged) or dev python. */
   private resolveLauncher(): Launcher | null {
-    const args = ['--host', HOST, '--port', String(this.port), '--mode', 'desktop'];
+    const args = ['--host', this.host, '--port', String(this.port), '--mode', 'desktop'];
     if (this.opts.dbPath) args.push('--db', this.opts.dbPath);
     const bundled = this.opts.bundledCorePath;
     if (bundled) {
@@ -326,7 +339,7 @@ export class CoreManager {
       cwd,
       env: {
         ...process.env,
-        API_HOST: HOST,
+        API_HOST: this.host,
         API_PORT: String(this.port),
         API_MODE: 'desktop',
         API_AUTH_TOKEN: this.authToken,

@@ -1,4 +1,12 @@
-/** Validate renderer-controlled values before they cross an Electron boundary. */
+/** Security validation and launch-policy helpers for Electron. */
+
+const CORE_LOOPBACK_HOST = '127.0.0.1';
+
+/** Production cores are local-only; source development may opt into LAN binding. */
+export function resolveCoreHost(requestedHost: string | undefined, production: boolean): string {
+  const requested = requestedHost?.trim() || CORE_LOOPBACK_HOST;
+  return production ? CORE_LOOPBACK_HOST : requested;
+}
 
 export function normalizeExternalUrl(target: string): string {
   let url: URL;

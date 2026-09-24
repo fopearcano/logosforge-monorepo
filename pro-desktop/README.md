@@ -144,7 +144,9 @@ occupied, it selects another free local port; an explicit `LOGOSFORGE_PORT`
 remains strict. The renderer talks to the verified core directly — no proxy.
 
 Env overrides: `LOGOSFORGE_PORT`, `LOGOSFORGE_HOST`, `LOGOSFORGE_CORE_DIR`,
-`LOGOSFORGE_PYTHON`.
+`LOGOSFORGE_PYTHON`. `LOGOSFORGE_HOST` is a source-development escape hatch for
+experimental LAN access; production and packaged launches always bind the core
+to `127.0.0.1`.
 
 ## Packaged Codex / MCP bridge
 

@@ -34,7 +34,7 @@ const installedMcpPath = mcpCompanionPath(
 
 let mainWindow: BrowserWindow | null = null;
 let rendererServer: StaticServer | null = null;
-const core = new CoreManager({ bundledCorePath, dbPath, mcpRuntimePath });
+const core = new CoreManager({ production: isProd, bundledCorePath, dbPath, mcpRuntimePath });
 let allowClose = false;
 let isQuitting = false;
 let closeInProgress = false;

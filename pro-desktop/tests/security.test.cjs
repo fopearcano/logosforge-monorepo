@@ -2,7 +2,9 @@ const {
   isExpectedCoreHealth,
   normalizeExternalUrl,
   requireProjectId,
+  resolveCoreHost,
 } = require('../dist-electron/security.js');
+const { CoreManager } = require('../dist-electron/core-manager.js');
 
 let passed = 0;
 function check(label, condition) {
@@ -34,5 +36,28 @@ check('wrong service rejected', !isExpectedCoreHealth({
 check('stale core nonce rejected', !isExpectedCoreHealth({
   status: 'ok', service: 'logosforge-api', api_version: '1.0.0', instance_nonce: 'old-nonce',
 }, 'nonce-1'));
+
+check('production host defaults to loopback', resolveCoreHost(undefined, true) === '127.0.0.1');
+check('production ignores a LAN host override', resolveCoreHost('0.0.0.0', true) === '127.0.0.1');
+check('source development retains a LAN host override', resolveCoreHost('0.0.0.0', false) === '0.0.0.0');
+
+const previousHost = process.env.LOGOSFORGE_HOST;
+process.env.LOGOSFORGE_HOST = '192.168.1.25';
+const originalWarn = console.warn;
+console.warn = () => {};
+try {
+  check(
+    'production CoreManager advertises only loopback',
+    new URL(new CoreManager({ production: true }).baseUrl).hostname === '127.0.0.1',
+  );
+  check(
+    'development CoreManager keeps explicit LAN binding',
+    new URL(new CoreManager({ production: false }).baseUrl).hostname === '192.168.1.25',
+  );
+} finally {
+  console.warn = originalWarn;
+  if (previousHost === undefined) delete process.env.LOGOSFORGE_HOST;
+  else process.env.LOGOSFORGE_HOST = previousHost;
+}
 
 console.log(`Electron security tests: ${passed} passed, 0 failed`);
