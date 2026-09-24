@@ -56,7 +56,8 @@ export interface FileActionsApi {
   newDocument: () => void;
   openDocument: () => void;
   saveDocument: () => void;
-  saveDocumentAs: () => void;
+  /** Save the current live manuscript to a user-chosen file; false means canceled/failed. */
+  saveDocumentAs: () => Promise<boolean>;
   /** Clear the disk-file association after switching backend documents. */
   resetForDocument: () => void;
   /**
@@ -330,7 +331,7 @@ export function useFileActions({ getBlocks, loadBlocks, mode, onNewDocument }: O
     newDocument: () => void newDocument(),
     openDocument: () => void openDocument(),
     saveDocument: () => void doSave(),
-    saveDocumentAs: () => void doSaveAs(),
+    saveDocumentAs: doSaveAs,
     resetForDocument,
     confirmProceedPastUnsavedChanges: confirmProceed,
   };

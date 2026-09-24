@@ -43,7 +43,7 @@ backend; only the venv (now has `logosforge`) and the wrapped routes differ.
 | `/api/psyke/search`, `/elements` | ✅ | wraps project-scoped core PSYKE routes |
 | `/api/littleboy/billy/chat`, `/logos/inline` | ✅ | prompt orchestration → core Assistant/Logos; manual Whiteboard outline added to AI grounding |
 | `/api/settings/ai`, `/test` | ✅ | global provider settings passthrough + actionable connection test |
-| `/api/whiteboard`, `/api/outline/items`, `/api/comments` | ✅ | per-document atomic JSON with fsync, transaction-wide locks, two rotating backups, quarantine + recovery; manuscript records also own voice/format settings |
+| `/api/whiteboard`, `/api/outline/items`, `/api/comments` | ✅ | per-document atomic JSON with fsync, transaction-wide locks, two rotating backups, quarantine + recovery; manuscript and outline writes use conditional resource revisions |
 | `/api/export/project` | ✅ | complete-or-failed `.lfbundle` (manuscript + document settings + outline + comments + PSYKE) |
 | `/api/recovery/notices` | ✅ | one-shot notices when a local state backup was restored |
 
@@ -63,6 +63,42 @@ backend; only the venv (now has `logosforge`) and the wrapped routes differ.
 All tests use temporary data/DB state; the AI test uses loopback mock OpenAI
 and Anthropic servers and never needs or reads a real API key. Recovery tests
 exercise backup rotation, quarantine, fail-closed autosave, and complete export.
+
+## Conditional manuscript and outline writes
+
+Manuscripts and manual outlines each own an independent opaque 32-hex
+`revision`. Their GET responses include that value in the JSON body and publish
+a strong ETag with this exact shape:
+
+```text
+"lfwb:<whiteboard|outline>:<document-incarnation>:<revision>"
+```
+
+An explicit-document `PUT` (`?doc=<id>`) must echo the complete tag in
+`If-Match`. A missing precondition returns HTTP 428, malformed/weak/wildcard
+tags return HTTP 400, and a stale tag returns HTTP 409 with the structured code
+`revision_conflict`, the current revision, and the current ETag. The write is
+not attempted. The legacy default-document route may omit `If-Match`; when it
+is supplied it is enforced normally.
+
+The legacy doc-omitted `POST /api/whiteboard` is create-only: it can initialize
+a missing local manuscript for the default core project and returns HTTP 409
+with `resource_already_exists` instead of replacing an existing manuscript.
+Explicit multi-document creation remains exclusively `POST /api/documents`, so
+a delayed headerless request cannot attach content to a reused numeric id. If a
+backup is recovered, the restored manuscript or outline is immediately saved
+with a fresh revision and cleared retry metadata (without changing manuscript
+`updated_at`), so every ETag issued before recovery becomes stale.
+
+Desktop persistence may also attach `X-LogosForge-Mutation-Id`. The store saves
+the last id and a canonical request fingerprint inside its private on-disk
+envelope. Retrying the exact request returns its prior successful revision
+without another write; reusing the id for a different request returns HTTP 409
+with `mutation_id_conflict`. These internal fields are never part of an API or
+MCP response. Main-process persistence-order no-ops are valid only while the
+current revision still belongs to the latest ordered lineage; an ordinary API
+write or recovery forces delayed writes through the conditional revision check.
+`ETag` is CORS-exposed for the browser-development client.
 
 ## Read-only MCP companion
 

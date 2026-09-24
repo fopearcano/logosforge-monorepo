@@ -35,9 +35,14 @@ import {
 } from './shutdown-persistence';
 import {
   buildPendingDocumentHttpRequest,
+  PendingDocumentRevisionConflictError,
+  PendingDocumentTerminalError,
   PendingDocumentPersistence,
+  type PendingDocumentConflictRecovery,
+  resourceEtag,
   validatePendingDocumentId,
   validatePendingDocumentIncarnation,
+  validateResourceRevision,
 } from './pending-document-persistence';
 
 // Keep packaged user data under the product identity rather than the npm name.
@@ -65,18 +70,78 @@ let mainWindow: BrowserWindow | null = null;
 const backend = new BackendManager({ production: isProd, mcpRuntimePath });
 const writablePaths = new PathGrantRegistry();
 const mainFileWrites = new PendingOperationTracker();
-const documentPersistence = new PendingDocumentPersistence(async (write, signal, dispatchSequence) => {
-  const request = buildPendingDocumentHttpRequest(write, backend.getStatus(), dispatchSequence);
+const documentPersistence = new PendingDocumentPersistence(async (
+  write,
+  signal,
+  dispatchSequence,
+  resourceRevision,
+) => {
+  const request = buildPendingDocumentHttpRequest(
+    write,
+    backend.getStatus(),
+    dispatchSequence,
+    resourceRevision,
+  );
   const response = await fetch(request.url, {
     method: request.method,
     headers: request.headers,
     body: request.body,
     signal,
   });
-  void response.body?.cancel();
-  if (!response.ok) {
-    throw new Error(`Could not persist ${write.kind} (HTTP ${response.status}).`);
+  let body: Record<string, unknown> = {};
+  try {
+    const parsed = await response.json() as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      body = parsed as Record<string, unknown>;
+    }
+  } catch {
+    /* A stable HTTP error below is safer than exposing transport internals. */
   }
+  if (!response.ok) {
+    const error = body.error && typeof body.error === 'object' && !Array.isArray(body.error)
+      ? body.error as Record<string, unknown>
+      : {};
+    const message = typeof error.message === 'string' && error.message.trim()
+      ? error.message.trim()
+      : `Could not persist ${write.kind} (HTTP ${response.status}).`;
+    if (response.status === 409 && error.code === 'revision_conflict') {
+      const currentRevision = validateResourceRevision(error.current_revision);
+      const currentEtag = typeof error.current_etag === 'string'
+        ? error.current_etag
+        : response.headers.get('etag') ?? '';
+      throw new PendingDocumentRevisionConflictError(
+        message,
+        currentRevision,
+        currentEtag,
+      );
+    }
+    const rendered = `${message} (HTTP ${response.status}).`;
+    if (response.status >= 400 && response.status < 500) {
+      throw new PendingDocumentTerminalError(
+        rendered,
+        typeof error.code === 'string' ? error.code : 'persistence_request_rejected',
+        response.status,
+      );
+    }
+    throw new Error(rendered);
+  }
+  let nextRevision: string;
+  try {
+    nextRevision = validateResourceRevision(body.revision);
+  } catch (error) {
+    throw new PendingDocumentTerminalError(
+      `The ${write.kind} save returned an invalid resource revision.`,
+      'invalid_persistence_response',
+    );
+  }
+  const expectedEtag = resourceEtag(write.kind, write.incarnation, nextRevision);
+  if (response.headers.get('etag') !== expectedEtag) {
+    throw new PendingDocumentTerminalError(
+      `The ${write.kind} save returned an invalid revision validator.`,
+      'invalid_persistence_response',
+    );
+  }
+  return { ok: true, resourceRevision: nextRevision };
 });
 const DOCUMENT_DELETE_REQUEST_TIMEOUT_MS = 10_000;
 interface ActiveDocumentDelete {
@@ -193,11 +258,11 @@ function deleteDocumentWithPersistenceFence(value: unknown): Promise<void> {
   }
 
   const run = runDocumentDeleteTransaction({
-    begin: () => documentPersistence.beginDocumentDelete(documentId),
+    begin: () => documentPersistence.beginDocumentDelete(documentId, incarnation),
     deleteBackend: (floor) => deleteBackendDocument(documentId, incarnation, floor),
     backendDocumentExists: () => backendDocumentExists(documentId, incarnation),
-    commit: () => documentPersistence.commitDocumentDelete(documentId),
-    cancel: () => documentPersistence.cancelDocumentDelete(documentId),
+    commit: () => documentPersistence.commitDocumentDelete(documentId, incarnation),
+    cancel: () => documentPersistence.cancelDocumentDelete(documentId, incarnation),
   });
   const tracked = run.finally(() => {
     if (documentDeleteOperations.get(documentId)?.promise === tracked) {
@@ -208,7 +273,7 @@ function deleteDocumentWithPersistenceFence(value: unknown): Promise<void> {
   return tracked;
 }
 
-async function waitForMainDocumentPersistence(): Promise<void> {
+async function recoverMainDocumentPersistence(): Promise<PendingDocumentConflictRecovery[]> {
   await mainFileWrites.drain();
   while (documentDeleteOperations.size) {
     await Promise.allSettled(
@@ -216,6 +281,17 @@ async function waitForMainDocumentPersistence(): Promise<void> {
     );
   }
   await documentPersistence.drain();
+  return documentPersistence.listConflicts();
+}
+
+async function waitForMainDocumentPersistence(): Promise<void> {
+  await mainFileWrites.drain();
+  while (documentDeleteOperations.size) {
+    await Promise.allSettled(
+      [...documentDeleteOperations.values()].map((operation) => operation.promise),
+    );
+  }
+  await documentPersistence.drainStrict();
 }
 
 function isMainRenderer(event: IpcMainInvokeEvent | IpcMainEvent): boolean {
@@ -321,7 +397,14 @@ async function prepareCloseWithoutRenderer(
 ): Promise<boolean> {
   try {
     console.warn('[close] renderer unavailable; draining main-owned persistence directly');
-    await waitForMainDocumentPersistence();
+    if (action === 'reload') {
+      // A renderer crash must remain recoverable: settle active/uncertain writes,
+      // but preserve terminal ledger entries for the replacement renderer to
+      // hydrate. A true close/quit stays strict and cannot erase the RAM ledger.
+      await recoverMainDocumentPersistence();
+    } else {
+      await waitForMainDocumentPersistence();
+    }
   } catch (error) {
     console.error('[close] main-owned persistence did not drain; keeping the window open:', error);
     return false;
@@ -339,9 +422,12 @@ function cancelRendererCloseBarrier(win: BrowserWindow, requestId: number | null
   }
 }
 
-async function handleCloseRequest(action: 'close' | 'reload' = 'close'): Promise<void> {
+async function handleCloseRequest(
+  action: 'close' | 'reload' = 'close',
+  recoveryToAbandon?: unknown,
+): Promise<boolean> {
   const win = mainWindow;
-  if (!win || !closePreparations.begin('ordinary')) return;
+  if (!win || !closePreparations.begin('ordinary')) return false;
   closePromptOpen = true;
   console.log('[close] preparing document persistence');
   let proceed = false;
@@ -398,26 +484,43 @@ async function handleCloseRequest(action: 'close' | 'reload' = 'close'): Promise
   if (!proceed) {
     cancelRendererCloseBarrier(win, autosaveRequestId);
     isQuitting = false; // Cancel / failed save → stay open, abort any quit
-    return;
+    return false;
   }
   if (mainWindow !== win) {
     cancelRendererCloseBarrier(win, autosaveRequestId);
     isQuitting = false;
-    return;
+    return false;
   }
   const finalAction = effectiveCloseAction(action, isQuitting);
   if (finalAction === 'reload') {
     try {
+      if (recoveryToAbandon && !documentPersistence.hasConflict(recoveryToAbandon)) {
+        cancelRendererCloseBarrier(win, autosaveRequestId);
+        return false;
+      }
       win.webContents.reload();
+      // Calling reload successfully transfers control to a fresh renderer. Ack
+      // afterwards so a thrown reload cannot erase the only main-owned copy;
+      // an exact-version miss leaves a newer recovery for hydration.
+      if (recoveryToAbandon) documentPersistence.acknowledgeConflict(recoveryToAbandon);
+      return true;
     } catch (error) {
       console.error('[close] reload failed; keeping the window open:', error);
       cancelRendererCloseBarrier(win, autosaveRequestId);
+      return false;
     }
-    return;
+  }
+  if (recoveryToAbandon) {
+    // A quit that overtakes the requested recovery reload must not consume an
+    // in-memory rescue entry under the reload-only exemption.
+    cancelRendererCloseBarrier(win, autosaveRequestId);
+    isQuitting = false;
+    return false;
   }
   allowClose = true;
   if (finalAction === 'quit') app.quit();
   else win.close();
+  return true;
 }
 
 /**
@@ -576,13 +679,57 @@ function createWindow(): void {
 }
 
 function registerFileIpc(): void {
-  ipcMain.handle('document:persist', (event, payload: unknown) => {
+  ipcMain.handle('document:persist', async (event, payload: unknown) => {
     requireMainRenderer(event);
-    return documentPersistence.enqueue(payload);
+    try {
+      return await documentPersistence.enqueue(payload);
+    } catch (error) {
+      if (
+        error instanceof PendingDocumentRevisionConflictError
+        || error instanceof PendingDocumentTerminalError
+      ) {
+        if (!error.recovery) throw error;
+        return {
+          ok: false,
+          code: error.code,
+          status: error.status ?? 409,
+          message: error.message,
+          ...(error instanceof PendingDocumentRevisionConflictError
+            ? {
+              currentRevision: error.currentRevision,
+              currentEtag: error.currentEtag,
+            }
+            : {}),
+          recovery: error.recovery,
+        };
+      }
+      throw error;
+    }
   });
   ipcMain.handle('document:drain-persistence', (event) => {
     requireMainRenderer(event);
-    return waitForMainDocumentPersistence();
+    return recoverMainDocumentPersistence();
+  });
+  ipcMain.on('document:retain-conflict', (event, payload: unknown) => {
+    if (!isMainRenderer(event)) {
+      event.returnValue = { ok: false };
+      return;
+    }
+    try {
+      event.returnValue = documentPersistence.retainConflict(payload);
+    } catch (error) {
+      console.error('[persistence] rejected conflict snapshot:', error);
+      event.returnValue = { ok: false };
+    }
+  });
+  ipcMain.handle('document:acknowledge-conflict', (event, payload: unknown) => {
+    requireMainRenderer(event);
+    return documentPersistence.acknowledgeConflict(payload);
+  });
+  ipcMain.handle('document:reload-after-abandoning-conflict', (event, payload: unknown) => {
+    requireMainRenderer(event);
+    if (!documentPersistence.hasConflict(payload)) return false;
+    return handleCloseRequest('reload', payload);
   });
   ipcMain.handle('document:delete-with-fence', (event, payload: unknown) => {
     requireMainRenderer(event);
@@ -731,7 +878,7 @@ if (!app.requestSingleInstanceLock()) {
     registerFileIpc();
     setAppMenu({
       getWindow: () => mainWindow,
-      reloadWindow: () => handleCloseRequest('reload'),
+      reloadWindow: async () => { await handleCloseRequest('reload'); },
     });
 
     createWindow();

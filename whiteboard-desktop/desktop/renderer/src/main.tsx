@@ -4,6 +4,7 @@ import ReactDOM from 'react-dom/client';
 import { App } from './App';
 import { RenderErrorBoundary } from './components/RenderErrorBoundary';
 import { RuntimeFaultBanner } from './components/RuntimeFaultBanner';
+import { PendingDocumentRecoveryBanner } from './components/PendingDocumentRecoveryBanner';
 import { useRuntimeFaultReporter } from './components/useRuntimeFaultReporter';
 import './styles/app.css';
 import { applyStoredTheme } from './styles/themes/customThemeStorage';
@@ -79,6 +80,7 @@ function RendererFaultHost() {
           <App />
         </ThemeProvider>
       </RenderErrorBoundary>
+      <PendingDocumentRecoveryBanner />
       <RuntimeFaultBanner fault={fault} onDismiss={dismiss} />
     </>
   );

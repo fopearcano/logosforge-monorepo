@@ -44,6 +44,14 @@ export const DEFAULT_SETTINGS: DocumentSettings = {
   showInvisibles: true,
 };
 
+/** Identity of the durable manuscript snapshot that owns project settings. */
+export function documentSettingsSnapshotKey(
+  documentId: string | null,
+  revision: string | null,
+): string | null {
+  return documentId && revision ? `${documentId}:${revision}` : null;
+}
+
 const PERSON_LABEL: Record<NarrativePerson, string> = {
   unspecified: '',
   first: 'first person',

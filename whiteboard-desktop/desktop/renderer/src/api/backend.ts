@@ -22,10 +22,48 @@ export interface PendingDocumentWrite {
   kind: 'whiteboard' | 'outline';
   documentId: string;
   incarnation: string;
+  resourceRevision: string;
   revision: number;
   sessionId: string;
   payload: object;
 }
+
+export interface PendingDocumentConflictReceipt {
+  conflictId: string;
+  version: number;
+  kind: PendingDocumentWrite['kind'];
+  documentId: string;
+  incarnation: string;
+}
+
+export interface PendingDocumentConflictRecovery extends PendingDocumentConflictReceipt {
+  write: PendingDocumentWrite;
+  error: {
+    code: string;
+    status: number;
+    message: string;
+    currentRevision?: string;
+    currentEtag?: string;
+  };
+}
+
+export interface PendingDocumentConflictUpdateResult {
+  ok: boolean;
+  recovery?: PendingDocumentConflictReceipt;
+}
+
+export type PendingDocumentWriteResult = {
+  ok: true;
+  resourceRevision: string;
+} | {
+  ok: false;
+  code: string;
+  status: number;
+  message: string;
+  currentRevision?: string;
+  currentEtag?: string;
+  recovery: PendingDocumentConflictReceipt;
+};
 
 export interface PendingDocumentDeleteFloor {
   whiteboard: number;
@@ -35,9 +73,17 @@ export interface PendingDocumentDeleteFloor {
 export interface LogosForgeBridge {
   getBackendStatus(): Promise<BackendStatus>;
   onBackendStatus(cb: (status: BackendStatus) => void): () => void;
-  persistPendingDocument(write: PendingDocumentWrite): Promise<void>;
+  persistPendingDocument(write: PendingDocumentWrite): Promise<PendingDocumentWriteResult>;
   persistPendingDocumentOnUnload(write: PendingDocumentWrite): boolean;
-  waitForPendingDocumentPersistence(): Promise<void>;
+  waitForPendingDocumentPersistence(): Promise<PendingDocumentConflictRecovery[]>;
+  retainPendingDocumentConflict(
+    recovery: PendingDocumentConflictReceipt,
+    write: PendingDocumentWrite,
+  ): PendingDocumentConflictUpdateResult;
+  acknowledgePendingDocumentConflict(recovery: PendingDocumentConflictReceipt): Promise<boolean>;
+  reloadAfterAbandoningPendingDocumentConflict(
+    recovery: PendingDocumentConflictReceipt,
+  ): Promise<boolean>;
   deleteDocumentWithPersistenceFence(documentId: string, incarnation: string): Promise<void>;
   fileSetCloseHandshakeReady(ready: boolean): void;
   fileSetExternalSaveHandshakeReady(ready: boolean): void;
@@ -92,7 +138,16 @@ const fallback: LogosForgeBridge = {
     return false;
   },
   waitForPendingDocumentPersistence() {
-    return Promise.resolve();
+    return Promise.resolve([]);
+  },
+  retainPendingDocumentConflict() {
+    return { ok: false };
+  },
+  acknowledgePendingDocumentConflict() {
+    return Promise.resolve(false);
+  },
+  reloadAfterAbandoningPendingDocumentConflict() {
+    return Promise.resolve(false);
   },
   deleteDocumentWithPersistenceFence() {
     return Promise.resolve();

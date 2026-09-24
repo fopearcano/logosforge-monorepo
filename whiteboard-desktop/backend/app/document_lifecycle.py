@@ -294,6 +294,7 @@ async def locked_document_request(
     doc: int | None,
     *,
     mutation: bool = False,
+    create_missing: bool = False,
 ) -> AsyncIterator[LockedDocument]:
     """Lock before authoritative resolution, then validate the current identity.
 
@@ -310,8 +311,13 @@ async def locked_document_request(
     if doc is None:
         async with locked_default_project(core) as pid:
             document_id = str(pid)
-            incarnation = whiteboard_store.ensure_incarnation(document_id)
-            require_document_incarnation(expected, incarnation)
+            if create_missing and not whiteboard_store.exists(document_id):
+                if expected is not None:
+                    require_document_incarnation(expected, "")
+                incarnation = ""
+            else:
+                incarnation = whiteboard_store.ensure_incarnation(document_id)
+                require_document_incarnation(expected, incarnation)
             yield LockedDocument(
                 project_id=pid,
                 document_id=document_id,
@@ -333,7 +339,19 @@ async def locked_document_request(
             await lock.acquire()
             acquired = True
             pid = await resolve_pid(core, int(hinted_pid))
-            if mutation and expected is None:
+            resource_exists = whiteboard_store.exists(str(pid))
+            if create_missing and not resource_exists:
+                # A headerless request cannot prove which lifetime of a reused
+                # numeric core id it belongs to. Multi-document creation owns
+                # identity publication through POST /api/documents instead.
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        "An explicit Whiteboard resource must be created through "
+                        "/api/documents."
+                    ),
+                )
+            if mutation and expected is None and not (create_missing and not resource_exists):
                 request_document_incarnation(request, required=True)
             incarnation = whiteboard_store.ensure_incarnation(str(pid))
             require_document_incarnation(expected, incarnation)

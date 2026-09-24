@@ -8,16 +8,33 @@ import {
 import {
   applyRetainedWhiteboardPatch,
   blockWhiteboardWrites,
+  claimWhiteboardConflict,
+  discardConflictedWhiteboardPatch,
+  discardWhiteboardConflictRecovery,
   discardRetainedWhiteboardPatch,
   flushWhiteboardPatchThrough,
   flushWhiteboardPatches,
   newestRetainedWhiteboardPatch,
   peekRetainedWhiteboardPatch,
   queueWhiteboardPatch,
+  restoreWhiteboardConflict,
   resumeWhiteboardWrites,
+  seedWhiteboardRecoverySnapshot,
+  whiteboardRevisionConflict,
 } from './pendingWhiteboardRecovery';
+import { RevisionConflictError } from '../../api/responseError';
+import {
+  saveWhiteboardConflictCopy,
+  type WhiteboardConflictEnvelope,
+} from './whiteboardConflictCopy';
 import { eligibleOrphanCleanupIds } from './orphanCleanupGate';
 import type { WhiteboardBlock } from './types';
+import type { PendingDocumentConflictRecovery } from '../../api/backend';
+import {
+  coordinateRecoveryAbandonment,
+  reconcilePendingDocumentRecoveries,
+  recoveryTargetsActiveDocument,
+} from '../../api/pendingRecoveryPolicy';
 import {
   acquireTrackedDocumentOperation,
   beginDocumentCloseBarrier,
@@ -65,6 +82,7 @@ const live: WhiteboardBlock[] = [{ id: 'live', type: 'paragraph', text: 'Latest 
 const document = (id: string) => ({
   id,
   incarnation: '0123456789abcdef0123456789abcdef',
+  revision: '11111111111111111111111111111111',
   title: 'Untitled',
   mode: 'novel',
   blocks: loaded,
@@ -72,21 +90,465 @@ const document = (id: string) => ({
   updated_at: '2026-09-11T00:00:00Z',
 });
 
+const mainWhiteboardRecovery = (
+  documentId: string,
+  incarnation: string,
+  payload: Record<string, unknown>,
+  version = 1,
+): PendingDocumentConflictRecovery => ({
+  conflictId: 'main_conflict_1',
+  version,
+  kind: 'whiteboard',
+  documentId,
+  incarnation,
+  write: {
+    kind: 'whiteboard',
+    documentId,
+    incarnation,
+    resourceRevision: '1'.repeat(32),
+    revision: version,
+    sessionId: 'renderer_recovery_session',
+    payload,
+  },
+  error: {
+    code: 'revision_conflict',
+    status: 409,
+    message: 'changed elsewhere',
+    currentRevision: '2'.repeat(32),
+    currentEtag: '"current"',
+  },
+});
+
 test('render recovery prefers the current document live snapshot', () => {
-  expectSame(editorRecoveryBlocks('doc-a', 'doc-a', live, loaded), live);
+  expectSame(editorRecoveryBlocks('doc-a:revision-1', 'doc-a:revision-1', live, loaded), live);
 });
 
 test('render recovery preserves an intentionally empty current snapshot', () => {
   const empty: WhiteboardBlock[] = [];
-  expectSame(editorRecoveryBlocks('doc-a', 'doc-a', empty, loaded), empty);
+  expectSame(editorRecoveryBlocks('doc-a:revision-1', 'doc-a:revision-1', empty, loaded), empty);
 });
 
 test('document switches reject a live snapshot from the previous document', () => {
-  expectSame(editorRecoveryBlocks('doc-b', 'doc-a', live, loaded), loaded);
+  expectSame(editorRecoveryBlocks('doc-b:revision-1', 'doc-a:revision-1', live, loaded), loaded);
+});
+
+test('same-document durable reload rejects the superseded live draft', () => {
+  expectSame(editorRecoveryBlocks('doc-a:revision-2', 'doc-a:revision-1', live, loaded), loaded);
 });
 
 test('a not-yet-loaded document uses the backend-derived snapshot', () => {
   expectSame(editorRecoveryBlocks(null, null, live, loaded), loaded);
+});
+
+test('the global recovery surface detects when abandonment requires a workspace reload', () => {
+  const recovery = mainWhiteboardRecovery('910', document('910').incarnation, {});
+  if (!recoveryTargetsActiveDocument(recovery, recovery.documentId, recovery.incarnation)) {
+    throw new Error('Active recovery did not require coordinated reload');
+  }
+  if (recoveryTargetsActiveDocument(recovery, '911', recovery.incarnation)) {
+    throw new Error('Orphan recovery was mistaken for live editor state');
+  }
+});
+
+test('a delayed empty main snapshot cannot hide a locally published conflict', () => {
+  const recovery = mainWhiteboardRecovery('912', document('912').incarnation, {});
+  const reconciled = reconcilePendingDocumentRecoveries(
+    [recovery],
+    [],
+    0,
+    new Map([[recovery.conflictId, 1]]),
+  );
+  if (reconciled.length !== 1 || reconciled[0] !== recovery) {
+    throw new Error('The stale absence erased a newer local conflict');
+  }
+});
+
+test('a delayed stale main snapshot cannot resurrect a locally acknowledged conflict', () => {
+  const recovery = mainWhiteboardRecovery('913', document('913').incarnation, {});
+  const reconciled = reconcilePendingDocumentRecoveries(
+    [],
+    [recovery],
+    1,
+    new Map([[recovery.conflictId, 2]]),
+  );
+  if (reconciled.length !== 0) {
+    throw new Error('The stale response resurrected an acknowledged conflict');
+  }
+});
+
+await testAsync('active recovery abandonment preserves the target when another store cannot flush', async () => {
+  let targetPresent = true;
+  let reloadRequested = false;
+  let restored = false;
+  let rejected = false;
+  try {
+    await coordinateRecoveryAbandonment({
+      discardTarget: () => {
+        targetPresent = false;
+        return true;
+      },
+      flushOtherState: async () => {
+        throw new Error('comment intent still pending');
+      },
+      requestCoordinatedReload: async () => {
+        reloadRequested = true;
+        return true;
+      },
+      restoreTarget: async () => {
+        targetPresent = true;
+        restored = true;
+      },
+    });
+  } catch {
+    rejected = true;
+  }
+  if (!rejected || !restored || !targetPresent) {
+    throw new Error('Failed unrelated state did not restore the protected draft');
+  }
+  if (reloadRequested) throw new Error('Reload started despite an unrelated flusher failure');
+});
+
+await testAsync('conflict copy preserves every pending field without consuming the queue', async () => {
+  const documentId = 'conflict-copy';
+  const patch = {
+    title: 'Local title',
+    mode: 'screenplay',
+    blocks: live,
+    settings: { narrativeStyle: 'lyrical' },
+  };
+  queueWhiteboardPatch(documentId, patch);
+  try {
+    await flushWhiteboardPatches(documentId, async () => {
+      throw new RevisionConflictError(
+        'changed elsewhere',
+        '22222222222222222222222222222222',
+        '"current"',
+      );
+    });
+  } catch {
+    /* expected */
+  }
+  const retained = peekRetainedWhiteboardPatch(documentId);
+  if (!retained) throw new Error('Expected a retained conflict snapshot');
+  const base = { ...document(documentId), title: 'Saved title', settings: {} };
+
+  const canceled = await saveWhiteboardConflictCopy(
+    base,
+    retained,
+    async () => ({ ok: false, canceled: true }),
+  );
+  if (!canceled.canceled || peekRetainedWhiteboardPatch(documentId)?.revision !== retained.revision) {
+    throw new Error('Canceling conflict export consumed the retained queue');
+  }
+
+  const exportedContents: string[] = [];
+  const saved = await saveWhiteboardConflictCopy(
+    base,
+    retained,
+    async (content) => {
+      exportedContents.push(content);
+      return { ok: true, filePath: 'conflict.json' };
+    },
+  );
+  const exported = exportedContents[0]
+    ? JSON.parse(exportedContents[0]) as WhiteboardConflictEnvelope
+    : null;
+  if (
+    !saved.ok
+    || !exported
+    || exported.document.title !== patch.title
+    || exported.document.mode !== patch.mode
+    || exported.document.blocks[0]?.text !== live[0]?.text
+    || (exported.document.settings as { narrativeStyle?: string }).narrativeStyle !== 'lyrical'
+    || peekRetainedWhiteboardPatch(documentId)?.revision !== retained.revision
+  ) {
+    throw new Error('Successful conflict export was incomplete or consumed the queue');
+  }
+  discardRetainedWhiteboardPatch(documentId);
+});
+
+await testAsync('conflict copy uses live saved blocks and their current base revision', async () => {
+  const documentId = 'conflict-copy-after-save';
+  queueWhiteboardPatch(documentId, { blocks: live });
+  await flushWhiteboardPatches(documentId, async () => {});
+  queueWhiteboardPatch(documentId, { title: 'Conflicted title' });
+  try {
+    await flushWhiteboardPatches(documentId, async () => {
+      throw new RevisionConflictError(
+        'changed elsewhere',
+        '33333333333333333333333333333333',
+        '"current"',
+      );
+    });
+  } catch {
+    /* expected */
+  }
+  const retained = peekRetainedWhiteboardPatch(documentId);
+  if (!retained || retained.patch.blocks !== live) {
+    throw new Error('Expected the later title conflict to retain the complete local snapshot');
+  }
+  const currentBaseRevision = '22222222222222222222222222222222';
+  const exportedContents: string[] = [];
+  await saveWhiteboardConflictCopy(
+    { ...document(documentId), revision: currentBaseRevision, blocks: live },
+    retained,
+    async (content) => {
+      exportedContents.push(content);
+      return { ok: true, filePath: 'conflict.json' };
+    },
+  );
+  const exported = JSON.parse(exportedContents[0] ?? '{}') as WhiteboardConflictEnvelope;
+  if (
+    exported.base_revision !== currentBaseRevision
+    || exported.document.revision !== currentBaseRevision
+    || exported.document.blocks[0]?.text !== live[0]?.text
+    || exported.document.title !== 'Conflicted title'
+  ) {
+    throw new Error('Conflict rescue did not use the current live document base');
+  }
+  discardRetainedWhiteboardPatch(documentId);
+});
+
+await testAsync('seeded title-only conflicts retain the complete local document across remounts', async () => {
+  const documentId = '901';
+  const base = {
+    ...document(documentId),
+    title: 'Local base',
+    blocks: live,
+    mode: 'screenplay',
+    settings: { language: 'it' },
+  };
+  seedWhiteboardRecoverySnapshot(base);
+  let retainedByMain: Record<string, unknown> | null = null;
+  const recovery = mainWhiteboardRecovery(documentId, base.incarnation, {
+    title: 'Local title',
+    mode: base.mode,
+    blocks: base.blocks,
+    settings: base.settings,
+  });
+  queueWhiteboardPatch(documentId, { title: 'Local title' }, {
+    incarnation: base.incarnation,
+    write: async (_target, payload) => {
+      retainedByMain = payload as Record<string, unknown>;
+      throw new RevisionConflictError(
+        'changed elsewhere',
+        '2'.repeat(32),
+        '"current"',
+        recovery,
+      );
+    },
+    retainConflict: (_target, payload) => {
+      retainedByMain = payload as Record<string, unknown>;
+      return recovery;
+    },
+  });
+  try {
+    await flushWhiteboardPatches(documentId);
+  } catch {
+    /* expected */
+  }
+  const retained = peekRetainedWhiteboardPatch(documentId, base.incarnation);
+  const external = {
+    ...base,
+    revision: '3'.repeat(32),
+    title: 'External title',
+    blocks: loaded,
+    mode: 'novel',
+    settings: {},
+  };
+  const hydrated = applyRetainedWhiteboardPatch(external, retained);
+  if (
+    !retained
+    || hydrated.title !== 'Local title'
+    || hydrated.blocks !== live
+    || hydrated.mode !== 'screenplay'
+    || (hydrated.settings as { language?: string }).language !== 'it'
+    || !retainedByMain
+    || !('blocks' in retainedByMain)
+    || !('settings' in retainedByMain)
+  ) throw new Error('A title-only conflict lost fields from the complete local snapshot');
+  discardRetainedWhiteboardPatch(documentId);
+});
+
+test('main conflict hydration is idempotent and incarnation-safe', () => {
+  const documentId = '902';
+  const incarnationA = document(documentId).incarnation;
+  const incarnationB = 'abcdef0123456789abcdef0123456789';
+  const recovery = mainWhiteboardRecovery(documentId, incarnationA, {
+    title: 'Recovered A',
+    mode: 'novel',
+    blocks: live,
+    settings: { source: 'A' },
+  });
+  restoreWhiteboardConflict(
+    recovery,
+    new RevisionConflictError('changed', '2'.repeat(32), '"current"', recovery),
+  );
+  const b = { ...document(documentId), incarnation: incarnationB, title: 'Document B' };
+  seedWhiteboardRecoverySnapshot(b);
+  if (peekRetainedWhiteboardPatch(documentId, incarnationB)) {
+    throw new Error('Old-incarnation recovery was applied to a reused document id');
+  }
+  seedWhiteboardRecoverySnapshot(document(documentId));
+  const first = peekRetainedWhiteboardPatch(documentId, incarnationA);
+  if (!first) throw new Error('Matching-incarnation recovery was not claimed');
+  restoreWhiteboardConflict(
+    recovery,
+    new RevisionConflictError('changed', '2'.repeat(32), '"current"', recovery),
+  );
+  const repeated = peekRetainedWhiteboardPatch(documentId, incarnationA);
+  if (!repeated || repeated.revision !== first.revision) {
+    throw new Error('Repeated hydration replaced the same recovery generation');
+  }
+  queueWhiteboardPatch(documentId, { title: 'Edit after hydration' }, {
+    incarnation: incarnationA,
+    write: async () => {},
+  });
+  const edited = peekRetainedWhiteboardPatch(documentId, incarnationA);
+  restoreWhiteboardConflict(
+    recovery,
+    new RevisionConflictError('changed', '2'.repeat(32), '"current"', recovery),
+  );
+  const afterRepeat = peekRetainedWhiteboardPatch(documentId, incarnationA);
+  if (
+    !edited
+    || !afterRepeat
+    || afterRepeat.revision !== edited.revision
+    || afterRepeat.patch.title !== 'Edit after hydration'
+  ) throw new Error('Repeated hydration overwrote a newer local edit');
+  discardRetainedWhiteboardPatch(documentId);
+});
+
+await testAsync('failed abandonment restores the complete captured draft before main refresh', async () => {
+  const documentId = 'rollback-before-refresh';
+  const incarnation = document(documentId).incarnation;
+  const recovery = mainWhiteboardRecovery(documentId, incarnation, {
+    title: 'Complete local title',
+    mode: 'screenplay',
+    blocks: live,
+    settings: { language: 'it' },
+  });
+  const error = new RevisionConflictError('changed', '2'.repeat(32), '"current"', recovery);
+  restoreWhiteboardConflict(recovery, error);
+  claimWhiteboardConflict(documentId, incarnation);
+  if (!discardWhiteboardConflictRecovery(recovery)) {
+    throw new Error('Could not prepare the abandonment rollback');
+  }
+
+  // Rollback must be complete even when a separate main drain remains failed.
+  restoreWhiteboardConflict(recovery, error);
+  claimWhiteboardConflict(documentId, incarnation);
+  await Promise.reject(new Error('unrelated main retry failed')).catch(() => {});
+
+  const restored = peekRetainedWhiteboardPatch(documentId, incarnation)?.patch;
+  if (
+    restored?.title !== 'Complete local title'
+    || restored.mode !== 'screenplay'
+    || restored.blocks !== live
+    || (restored.settings as { language?: string } | undefined)?.language !== 'it'
+  ) throw new Error('Rollback depended on main drain and lost fields from the rescue');
+  discardRetainedWhiteboardPatch(documentId);
+});
+
+await testAsync('revision conflicts retain local patches and pause retries', async () => {
+  const documentId = 'revision-conflict-draft';
+  let attempts = 0;
+  queueWhiteboardPatch(documentId, { blocks: loaded });
+  try {
+    await flushWhiteboardPatches(documentId, async () => {
+      attempts += 1;
+      throw new RevisionConflictError(
+        'changed elsewhere',
+        '99999999999999999999999999999999',
+        '"current"',
+      );
+    });
+  } catch {
+    /* expected */
+  }
+  queueWhiteboardPatch(documentId, { title: 'Still local' });
+  try {
+    await flushWhiteboardPatches(documentId, async () => {
+      attempts += 1;
+    });
+  } catch {
+    /* the original conflict is deliberately sticky */
+  }
+  if (attempts !== 1) throw new Error('A conflicted draft was retried automatically');
+  if (!whiteboardRevisionConflict(documentId)) throw new Error('Conflict state was not retained');
+  const retained = peekRetainedWhiteboardPatch(documentId)?.patch;
+  if (!retained?.blocks || retained.title !== 'Still local') {
+    throw new Error('Local changes were not merged into the retained conflict draft');
+  }
+  discardRetainedWhiteboardPatch(documentId);
+});
+
+await testAsync('an edit queued behind an in-flight conflict is handed to main before rejection returns', async () => {
+  const documentId = '904';
+  const incarnation = document(documentId).incarnation;
+  const recovery = mainWhiteboardRecovery(documentId, incarnation, { blocks: loaded });
+  let release!: () => void;
+  let started!: () => void;
+  const blocked = new Promise<void>((resolve) => { release = resolve; });
+  const writeStarted = new Promise<void>((resolve) => { started = resolve; });
+  const retainedByMain: {
+    current: { patch: Record<string, unknown>; version: number } | null;
+  } = { current: null };
+  queueWhiteboardPatch(documentId, { blocks: loaded }, {
+    incarnation,
+    write: async () => {
+      started();
+      await blocked;
+      throw new RevisionConflictError('changed', '2'.repeat(32), '"current"', recovery);
+    },
+    retainConflict: (_target, patch, _revision, receipt) => {
+      retainedByMain.current = {
+        patch: patch as Record<string, unknown>,
+        version: receipt.version + 1,
+      };
+      return { ...receipt, version: receipt.version + 1 };
+    },
+  });
+  const flushing = flushWhiteboardPatches(documentId).catch(() => {});
+  await writeStarted;
+  queueWhiteboardPatch(documentId, { title: 'Queued newest' }, {
+    incarnation,
+    write: async () => {},
+  });
+  release();
+  await flushing;
+  const retained = peekRetainedWhiteboardPatch(documentId, incarnation);
+  if (
+    !retainedByMain.current
+    || retainedByMain.current.patch.title !== 'Queued newest'
+    || !('blocks' in retainedByMain.current.patch)
+    || retained?.mainRecovery?.version !== 2
+  ) throw new Error('The newer in-flight edit was not copied into the main recovery ledger');
+  discardRetainedWhiteboardPatch(documentId);
+});
+
+await testAsync('conflict reload discards only the exact captured draft', async () => {
+  const documentId = 'revision-conflict-resolution';
+  const captured = queueWhiteboardPatch(documentId, { blocks: loaded });
+  if (!captured) throw new Error('Expected a captured draft');
+  try {
+    await flushWhiteboardPatches(documentId, async () => {
+      throw new RevisionConflictError('changed elsewhere', '9'.repeat(32), '"current"');
+    });
+  } catch {
+    /* expected */
+  }
+  queueWhiteboardPatch(documentId, { title: 'New edit during reload' });
+  if (discardConflictedWhiteboardPatch(captured)) {
+    throw new Error('Reload discarded an edit made after its snapshot');
+  }
+  const latest = peekRetainedWhiteboardPatch(documentId);
+  if (!latest || !discardConflictedWhiteboardPatch(latest)) {
+    throw new Error('Exact conflicted draft could not be discarded');
+  }
+  if (peekRetainedWhiteboardPatch(documentId) || whiteboardRevisionConflict(documentId)) {
+    throw new Error('Resolved draft remained queued');
+  }
 });
 
 test('the root-boundary outbox merges fields and retains the newest values', () => {
@@ -247,6 +709,7 @@ await testAsync('a snapshot captured before a racing GET still hydrates root rec
   const hydrated = applyRetainedWhiteboardPatch({
     id: documentId,
     incarnation: '0123456789abcdef0123456789abcdef',
+    revision: '11111111111111111111111111111111',
     title: 'Draft',
     mode: 'novel',
     blocks: loaded,
@@ -262,6 +725,7 @@ test('retained patches never cross document boundaries', () => {
   const document = {
     id: 'recovery-doc-b',
     incarnation: 'fedcba9876543210fedcba9876543210',
+    revision: '22222222222222222222222222222222',
     title: 'Other',
     mode: 'novel',
     blocks: loaded,

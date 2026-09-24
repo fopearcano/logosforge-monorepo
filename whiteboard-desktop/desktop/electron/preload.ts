@@ -9,7 +9,11 @@ import type {
   SaveResult,
 } from './file-manager';
 import type {
+  PendingDocumentConflictReceipt,
+  PendingDocumentConflictRecovery,
+  PendingDocumentConflictUpdateResult,
   PendingDocumentWrite,
+  PendingDocumentWriteResult,
 } from './pending-document-persistence';
 
 /**
@@ -22,9 +26,17 @@ import type {
 export interface LogosForgeApi {
   getBackendStatus(): Promise<BackendStatus>;
   onBackendStatus(cb: (status: BackendStatus) => void): () => void;
-  persistPendingDocument(write: PendingDocumentWrite): Promise<void>;
+  persistPendingDocument(write: PendingDocumentWrite): Promise<PendingDocumentWriteResult>;
   persistPendingDocumentOnUnload(write: PendingDocumentWrite): boolean;
-  waitForPendingDocumentPersistence(): Promise<void>;
+  waitForPendingDocumentPersistence(): Promise<PendingDocumentConflictRecovery[]>;
+  retainPendingDocumentConflict(
+    recovery: PendingDocumentConflictReceipt,
+    write: PendingDocumentWrite,
+  ): PendingDocumentConflictUpdateResult;
+  acknowledgePendingDocumentConflict(recovery: PendingDocumentConflictReceipt): Promise<boolean>;
+  reloadAfterAbandoningPendingDocumentConflict(
+    recovery: PendingDocumentConflictReceipt,
+  ): Promise<boolean>;
   deleteDocumentWithPersistenceFence(documentId: string, incarnation: string): Promise<void>;
 
   fileOpen(): Promise<OpenResult>;
@@ -66,6 +78,17 @@ const api: LogosForgeApi = {
     }
   },
   waitForPendingDocumentPersistence: () => ipcRenderer.invoke('document:drain-persistence'),
+  retainPendingDocumentConflict: (recovery, write) => {
+    try {
+      return ipcRenderer.sendSync('document:retain-conflict', { recovery, write });
+    } catch {
+      return { ok: false };
+    }
+  },
+  acknowledgePendingDocumentConflict: (recovery) =>
+    ipcRenderer.invoke('document:acknowledge-conflict', recovery),
+  reloadAfterAbandoningPendingDocumentConflict: (recovery) =>
+    ipcRenderer.invoke('document:reload-after-abandoning-conflict', recovery),
   deleteDocumentWithPersistenceFence: (documentId, incarnation) =>
     ipcRenderer.invoke('document:delete-with-fence', { documentId, incarnation }),
 

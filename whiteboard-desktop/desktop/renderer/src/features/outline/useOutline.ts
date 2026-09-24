@@ -19,10 +19,18 @@ import {
   markPendingDocSave,
   useCurrentDocId,
 } from '../../state/currentDocument';
-import { canStartDocumentMutationDuringClose } from '../whiteboard/documentOperationGuard';
+import {
+  acquireTrackedDocumentOperation,
+  canStartDocumentMutationDuringClose,
+  lockDocumentInteraction,
+} from '../whiteboard/documentOperationGuard';
+import { exportSave } from '../files/importExportApi';
 import {
   persistPendingDocument,
   persistPendingDocumentOnUnload,
+  retainPendingDocumentConflict,
+  acknowledgePendingDocumentConflict,
+  recoverPendingDocumentPersistence,
 } from '../../api/pendingDocumentPersistence';
 import {
   getOutlineItemsForDocument,
@@ -30,10 +38,14 @@ import {
 } from './outlineApi';
 import {
   flushOutlineSnapshots,
+  claimOutlineConflict,
+  discardConflictedOutlineSnapshot,
   newestRetainedOutlineSnapshot,
+  outlineRevisionConflict,
   peekRetainedOutlineSnapshot,
   queueOutlineSnapshot,
 } from './pendingOutlineRecovery';
+import { isPersistenceRecoveryError } from '../../api/responseError';
 import { OutlineLoadCoordinator } from './outlineLoadCoordinator';
 import { publishOutlineColors } from './outlineColorStore';
 import { instantiateTemplate, type OutlineTemplate } from './outlineTemplates';
@@ -67,7 +79,10 @@ function saveZoom(id: string | null): void {
   }
 }
 
-type SaveState = 'idle' | 'saving' | 'saved' | 'error';
+type SaveState = 'idle' | 'saving' | 'saved' | 'error' | 'conflict';
+const OUTLINE_CONFLICT_MESSAGE =
+  'Outline recovery required: this saved outline changed or is no longer writable. '
+  + 'Your local outline remains open and was not overwritten.';
 
 function newId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -82,7 +97,10 @@ export interface OutlineStore {
   items: OutlineNode[];
   loading: boolean;
   error: string | null;
+  saveError: string | null;
   saveState: SaveState;
+  saveConflictCopy: () => Promise<boolean>;
+  reloadAfterConflict: () => Promise<boolean>;
   selectedId: string | null;
   setSelectedId: (id: string | null) => void;
   /** Multi-selection for batch actions (empty unless ≥1 rows are multi-selected). */
@@ -153,6 +171,7 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
   const [items, setItems] = useState<OutlineNode[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<SaveState>('idle');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -183,6 +202,7 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const timerDocId = useRef('');
   const loadCoordinator = useRef(new OutlineLoadCoordinator());
+  const conflictResolutionRunning = useRef(false);
   // The document id whose items are currently in the store. Lags `docId` during a
   // switch (the new load hasn't resolved yet); `reanchor` compares against it so
   // it never re-anchors the NEW doc's links against the OLD doc's manuscript text.
@@ -196,20 +216,27 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
       timerDocId.current = '';
     }
     if (!peekRetainedOutlineSnapshot(documentId)) return Promise.resolve();
-    if (loadedDocIdRef.current === documentId) setSaveState('saving');
+    if (loadedDocIdRef.current === documentId) {
+      setSaveState(outlineRevisionConflict(documentId) ? 'conflict' : 'saving');
+    }
     return flushOutlineSnapshots(
       documentId,
     ).then(
       () => {
         if (loadedDocIdRef.current === documentId) {
           setSaveState('saved');
-          setError(null);
+          setSaveError(null);
         }
       },
       (saveError: unknown) => {
         if (loadedDocIdRef.current === documentId) {
-          setSaveState('error');
-          setError(saveError instanceof Error ? saveError.message : String(saveError));
+          if (isPersistenceRecoveryError(saveError)) {
+            setSaveState('conflict');
+            setSaveError(OUTLINE_CONFLICT_MESSAGE);
+          } else {
+            setSaveState('error');
+            setSaveError(saveError instanceof Error ? saveError.message : String(saveError));
+          }
         }
         throw saveError;
       },
@@ -218,7 +245,7 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
 
   const scheduleSave = useCallback(
     (next: OutlineNode[]) => {
-      if (!canStartDocumentMutationDuringClose()) return;
+      if (conflictResolutionRunning.current || !canStartDocumentMutationDuringClose()) return;
       const documentId = loadedDocIdRef.current;
       if (!documentId || documentId !== getCurrentDocId()) return;
       // A locally-authored snapshot is newer than any active GET, including an
@@ -227,6 +254,7 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
       loadCoordinator.current.cancel();
       const incarnation = captureDocumentIncarnation(documentId);
       queueOutlineSnapshot(documentId, next, {
+        incarnation,
         write: (targetDocumentId, snapshot, revision) => persistPendingDocument(
           baseUrlRef.current,
           'outline',
@@ -245,9 +273,18 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
             incarnation,
           );
         },
+        retainConflict: (targetDocumentId, snapshot, revision, recovery) =>
+          retainPendingDocumentConflict(
+            'outline',
+            targetDocumentId,
+            revision,
+            { items: snapshot },
+            recovery,
+            incarnation,
+          ),
       });
       markPendingDocSave();
-      setSaveState('saving');
+      setSaveState(outlineRevisionConflict(documentId) ? 'conflict' : 'saving');
       if (timer.current) clearTimeout(timer.current);
       timerDocId.current = documentId;
       timer.current = setTimeout(() => {
@@ -264,7 +301,9 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
   // Apply a pure model mutation, update state + ref, and queue a save.
   const mutate = useCallback(
     (fn: (items: OutlineNode[]) => OutlineNode[]): OutlineNode[] => {
-      if (!canStartDocumentMutationDuringClose()) return itemsRef.current;
+      if (conflictResolutionRunning.current || !canStartDocumentMutationDuringClose()) {
+        return itemsRef.current;
+      }
       if (!loadedDocIdRef.current || loadedDocIdRef.current !== getCurrentDocId()) {
         return itemsRef.current;
       }
@@ -281,24 +320,30 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
   useEffect(() => {
     if (!ready || !docId) return;
     const requestDocId = docId;
+    const requestIncarnation = captureDocumentIncarnation(requestDocId);
     const request = loadCoordinator.current.begin(requestDocId);
-    const retainedBeforeLoad = peekRetainedOutlineSnapshot(requestDocId);
+    const retainedBeforeLoad = claimOutlineConflict(requestDocId, requestIncarnation);
     loadedDocIdRef.current = null;
     setLoading(true);
     setError(null);
+    setSaveError(null);
+    setSaveState('idle');
     getOutlineItemsForDocument(baseUrl, requestDocId, request.signal)
       .then((loaded) => {
         if (!loadCoordinator.current.isCurrent(request, getCurrentDocId())) return;
         const retained = newestRetainedOutlineSnapshot(
           retainedBeforeLoad,
-          peekRetainedOutlineSnapshot(requestDocId),
+          peekRetainedOutlineSnapshot(requestDocId, requestIncarnation),
         );
         const next = retained?.items ?? loaded;
         itemsRef.current = next;
         loadedDocIdRef.current = requestDocId;
         setItems(next);
         setLoading(false);
-        if (retained) scheduleSave(retained.items);
+        if (retained && outlineRevisionConflict(requestDocId)) {
+          setSaveState('conflict');
+          setSaveError(OUTLINE_CONFLICT_MESSAGE);
+        } else if (retained) scheduleSave(retained.items);
       })
       .catch((err: unknown) => {
         if (!loadCoordinator.current.isCurrent(request, getCurrentDocId())) return;
@@ -325,6 +370,116 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
   }, [ready]);
 
   useEffect(() => () => loadCoordinator.current.cancel(), []);
+
+  const saveConflictCopy = useCallback(async (): Promise<boolean> => {
+    const documentId = loadedDocIdRef.current;
+    if (!documentId || !outlineRevisionConflict(documentId)) return false;
+    const content = JSON.stringify({
+      format: 'logosforge-whiteboard-outline-conflict',
+      version: 1,
+      document_id: documentId,
+      exported_at: new Date().toISOString(),
+      items: itemsRef.current,
+    }, null, 2);
+    try {
+      const result = await exportSave(
+        content,
+        `outline-${documentId}-conflict.json`,
+        [{ name: 'JSON', extensions: ['json'] }],
+      );
+      if (result.ok && !result.canceled) return true;
+      if (!result.canceled) {
+        setSaveError(`${OUTLINE_CONFLICT_MESSAGE} The local copy could not be saved.`);
+      }
+      return false;
+    } catch (saveError) {
+      setSaveError(
+        `${OUTLINE_CONFLICT_MESSAGE} Local copy failed: ${
+          saveError instanceof Error ? saveError.message : String(saveError)
+        }`,
+      );
+      return false;
+    }
+  }, []);
+
+  const reloadAfterConflict = useCallback(async (): Promise<boolean> => {
+    const documentId = loadedDocIdRef.current;
+    if (
+      !documentId
+      || documentId !== getCurrentDocId()
+      || conflictResolutionRunning.current
+      || !outlineRevisionConflict(documentId)
+    ) return false;
+    const retained = peekRetainedOutlineSnapshot(documentId);
+    if (!retained) return false;
+    conflictResolutionRunning.current = true;
+    let finishOperation: (() => void) | null = null;
+    let releaseInteraction: (() => void) | null = null;
+    let request: ReturnType<OutlineLoadCoordinator['begin']> | null = null;
+    const incarnation = captureDocumentIncarnation(documentId);
+    let discardedRendererConflict = false;
+    try {
+      finishOperation = await acquireTrackedDocumentOperation();
+      releaseInteraction = lockDocumentInteraction();
+      if (documentId !== getCurrentDocId()) return false;
+      if (timer.current && timerDocId.current === documentId) {
+        clearTimeout(timer.current);
+        timer.current = null;
+        timerDocId.current = '';
+      }
+      loadCoordinator.current.cancel();
+      request = loadCoordinator.current.begin(documentId);
+      const latest = await getOutlineItemsForDocument(
+        baseUrlRef.current,
+        documentId,
+        request.signal,
+        incarnation,
+      );
+      if (!loadCoordinator.current.isCurrent(request, getCurrentDocId())) return false;
+      if (!discardConflictedOutlineSnapshot(retained)) {
+        throw new Error(
+          'The outline changed while the saved version was loading. Review the new edit and try again.',
+        );
+      }
+      discardedRendererConflict = true;
+      const acknowledged = await acknowledgePendingDocumentConflict(retained.mainRecovery);
+      if (!acknowledged) {
+        await recoverPendingDocumentPersistence();
+        throw new Error('A newer local outline recovery arrived while reloading. Review it and try again.');
+      }
+      itemsRef.current = latest;
+      loadedDocIdRef.current = documentId;
+      setItems(latest);
+      setSaveState('idle');
+      setSaveError(null);
+      setError(null);
+      setLoading(false);
+      return true;
+    } catch (reloadError) {
+      if (discardedRendererConflict) {
+        await recoverPendingDocumentPersistence().catch(() => {});
+        const recovered = claimOutlineConflict(documentId, incarnation);
+        if (recovered) {
+          itemsRef.current = recovered.items;
+          setItems(recovered.items);
+        }
+      }
+      if (request && loadCoordinator.current.isCurrent(request, getCurrentDocId())) {
+        setSaveState('conflict');
+        setSaveError(
+          `Conflict reload stopped; your local outline is still open. ${
+            reloadError instanceof Error ? reloadError.message : String(reloadError)
+          }`,
+        );
+      }
+      return false;
+    } finally {
+      if (request) loadCoordinator.current.finish(request);
+      releaseInteraction?.();
+      finishOperation?.();
+      conflictResolutionRunning.current = false;
+    }
+  }, []);
 
   // Flush a pending save on unmount (e.g. when the Outline panel is hidden).
   useEffect(
@@ -688,7 +843,10 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
     items,
     loading,
     error,
+    saveError,
     saveState,
+    saveConflictCopy,
+    reloadAfterConflict,
     selectedId,
     setSelectedId,
     selectedIds,

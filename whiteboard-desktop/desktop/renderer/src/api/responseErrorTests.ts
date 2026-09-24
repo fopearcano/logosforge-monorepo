@@ -1,4 +1,4 @@
-import { responseError } from './responseError';
+import { isRevisionConflictError, responseError } from './responseError';
 import { setBackendAuthToken, withBackendAuth } from './backendAuth';
 import { setCurrentDocId } from '../state/currentDocument';
 import { getWhiteboardForDocument } from '../features/whiteboard/whiteboardApi';
@@ -20,6 +20,23 @@ const structured = await responseError(
   'Fallback',
 );
 check('structured error message', structured.message === 'Backup required (HTTP 409)');
+check('corruption is not a revision conflict', !isRevisionConflictError(structured));
+
+const conflict = await responseError(
+  new Response(JSON.stringify({
+    error: {
+      code: 'revision_conflict',
+      message: 'The manuscript changed outside this window.',
+      current_revision: '99999999999999999999999999999999',
+      current_etag: '"lfwb:whiteboard:0123456789abcdef0123456789abcdef:99999999999999999999999999999999"',
+    },
+  }), {
+    status: 409,
+    headers: { 'Content-Type': 'application/json' },
+  }),
+  'Fallback',
+);
+check('revision conflict remains typed', isRevisionConflictError(conflict));
 
 const detail = await responseError(
   new Response(JSON.stringify({ detail: 'Export aborted safely' }), {
@@ -51,8 +68,23 @@ let requestedUrl = '';
 globalThis.fetch = (async (input: RequestInfo | URL) => {
   requestedUrl = String(input);
   return new Response(
-    JSON.stringify({ id: 'new doc', title: 'New', mode: 'novel', blocks: [], updated_at: '' }),
-    { status: 200, headers: { 'Content-Type': 'application/json' } },
+    JSON.stringify({
+      id: 'new doc',
+      incarnation: '0123456789abcdef0123456789abcdef',
+      revision: '11111111111111111111111111111111',
+      title: 'New',
+      mode: 'novel',
+      blocks: [],
+      settings: {},
+      updated_at: '',
+    }),
+    {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/json',
+        ETag: '"lfwb:whiteboard:0123456789abcdef0123456789abcdef:11111111111111111111111111111111"',
+      },
+    },
   );
 }) as typeof fetch;
 try {
@@ -61,7 +93,12 @@ try {
     recoverySignals += 1;
   });
   setCurrentDocId('old-doc');
-  await getWhiteboardForDocument('http://127.0.0.1:8777', 'new doc');
+  await getWhiteboardForDocument(
+    'http://127.0.0.1:8777',
+    'new doc',
+    undefined,
+    '0123456789abcdef0123456789abcdef',
+  );
   check('explicit document load uses the target id', requestedUrl.endsWith('/api/whiteboard?doc=new%20doc'));
   check('explicit document load ignores active id', !requestedUrl.includes('old-doc'));
   check('ordinary API activity requests a recovery check', recoverySignals === 1);

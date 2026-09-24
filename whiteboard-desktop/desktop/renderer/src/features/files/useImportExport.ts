@@ -26,6 +26,7 @@ import { backendFetch, withExpectedDocumentIncarnation } from '../../api/backend
 import {
   persistPendingDocument,
   persistPendingDocumentOnUnload,
+  retainPendingDocumentConflict,
 } from '../../api/pendingDocumentPersistence';
 import { responseError } from '../../api/responseError';
 import { createPsykeElementForDocument } from '../psyke/psykeApi';
@@ -157,6 +158,7 @@ export function useImportExport(opts: Options): ImportExportApi {
     const incarnation = captureDocumentIncarnation(documentId);
     await runPendingDocWrite(async () => {
       queueOutlineSnapshot(documentId, outline, {
+        incarnation,
         write: (targetDocumentId, snapshot, revision) => persistPendingDocument(
           baseUrl,
           'outline',
@@ -175,6 +177,15 @@ export function useImportExport(opts: Options): ImportExportApi {
             incarnation,
           );
         },
+        retainConflict: (targetDocumentId, snapshot, revision, recovery) =>
+          retainPendingDocumentConflict(
+            'outline',
+            targetDocumentId,
+            revision,
+            { items: snapshot },
+            recovery,
+            incarnation,
+          ),
       });
       markPendingDocSave();
       // Synchronously cancels any older GET and installs this exact snapshot in

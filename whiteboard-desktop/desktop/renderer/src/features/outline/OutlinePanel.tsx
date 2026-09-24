@@ -96,6 +96,7 @@ const SAVE_LABEL: Record<string, string> = {
   saving: 'Saving…',
   saved: 'Saved',
   error: 'Save failed',
+  conflict: 'Save conflict',
 };
 
 export function OutlinePanel({
@@ -256,6 +257,7 @@ function ManualView({
   const saveLabel = SAVE_LABEL[store.saveState] ?? '';
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [deletePrompt, setDeletePrompt] = useState<DeletePrompt | null>(null);
+  const [conflictReloadOpen, setConflictReloadOpen] = useState(false);
   const addButtonRef = useRef<HTMLButtonElement>(null);
   const filterOn = isFilterActive(store.filter);
   const multiCount = store.selectedIds.length;
@@ -567,6 +569,26 @@ function ManualView({
         </div>
       )}
 
+      {store.saveError && (
+        <div className="outline-hint outline-error outline-conflict" role="alert">
+          <span>{store.saveError}</span>
+          {store.saveState === 'conflict' && (
+            <span className="outline-conflict-actions">
+              <button type="button" className="outline-conflict-action" onClick={() => { void store.saveConflictCopy(); }}>
+                Save local copy…
+              </button>
+              <button
+                type="button"
+                className="outline-conflict-action outline-conflict-action-danger"
+                onClick={() => setConflictReloadOpen(true)}
+              >
+                Reload saved…
+              </button>
+            </span>
+          )}
+        </div>
+      )}
+
       <div className="outline-body">
         {store.loading ? (
           <p className="outline-hint">Loading…</p>
@@ -594,6 +616,17 @@ function ManualView({
         returnFocusFallbackRef={addButtonRef}
         onConfirm={() => deletePrompt?.onConfirm()}
         onCancel={() => setDeletePrompt(null)}
+      />
+      <ConfirmDialog
+        open={conflictReloadOpen}
+        title="Discard local outline changes?"
+        message="Reloading adopts the latest saved outline and permanently discards the conflicted local outline. Save a local JSON copy first if you may need these edits."
+        confirmLabel="Discard and reload"
+        onConfirm={() => {
+          setConflictReloadOpen(false);
+          void store.reloadAfterConflict();
+        }}
+        onCancel={() => setConflictReloadOpen(false)}
       />
       <OutlineTemplatesDialog
         open={templatesOpen}

@@ -41,8 +41,8 @@ from app.whiteboard_mcp.server import (
 class FakeClient:
     def __init__(self) -> None:
         self.documents = [
-            {"id": "1", "incarnation": "a" * 32, "title": "Alpha", "mode": "prose", "updated_at": "2026-01-02T00:00:00Z"},
-            {"id": "2", "incarnation": "b" * 32, "title": "Beta", "mode": "screenplay", "updated_at": "2026-01-01T00:00:00Z"},
+            {"id": "1", "incarnation": "a" * 32, "revision": "3" * 32, "title": "Alpha", "mode": "prose", "updated_at": "2026-01-02T00:00:00Z"},
+            {"id": "2", "incarnation": "b" * 32, "revision": "4" * 32, "title": "Beta", "mode": "screenplay", "updated_at": "2026-01-01T00:00:00Z"},
         ]
         self.blocks = {
             1: [
@@ -53,6 +53,7 @@ class FakeClient:
             2: [],
         }
         self.outline = {1: [{"id": "o1", "title": "Mara arrives"}], 2: []}
+        self.outline_revision = {1: "1" * 32, 2: "2" * 32}
         self.comments = {
             1: [
                 {"id": "c1", "quote": "lantern", "body": "Track this image", "resolved": False, "replies": []},
@@ -81,7 +82,10 @@ class FakeClient:
         }
 
     def get_outline(self, document_id):
-        return list(self.outline[document_id])
+        return {
+            "items": list(self.outline[document_id]),
+            "revision": self.outline_revision[document_id],
+        }
 
     def get_comments(self, document_id):
         return list(self.comments[document_id])
@@ -156,8 +160,21 @@ def test_document_list_and_manuscript_snapshot_are_bounded() -> None:
         {"document_id": 1, "offset": 1, "limit": 1, "max_characters": 1_000},
     )["result"]
     assert [item["id"] for item in snapshot["document"]["blocks"]] == ["b2"]
+    assert snapshot["document"]["revision"] == "3" * 32
     assert snapshot["page"]["total"] == 3
     assert snapshot["page"]["next_offset"] == 2
+
+
+def test_outline_carries_revision_without_changing_items_or_pagination() -> None:
+    outline = call_tool(
+        _gateway(),
+        "logosforge_whiteboard_get_outline",
+        {"document_id": 1, "offset": 0, "limit": 1},
+    )["result"]
+    assert outline["document_id"] == 1
+    assert outline["revision"] == "1" * 32
+    assert outline["items"] == [{"id": "o1", "title": "Mara arrives"}]
+    assert outline["page"]["total"] == 1
 
 
 def test_large_page_items_are_clipped_with_progress_safe_pagination() -> None:
@@ -244,6 +261,7 @@ def test_snapshot_bounds_metadata_marks_and_other_nested_strings() -> None:
     assert first_page["truncated_item_offsets"] == [0]
     assert first_page["next_offset"] == 1
     assert first["result"]["document"]["blocks"][0]["id"] == "marks-huge"
+    assert first["result"]["document"]["revision"] == "3" * 32
 
     resumed = call_tool(
         gateway,
@@ -252,7 +270,20 @@ def test_snapshot_bounds_metadata_marks_and_other_nested_strings() -> None:
     )
     assert _wire_bytes(resumed) <= MAX_RESULT_BYTES
     assert resumed["result"]["document"]["blocks"][0]["id"] == "other-huge"
+    assert resumed["result"]["document"]["revision"] == "3" * 32
     assert resumed["result"]["page"]["truncated_item_offsets"] == [1]
+
+
+def test_snapshot_preserves_revision_when_a_huge_title_exhausts_metadata() -> None:
+    client = FakeClient()
+    client.documents[0]["title"] = "T" * (MAX_RESULT_BYTES * 2)
+    snapshot = call_tool(
+        WhiteboardMcpGateway(client),  # type: ignore[arg-type]
+        "logosforge_whiteboard_get_document_snapshot",
+        {"document_id": 1, "offset": 0, "limit": 1, "max_characters": 1_000},
+    )["result"]
+    assert snapshot["document"]["revision"] == "3" * 32
+    assert snapshot["page"]["metadata_byte_limited"] is True
 
 
 def test_common_result_guard_bounds_unpaged_document_summary() -> None:
@@ -371,6 +402,84 @@ def test_api_client_sends_bearer_and_only_uses_get(monkeypatch) -> None:
         "url": "http://127.0.0.1:8777/api/documents",
         "timeout": 7.0,
     }
+
+
+def test_api_client_preserves_valid_outline_revision(monkeypatch) -> None:
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _size):
+            return json.dumps(
+                {
+                    "items": [{"id": "o1", "title": "Opening"}],
+                    "revision": "abcdef0123456789abcdef0123456789",
+                }
+            ).encode("utf-8")
+
+    def urlopen(_request, timeout):
+        del timeout
+        return Response()
+
+    monkeypatch.setattr("app.whiteboard_mcp.client.urllib.request.urlopen", urlopen)
+    client = WhiteboardApiClient("http://127.0.0.1:8777", "s" * 32)
+    assert client.get_outline(1) == {
+        "items": [{"id": "o1", "title": "Opening"}],
+        "revision": "abcdef0123456789abcdef0123456789",
+    }
+
+
+@pytest.mark.parametrize(
+    "revision",
+    [None, "", "a" * 31, "a" * 33, "A" * 32, "g" * 32, 1],
+)
+def test_api_client_rejects_invalid_manuscript_revision(monkeypatch, revision) -> None:
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _size):
+            return json.dumps({"blocks": [], "revision": revision}).encode("utf-8")
+
+    def urlopen(_request, timeout):
+        del timeout
+        return Response()
+
+    monkeypatch.setattr("app.whiteboard_mcp.client.urllib.request.urlopen", urlopen)
+    client = WhiteboardApiClient("http://127.0.0.1:8777", "s" * 32)
+    with pytest.raises(WhiteboardApiError, match="manuscript has an invalid shape"):
+        client.get_document(1)
+
+
+@pytest.mark.parametrize(
+    "revision",
+    [None, "", "a" * 31, "a" * 33, "A" * 32, "g" * 32, 1],
+)
+def test_api_client_rejects_invalid_outline_revision(monkeypatch, revision) -> None:
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _size):
+            return json.dumps({"items": [], "revision": revision}).encode("utf-8")
+
+    def urlopen(_request, timeout):
+        del timeout
+        return Response()
+
+    monkeypatch.setattr("app.whiteboard_mcp.client.urllib.request.urlopen", urlopen)
+    client = WhiteboardApiClient("http://127.0.0.1:8777", "s" * 32)
+    with pytest.raises(WhiteboardApiError, match="outline has an invalid shape"):
+        client.get_outline(1)
 
 
 def test_api_client_error_never_echoes_bearer_token(monkeypatch) -> None:

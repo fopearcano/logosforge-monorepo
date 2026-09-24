@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   DEFAULT_SETTINGS,
   clearLegacySettingsMigration,
+  documentSettingsSnapshotKey,
   legacySettingsForDocument,
   normalizeDocumentSettings,
   type DocumentSettings,
@@ -19,12 +20,14 @@ export interface DocumentSettingsApi {
 
 interface Options {
   documentId: string | null;
+  documentRevision: string | null;
   initialSettings?: unknown;
   onChange: (settings: DocumentSettings) => void;
 }
 
 export function useDocumentSettings({
   documentId,
+  documentRevision,
   initialSettings,
   onChange,
 }: Options): DocumentSettingsApi {
@@ -35,8 +38,9 @@ export function useDocumentSettings({
   initialRef.current = initialSettings;
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
+  const snapshotKey = documentSettingsSnapshotKey(documentId, documentRevision);
   useEffect(() => {
-    if (!documentId) return;
+    if (!documentId || !snapshotKey) return;
     const raw = initialRef.current;
     const hasPersisted = !!raw && typeof raw === 'object' &&
       !Array.isArray(raw) && Object.keys(raw as Record<string, unknown>).length > 0;
@@ -46,7 +50,7 @@ export function useDocumentSettings({
     setSettings(next);
     if (hasPersisted) clearLegacySettingsMigration(documentId);
     else if (legacy) onChangeRef.current(next);
-  }, [documentId]);
+  }, [documentId, snapshotKey]);
 
   const update = useCallback(
     <K extends keyof DocumentSettings>(key: K, value: DocumentSettings[K]) => {

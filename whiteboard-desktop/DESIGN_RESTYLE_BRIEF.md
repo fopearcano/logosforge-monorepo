@@ -229,7 +229,7 @@ Containers (compose/route state) vs leaf controls (render/emit):
 - `loadError` → `p.wb-hint.wb-error` "Couldn't load document: {error}"
 - `doc` present → editor (+ optional Preview).
 
-**Autosave (Draft) status** — `saveStatus: SaveStatus` ∈ idle/saving/saved/error, labelled via `DRAFT_LABEL` ("", "Draft saving…", "Draft saved", "Draft error"); class `wb-draft-{status}`. This is the **backend session autosave**, deliberately distinct from file save.
+**Autosave (Draft) status** — `saveStatus: SaveStatus` ∈ idle/saving/saved/error/conflict, labelled via `DRAFT_LABEL` ("", "Draft saving…", "Draft saved", "Draft error", "Draft conflict"); class `wb-draft-{status}`. This is the **backend session autosave**, deliberately distinct from file save. A conflict is sticky: automatic persistence pauses and the current local draft stays open rather than being replaced. Its persistent toast can export a complete conflict JSON envelope (manuscript, title, mode, settings, base revision, and pending patch) or open a confirmation before adopting the latest saved revision. Main also retains the complete versioned recovery across renderer reloads; an app-lifetime banner exposes non-current/orphaned recoveries for JSON export or confirmed exact discard, and close remains blocked until they are resolved.
 
 **File state** — `fileDoc.status` (saving/error/idle), `fileDoc.dirty`, `fileDoc.fileName`, `fileDoc.filePath`. Rendered in `span.wb-filestate` (with `.is-dirty`); text via `fileStateLabel(...)`. Also drives `document.title` via `windowTitle(fileName, dirty)`.
 
@@ -242,7 +242,7 @@ Containers (compose/route state) vs leaf controls (render/emit):
 **Scale** — `scale` number → CSS var `--wb-scale`; percentage shown via `scaleToPct(scale)`.
 
 ### DATA & API
-- **`useWhiteboardDocument({ baseUrl, ready })`** → `{ doc, loading, loadError, saveStatus, onChangeBlocks, setMode }`. The document/backend autosave contract. `doc` shape: `{ id, title, mode, blocks }`; `blocks: WhiteboardBlock[]` (`./types`).
+- **`useWhiteboardDocument({ baseUrl, ready })`** → `{ doc, loading, loadError, saveStatus, onChangeBlocks, setMode }`. The document/backend autosave contract. `doc` shape: `{ id, incarnation, revision, title, mode, blocks }`; `blocks: WhiteboardBlock[]` (`./types`). GET responses also carry the matching strong `ETag`; writes use that validator with `If-Match` and only advance the tracked revision after acknowledgement.
 - **`WhiteboardBlock`** (the load-bearing backend contract): `{ id, type: 'heading'|'paragraph', text, level?, sp? }`. Mapped to/from ProseMirror by `blocksToDoc` / `docToBlocks` in `WhiteboardEditor.tsx` (heading carries `attrs.level`; paragraph carries `attrs.sp`).
 - **`useWritingModes({ baseUrl, ready })`** → `{ modes, defaultMode }` for the selector.
 - **`useDocumentSettings()`** → `DocumentSettingsApi` `{ settings, update, replace }`; `DocumentSettings` persisted to `localStorage` key `logosforge-doc-settings` (`documentSettings.ts`, `loadSettings`/`saveSettings`). `surfaceDataAttrs(settings)` emits `data-scene-style`, `data-scene-blank`, `data-typeface`, `data-invisibles`.
@@ -448,19 +448,20 @@ Hierarchy (containers → leaves):
 
 ### STATES & MODES
 - **Loading** (`store.loading`): body shows `<p class="outline-hint">Loading…</p>`.
-- **Error** (`store.error`): `<p class="outline-hint outline-error">Couldn't load outline: …</p>`.
+- **Load error** (`store.error`): `<p class="outline-hint outline-error">Couldn't load outline: …</p>`.
+- **Save conflict** (`store.saveError` with `saveState === 'conflict'`): a persistent inline alert is shown above the still-visible outliner. Automatic persistence pauses and retains subsequent local edits instead of replacing them. The alert can export the retained outline as JSON or open a confirmation before adopting the latest saved outline. A versioned copy also remains in main across renderer reloads and appears in the app-lifetime recovery banner until exact resolution.
 - **Empty (manual):** distinct hints — no items → "No outline yet. Use **+ Add**…"; zoomed but empty → "Empty — add an item under this one."; filtering with no matches → "No matches. [Clear filter]".
 - **Empty (derived):** "No structure in the document yet." (when `items.length === 0`) vs "All hidden." (all kinds toggled off).
-- **Save state** (`store.saveState`: `idle | saving | saved | error`): chip text via `SAVE_LABEL` ("Saving…" / "Saved" / "Save failed"); class `outline-save-${saveState}`; `idle` renders empty.
+- **Save state** (`store.saveState`: `idle | saving | saved | error | conflict`): chip text via `SAVE_LABEL` ("Saving…" / "Saved" / "Save failed" / "Save conflict"); class `outline-save-${saveState}`; `idle` renders empty.
 - **Selection / details:** selected row gets `.is-selected` and swaps title button → input (autofocus, caret-at-end via the `useEffect` in `OutlineRow`); `detailsOpenId` controls the inline details panel.
 - **Filter active:** `isFilterActive` drives the banner and changes empty-state copy; when filtering, `buildRows` ignores collapse and shows matches + ancestors.
 - **Writing-mode variants (`mode` prop):** mode does **not** change layout but drives **default item types** via `rootType(mode)` and `childType(mode, parentType)` (e.g. screenplay → act › sequence › scene › beat › note; novel → chapter › scene › beat; series → part › chapter…; scene → scene › beat; notes → note). Derived view's parser also depends on mode: `deriveOutline` uses Fountain parsing when `modeBehavior(mode).outline === 'fountain'` (Sections/Scene-headings/Synopses/Notes), else Markdown headings.
 
 ### DATA & API
-- **Store hook:** `useOutline({ baseUrl, ready, mode })` → `OutlineStore` (in `useOutline.ts`). Owns items, loading/error/saveState, selection, detailsOpenId, zoom, filter, and all mutations. Autosaves with a **600 ms debounce** (`SAVE_DEBOUNCE_MS`), flushes on unmount, and reloads on an out-of-band refresh event.
+- **Store hook:** `useOutline({ baseUrl, ready, mode })` → `OutlineStore` (in `useOutline.ts`). Owns items, loading/error/saveError/saveState, selection, detailsOpenId, zoom, filter, and all mutations. Autosaves with a **600 ms debounce** (`SAVE_DEBOUNCE_MS`), flushes on unmount, and reloads on an out-of-band refresh event. A revision conflict is terminal for the active queue: the edited items remain visible and further local edits accumulate, but no blind overwrite is attempted.
 - **API module** `outlineApi.ts`:
-  - `getOutlineItems(baseUrl, signal)` → `GET /api/outline/items` → `{ items }`.
-  - `saveOutlineItems(baseUrl, items)` → `PUT /api/outline/items` with `{ items }`.
+  - `getOutlineItems(baseUrl, signal)` → `GET /api/outline/items` → `{ items, revision }` plus a matching strong `ETag`.
+  - `saveOutlineItems(baseUrl, items)` → `PUT /api/outline/items` with `{ items }` and the tracked validator in `If-Match`; success advances the revision, while a structured conflict preserves the local queue.
   - Defensive `normalize()` tolerates partial/legacy rows; unknown type/status/color fall back to `custom`/`none`/`none`.
   - `emitOutlineRefresh()` / `onOutlineRefresh(cb)` over the window event `lf:outline-refresh` (used by e.g. LogosForge import to trigger a reload).
 - **Data shapes:** `OutlineNode` (manual model — `id`, `parentId`, `type`, `title`, `notes`, `order`, `collapsed`, `completed`, `status`, `tags`, `colorLabel`, `linkedLineId`, timestamps) defined in `outlineModel.ts`; the tree is **derived** from this flat list (`parentId` + `order`). `OutlineItem` (derived navigator — `id`, `label`, `kind`, `level`, `blockIndex`) in `./types`, produced by `deriveOutline(blocks, mode)` (`deriveOutline.ts`).

@@ -77,8 +77,8 @@ authoritative source for their argument schemas.
 | `logosforge_whiteboard_list_documents` | List a bounded page of document summaries and the session's selected document id. |
 | `logosforge_whiteboard_select_document` | Select a document in this MCP process only; it does not change Whiteboard project data. |
 | `logosforge_whiteboard_get_current_document` | Return the selected document summary, auto-selecting only when exactly one document exists. |
-| `logosforge_whiteboard_get_document_snapshot` | Read a bounded page of native manuscript blocks plus document metadata. |
-| `logosforge_whiteboard_get_outline` | Read a bounded page of outline items. |
+| `logosforge_whiteboard_get_document_snapshot` | Read a bounded page of native manuscript blocks plus document metadata, including its opaque revision. |
+| `logosforge_whiteboard_get_outline` | Read a bounded page of outline items plus the outline's independent opaque revision. |
 | `logosforge_whiteboard_get_comments` | Read a bounded page of comment threads, optionally excluding resolved threads. |
 | `logosforge_whiteboard_get_psyke` | Read a bounded, optionally filtered page of PSYKE story-bible entries. |
 | `logosforge_whiteboard_search` | Search manuscript, outline, comments, and PSYKE with bounded short results. |
@@ -129,10 +129,12 @@ not a substitute for that design.
 
 ## Write roadmap
 
-Whiteboard MCP writes remain intentionally unavailable. Do not add opt-in write
-tools until the Whiteboard API and every relevant autosave path provide durable
-document revisions or ETags, atomic conditional updates, and clear stale-write
-conflict reporting. A future write surface should read a revision, prepare an
-exact bounded proposal for review, apply it conditionally, and require a reread
-when the revision has changed. Until those guarantees exist, all story changes
-must be made through the Whiteboard UI.
+Whiteboard MCP writes remain intentionally unavailable. The Whiteboard API and
+desktop autosave paths now provide durable per-resource revisions, strong ETags,
+atomic conditional updates, idempotent retries, and visible stale-write conflict
+recovery. Those are prerequisites, not an authorization to mutate through MCP.
+The next write phase must still introduce a reviewed proposal/apply workflow:
+read a revision, prepare an exact bounded proposal for user review, apply it with
+`If-Match`, and require a reread when the revision has changed. Until that UX and
+tool contract are implemented and tested, all story changes must be made through
+the Whiteboard UI.

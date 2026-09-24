@@ -7,14 +7,20 @@ import {
 } from '../../state/currentDocument';
 import {
   blockOutlineWrites,
+  claimOutlineConflict,
+  discardConflictedOutlineSnapshot,
   discardRetainedOutlineSnapshot,
   flushOutlineSnapshots,
   newestRetainedOutlineSnapshot,
+  outlineRevisionConflict,
   peekRetainedOutlineSnapshot,
   queueOutlineSnapshot,
+  restoreOutlineConflict,
   resumeOutlineWrites,
 } from './pendingOutlineRecovery';
+import { RevisionConflictError } from '../../api/responseError';
 import { OutlineLoadCoordinator } from './outlineLoadCoordinator';
+import type { PendingDocumentConflictRecovery } from '../../api/backend';
 
 let passed = 0;
 const failures: string[] = [];
@@ -45,6 +51,35 @@ const node = (id: string, title: string): OutlineNode => ({
   updatedAt: '2026-09-11T00:00:00Z',
 });
 
+const mainOutlineRecovery = (
+  documentId: string,
+  incarnation: string,
+  items: OutlineNode[],
+  version = 1,
+): PendingDocumentConflictRecovery => ({
+  conflictId: 'main_conflict_2',
+  version,
+  kind: 'outline',
+  documentId,
+  incarnation,
+  write: {
+    kind: 'outline',
+    documentId,
+    incarnation,
+    resourceRevision: '1'.repeat(32),
+    revision: version,
+    sessionId: 'outline_recovery_session',
+    payload: { items },
+  },
+  error: {
+    code: 'revision_conflict',
+    status: 409,
+    message: 'changed elsewhere',
+    currentRevision: '2'.repeat(32),
+    currentEtag: '"current"',
+  },
+});
+
 await test('newer complete snapshots replace older pending snapshots', () => {
   const documentId = 'outline-latest';
   const first = [node('one', 'First')];
@@ -55,6 +90,147 @@ await test('newer complete snapshots replace older pending snapshots', () => {
     throw new Error('Latest snapshot was not retained');
   }
   discardRetainedOutlineSnapshot(documentId);
+});
+
+await test('revision conflicts retain the local outline and pause retries', async () => {
+  const documentId = 'outline-revision-conflict';
+  const first = [node('one', 'Local')];
+  const latest = [node('one', 'Still local')];
+  let attempts = 0;
+  queueOutlineSnapshot(documentId, first);
+  try {
+    await flushOutlineSnapshots(documentId, async () => {
+      attempts += 1;
+      throw new RevisionConflictError(
+        'changed elsewhere',
+        '99999999999999999999999999999999',
+        '"current"',
+      );
+    });
+  } catch {
+    /* expected */
+  }
+  queueOutlineSnapshot(documentId, latest);
+  try {
+    await flushOutlineSnapshots(documentId, async () => {
+      attempts += 1;
+    });
+  } catch {
+    /* sticky conflict */
+  }
+  if (attempts !== 1) throw new Error('A conflicted outline was retried automatically');
+  if (!outlineRevisionConflict(documentId)) throw new Error('Conflict state was not retained');
+  if (peekRetainedOutlineSnapshot(documentId)?.items !== latest) {
+    throw new Error('The newest local outline snapshot was not retained');
+  }
+  discardRetainedOutlineSnapshot(documentId);
+});
+
+await test('an outline edit queued behind an in-flight conflict is handed to main', async () => {
+  const documentId = '905';
+  const incarnation = '0123456789abcdef0123456789abcdef';
+  const first = [node('one', 'First')];
+  const newest = [node('one', 'Newest')];
+  const recovery = mainOutlineRecovery(documentId, incarnation, first);
+  let release!: () => void;
+  let started!: () => void;
+  const blocked = new Promise<void>((resolve) => { release = resolve; });
+  const writeStarted = new Promise<void>((resolve) => { started = resolve; });
+  let retainedByMain: OutlineNode[] | null = null;
+  queueOutlineSnapshot(documentId, first, {
+    incarnation,
+    write: async () => {
+      started();
+      await blocked;
+      throw new RevisionConflictError('changed', '2'.repeat(32), '"current"', recovery);
+    },
+    retainConflict: (_target, items, _revision, receipt) => {
+      retainedByMain = items;
+      return { ...receipt, version: receipt.version + 1 };
+    },
+  });
+  const flushing = flushOutlineSnapshots(documentId).catch(() => {});
+  await writeStarted;
+  queueOutlineSnapshot(documentId, newest, { incarnation, write: async () => {} });
+  release();
+  await flushing;
+  const retained = peekRetainedOutlineSnapshot(documentId, incarnation);
+  if (retainedByMain !== newest || retained?.mainRecovery?.version !== 2) {
+    throw new Error('The newer in-flight outline was not copied into main recovery');
+  }
+  discardRetainedOutlineSnapshot(documentId);
+});
+
+await test('main outline hydration is sticky, idempotent, and incarnation-safe', async () => {
+  const documentId = '903';
+  const incarnationA = '0123456789abcdef0123456789abcdef';
+  const incarnationB = 'abcdef0123456789abcdef0123456789';
+  const local = [node('one', 'Recovered A')];
+  const recovery = mainOutlineRecovery(documentId, incarnationA, local);
+  const error = new RevisionConflictError('changed', '2'.repeat(32), '"current"', recovery);
+  restoreOutlineConflict(recovery, error);
+  if (claimOutlineConflict(documentId, incarnationB)) {
+    throw new Error('Old-incarnation outline was applied to a reused document id');
+  }
+  const first = claimOutlineConflict(documentId, incarnationA);
+  if (!first || first.items !== local || !outlineRevisionConflict(documentId)) {
+    throw new Error('Matching main outline recovery was not claimed as a sticky conflict');
+  }
+  restoreOutlineConflict(recovery, error);
+  const repeated = peekRetainedOutlineSnapshot(documentId, incarnationA);
+  if (!repeated || repeated.revision !== first.revision) {
+    throw new Error('Repeated outline hydration replaced the same generation');
+  }
+  const edited = [node('one', 'Edited after hydration')];
+  let retainedByMain: OutlineNode[] | null = null;
+  queueOutlineSnapshot(documentId, edited, {
+    incarnation: incarnationA,
+    write: async () => {},
+    retainConflict: (_target, items) => {
+      retainedByMain = items;
+      return recovery;
+    },
+  });
+  restoreOutlineConflict(recovery, error);
+  const afterRepeat = peekRetainedOutlineSnapshot(documentId, incarnationA);
+  let writerCalled = false;
+  try {
+    await flushOutlineSnapshots(documentId, async () => { writerCalled = true; });
+  } catch {
+    /* sticky recovery */
+  }
+  if (
+    !afterRepeat
+    || afterRepeat.items !== edited
+    || retainedByMain !== edited
+    || writerCalled
+  ) throw new Error('A repeated hydration lost or retried the newer local outline');
+  discardRetainedOutlineSnapshot(documentId);
+});
+
+await test('conflict reload discards only the exact captured outline', async () => {
+  const documentId = 'outline-conflict-resolution';
+  const first = [node('one', 'Local')];
+  const captured = queueOutlineSnapshot(documentId, first);
+  if (!captured) throw new Error('Expected a captured outline');
+  try {
+    await flushOutlineSnapshots(documentId, async () => {
+      throw new RevisionConflictError('changed elsewhere', '9'.repeat(32), '"current"');
+    });
+  } catch {
+    /* expected */
+  }
+  queueOutlineSnapshot(documentId, [node('one', 'Edited during reload')]);
+  if (discardConflictedOutlineSnapshot(captured)) {
+    throw new Error('Reload discarded an edit made after its snapshot');
+  }
+  const latest = peekRetainedOutlineSnapshot(documentId);
+  if (!latest || !discardConflictedOutlineSnapshot(latest)) {
+    throw new Error('Exact conflicted outline could not be discarded');
+  }
+  if (peekRetainedOutlineSnapshot(documentId) || outlineRevisionConflict(documentId)) {
+    throw new Error('Resolved outline remained queued');
+  }
 });
 
 await test('old and replacement hooks serialize writes to the owning document', async () => {

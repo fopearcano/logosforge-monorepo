@@ -28,8 +28,10 @@ import {
 import {
   persistPendingDocument,
   persistPendingDocumentOnUnload,
+  retainPendingDocumentConflict,
+  acknowledgePendingDocumentConflict,
   deleteDocumentWithNativePersistenceFence,
-  waitForPendingDocumentPersistence,
+  recoverPendingDocumentPersistence,
 } from '../../api/pendingDocumentPersistence';
 import {
   createDocument,
@@ -43,15 +45,23 @@ import { getWhiteboardForDocument } from './whiteboardApi';
 import {
   blockWhiteboardWrites,
   applyRetainedWhiteboardPatch,
+  discardConflictedWhiteboardPatch,
   discardRetainedWhiteboardPatch,
   flushWhiteboardPatches,
   newestRetainedWhiteboardPatch,
   peekRetainedWhiteboardPatch,
   queueWhiteboardPatch,
   resumeWhiteboardWrites,
+  seedWhiteboardRecoverySnapshot,
   type WhiteboardPatchReceipt,
   waitForWhiteboardWrites,
+  whiteboardRevisionConflict,
 } from './pendingWhiteboardRecovery';
+import { isPersistenceRecoveryError } from '../../api/responseError';
+import {
+  clearDocumentResourceRevisions,
+  requireResourceRevision,
+} from '../../api/resourceRevision';
 import {
   blockOutlineWrites,
   discardRetainedOutlineSnapshot,
@@ -60,6 +70,7 @@ import {
   waitForOutlineWrites,
 } from '../outline/pendingOutlineRecovery';
 import { loadInitialDocumentOnce } from './documentBootstrap';
+import { saveWhiteboardConflictCopy } from './whiteboardConflictCopy';
 import {
   acquireTrackedDocumentOperation,
   activateDocumentOperationOwner,
@@ -73,6 +84,9 @@ import {
 
 const SAVE_DEBOUNCE_MS = 700;
 const LAST_DOC_KEY = 'lf-last-doc';
+const REVISION_CONFLICT_MESSAGE =
+  'Autosave recovery required: this saved document changed or is no longer writable. '
+  + 'Your local draft remains open and was not overwritten. Save a copy before reloading.';
 
 function loadLastDocId(): string | null {
   try {
@@ -102,6 +116,8 @@ interface Result {
   loading: boolean;
   loadError: string | null;
   dismissError: () => void;
+  saveConflictCopy: (blocks: WhiteboardBlock[]) => Promise<boolean>;
+  reloadAfterConflict: () => Promise<boolean>;
   saveStatus: SaveStatus;
   onChangeBlocks: (blocks: WhiteboardBlock[]) => WhiteboardPatchReceipt | null;
   onChangeSettings: (settings: object) => void;
@@ -149,6 +165,7 @@ export function useWhiteboardDocument({ baseUrl, ready, onSaved }: Options): Res
     (documentId: string, patch: WhiteboardUpdate) => {
       const incarnation = captureDocumentIncarnation(documentId);
       return queueWhiteboardPatch(documentId, patch, {
+        incarnation,
         write: (targetDocumentId, queuedPatch, revision) => persistPendingDocument(
           baseUrl,
           'whiteboard',
@@ -167,6 +184,15 @@ export function useWhiteboardDocument({ baseUrl, ready, onSaved }: Options): Res
             incarnation,
           );
         },
+        retainConflict: (targetDocumentId, queuedPatch, revision, recovery) =>
+          retainPendingDocumentConflict(
+            'whiteboard',
+            targetDocumentId,
+            revision,
+            queuedPatch,
+            recovery,
+            incarnation,
+          ),
       });
     },
     [baseUrl],
@@ -181,7 +207,9 @@ export function useWhiteboardDocument({ baseUrl, ready, onSaved }: Options): Res
       timerDocId.current = '';
     }
     if (!peekRetainedWhiteboardPatch(documentId)) return Promise.resolve();
-    if (getCurrentDocId() === documentId) setSaveStatus('saving');
+    if (getCurrentDocId() === documentId) {
+      setSaveStatus(whiteboardRevisionConflict(documentId) ? 'conflict' : 'saving');
+    }
     return flushWhiteboardPatches(documentId).then(
       () => {
         if (getCurrentDocId() !== documentId) return;
@@ -191,8 +219,13 @@ export function useWhiteboardDocument({ baseUrl, ready, onSaved }: Options): Res
       },
       (error: unknown) => {
         if (getCurrentDocId() === documentId) {
-          setSaveStatus('error');
-          setLoadError(`Autosave stopped: ${error instanceof Error ? error.message : String(error)}`);
+          if (isPersistenceRecoveryError(error)) {
+            setSaveStatus('conflict');
+            setLoadError(REVISION_CONFLICT_MESSAGE);
+          } else {
+            setSaveStatus('error');
+            setLoadError(`Autosave stopped: ${error instanceof Error ? error.message : String(error)}`);
+          }
         }
         throw error;
       },
@@ -228,7 +261,7 @@ export function useWhiteboardDocument({ baseUrl, ready, onSaved }: Options): Res
       const receipt = queuePatch(documentId, patch);
       if (!receipt) return null;
       markPendingDocSave();
-      setSaveStatus('saving');
+      setSaveStatus(whiteboardRevisionConflict(documentId) ? 'conflict' : 'saving');
       if (timer.current) clearTimeout(timer.current);
       timerDocId.current = documentId;
       timer.current = setTimeout(() => {
@@ -278,7 +311,7 @@ export function useWhiteboardDocument({ baseUrl, ready, onSaved }: Options): Res
         await waitForPendingDocWrites();
         const recoveringDocumentId = getCurrentDocId();
         const loadDocument = async () => {
-          await waitForPendingDocumentPersistence();
+          await recoverPendingDocumentPersistence();
           let list = await listDocuments(baseUrl);
           let createdDocument: WhiteboardDocument | null = null;
           if (!list.length) {
@@ -286,6 +319,7 @@ export function useWhiteboardDocument({ baseUrl, ready, onSaved }: Options): Res
             list = [{
               id: createdDocument.id,
               incarnation: createdDocument.incarnation,
+              revision: createdDocument.revision,
               title: createdDocument.title,
               mode: createdDocument.mode,
               updated_at: createdDocument.updated_at,
@@ -300,13 +334,14 @@ export function useWhiteboardDocument({ baseUrl, ready, onSaved }: Options): Res
           // Capture before the GET as well as after it. A retiring hook can finish
           // its PUT (and acknowledge the outbox) while this GET is in flight; the
           // pre-request snapshot prevents that race from displaying stale text.
-          const retainedBeforeLoad = peekRetainedWhiteboardPatch(pick.id);
+          const retainedBeforeLoad = peekRetainedWhiteboardPatch(pick.id, pick.incarnation);
           const full = createdDocument?.id === pick.id
             ? createdDocument
             : await getWhiteboardForDocument(baseUrl, pick.id, undefined, pick.incarnation);
+          seedWhiteboardRecoverySnapshot(full);
           const retained = newestRetainedWhiteboardPatch(
             retainedBeforeLoad,
-            peekRetainedWhiteboardPatch(pick.id),
+            peekRetainedWhiteboardPatch(pick.id, full.incarnation),
           );
           return { list, pick, full, retained };
         };
@@ -322,7 +357,9 @@ export function useWhiteboardDocument({ baseUrl, ready, onSaved }: Options): Res
           || seq !== switchSeq.current
           || !isActiveDocumentOperationOwner(lifecycleOwner)
         ) return;
-        setDoc(applyRetainedWhiteboardPatch(prepared.full, prepared.retained));
+        const displayed = applyRetainedWhiteboardPatch(prepared.full, prepared.retained);
+        seedWhiteboardRecoverySnapshot(displayed);
+        setDoc(displayed);
         setCurrentDocumentIdentity(prepared.pick.id, prepared.full.incarnation);
         saveLastDocId(prepared.pick.id);
         setDocList(prepared.list.map((summary) => (
@@ -338,7 +375,10 @@ export function useWhiteboardDocument({ baseUrl, ready, onSaved }: Options): Res
             }
             : summary
         )));
-        if (prepared.retained) schedulePatch(prepared.retained.patch);
+        if (prepared.retained && whiteboardRevisionConflict(prepared.pick.id)) {
+          setSaveStatus('conflict');
+          setLoadError(REVISION_CONFLICT_MESSAGE);
+        } else if (prepared.retained) schedulePatch(prepared.retained.patch);
         else setSaveStatus('idle');
         setLoading(false);
       } catch (err) {
@@ -382,11 +422,22 @@ export function useWhiteboardDocument({ baseUrl, ready, onSaved }: Options): Res
 
         // No await between the final drain and this state handoff: a browser input
         // event cannot queue old-document blocks under the new active id.
-        setDoc(full);
+        seedWhiteboardRecoverySnapshot(full);
+        const displayed = applyRetainedWhiteboardPatch(
+          full,
+          peekRetainedWhiteboardPatch(id, full.incarnation),
+        );
+        seedWhiteboardRecoverySnapshot(displayed);
+        setDoc(displayed);
         setCurrentDocumentIdentity(id, full.incarnation);
         saveLastDocId(id);
-        setSaveStatus('idle');
-        setLoadError(null);
+        if (whiteboardRevisionConflict(id)) {
+          setSaveStatus('conflict');
+          setLoadError(REVISION_CONFLICT_MESSAGE);
+        } else {
+          setSaveStatus('idle');
+          setLoadError(null);
+        }
         return true;
       } catch (err) {
         if (seq !== switchSeq.current) return false;
@@ -424,6 +475,7 @@ export function useWhiteboardDocument({ baseUrl, ready, onSaved }: Options): Res
           seq !== switchSeq.current
           || !isActiveDocumentOperationOwner(lifecycleOwner)
         ) return false;
+        seedWhiteboardRecoverySnapshot(createdDocument);
         setDoc(createdDocument);
         setCurrentDocumentIdentity(createdDocument.id, createdDocument.incarnation);
         saveLastDocId(createdDocument.id);
@@ -528,6 +580,7 @@ export function useWhiteboardDocument({ baseUrl, ready, onSaved }: Options): Res
           }
         }
         backendDeleted = true;
+        clearDocumentResourceRevisions(id, deletingIncarnation);
         discardRetainedWhiteboardPatch(id);
         discardRetainedOutlineSnapshot(id);
         discardDocumentMutations(id);
@@ -538,6 +591,7 @@ export function useWhiteboardDocument({ baseUrl, ready, onSaved }: Options): Res
         ) return false;
         if (wasCurrent && replacement) {
           discardPendingDocSaves();
+          seedWhiteboardRecoverySnapshot(replacement);
           setDoc(replacement);
           setCurrentDocumentIdentity(replacement.id, replacement.incarnation);
           saveLastDocId(replacement.id);
@@ -611,13 +665,129 @@ export function useWhiteboardDocument({ baseUrl, ready, onSaved }: Options): Res
         // The shared outbox already retains the newest title. Keep the writer's
         // latest intent visible and retryable instead of overwriting it with an
         // older optimistic rollback from another in-flight rename.
-        setLoadError(`Rename stopped: ${err instanceof Error ? err.message : String(err)}`);
+        setLoadError(isPersistenceRecoveryError(err)
+          ? REVISION_CONFLICT_MESSAGE
+          : `Rename stopped: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
     [flushDocument, lifecycleOwner, queuePatch, refreshList],
   );
 
   const dismissError = useCallback(() => setLoadError(null), []);
+
+  const saveConflictCopy = useCallback(async (blocks: WhiteboardBlock[]): Promise<boolean> => {
+    const documentId = getCurrentDocId();
+    if (!doc || doc.id !== documentId || !whiteboardRevisionConflict(documentId)) return false;
+    const retained = peekRetainedWhiteboardPatch(documentId);
+    if (!retained) return false;
+    try {
+      const baseRevision = requireResourceRevision(
+        'whiteboard',
+        documentId,
+        doc.incarnation,
+      );
+      const result = await saveWhiteboardConflictCopy(
+        { ...doc, revision: baseRevision, blocks },
+        retained,
+      );
+      if (result.ok && !result.canceled) return true;
+      if (!result.canceled) {
+        setLoadError(`${REVISION_CONFLICT_MESSAGE} The conflict copy could not be saved.`);
+      }
+      return false;
+    } catch (error) {
+      setLoadError(
+        `${REVISION_CONFLICT_MESSAGE} Conflict copy failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return false;
+    }
+  }, [doc]);
+
+  const reloadAfterConflict = useCallback(async (): Promise<boolean> => {
+    const documentId = getCurrentDocId();
+    if (!documentId || navigationBusy.current || !whiteboardRevisionConflict(documentId)) {
+      return false;
+    }
+    const retained = peekRetainedWhiteboardPatch(documentId);
+    if (!retained) return false;
+    navigationBusy.current = true;
+    const seq = (switchSeq.current += 1);
+    let finishOperation: (() => void) | null = null;
+    let releaseInteraction: (() => void) | null = null;
+    let discardedRendererConflict = false;
+    let reloadedSnapshot: WhiteboardDocument | null = null;
+    try {
+      finishOperation = await acquireTrackedDocumentOperation();
+      releaseInteraction = lockDocumentInteraction();
+      if (documentId !== getCurrentDocId() || !isActiveDocumentOperationOwner(lifecycleOwner)) {
+        return false;
+      }
+      if (timer.current && timerDocId.current === documentId) {
+        clearTimeout(timer.current);
+        timer.current = null;
+        timerDocId.current = '';
+      }
+      const incarnation = captureDocumentIncarnation(documentId);
+      const latest = await getWhiteboardForDocument(
+        baseUrl,
+        documentId,
+        undefined,
+        incarnation,
+      );
+      reloadedSnapshot = latest;
+      if (
+        seq !== switchSeq.current
+        || documentId !== getCurrentDocId()
+        || !isActiveDocumentOperationOwner(lifecycleOwner)
+      ) return false;
+      if (!discardConflictedWhiteboardPatch(retained)) {
+        throw new Error(
+          'The draft changed while the saved version was loading. Review the new edit and try again.',
+        );
+      }
+      discardedRendererConflict = true;
+      const acknowledged = await acknowledgePendingDocumentConflict(retained.mainRecovery);
+      if (!acknowledged) {
+        await recoverPendingDocumentPersistence();
+        throw new Error('A newer local recovery snapshot arrived while reloading. Review it and try again.');
+      }
+      seedWhiteboardRecoverySnapshot(latest);
+      setDoc(latest);
+      setSaveStatus('idle');
+      setLoadError(null);
+      await refreshList();
+      return true;
+    } catch (error) {
+      if (discardedRendererConflict) {
+        await recoverPendingDocumentPersistence().catch(() => {});
+        if (reloadedSnapshot) {
+          seedWhiteboardRecoverySnapshot(reloadedSnapshot);
+          const recovered = peekRetainedWhiteboardPatch(documentId, reloadedSnapshot.incarnation);
+          if (recovered) {
+            const displayed = applyRetainedWhiteboardPatch(reloadedSnapshot, recovered);
+            const recoveredView = { ...displayed, viewRevision: recovered.revision };
+            seedWhiteboardRecoverySnapshot(recoveredView);
+            setDoc(recoveredView);
+          }
+        }
+      }
+      if (seq === switchSeq.current && documentId === getCurrentDocId()) {
+        setSaveStatus('conflict');
+        setLoadError(
+          `Conflict reload stopped; your local draft is still open. ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+      return false;
+    } finally {
+      releaseInteraction?.();
+      finishOperation?.();
+      if (seq === switchSeq.current) navigationBusy.current = false;
+    }
+  }, [baseUrl, lifecycleOwner, refreshList]);
 
   // -- writing mode (active document) --
   const setMode = useCallback(
@@ -648,8 +818,13 @@ export function useWhiteboardDocument({ baseUrl, ready, onSaved }: Options): Res
         // Retain the latest requested mode in both UI and outbox. Rolling back
         // here can race a newer request and replace it with a value that was
         // never actually persisted.
-        setSaveStatus('error');
-        setLoadError(`Mode save stopped: ${err instanceof Error ? err.message : String(err)}`);
+        if (isPersistenceRecoveryError(err)) {
+          setSaveStatus('conflict');
+          setLoadError(REVISION_CONFLICT_MESSAGE);
+        } else {
+          setSaveStatus('error');
+          setLoadError(`Mode save stopped: ${err instanceof Error ? err.message : String(err)}`);
+        }
         return false;
       }
     },
@@ -678,6 +853,8 @@ export function useWhiteboardDocument({ baseUrl, ready, onSaved }: Options): Res
     loading,
     loadError,
     dismissError,
+    saveConflictCopy,
+    reloadAfterConflict,
     saveStatus,
     onChangeBlocks,
     onChangeSettings,

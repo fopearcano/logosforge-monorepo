@@ -63,12 +63,13 @@ _KEY_PRIORITY = {
     "id": 0,
     "document_id": 1,
     "incarnation": 2,
-    "title": 3,
-    "name": 4,
-    "type": 5,
-    "entry_type": 6,
-    "mode": 7,
-    "text": 8,
+    "revision": 3,
+    "title": 4,
+    "name": 5,
+    "type": 6,
+    "entry_type": 7,
+    "mode": 8,
+    "text": 9,
 }
 
 
@@ -439,8 +440,14 @@ class WhiteboardMcpGateway:
 
     def outline(self, document_id: int | None, offset: int, limit: int) -> dict[str, Any]:
         resolved = self._document_id(document_id)
-        values, page = _page(self.client.get_outline(resolved), offset, limit)
-        return {"document_id": resolved, "items": values, "page": page}
+        outline = self.client.get_outline(resolved)
+        values, page = _page(outline["items"], offset, limit)
+        return {
+            "document_id": resolved,
+            "revision": outline["revision"],
+            "items": values,
+            "page": page,
+        }
 
     def comments(
         self,
@@ -520,7 +527,7 @@ class WhiteboardMcpGateway:
                     )
 
         if scope in {"all", "outline"}:
-            for index, item in enumerate(self.client.get_outline(resolved)):
+            for index, item in enumerate(self.client.get_outline(resolved)["items"]):
                 add(
                     "outline",
                     item.get("id", index),

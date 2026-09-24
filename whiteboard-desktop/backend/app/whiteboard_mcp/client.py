@@ -6,13 +6,28 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any
+from typing import Any, TypedDict
 
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 
 
 class WhiteboardApiError(RuntimeError):
     """A safe Whiteboard API failure suitable for an MCP result."""
+
+
+class OutlineRead(TypedDict):
+    """Validated outline payload returned by the Whiteboard backend."""
+
+    items: list[dict[str, Any]]
+    revision: str
+
+
+def _valid_revision(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 32
+        and all(character in "0123456789abcdef" for character in value)
+    )
 
 
 class WhiteboardApiClient:
@@ -83,16 +98,25 @@ class WhiteboardApiClient:
 
     def get_document(self, document_id: int) -> dict[str, Any]:
         value = self._get("/api/whiteboard", self._document_query(document_id))
-        if not isinstance(value, dict) or not isinstance(value.get("blocks"), list):
+        if (
+            not isinstance(value, dict)
+            or not isinstance(value.get("blocks"), list)
+            or not _valid_revision(value.get("revision"))
+        ):
             raise WhiteboardApiError("The Whiteboard manuscript has an invalid shape.")
         return value
 
-    def get_outline(self, document_id: int) -> list[dict[str, Any]]:
+    def get_outline(self, document_id: int) -> OutlineRead:
         value = self._get("/api/outline/items", self._document_query(document_id))
         items = value.get("items") if isinstance(value, dict) else None
-        if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+        revision = value.get("revision") if isinstance(value, dict) else None
+        if (
+            not isinstance(items, list)
+            or any(not isinstance(item, dict) for item in items)
+            or not _valid_revision(revision)
+        ):
             raise WhiteboardApiError("The Whiteboard outline has an invalid shape.")
-        return items
+        return {"items": items, "revision": revision}
 
     def get_comments(self, document_id: int) -> list[dict[str, Any]]:
         value = self._get("/api/comments", self._document_query(document_id))

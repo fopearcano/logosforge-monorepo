@@ -46,6 +46,15 @@ def test_api_requires_token_but_health_and_preflight_remain_available() -> None:
             )
             assert allowed.status_code == 200
 
+            cors = client.get(
+                "/api/recovery/notices",
+                headers={
+                    "Authorization": "Bearer test-session-token",
+                    "Origin": "null",
+                },
+            )
+            assert cors.headers.get("access-control-expose-headers") == "ETag"
+
             assert client.get("/health").status_code == 200
             preflight = client.options(
                 "/api/recovery/notices",

@@ -11,7 +11,7 @@ import asyncio
 import logging
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 
 from app.document_lifecycle import (
     complete_core_allocation,
@@ -35,6 +35,7 @@ from app.persistence_order import (
     create_document_incarnation,
     request_delete_order_floors,
 )
+from app.resource_revision import resource_etag
 
 router = APIRouter()
 _LOG = logging.getLogger(__name__)
@@ -173,7 +174,11 @@ async def document_exists(request: Request, doc_id: int) -> dict:
 
 
 @router.post("/api/documents", status_code=201)
-async def create_document(request: Request, body: WhiteboardCreate) -> dict:
+async def create_document(
+    request: Request,
+    body: WhiteboardCreate,
+    response: Response = None,
+) -> dict:
     """Create a new document: a fresh core project (its own PSYKE bible) + an empty
     local blocks file keyed by that project id. Returns the new document."""
     core = request.app.state.core
@@ -215,6 +220,10 @@ async def create_document(request: Request, body: WhiteboardCreate) -> dict:
                         detail=f"Document creation was cancelled because local storage failed. {exc}",
                     ) from exc
                 published = True
+                if response is not None:
+                    response.headers["ETag"] = resource_etag(
+                        "whiteboard", doc.incarnation, doc.revision
+                    )
                 return {"ok": True, "document": doc.model_dump()}
         except BaseException as exc:
             if doc_id is not None and not published:

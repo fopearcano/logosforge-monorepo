@@ -16,6 +16,15 @@ import {
 } from '../../api/backendAuth';
 import { responseError } from '../../api/responseError';
 import {
+  advanceResourceRevision,
+  beginResourceRevisionRead,
+  commitResourceRevisionRead,
+  requireResourceRevision,
+  resourceEtag,
+  StaleResourceReadError,
+  validateResourceRevisionResponse,
+} from '../../api/resourceRevision';
+import {
   OUTLINE_COLORS,
   OUTLINE_STATUSES,
   OUTLINE_TYPES,
@@ -30,6 +39,7 @@ const DEFAULT_BASE_URL = 'http://127.0.0.1:8777';
 
 interface OutlineItemsResponse {
   items?: unknown;
+  revision?: unknown;
 }
 
 const asString = (v: unknown, fallback = ''): string => (typeof v === 'string' ? v : fallback);
@@ -86,17 +96,49 @@ function toNodes(data: OutlineItemsResponse): OutlineNode[] {
   return list.map(normalize).filter((n): n is OutlineNode => n !== null);
 }
 
+async function readOutlineItems(
+  url: string,
+  documentId: string,
+  incarnation: string,
+  signal?: AbortSignal,
+): Promise<OutlineNode[]> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const read = beginResourceRevisionRead('outline', documentId, incarnation);
+    const res = await backendFetch(url, {
+      headers: withExpectedDocumentIncarnation(incarnation),
+      signal,
+    });
+    if (!res.ok) throw await responseError(res, 'Could not load the outline');
+    const data = (await res.json()) as OutlineItemsResponse;
+    const bodyRevision = validateResourceRevisionResponse(
+      'outline',
+      incarnation,
+      data.revision,
+      res.headers.get('ETag'),
+    );
+    const committed = commitResourceRevisionRead(
+      'outline',
+      documentId,
+      incarnation,
+      bodyRevision,
+      read,
+    );
+    if (committed.accepted && committed.revision === bodyRevision) return toNodes(data);
+  }
+  throw new StaleResourceReadError('outline');
+}
+
 export async function getOutlineItems(
   baseUrl: string = DEFAULT_BASE_URL,
   signal?: AbortSignal,
 ): Promise<OutlineNode[]> {
   const identity = captureDocumentIdentity();
-  const res = await backendFetch(withDoc(`${baseUrl}/api/outline/items`), {
-    headers: withExpectedDocumentIncarnation(identity.incarnation),
+  return readOutlineItems(
+    withDoc(`${baseUrl}/api/outline/items`),
+    identity.documentId,
+    identity.incarnation,
     signal,
-  });
-  if (!res.ok) throw await responseError(res, 'Could not load the outline');
-  return toNodes((await res.json()) as OutlineItemsResponse);
+  );
 }
 
 export async function getOutlineItemsForDocument(
@@ -105,12 +147,12 @@ export async function getOutlineItemsForDocument(
   signal?: AbortSignal,
   incarnation: string = captureDocumentIncarnation(documentId),
 ): Promise<OutlineNode[]> {
-  const res = await backendFetch(
+  return readOutlineItems(
     `${baseUrl}/api/outline/items?doc=${encodeURIComponent(documentId)}`,
-    { headers: withExpectedDocumentIncarnation(incarnation), signal },
+    documentId,
+    incarnation,
+    signal,
   );
-  if (!res.ok) throw await responseError(res, 'Could not load the outline');
-  return toNodes((await res.json()) as OutlineItemsResponse);
 }
 
 export async function saveOutlineItems(
@@ -119,14 +161,36 @@ export async function saveOutlineItems(
   signal?: AbortSignal,
 ): Promise<OutlineNode[]> {
   const identity = captureDocumentIdentity();
+  const expectedRevision = requireResourceRevision(
+    'outline',
+    identity.documentId,
+    identity.incarnation,
+  );
   const res = await backendFetch(withDoc(`${baseUrl}/api/outline/items`), {
     method: 'PUT',
-    headers: withDocumentIncarnation(identity.incarnation, { 'Content-Type': 'application/json' }),
+    headers: withDocumentIncarnation(identity.incarnation, {
+      'Content-Type': 'application/json',
+      'If-Match': resourceEtag('outline', identity.incarnation, expectedRevision),
+    }),
     body: JSON.stringify({ items }),
     signal,
   });
   if (!res.ok) throw await responseError(res, 'Could not save the outline');
-  return toNodes((await res.json()) as OutlineItemsResponse);
+  const data = (await res.json()) as OutlineItemsResponse;
+  const nextRevision = validateResourceRevisionResponse(
+    'outline',
+    identity.incarnation,
+    data.revision,
+    res.headers.get('ETag'),
+  );
+  advanceResourceRevision(
+    'outline',
+    identity.documentId,
+    identity.incarnation,
+    expectedRevision,
+    nextRevision,
+  );
+  return toNodes(data);
 }
 
 export async function saveOutlineItemsForDocument(
@@ -136,17 +200,35 @@ export async function saveOutlineItemsForDocument(
   signal?: AbortSignal,
   incarnation: string = captureDocumentIncarnation(documentId),
 ): Promise<OutlineNode[]> {
+  const expectedRevision = requireResourceRevision('outline', documentId, incarnation);
   const res = await backendFetch(
     `${baseUrl}/api/outline/items?doc=${encodeURIComponent(documentId)}`,
     {
       method: 'PUT',
-      headers: withDocumentIncarnation(incarnation, { 'Content-Type': 'application/json' }),
+      headers: withDocumentIncarnation(incarnation, {
+        'Content-Type': 'application/json',
+        'If-Match': resourceEtag('outline', incarnation, expectedRevision),
+      }),
       body: JSON.stringify({ items }),
       signal,
     },
   );
   if (!res.ok) throw await responseError(res, 'Could not save the outline');
-  return toNodes((await res.json()) as OutlineItemsResponse);
+  const data = (await res.json()) as OutlineItemsResponse;
+  const nextRevision = validateResourceRevisionResponse(
+    'outline',
+    incarnation,
+    data.revision,
+    res.headers.get('ETag'),
+  );
+  advanceResourceRevision(
+    'outline',
+    documentId,
+    incarnation,
+    expectedRevision,
+    nextRevision,
+  );
+  return toNodes(data);
 }
 
 // --- external-change signal -------------------------------------------------

@@ -3,6 +3,7 @@
 import {
   DEFAULT_SETTINGS,
   clearLegacySettingsMigration,
+  documentSettingsSnapshotKey,
   legacySettingsForDocument,
   normalizeDocumentSettings,
 } from './documentSettings';
@@ -36,6 +37,16 @@ check('numeric formatting retained', normalized.blankLinesBeforeScene === 2);
 check('booleans retained', normalized.includeOutline && !normalized.showInvisibles);
 check('typeface retained', normalized.typeface === 'monospace');
 check('unknown keys discarded', !('injectedUnknownKey' in normalized));
+check(
+  'same-document durable revision reload changes the settings source key',
+  documentSettingsSnapshotKey('doc-a', 'revision-1')
+    !== documentSettingsSnapshotKey('doc-a', 'revision-2'),
+);
+check(
+  'optimistic updates within one revision keep the settings source key',
+  documentSettingsSnapshotKey('doc-a', 'revision-1')
+    === documentSettingsSnapshotKey('doc-a', 'revision-1'),
+);
 
 const malformed = normalizeDocumentSettings({
   narrativePerson: 'second',

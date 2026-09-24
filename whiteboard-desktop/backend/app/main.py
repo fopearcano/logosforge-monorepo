@@ -40,6 +40,7 @@ from app.routers import (
     whiteboard,
     writing_modes,
 )
+from app.resource_revision import ResourceProtocolError
 
 WRAPPER_VERSION = "0.1.0"
 _AUTH_TOKEN = os.environ.get("LOGOSFORGE_WHITEBOARD_AUTH_TOKEN", "").strip()
@@ -136,11 +137,26 @@ async def local_state_io_handler(_request: Request, exc: LocalStateIOError) -> J
     )
 
 
+@app.exception_handler(ResourceProtocolError)
+async def resource_protocol_error_handler(
+    _request: Request,
+    exc: ResourceProtocolError,
+) -> JSONResponse:
+    """Keep conditional-write failures in the wrapper's stable error envelope."""
+    detail = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
+    return JSONResponse(
+        status_code=exc.status_code,
+        headers=exc.headers,
+        content={"error": detail},
+    )
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_DEV_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["ETag"],
 )
 app.include_router(writing_modes.router)
 app.include_router(documents.router)

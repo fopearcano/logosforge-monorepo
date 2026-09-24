@@ -12,6 +12,8 @@ whiteboard's writing ``mode`` — is normalized against the core
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -62,6 +64,23 @@ class LocalStateCorruptionError(LocalStateError):
         )
 
 
+class ResourceRevisionConflict(RuntimeError):
+    """A conditional resource write was based on an older durable snapshot."""
+
+    def __init__(self, expected_revision: str, current_revision: str) -> None:
+        self.expected_revision = expected_revision
+        self.current_revision = current_revision
+        super().__init__("The saved resource changed after it was loaded.")
+
+
+class MutationIdConflict(RuntimeError):
+    """One mutation id was reused for a different conditional request."""
+
+    def __init__(self, mutation_id: str) -> None:
+        self.mutation_id = mutation_id
+        super().__init__("The mutation id was already used for a different request.")
+
+
 def consume_recovery_notices() -> list[dict[str, str]]:
     """Return and clear successful automatic-recovery notices for the UI."""
     with _STATE_LOCK:
@@ -76,6 +95,38 @@ def _data_dir() -> Path:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _new_revision() -> str:
+    """Return an opaque durable resource validator.
+
+    Revisions deliberately are not counters. Restoring an older rotating backup
+    must not make a later numeric revision reusable (an ABA stale-write gap).
+    """
+    return uuid4().hex
+
+
+def _valid_revision(value: str) -> bool:
+    return len(value) == 32 and all(character in "0123456789abcdef" for character in value)
+
+
+def _mutation_fingerprint(
+    kind: str,
+    payload: BaseModel,
+    expected_revision: str | None,
+) -> str:
+    """Hash the complete conditional request represented by a mutation id."""
+    canonical = json.dumps(
+        {
+            "kind": kind,
+            "expected_revision": expected_revision,
+            "payload": payload.model_dump(exclude_none=True, mode="json"),
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
 
 
 def _backup_paths(path: Path) -> tuple[Path, Path]:
@@ -168,18 +219,21 @@ def _read_with_recovery(
     parser: Callable[[str], _T],
     *,
     label: str,
-) -> _T | None:
+    prepare_recovery: Callable[[_T], tuple[_T, bytes]] | None = None,
+) -> tuple[_T | None, bool]:
     """Read validated state, restoring the newest valid backup when necessary.
 
-    Missing state is represented by ``None``. Invalid state is never represented
-    by an empty document/list: if no backup validates, a protected error aborts
-    the request so a subsequent autosave cannot overwrite the damaged file.
+    Missing state is represented by ``(None, False)``. The boolean reports that
+    a backup was restored, allowing revisioned stores to mint a fresh validator
+    before returning recovered content. Invalid state is never represented by an
+    empty document/list: if no backup validates, a protected error aborts the
+    request so a subsequent autosave cannot overwrite the damaged file.
     """
     with _STATE_LOCK:
         if not path.exists():
-            return None
+            return None, False
         try:
-            return _parse_file(path, parser)[0]
+            return _parse_file(path, parser)[0], False
         except OSError as exc:
             raise LocalStateIOError(path, "read", exc) from exc
         except Exception as current_error:
@@ -192,6 +246,13 @@ def _read_with_recovery(
                 except (OSError, UnicodeError, ValueError, TypeError):
                     invalid_backups.append(backup)
                     continue
+
+                # Revisioned resources replace the backup's old validator and
+                # retry metadata before its bytes become canonical. This must be
+                # part of the recovery write itself: if persistence fails, a
+                # later read must not mistake the unrotated backup for current.
+                if prepare_recovery is not None:
+                    recovered, raw = prepare_recovery(recovered)
 
                 quarantine = _quarantine_path(path)
                 try:
@@ -236,7 +297,7 @@ def _read_with_recovery(
                 # A single-user desktop session cannot usefully display an
                 # unbounded history; the quarantined files themselves remain.
                 del _RECOVERY_NOTICES[:-50]
-                return recovered
+                return recovered, True
 
             raise LocalStateCorruptionError(path, label) from current_error
 
@@ -263,6 +324,16 @@ class WhiteboardDocument(BaseModel):
     blocks: list[WhiteboardBlock] = Field(default_factory=list)
     settings: dict[str, Any] = Field(default_factory=dict)
     updated_at: str
+    # Opaque per-resource validator. It rotates on every committed manuscript
+    # change and is intentionally unrelated to renderer-local save counters.
+    revision: str = ""
+
+
+class _StoredWhiteboardDocument(WhiteboardDocument):
+    """On-disk manuscript envelope; retry metadata is never an API field."""
+
+    last_mutation_id: str = ""
+    last_mutation_fingerprint: str = ""
 
 
 class WhiteboardDocumentSummary(BaseModel):
@@ -273,6 +344,7 @@ class WhiteboardDocumentSummary(BaseModel):
     title: str
     mode: str
     updated_at: str
+    revision: str = ""
 
 
 class WhiteboardCreate(BaseModel):
@@ -307,28 +379,58 @@ class WhiteboardStore:
     def _path(self, doc_id: str) -> Path:
         return self._dir / f"{doc_id}.json"
 
-    def _default(self, doc_id: str) -> WhiteboardDocument:
-        return WhiteboardDocument(
-            id=doc_id, incarnation="", title="Untitled", mode=wm.DEFAULT_MODE, blocks=[],
-            settings={}, updated_at=_now())
+    @staticmethod
+    def _public(doc: _StoredWhiteboardDocument) -> WhiteboardDocument:
+        return WhiteboardDocument.model_validate(doc.model_dump())
 
-    def _load(self, doc_id: str) -> WhiteboardDocument:
+    def _default(self, doc_id: str) -> _StoredWhiteboardDocument:
+        return _StoredWhiteboardDocument(
+            id=doc_id, incarnation="", title="Untitled", mode=wm.DEFAULT_MODE, blocks=[],
+            settings={}, updated_at=_now(), revision=_new_revision())
+
+    def _load(self, doc_id: str) -> _StoredWhiteboardDocument:
         path = self._path(doc_id)
-        doc = _read_with_recovery(
+
+        def prepare_recovery(
+            recovered: _StoredWhiteboardDocument,
+        ) -> tuple[_StoredWhiteboardDocument, bytes]:
+            rotated = recovered.model_copy(update={
+                "id": doc_id,
+                "revision": _new_revision(),
+                "last_mutation_id": "",
+                "last_mutation_fingerprint": "",
+            })
+            return rotated, rotated.model_dump_json(indent=2).encode("utf-8")
+
+        doc, recovered = _read_with_recovery(
             path,
-            WhiteboardDocument.model_validate_json,
+            _StoredWhiteboardDocument.model_validate_json,
             label=f"manuscript for document {doc_id}",
+            prepare_recovery=prepare_recovery,
         )
         if doc is None:
             return self._default(doc_id)
         # The path is the source of truth for the id (tolerate a stale id).
-        return doc if doc.id == doc_id else doc.model_copy(update={"id": doc_id})
+        migrated = doc if doc.id == doc_id else doc.model_copy(update={"id": doc_id})
+        if recovered:
+            # A backup contains an older state incarnation. Never reuse its
+            # validator or retry metadata: either would let a request prepared
+            # before recovery masquerade as current. ``updated_at`` deliberately
+            # remains unchanged because recovery is not a user edit.
+            assert _valid_revision(migrated.revision)
+        elif not _valid_revision(migrated.revision):
+            # Persist the legacy migration once, but preserve updated_at: adding
+            # a transport validator is not a user edit and must not reorder docs.
+            migrated = migrated.model_copy(update={"revision": _new_revision()})
+            _atomic_write_text(path, migrated.model_dump_json(indent=2))
+        return migrated
 
     def exists(self, doc_id: str) -> bool:
         return self._path(doc_id).exists()
 
     def get(self, doc_id: str) -> WhiteboardDocument:
-        return self._load(doc_id)
+        with _STATE_LOCK:
+            return self._public(self._load(doc_id))
 
     def ensure_incarnation(self, doc_id: str) -> str:
         """Return a durable identity token, migrating legacy/missing state once."""
@@ -350,15 +452,23 @@ class WhiteboardStore:
             incarnation = ""
             if self._path(doc_id).exists():
                 incarnation = self._load(doc_id).incarnation
-            doc = WhiteboardDocument(
+            doc = _StoredWhiteboardDocument(
                 id=doc_id, incarnation=incarnation or uuid4().hex,
                 title=payload.title or "Untitled",
                 mode=wm.normalize_mode(payload.mode), blocks=payload.blocks or [],
-                settings=dict(payload.settings or {}), updated_at=_now())
+                settings=dict(payload.settings or {}), updated_at=_now(),
+                revision=_new_revision())
             _atomic_write_text(self._path(doc_id), doc.model_dump_json(indent=2))
-            return doc
+            return self._public(doc)
 
-    def update(self, doc_id: str, payload: WhiteboardUpdate) -> WhiteboardDocument:
+    def update(
+        self,
+        doc_id: str,
+        payload: WhiteboardUpdate,
+        *,
+        expected_revision: str | None = None,
+        mutation_id: str | None = None,
+    ) -> WhiteboardDocument:
         # PARTIAL-PATCH MERGE (invariant): a None field keeps the stored value, so a
         # blocks-only autosave never clobbers `mode` (and a mode change never drops
         # blocks). This is what makes doc-switching safe — a late autosave draining
@@ -366,16 +476,29 @@ class WhiteboardStore:
         # fields unconditionally.
         with _STATE_LOCK:
             cur = self._load(doc_id)
-            doc = WhiteboardDocument(
+            fingerprint = _mutation_fingerprint("whiteboard", payload, expected_revision)
+            if mutation_id and cur.last_mutation_id == mutation_id:
+                if cur.last_mutation_fingerprint != fingerprint:
+                    raise MutationIdConflict(mutation_id)
+                return self._public(cur)
+            if expected_revision is not None and not hmac.compare_digest(
+                expected_revision, cur.revision
+            ):
+                raise ResourceRevisionConflict(expected_revision, cur.revision)
+            doc = _StoredWhiteboardDocument(
                 id=doc_id,
                 incarnation=cur.incarnation,
                 title=cur.title if payload.title is None else payload.title,
                 mode=cur.mode if payload.mode is None else wm.normalize_mode(payload.mode),
                 blocks=cur.blocks if payload.blocks is None else payload.blocks,
                 settings=cur.settings if payload.settings is None else dict(payload.settings),
-                updated_at=_now())
+                updated_at=_now(),
+                revision=_new_revision(),
+                last_mutation_id=mutation_id or "",
+                last_mutation_fingerprint=fingerprint if mutation_id else "",
+            )
             _atomic_write_text(self._path(doc_id), doc.model_dump_json(indent=2))
-            return doc
+            return self._public(doc)
 
     def delete(self, doc_id: str) -> None:
         _delete_state_files(self._path(doc_id))
@@ -397,7 +520,7 @@ class WhiteboardStore:
             doc = self._load(p.stem)
             out.append(WhiteboardDocumentSummary(
                 id=doc.id, incarnation=doc.incarnation, title=doc.title,
-                mode=doc.mode, updated_at=doc.updated_at))
+                mode=doc.mode, updated_at=doc.updated_at, revision=doc.revision))
         out.sort(key=lambda s: s.updated_at, reverse=True)  # most-recent first
         return out
 
@@ -406,6 +529,14 @@ class WhiteboardStore:
 
 class OutlineItemsDocument(BaseModel):
     items: list[dict[str, Any]] = Field(default_factory=list)
+    revision: str = ""
+
+
+class _StoredOutlineItemsDocument(OutlineItemsDocument):
+    """On-disk outline envelope; retry metadata is not exposed by the API."""
+
+    last_mutation_id: str = ""
+    last_mutation_fingerprint: str = ""
 
 
 class OutlineItemsStore:
@@ -419,32 +550,98 @@ class OutlineItemsStore:
         return self._dir / f"{doc_id}.json"
 
     @staticmethod
-    def _parse(text: str) -> list[dict[str, Any]]:
+    def _parse(text: str) -> _StoredOutlineItemsDocument:
         data = json.loads(text)
         if isinstance(data, list):
-            return data
+            return _StoredOutlineItemsDocument(items=data)
         if isinstance(data, dict) and isinstance(data.get("items"), list):
-            return data["items"]
+            return _StoredOutlineItemsDocument.model_validate(data)
         raise ValueError("outline state must be a list or an object containing an items list")
 
-    def get(self, doc_id: str) -> list[dict[str, Any]]:
-        items = _read_with_recovery(
-            self._path(doc_id),
+    @staticmethod
+    def _public(doc: _StoredOutlineItemsDocument) -> OutlineItemsDocument:
+        return OutlineItemsDocument.model_validate(doc.model_dump())
+
+    def _load(
+        self,
+        doc_id: str,
+        *,
+        persist_missing: bool = True,
+    ) -> _StoredOutlineItemsDocument:
+        path = self._path(doc_id)
+
+        def prepare_recovery(
+            recovered: _StoredOutlineItemsDocument,
+        ) -> tuple[_StoredOutlineItemsDocument, bytes]:
+            rotated = recovered.model_copy(update={
+                "revision": _new_revision(),
+                "last_mutation_id": "",
+                "last_mutation_fingerprint": "",
+            })
+            return rotated, rotated.model_dump_json(indent=2).encode("utf-8")
+
+        doc, recovered = _read_with_recovery(
+            path,
             self._parse,
             label=f"outline for document {doc_id}",
+            prepare_recovery=prepare_recovery,
         )
-        return [] if items is None else items
+        if doc is None:
+            doc = _StoredOutlineItemsDocument(items=[], revision=_new_revision())
+            if persist_missing:
+                _atomic_write_text(path, doc.model_dump_json(indent=2))
+            return doc
+        if recovered:
+            assert _valid_revision(doc.revision)
+        elif not _valid_revision(doc.revision):
+            doc = doc.model_copy(update={"revision": _new_revision()})
+            _atomic_write_text(path, doc.model_dump_json(indent=2))
+        return doc
+
+    def get_document(self, doc_id: str) -> OutlineItemsDocument:
+        with _STATE_LOCK:
+            return self._public(self._load(doc_id))
+
+    def get(self, doc_id: str) -> list[dict[str, Any]]:
+        return self.get_document(doc_id).items
 
     def replace(self, doc_id: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return self.replace_document(doc_id, items).items
+
+    def replace_document(
+        self,
+        doc_id: str,
+        items: list[dict[str, Any]],
+        *,
+        expected_revision: str | None = None,
+        mutation_id: str | None = None,
+    ) -> OutlineItemsDocument:
         with _STATE_LOCK:
-            path = self._path(doc_id)
             # PUT is a full-list replacement and otherwise has no read/merge step.
             # Validate/recover the stored copy explicitly so a queued autosave cannot
             # overwrite an unrecoverable outline with an apparently valid empty list.
-            if path.exists():
-                self.get(doc_id)
-            _atomic_write_text(path, json.dumps({"items": list(items)}, indent=2))
-            return list(items)
+            # A conditional conflict must advertise a durable validator. Persist
+            # the initial empty outline before comparing so repeated stale PUTs
+            # and the following GET all observe the same current revision.
+            cur = self._load(doc_id, persist_missing=expected_revision is not None)
+            payload = OutlineItemsDocument(items=list(items), revision="")
+            fingerprint = _mutation_fingerprint("outline", payload, expected_revision)
+            if mutation_id and cur.last_mutation_id == mutation_id:
+                if cur.last_mutation_fingerprint != fingerprint:
+                    raise MutationIdConflict(mutation_id)
+                return self._public(cur)
+            if expected_revision is not None and not hmac.compare_digest(
+                expected_revision, cur.revision
+            ):
+                raise ResourceRevisionConflict(expected_revision, cur.revision)
+            doc = _StoredOutlineItemsDocument(
+                items=list(items),
+                revision=_new_revision(),
+                last_mutation_id=mutation_id or "",
+                last_mutation_fingerprint=fingerprint if mutation_id else "",
+            )
+            _atomic_write_text(self._path(doc_id), doc.model_dump_json(indent=2))
+            return self._public(doc)
 
     def delete(self, doc_id: str) -> None:
         _delete_state_files(self._path(doc_id))
@@ -531,7 +728,7 @@ class CommentsStore:
         return self._dir / f"{doc_id}.json"
 
     def _load(self, doc_id: str) -> CommentsDocument:
-        doc = _read_with_recovery(
+        doc, _recovered = _read_with_recovery(
             self._path(doc_id),
             CommentsDocument.model_validate_json,
             label=f"comments for document {doc_id}",
@@ -633,8 +830,13 @@ def migrate_legacy(default_doc_id: str) -> None:
     new_wb = root / _WB_DIRNAME / f"{default_doc_id}.json"
     if legacy_wb.exists() and not new_wb.exists():
         try:
-            doc = WhiteboardDocument.model_validate_json(legacy_wb.read_text(encoding="utf-8"))
-            doc = doc.model_copy(update={"id": default_doc_id})
+            doc = _StoredWhiteboardDocument.model_validate_json(
+                legacy_wb.read_text(encoding="utf-8")
+            )
+            doc = doc.model_copy(update={
+                "id": default_doc_id,
+                "revision": doc.revision if _valid_revision(doc.revision) else _new_revision(),
+            })
             _atomic_write_text(new_wb, doc.model_dump_json(indent=2))
             legacy_wb.rename(legacy_wb.with_suffix(".json.migrated"))
         except Exception:
@@ -648,7 +850,13 @@ def migrate_legacy(default_doc_id: str) -> None:
                 data["items"] if isinstance(data, dict) and isinstance(data.get("items"), list)
                 else data if isinstance(data, list) else []
             )
-            _atomic_write_text(new_ol, json.dumps({"items": items}, indent=2))
+            _atomic_write_text(
+                new_ol,
+                _StoredOutlineItemsDocument(
+                    items=items,
+                    revision=_new_revision(),
+                ).model_dump_json(indent=2),
+            )
             legacy_ol.rename(legacy_ol.with_suffix(".json.migrated"))
         except Exception:
             pass

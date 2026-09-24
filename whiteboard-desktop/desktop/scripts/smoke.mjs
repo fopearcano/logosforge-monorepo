@@ -21,14 +21,18 @@ function record(label, ok, detail = '') {
   if (!ok) failures += 1;
 }
 
-async function json(method, path, body) {
+async function jsonResponse(method, path, body, headers = {}) {
   const res = await fetch(BASE + path, {
     method,
-    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    headers: body ? { 'Content-Type': 'application/json', ...headers } : headers,
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+  return { data: await res.json(), etag: res.headers.get('etag') };
+}
+
+async function json(method, path, body, headers) {
+  return (await jsonResponse(method, path, body, headers)).data;
 }
 
 async function main() {
@@ -45,7 +49,9 @@ async function main() {
 
   // Hoisted so the finally cleanup can run even if the try aborts early.
   let wbSnapshot = null;
+  let wbEtag = null;
   let olSnapshot = null;
+  let olEtag = null;
   let createdId = null;
 
   try {
@@ -54,23 +60,31 @@ async function main() {
     const ver = await json('GET', '/api/version');
     record('GET  /api/version', !!ver.api_version && !!ver.core_version);
     // Snapshot the live session BEFORE we mutate it, so cleanup can restore it.
-    wbSnapshot = (await json('GET', '/api/whiteboard')).blocks;
-    record('GET  /api/whiteboard', Array.isArray(wbSnapshot));
+    const whiteboardRead = await jsonResponse('GET', '/api/whiteboard');
+    wbSnapshot = whiteboardRead.data.blocks;
+    wbEtag = whiteboardRead.etag;
+    record('GET  /api/whiteboard', Array.isArray(wbSnapshot) && !!wbEtag);
 
-    const put = await json('PUT', '/api/whiteboard', {
+    const whiteboardWrite = await jsonResponse('PUT', '/api/whiteboard', {
       blocks: [{ id: 'b0', type: 'heading', text: 'Smoke', level: 1 }],
-    });
-    record('PUT  /api/whiteboard', put.blocks.length === 1);
+    }, { 'If-Match': wbEtag });
+    const put = whiteboardWrite.data;
+    wbEtag = whiteboardWrite.etag;
+    record('PUT  /api/whiteboard', put.blocks.length === 1 && !!wbEtag);
 
     const modes = await json('GET', '/api/writing-modes');
     record('GET  /api/writing-modes', modes.modes.length >= 1, `${modes.modes.length} modes`);
 
-    olSnapshot = (await json('GET', '/api/outline/items')).items;
-    record('GET  /api/outline/items', Array.isArray(olSnapshot));
-    const outlinePut = await json('PUT', '/api/outline/items', {
+    const outlineRead = await jsonResponse('GET', '/api/outline/items');
+    olSnapshot = outlineRead.data.items;
+    olEtag = outlineRead.etag;
+    record('GET  /api/outline/items', Array.isArray(olSnapshot) && !!olEtag);
+    const outlineWrite = await jsonResponse('PUT', '/api/outline/items', {
       items: [{ id: 'n0', parentId: null, type: 'act', title: 'Smoke', order: 0 }],
-    });
-    record('PUT  /api/outline/items', outlinePut.items.length === 1);
+    }, { 'If-Match': olEtag });
+    const outlinePut = outlineWrite.data;
+    olEtag = outlineWrite.etag;
+    record('PUT  /api/outline/items', outlinePut.items.length === 1 && !!olEtag);
 
     const psyke = await json('GET', '/api/psyke/search?q=test');
     record('GET  /api/psyke/search', Array.isArray(psyke.results));
@@ -120,7 +134,7 @@ async function main() {
     let restored = true;
     if (Array.isArray(wbSnapshot)) {
       try {
-        await json('PUT', '/api/whiteboard', { blocks: wbSnapshot });
+        await json('PUT', '/api/whiteboard', { blocks: wbSnapshot }, { 'If-Match': wbEtag });
       } catch (e) {
         restored = false;
         record('cleanup — restore whiteboard', false, String(e?.message ?? e));
@@ -128,7 +142,7 @@ async function main() {
     }
     if (Array.isArray(olSnapshot)) {
       try {
-        await json('PUT', '/api/outline/items', { items: olSnapshot });
+        await json('PUT', '/api/outline/items', { items: olSnapshot }, { 'If-Match': olEtag });
       } catch (e) {
         restored = false;
         record('cleanup — restore outline', false, String(e?.message ?? e));

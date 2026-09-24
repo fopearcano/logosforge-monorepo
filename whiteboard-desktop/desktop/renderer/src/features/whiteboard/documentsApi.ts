@@ -8,6 +8,11 @@ import type { WhiteboardDocument } from './types';
 import { backendFetch, withDocumentIncarnation } from '../../api/backendAuth';
 import { responseError } from '../../api/responseError';
 import type { PendingDocumentDeleteFloor } from '../../api/backend';
+import {
+  clearDocumentResourceRevisions,
+  installResourceRevision,
+  validateResourceRevisionResponse,
+} from '../../api/resourceRevision';
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:8777';
 const DOCUMENT_REQUEST_TIMEOUT_MS = 10_000;
@@ -33,6 +38,7 @@ async function withDocumentRequestDeadline<T>(
 export interface DocumentSummary {
   id: string;
   incarnation: string;
+  revision: string;
   title: string;
   mode: string;
   updated_at: string;
@@ -59,6 +65,18 @@ export async function createDocument(
   });
   if (!res.ok) throw await responseError(res, 'Could not create the document');
   const data = (await res.json()) as { document: WhiteboardDocument };
+  const revision = validateResourceRevisionResponse(
+    'whiteboard',
+    data.document.incarnation,
+    data.document.revision,
+    res.headers.get('ETag'),
+  );
+  installResourceRevision(
+    'whiteboard',
+    data.document.id,
+    data.document.incarnation,
+    revision,
+  );
   return data.document;
 }
 
@@ -78,6 +96,7 @@ export async function deleteDocument(
       signal,
     });
     if (!res.ok) throw await responseError(res, 'Could not delete the document');
+    clearDocumentResourceRevisions(id, incarnation);
   });
 }
 

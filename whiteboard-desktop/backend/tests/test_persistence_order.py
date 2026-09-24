@@ -17,12 +17,19 @@ from app.persistence_order import (
 def test_older_timed_out_request_cannot_overwrite_a_newer_dispatch() -> None:
     doc_id = "910001"
     saved: list[str] = []
+    revision = {"value": "initial"}
 
     # Model the newer request reaching the actual store boundary first.
-    with accept_persistence_write("whiteboard", doc_id, 2) as accepted:
+    with accept_persistence_write(
+        "whiteboard", doc_id, 2, current_revision=lambda: revision["value"]
+    ) as accepted:
         assert accepted
         saved.append("new")
-    with accept_persistence_write("whiteboard", doc_id, 1) as accepted:
+        revision["value"] = "new"
+        accepted.commit(revision["value"])
+    with accept_persistence_write(
+        "whiteboard", doc_id, 1, current_revision=lambda: revision["value"]
+    ) as accepted:
         assert not accepted
         if accepted:
             saved.append("old")
@@ -32,28 +39,49 @@ def test_older_timed_out_request_cannot_overwrite_a_newer_dispatch() -> None:
 
 def test_failed_store_write_rolls_back_order_for_retry() -> None:
     doc_id = "910002"
+    revision = {"value": "initial"}
     with pytest.raises(OSError):
-        with accept_persistence_write("outline", doc_id, 7) as accepted:
+        with accept_persistence_write(
+            "outline", doc_id, 7, current_revision=lambda: revision["value"]
+        ) as accepted:
             assert accepted
             raise OSError("disk full")
-    with accept_persistence_write("outline", doc_id, 7) as accepted:
+    with accept_persistence_write(
+        "outline", doc_id, 7, current_revision=lambda: revision["value"]
+    ) as accepted:
         assert accepted
+        revision["value"] = "saved"
+        accepted.commit(revision["value"])
 
 
 def test_delete_tombstone_blocks_old_write_and_reused_id_keeps_watermark() -> None:
     doc_id = "910003"
-    with accept_persistence_write("whiteboard", doc_id, 4) as accepted:
+    revision = {"value": "initial"}
+    with accept_persistence_write(
+        "whiteboard", doc_id, 4, current_revision=lambda: revision["value"]
+    ) as accepted:
         assert accepted
+        revision["value"] = "saved-4"
+        accepted.commit(revision["value"])
     begin_document_delete(doc_id)
-    with accept_persistence_write("whiteboard", doc_id, 5) as accepted:
+    with accept_persistence_write(
+        "whiteboard", doc_id, 5, current_revision=lambda: revision["value"]
+    ) as accepted:
         assert not accepted
 
     with create_document_incarnation(doc_id):
         pass
-    with accept_persistence_write("whiteboard", doc_id, 4) as accepted:
+    revision["value"] = "new-incarnation"
+    with accept_persistence_write(
+        "whiteboard", doc_id, 4, current_revision=lambda: revision["value"]
+    ) as accepted:
         assert not accepted
-    with accept_persistence_write("whiteboard", doc_id, 6) as accepted:
+    with accept_persistence_write(
+        "whiteboard", doc_id, 6, current_revision=lambda: revision["value"]
+    ) as accepted:
         assert accepted
+        revision["value"] = "saved-6"
+        accepted.commit(revision["value"])
 
 
 def test_delete_floor_rejects_issued_request_that_reaches_gate_after_id_reuse() -> None:
@@ -63,20 +91,30 @@ def test_delete_floor_rejects_issued_request_that_reaches_gate_after_id_reuse() 
     begin_document_delete(doc_id, {"whiteboard": 8, "outline": 3})
     with create_document_incarnation(doc_id):
         pass
-    with accept_persistence_write("whiteboard", doc_id, 8) as accepted:
+    with accept_persistence_write(
+        "whiteboard", doc_id, 8, current_revision=lambda: "new-incarnation"
+    ) as accepted:
         assert not accepted
-    with accept_persistence_write("outline", doc_id, 3) as accepted:
+    with accept_persistence_write(
+        "outline", doc_id, 3, current_revision=lambda: "new-outline"
+    ) as accepted:
         assert not accepted
-    with accept_persistence_write("whiteboard", doc_id, 9) as accepted:
+    with accept_persistence_write(
+        "whiteboard", doc_id, 9, current_revision=lambda: "new-incarnation"
+    ) as accepted:
         assert accepted
+        accepted.commit("saved-9")
 
 
 def test_failed_delete_reopens_document_for_retained_write() -> None:
     doc_id = "910004"
     begin_document_delete(doc_id)
     cancel_document_delete(doc_id)
-    with accept_persistence_write("whiteboard", doc_id, 1) as accepted:
+    with accept_persistence_write(
+        "whiteboard", doc_id, 1, current_revision=lambda: "initial"
+    ) as accepted:
         assert accepted
+        accepted.commit("saved")
 
 
 def test_existence_reconciliation_waits_for_an_accepted_delete(monkeypatch) -> None:

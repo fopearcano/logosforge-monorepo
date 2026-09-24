@@ -65,6 +65,7 @@ const DRAFT_LABEL: Record<SaveStatus, string> = {
   saving: 'Draft saving…',
   saved: 'Draft saved',
   error: 'Draft error',
+  conflict: 'Draft conflict',
 };
 
 interface LiveBlocksPersistence {
@@ -116,6 +117,8 @@ export function WhiteboardPage({
     loading,
     loadError,
     dismissError,
+    saveConflictCopy,
+    reloadAfterConflict,
     saveStatus,
     onChangeBlocks,
     onChangeSettings,
@@ -129,6 +132,7 @@ export function WhiteboardPage({
   const [editor, setEditor] = useState<Editor | null>(null);
   const [element, setElement] = useState<FountainType | null>(null);
   const [preview, setPreview] = useState(false);
+  const [conflictReloadOpen, setConflictReloadOpen] = useState(false);
   const [liveBlocks, setLiveBlocks] = useState<WhiteboardBlock[]>([]);
   const liveBlocksRef = useRef(liveBlocks);
   liveBlocksRef.current = liveBlocks;
@@ -153,6 +157,7 @@ export function WhiteboardPage({
 
   const settingsApi = useDocumentSettings({
     documentId: doc?.id ?? null,
+    documentRevision: doc ? `${doc.revision}:${doc.viewRevision ?? 0}` : null,
     initialSettings: doc?.settings,
     onChange: onChangeSettings,
   });
@@ -175,7 +180,7 @@ export function WhiteboardPage({
   onModeChangeRef.current = onModeChange;
   const onTitleChangeRef = useRef(onTitleChange);
   onTitleChangeRef.current = onTitleChange;
-  const lastDocIdRef = useRef<string | null>(null);
+  const lastDocumentSnapshotRef = useRef<string | null>(null);
   const previewRef = useRef(preview);
   previewRef.current = preview;
 
@@ -190,9 +195,17 @@ export function WhiteboardPage({
     const ids = normalizeBlockIds(source.map((block) => block.id));
     return source.map((block, index) => ({ ...block, id: ids[index] }));
   }, [doc?.id, doc?.blocks]);
+  const documentSnapshotKey = doc
+    ? `${doc.id}:${doc.revision}:${doc.viewRevision ?? 0}`
+    : null;
   const editorMountBlocks = useMemo(
-    () => editorRecoveryBlocks(doc?.id ?? null, liveBlocksDocId, liveBlocks, editorInitialBlocks),
-    [doc?.id, liveBlocksDocId, liveBlocks, editorInitialBlocks],
+    () => editorRecoveryBlocks(
+      documentSnapshotKey,
+      liveBlocksDocId === doc?.id ? lastDocumentSnapshotRef.current : null,
+      liveBlocks,
+      editorInitialBlocks,
+    ),
+    [documentSnapshotKey, doc?.id, liveBlocksDocId, liveBlocks, editorInitialBlocks],
   );
 
   // Recovery happens inside whichever store first reads damaged state (document,
@@ -536,18 +549,19 @@ export function WhiteboardPage({
   // Reflect the project name + a transient "unsaved" marker (the backend autosave
   // in flight / failed) in BOTH the OS window title and the in-app title bar.
   useEffect(() => {
-    const unsaved = saveStatus === 'saving' || saveStatus === 'error';
+    const unsaved = saveStatus === 'saving' || saveStatus === 'error' || saveStatus === 'conflict';
     document.title = windowTitle(projectName, unsaved);
     onTitleChangeRef.current?.(projectName, unsaved);
   }, [projectName, saveStatus]);
 
   // Re-derive the outline whenever the document loads or the mode changes; reset
-  // the live snapshot only when a different document loads (a mode switch keeps
-  // the current content, so re-derive from the live blocks, not doc.blocks).
+  // the live snapshot when a different document or an explicitly reloaded
+  // durable revision arrives. A mode switch keeps current live content.
   useEffect(() => {
     if (!doc) return;
-    if (doc.id !== lastDocIdRef.current) {
-      lastDocIdRef.current = doc.id;
+    const snapshotKey = `${doc.id}:${doc.revision}:${doc.viewRevision ?? 0}`;
+    if (snapshotKey !== lastDocumentSnapshotRef.current) {
+      lastDocumentSnapshotRef.current = snapshotKey;
       const idsChanged = doc.blocks.length !== editorInitialBlocks.length
         || doc.blocks.some((block, index) => block.id !== editorInitialBlocks[index]?.id);
       const receipt = idsChanged ? onChangeBlocks(editorInitialBlocks) : null;
@@ -695,6 +709,19 @@ export function WhiteboardPage({
           setDocToDelete(null);
         }}
         onCancel={() => setDocToDelete(null)}
+      />
+      <ConfirmDialog
+        open={conflictReloadOpen}
+        title="Discard local draft changes?"
+        message="Reloading adopts the latest saved document and permanently discards the conflicted local manuscript, title, mode, and settings. Save a conflict JSON copy first if you may need these edits."
+        confirmLabel="Discard and reload"
+        onConfirm={() => {
+          setConflictReloadOpen(false);
+          void reloadAfterConflict().then((reloaded) => {
+            if (reloaded) fileDoc.resetForDocument();
+          });
+        }}
+        onCancel={() => setConflictReloadOpen(false)}
       />
       <div className="wb-statusline">
         <div className="wb-statusline-left">
@@ -865,7 +892,7 @@ export function WhiteboardPage({
         {doc ? (
           <>
             <WhiteboardEditor
-              key={doc.id}
+              key={`${doc.id}:${doc.revision}:${doc.viewRevision ?? 0}`}
               initialBlocks={editorMountBlocks}
               mode={doc.mode}
               onChangeBlocks={handleBlocks}
@@ -967,15 +994,34 @@ export function WhiteboardPage({
               aria-atomic="true"
             >
               <span className="wb-toast-message">{loadError}</span>
-              <button
-                type="button"
-                className="wb-toast-dismiss"
-                onClick={() => dismissNotification(dismissError)}
-                title="Dismiss"
-                aria-label="Dismiss document error"
-              >
-                ×
-              </button>
+              {saveStatus === 'conflict' ? (
+                <span className="wb-toast-actions">
+                  <button
+                    type="button"
+                    className="wb-toast-action"
+                    onClick={() => { void saveConflictCopy(liveBlocksRef.current); }}
+                  >
+                    Save conflict copy…
+                  </button>
+                  <button
+                    type="button"
+                    className="wb-toast-action wb-toast-action-danger"
+                    onClick={() => setConflictReloadOpen(true)}
+                  >
+                    Reload saved…
+                  </button>
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  className="wb-toast-dismiss"
+                  onClick={() => dismissNotification(dismissError)}
+                  title="Dismiss"
+                  aria-label="Dismiss document error"
+                >
+                  ×
+                </button>
+              )}
             </div>
           )}
           {commentsApi.error && (

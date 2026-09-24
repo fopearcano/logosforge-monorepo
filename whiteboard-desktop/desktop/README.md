@@ -63,6 +63,27 @@ nonce, so the app neither trusts nor terminates an unrelated listener. The
 renderer receives no Node.js integration: `contextIsolation`, sandboxing, frame
 validation, narrow IPC methods, and explicit file-path grants remain enabled.
 
+Manuscript and outline persistence is conflict-safe per document and resource.
+Each successful read or write returns an opaque durable revision plus a strong
+`ETag`; explicit-document writes send that validator with `If-Match`. The main
+process also assigns stable mutation IDs so an uncertain response can be retried
+without applying the same edit twice. If another client has advanced the same
+resource, autosave pauses, keeps the local draft or outline visible, and reports
+a conflict instead of overwriting either version. Main retains a versioned,
+incarnation-scoped recovery ledger across renderer reloads; later conflict-state
+edits synchronously refresh that ledger, and shutdown fails closed until the
+exact recovery generation is resolved. Whiteboard ledger entries carry the
+complete local manuscript/title/mode/settings snapshot, not only the last field
+patch. The document conflict UI and the app-lifetime recovery banner can export
+a complete JSON rescue copy, then require confirmation before discarding or
+reloading the saved version. A reload is rejected if another local edit arrives
+while the server copy is being fetched. The MCP companion remains read-only
+while this foundation is validated; write tools will require the same
+preconditions. The recovery ledger is process-memory protection for renderer
+loss, not a power-loss journal: export an offered rescue JSON before explicitly
+discarding it. Rescue envelopes are currently archival/manual-recovery files,
+not accepted by the normal project importer.
+
 User data defaults to `~/.logosforge` (`%USERPROFILE%\.logosforge` on Windows).
 Set `LOGOSFORGE_DATA_DIR` and `LOGOSFORGE_DB_PATH` to isolate a development or
 test run. `LOGOSFORGE_HOST` and `LOGOSFORGE_PORT` override the loopback endpoint;
