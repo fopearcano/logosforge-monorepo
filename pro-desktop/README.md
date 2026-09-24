@@ -10,6 +10,7 @@ own: it **spawns the logosforge core API** and composes the
 ```
 electron/                 main process (CommonJS → dist-electron/)
   core-manager.ts         connect to / spawn `python -m logosforge.api --mode desktop`
+  mcp-runtime.ts          private runtime descriptor for the packaged MCP gateway
   file-manager.ts         open/save dialogs + per-project layout persistence
   preload.ts              flat `window.logosforge` bridge (contextBridge)
   main.ts                 window + IPC + lifecycle
@@ -120,7 +121,8 @@ remounted at the project boundary, so drafts, chat results and loading-state dat
 from one project can never appear inside another.
 
 The shared package + contracts are aliased straight to source (vite + tsconfig
-`paths`), so there's no build/link step in dev and HMR works across the monorepo.
+`paths`), so there's no build/link step in dev and HMR works across the
+monorepo. Their own dependencies still need installing in a fresh checkout.
 
 ## Run (dev)
 
@@ -128,9 +130,11 @@ Prereqs: **Node.js 22.12+**, plus the **logosforge core venv** at
 `../logosforge/venv`. The app falls back to system `python` if the venv is not
 present, so the `logosforge` package must then be installed there.
 
-```
-npm install
-npm run dev
+```bash
+# From the repository root
+(cd logosforge-ui-contracts && npm install)
+(cd pro-shared-ui && npm install)
+(cd pro-desktop && npm install && npm run dev)
 ```
 
 This starts Vite (`:5173`) and Electron together. On launch the app starts a
@@ -142,11 +146,28 @@ remains strict. The renderer talks to the verified core directly — no proxy.
 Env overrides: `LOGOSFORGE_PORT`, `LOGOSFORGE_HOST`, `LOGOSFORGE_CORE_DIR`,
 `LOGOSFORGE_PYTHON`.
 
+## Packaged Codex / MCP bridge
+
+Native packages include a small console MCP companion. Start the Pro GUI once;
+it atomically installs/updates that companion under the stable per-user
+`LogosForge Pro/mcp/` directory, including when the GUI itself is a portable
+EXE or AppImage. While Pro is running it publishes the dynamic loopback URL and
+random API token through a private, versioned runtime descriptor only after
+core identity verification. Configure Codex to launch the companion directly;
+no token or changing package-extraction path belongs in Codex configuration.
+Writes remain disabled unless the MCP client explicitly sets
+`LOGOSFORGE_MCP_ALLOW_WRITES=1`.
+
+See [`../logosforge/docs/MCP_GATEWAY.md`](../logosforge/docs/MCP_GATEWAY.md) for
+Codex configuration and the proposal/review/apply safety model.
+
 ## Status
 
 - **Workspace** is a single-panel switcher today. The dockable/draggable layout
   (persisted via the `loadLayout`/`saveLayout` PlatformAdapter hooks) is next.
-- **Packaging** is configured for a self-contained Windows installer and
-  portable build. Electron starts a per-process authenticated core and stores
-  the SQLite database in the app's stable user-data directory.
+- **Packaging** is configured for self-contained Windows installer/portable,
+  macOS Intel DMG, and Linux x64 AppImage builds. Electron starts a per-process
+  authenticated core and stores the SQLite database in the app's stable
+  user-data directory. The same packages install a stable,
+  descriptor-authenticated MCP companion for local Codex orchestration.
 - The renderer uses bundled/local assets and runs under a restrictive CSP.

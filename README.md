@@ -22,23 +22,36 @@ Workflows live in `.github/workflows/`. Each freezes the Python backend/core wit
 | `release-whiteboard-windows.yml` | Whiteboard — Windows (NSIS installer + portable) | tag `whiteboard-v*` |
 | `release-whiteboard-macos.yml` | Whiteboard — macOS Intel (DMG) | tag `whiteboard-v*` — runs on a **self-hosted Intel Mac** runner |
 | `release-whiteboard-linux.yml` | Whiteboard — Linux x64 (AppImage) | tag `whiteboard-v*` — hosted `ubuntu-latest` |
-| `release-windows.yml` | Pro — Windows | tag `v*` |
+| `release-windows.yml` | Pro — Windows x64, macOS Intel x64, Linux x64 | tag `v*` or manually selected native builds |
 
 Whiteboard release tags use the form **`whiteboard-vX.Y.Z`** and must match the
 version in `whiteboard-desktop/desktop/package.json`. Do not reuse or move a
 published tag. For the version bump, release notes, validation, tag, manual
 workflow, and recovery procedures, follow
 **[whiteboard-desktop/RELEASING.md](whiteboard-desktop/RELEASING.md)**. The macOS
-job needs a self-hosted Intel Mac runner labelled `self-hosted`, `macOS`, and
-`X64`, running macOS 13 Ventura or newer with Python 3.11+ installed.
+jobs need a self-hosted Intel Mac runner labelled `self-hosted`, `macOS`, and
+`X64`, with Python 3.11+ installed. Whiteboard 0.1.13 supports macOS 12 through
+Electron 43 and the temporary GitHub Actions Node 20 fallback documented in its
+release guide; Pro requires macOS 13.5+ and Actions Runner 2.327.1+.
 
 ## Local development
 
-- **Prerequisite:** Node.js 22.12+ (Electron 44 / Vite 8) and Python 3.11+.
-- **Core:** `pip install -e ./logosforge[export]`
+- **Prerequisite:** Node.js 22.12+ (Whiteboard Electron 43, Pro Electron 44,
+  Vite 8) and Python 3.11+.
+- **Core:** `pip install -e ./logosforge[export,mcp]`
 - **Whiteboard desktop:** `cd whiteboard-desktop/desktop && npm install && npm run dev` (spawns the wrapper backend from `whiteboard-desktop/backend/.venv`; run `pip install -r whiteboard-desktop/backend/requirements.txt` in that venv first).
-- **Pro desktop:** `cd pro-desktop && npm install && npm run dev`
+- **Pro desktop:** install `logosforge-ui-contracts`, `pro-shared-ui`, then
+  `pro-desktop` dependencies; run `npm run dev` from `pro-desktop` (see its
+  README for the exact clean-checkout commands). Native Pro packages expose a
+  local, descriptor-authenticated MCP companion at a stable per-user path for
+  Codex orchestration, including portable EXE and AppImage builds.
 
 ## Status
 
-**Alpha.** Desktop builds are currently **unsigned** — Windows SmartScreen and macOS Gatekeeper will warn (on macOS, clear quarantine with `xattr -cr "/Applications/LogosForge Whiteboard.app"`). Whiteboard ships Windows, macOS 13+ Intel, and Linux x64 as a self-contained AppImage (`chmod +x "LogosForge Whiteboard-X.Y.Z-x86_64.AppImage"`, then run it). macOS arm64/universal, Linux `.deb`, and Pro's Mac/Linux are later milestones.
+**Alpha.** Desktop builds are currently **unsigned** — Windows SmartScreen and
+macOS Gatekeeper will warn. Whiteboard and Pro have native Windows x64, macOS
+Intel, and Linux x64 release paths; Whiteboard supports macOS 12+, while Pro
+requires macOS 13+. Linux ships as a self-contained AppImage. macOS
+arm64/universal, signed/notarized builds, and Linux `.deb` packages remain later
+milestones. Native artifacts require target-system manual acceptance before
+publishing.

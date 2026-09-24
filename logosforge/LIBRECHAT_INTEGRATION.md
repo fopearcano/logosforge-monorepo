@@ -1,10 +1,10 @@
 # LibreChat integration (optional advanced chat sidecar)
 
 LibreChat is an **optional** advanced conversational workspace that LogosForge
-can detect, connect to, embed (or open in the browser), and — in a future
-phase — let talk back to LogosForge through a safe bridge. It is **off by
-default**; LogosForge behaves exactly as before until you enable it, and stays
-fully functional if LibreChat is never installed.
+can detect, connect to, embed (or open in the browser), and connect to the Pro
+API through the LogosForge MCP gateway. It is **off by default**; LogosForge
+behaves exactly as before until you enable it, and stays fully functional if
+LibreChat is never installed.
 
 It does **not** replace the existing **Chat** section, the AI Assistant, Billy,
 Logos, COUNTERPART, inline editing, or any narrative-aware AI feature. A new
@@ -36,10 +36,10 @@ React code or its infrastructure (MongoDB / Meilisearch / Docker / Redis).
 │        └─ embedded QWebEngineView OR system browser ─────────────────────────────────►  │
 │                                                                                         │
 │  bridge.LogosForgeBridge (adapter boundary)  ──>  connector_registry / connector_executor│
-│        (read context · propose · apply confirmed)        (the existing safe action layer)│
+│        (desktop/internal adapter)                         (the existing safe action layer)│
 └─────────────────────────────────────────────────────────────────────────────────────────┘
-                                   ▲ (future)
-        LibreChat Agent ──OpenAPI / MCP──┘  calls the same bridge operations
+                                   ▲
+        LibreChat/Codex ──MCP stdio gateway──> Pro API (validated reads and proposals)
 ```
 
 ---
@@ -100,63 +100,49 @@ LibreChat to launch.
 
 ---
 
-## 5. The LogosForge bridge (future OpenAPI / MCP boundary)
+## 5. The LogosForge bridge and Pro MCP gateway
 
-`logosforge/librechat/bridge.py` defines `LogosForgeBridge` — the **only**
-sanctioned surface a future LibreChat agent will use. `LocalBridge` implements
-it as a **thin, validated adapter over the existing safe connector layer**
-(`connector_registry` + `connector_executor`, wrapped by
-`logosforge.api.actions.run_action`). Operations:
+`logosforge/librechat/bridge.py` remains the validated in-process adapter used
+by desktop integration. External agents use the dedicated, stateful MCP server
+in `logosforge/librechat/mcp_server.py`. It delegates to the supported FastAPI
+routes through `logosforge/librechat/api_client.py`; it never opens the SQLite
+database or exposes arbitrary HTTP, filesystem, or Python execution.
 
-* **Read context** — `get_project_context`, `get_current_scene`,
-  `get_current_selection`, `search_psyke`, `get_entity_context`,
-  `get_outline_context` → registered **read** actions (always permitted).
-* **Propose (validated, NOT applied)** — `propose_edit`,
-  `propose_outline_change`, `propose_psyke_entry` → return an `ActionProposal`
-  validated against the registry.
-* **Apply** — `apply_confirmed_action(action, args, confirmed=True)` runs a
-  previously-confirmed action through the connector, which still enforces the
-  desktop write settings (`connector_enabled` / `connector_allow_writes` /
-  `connector_confirm_writes`).
+MCP reads cover complete revisioned scenes, outline and PSYKE data, notes,
+search, events, diagnostics, exports, and desktop live context when available.
+Writes use focused `logosforge_propose_*` tools. Each proposal stores the exact
+validated request and stale-state guard under an opaque, expiring id. Only
+`logosforge_apply_proposal(proposal_id)` can apply that stored request, and a
+proposal is single-use. There is no generic action tool and no
+`confirmed=true` shortcut.
 
-So a write needs **both** explicit confirmation **and** the connector
-write-settings gate — the bridge never bypasses propose → confirm → apply, and
-never exposes filesystem access, direct DB access, arbitrary Python, or
-unconfirmed destructive actions. All input from LibreChat is treated as
-untrusted and validated.
+Writes are disabled by default. They require the explicit MCP write gate and,
+by default, a shared API token; scene writes also require the current revision
+so the API can reject stale prose atomically. Configure the MCP client to ask
+for approval before invoking the apply tool.
 
-A **read-only proof of concept already works over the existing OpenAPI**: the
-FastAPI server (`python -m logosforge.api`, `127.0.0.1:8765`, desktop mode =
-localhost-only CORS) exposes `POST /projects/{id}/connector/execute` and
-`GET /projects/{id}/connector/actions`, which run the same registry actions.
+See [Pro MCP gateway](docs/MCP_GATEWAY.md) for the complete tool model,
+environment variables, Codex setup, remote-host restrictions, and checkpoint
+limitations.
 
-### LogosForge MCP server (scaffolded)
+Native Pro packages already contain this gateway. On launch, Pro installs a
+small console companion at a stable per-user path, so this also works when the
+GUI is a portable EXE or AppImage. With the Pro GUI running, a local MCP client
+launches that companion; Pro supplies its dynamic loopback endpoint and
+per-process token through a private, nonce-verified runtime descriptor. The
+source commands below remain useful for development and for a separately
+hosted API.
 
-`logosforge/librechat/mcp_server.py` is a small **MCP server** that exposes the
-bridge operations to LibreChat as named tools. It **delegates to the FastAPI
-connector endpoints** over localhost (via `logosforge/librechat/api_client.py`),
-so it never touches the database directly and reuses the safe action layer — and
-the desktop app stays the single DB owner.
-
-**Tools (1:1 with the bridge):** `logosforge_get_project_context`,
-`logosforge_get_outline_context`, `logosforge_get_scene`, `logosforge_search`,
-`logosforge_list_characters`, `logosforge_list_psyke_entries`,
-`logosforge_propose_psyke_entry`, `logosforge_propose_scene`,
-`logosforge_propose_rename_scene`, `logosforge_apply_confirmed_action`.
-
-`propose_*` tools return an **un-applied** proposal. `apply_confirmed_action`
-requires `confirmed=true` **and** is still gated by the connector write settings
-on the API side — so an external agent cannot mutate the project unconfirmed.
-
-**Run it** (the `mcp` SDK is optional — `pip install mcp`):
+**Run it** (install the optional dependency with `pip install -e ".[mcp]"`):
 
 ```bash
 # 1. Start the LogosForge API (separate process; localhost, desktop mode):
 python -m logosforge.api
 
 # 2. Run the MCP server (stdio), pointed at that API + a project id:
-LOGOSFORGE_API_URL=http://127.0.0.1:8765 LOGOSFORGE_PROJECT_ID=1 \
-  python -m logosforge.librechat.mcp_server
+LOGOSFORGE_API_URL=http://127.0.0.1:8765 \
+LOGOSFORGE_PROJECT_ID=1 LOGOSFORGE_MCP_ALLOW_WRITES=0 \
+python -m logosforge.librechat.mcp_server
 ```
 
 **Register it in LibreChat** (`librechat.yaml`):
@@ -169,15 +155,15 @@ mcpServers:
     env:
       LOGOSFORGE_API_URL: "http://127.0.0.1:8765"
       LOGOSFORGE_PROJECT_ID: "1"
-      # LOGOSFORGE_API_TOKEN: "<token>"   # only if the API is started with one
+      LOGOSFORGE_MCP_ALLOW_WRITES: "0"
+      # LOGOSFORGE_API_TOKEN: "<token>"
 ```
 
 Then attach these tools to a LibreChat **Agent**.
 
-**Alternative (OpenAPI Action):** for a quick smoke test you can instead register
-a LibreChat Agent "OpenAPI Action" against `http://127.0.0.1:8765` using the
-connector endpoints directly — but the MCP server gives the agent better,
-named, per-operation tools and is the recommended durable path.
+The named MCP surface is preferred to registering the full OpenAPI surface as
+an agent action: its schemas are narrower, it separates review from mutation,
+and it keeps pending proposal state inside the gateway process.
 
 ### In-process API hosting + LIVE context
 
@@ -246,13 +232,12 @@ later behind the same `LibreChatService` interface.
 ## 7. Why LibreChat does not access the LogosForge database
 
 LogosForge stays the single source of truth for project state. Going through
-the Python services / FastAPI / connector layer (rather than the SQLite file)
-guarantees: input validation, the registered-action allow-list, the
-read/write-settings gate, propose → confirm → apply confirmation, and event
-publication on change. Direct DB access would bypass every one of these
-safeguards and let an external chat tool silently corrupt or exfiltrate project
-data. The bridge boundary keeps LibreChat as an *interface*, never an
-*authority*.
+the Python services and FastAPI layer (rather than the SQLite file) preserves
+DTO validation, revision checks, service invariants, and event publication.
+The MCP gateway adds its own named-tool allow-list and stateful propose → review
+→ apply boundary. Direct DB access would bypass those safeguards and could let
+an external chat tool silently corrupt or exfiltrate project data. The gateway
+keeps LibreChat as an *interface*, never an *authority*.
 
 ---
 
@@ -260,9 +245,11 @@ data. The bridge boundary keeps LibreChat as an *interface*, never an
 
 * The embedded view shows the LibreChat web app as-is; visual theming matches
   LogosForge only at the panel chrome level (no LibreChat fork).
-* The bridge is wired in-process and over the existing OpenAPI for reads; the
-  dedicated **MCP server** and a LibreChat-side **OpenAPI Action** package are
-  future work (see §5).
+* The MCP gateway is stdio-only. The MCP client is responsible for launching
+  it and keeping the process alive while proposals are pending.
+* Project export is a manual checkpoint, not an automatic transactional
+  rollback. Manuscript imports and delete operations are intentionally not
+  exposed as MCP tools.
 * Auto-launch covers only a simple local startup command; Docker-stack
   orchestration is deferred (§6).
 * `get_entity_context` for non-character PSYKE types filters the full entry
