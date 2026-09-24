@@ -16,6 +16,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { isModalDialogOpen } from '../../components/useModalDialog';
 import {
+  captureDocumentIdentity,
   captureDocumentIncarnation,
   flushPendingDocSaves,
   getCurrentDocId,
@@ -52,9 +53,15 @@ import {
 import { onMenuFile } from './fileApi';
 import { exportSave, importConfirmMode, importOpen } from './importExportApi';
 import {
+  applyRecoveryImport,
+  confirmRecoveryImportSteps,
+  runRecoveryImportAfterPreflight,
+} from './recoveryImportApplication';
+import {
   EXPORT_BY_ID,
   IMPORT_BY_ID,
   ImportError,
+  assertRecoveryImportTargetStillActive,
   buildExport,
   parseImport,
   suggestedExportName,
@@ -64,6 +71,8 @@ import {
   type ImportFormatDef,
   type ImportFormatId,
   type ImportResult,
+  type RecoveryImportDescriptor,
+  type RecoveryImportTarget,
 } from './importExportFormats';
 
 export interface ImportExportFeedback {
@@ -75,15 +84,25 @@ interface Options {
   baseUrl: string;
   getBlocks: () => WhiteboardBlock[];
   applySettings: (s: Partial<DocumentSettings>) => void;
-  loadBlocks: (blocks: WhiteboardBlock[]) => void;
+  loadBlocks: (blocks: WhiteboardBlock[]) => boolean;
   setMode: (mode: string) => Promise<boolean>;
+  setTitle: (title: string) => Promise<boolean>;
   markDirty: () => void;
   confirmProceedPastUnsavedChanges: (reason: string) => Promise<boolean>;
 }
 
+export interface RecoveryImportConfirmation {
+  title: string;
+  message: string;
+  confirmLabel: string;
+}
+
 export interface ImportExportApi {
   feedback: ImportExportFeedback | null;
+  recoveryConfirmation: RecoveryImportConfirmation | null;
   clearFeedback: () => void;
+  confirmRecoveryImport: () => void;
+  cancelRecoveryImport: () => void;
   runImport: (id: ImportFormatId) => void;
   runExport: (id: ExportFormatId) => void;
 }
@@ -146,11 +165,83 @@ export function useImportExport(opts: Options): ImportExportApi {
   optsRef.current = opts;
 
   const [feedback, setFeedback] = useState<ImportExportFeedback | null>(null);
+  const [recoveryConfirmation, setRecoveryConfirmation] =
+    useState<RecoveryImportConfirmation | null>(null);
+  const recoveryConfirmationResolver = useRef<((confirmed: boolean) => void) | null>(null);
 
   const say = useCallback((kind: 'ok' | 'error', message: string) => {
     setFeedback({ kind, message });
   }, []);
   const clearFeedback = useCallback(() => setFeedback(null), []);
+
+  const settleRecoveryConfirmation = useCallback((confirmed: boolean) => {
+    const resolve = recoveryConfirmationResolver.current;
+    recoveryConfirmationResolver.current = null;
+    setRecoveryConfirmation(null);
+    resolve?.(confirmed);
+  }, []);
+  const confirmRecoveryImport = useCallback(
+    () => settleRecoveryConfirmation(true),
+    [settleRecoveryConfirmation],
+  );
+  const cancelRecoveryImport = useCallback(
+    () => settleRecoveryConfirmation(false),
+    [settleRecoveryConfirmation],
+  );
+  const requestRecoveryConfirmation = useCallback(
+    (
+      recovery: RecoveryImportDescriptor,
+      sourceName: string | undefined,
+      target: RecoveryImportTarget,
+      mismatchWarning = false,
+    ): Promise<boolean> => {
+      recoveryConfirmationResolver.current?.(false);
+      const scope = recovery.scope === 'whiteboard' ? 'manuscript recovery' : 'outline recovery';
+      const replacement = recovery.scope === 'whiteboard'
+        ? 'This replaces the manuscript, title, writing mode, and document settings. The outline is not changed.'
+        : 'This replaces the entire outline. The manuscript, title, writing mode, and document settings are not changed.';
+      if (mismatchWarning) {
+        const sourceIdentity = recovery.incarnation
+          ? `document ${recovery.documentId}, incarnation ${recovery.incarnation.slice(0, 12)}…`
+          : `document ${recovery.documentId}, unknown legacy incarnation`;
+        setRecoveryConfirmation({
+          title: 'Restore into a different document?',
+          message:
+            `Source recovery: ${sourceIdentity}. Active target: document ${target.documentId}, `
+            + `incarnation ${target.incarnation.slice(0, 12)}…. Continuing copies only the recovered `
+            + `content into the active target; source ids, revisions, session, and conflict receipt are ignored. `
+            + replacement,
+          confirmLabel: 'Restore into active document',
+        });
+        return new Promise<boolean>((resolve) => {
+          recoveryConfirmationResolver.current = resolve;
+        });
+      }
+      const provenance = recovery.incarnation
+        ? `for document ${recovery.documentId} and its recorded source incarnation`
+        : `for document ${recovery.documentId}; this legacy file does not record a source incarnation`;
+      setRecoveryConfirmation({
+        title: recovery.scope === 'whiteboard'
+          ? 'Restore manuscript recovery?'
+          : 'Restore outline recovery?',
+        message:
+          `${sourceName ? `“${sourceName}”` : 'This file'} is a ${scope} ${provenance}. ${replacement} `
+          + 'Pending changes will be saved first, and nothing is overwritten unless you confirm.',
+        confirmLabel: recovery.scope === 'whiteboard'
+          ? 'Restore manuscript'
+          : 'Restore outline',
+      });
+      return new Promise<boolean>((resolve) => {
+        recoveryConfirmationResolver.current = resolve;
+      });
+    },
+    [],
+  );
+
+  useEffect(() => () => {
+    recoveryConfirmationResolver.current?.(false);
+    recoveryConfirmationResolver.current = null;
+  }, []);
 
   // --- apply an import to the editor -----------------------------------------
   const restoreOutline = useCallback(async (documentId: string, outline: OutlineNode[]) => {
@@ -229,6 +320,16 @@ export function useImportExport(opts: Options): ImportExportApi {
     ) => {
       const o = optsRef.current;
       const warnings: string[] = [];
+      if (parsed.recovery) {
+        await applyRecoveryImport(
+          parsed.recovery.scope === 'whiteboard'
+            ? { ...parsed, blocks: withStableIds(parsed.blocks) }
+            : parsed,
+          targetDocumentId,
+          { ...o, restoreOutline },
+        );
+        return warnings;
+      }
       if (mode === 'replace') {
         const targetMode = parsed.mode ?? def.forcesMode;
         if (parsed.settings) o.applySettings(parsed.settings);
@@ -274,6 +375,7 @@ export function useImportExport(opts: Options): ImportExportApi {
     async (id: ImportFormatId) => {
       const def = IMPORT_BY_ID.get(id);
       if (!def) return;
+      let recoveryAttempt = false;
       try {
         const res = await importOpen(def.filters);
         if (res.canceled) return;
@@ -290,9 +392,37 @@ export function useImportExport(opts: Options): ImportExportApi {
           return;
         }
 
-        const applyMode = await importConfirmMode();
-        if (applyMode === 'cancel') return;
-        if (applyMode === 'replace') {
+        recoveryAttempt = parsed.recovery !== undefined;
+        let applyMode: 'replace' | 'append';
+        let recoveryTarget: RecoveryImportTarget | null = null;
+        if (parsed.recovery) {
+          recoveryTarget = captureDocumentIdentity();
+          if (!recoveryTarget.documentId || !recoveryTarget.incarnation) {
+            throw new ImportError('Open a document before restoring a recovery file. Nothing was changed.');
+          }
+          if (parsed.recovery.scope === 'whiteboard') {
+            const ok = await optsRef.current.confirmProceedPastUnsavedChanges(
+              'Save file changes before restoring this manuscript recovery?',
+            );
+            if (!ok) return;
+          }
+          if (!await confirmRecoveryImportSteps(
+            parsed.recovery,
+            recoveryTarget,
+            (step) => requestRecoveryConfirmation(
+              parsed.recovery as RecoveryImportDescriptor,
+              res.fileName,
+              recoveryTarget as RecoveryImportTarget,
+              step === 'retarget',
+            ),
+          )) return;
+          applyMode = 'replace';
+        } else {
+          const selectedMode = await importConfirmMode();
+          if (selectedMode === 'cancel') return;
+          applyMode = selectedMode;
+        }
+        if (!parsed.recovery && applyMode === 'replace') {
           const ok = await optsRef.current.confirmProceedPastUnsavedChanges(
             'Importing will replace the current document. Save changes first?',
           );
@@ -304,11 +434,31 @@ export function useImportExport(opts: Options): ImportExportApi {
         // id instead of consulting mutable global state between awaits.
         const finishImport = await acquireTrackedDocumentOperation();
         const releaseImportInteraction = lockDocumentInteraction();
-        let warnings: string[];
+        let warnings: string[] = [];
         try {
-          const targetDocumentId = getCurrentDocId();
+          const targetDocumentId = recoveryTarget?.documentId ?? getCurrentDocId();
           if (!targetDocumentId) throw new Error('No active document to import into.');
-          warnings = await applyImport(def, parsed, applyMode, targetDocumentId);
+          if (parsed.recovery) {
+            // Recheck after every dialog and after acquiring the interaction
+            // lock. A document switch while the picker/confirm was open must
+            // never retarget recovery bytes into the newly active project.
+            await runRecoveryImportAfterPreflight(
+              () => assertRecoveryImportTargetStillActive(
+                recoveryTarget as RecoveryImportTarget,
+                getCurrentDocId(),
+                captureDocumentIncarnation(targetDocumentId),
+              ),
+              // Do not overwrite an unpersisted edit or active conflict. A copy
+              // can be restored after the protected draft is explicitly resolved;
+              // a failing drain runs no recovery mutation.
+              flushPendingDocSaves,
+              async () => {
+                warnings = await applyImport(def, parsed, applyMode, targetDocumentId);
+              },
+            );
+          } else {
+            warnings = await applyImport(def, parsed, applyMode, targetDocumentId);
+          }
           // Confirm that every imported snapshot reached the local backend
           // before claiming success. A failed flush retains it for retry.
           await flushPendingDocSaves();
@@ -316,7 +466,9 @@ export function useImportExport(opts: Options): ImportExportApi {
           releaseImportInteraction();
           finishImport();
         }
-        const summary = `Imported ${res.fileName ?? 'file'} (${applyMode === 'replace' ? 'replaced' : 'appended'}).`;
+        const summary = parsed.recovery
+          ? `Restored ${parsed.recovery.scope === 'whiteboard' ? 'manuscript' : 'outline'} recovery from ${res.fileName ?? 'file'}.`
+          : `Imported ${res.fileName ?? 'file'} (${applyMode === 'replace' ? 'replaced' : 'appended'}).`;
         if (warnings.length) {
           say('error', `${summary} Could not restore: ${warnings.join(', ')}.`);
         } else {
@@ -324,10 +476,14 @@ export function useImportExport(opts: Options): ImportExportApi {
         }
       } catch (err) {
         console.error('[import] failed:', err);
-        say('error', 'Import failed.');
+        const detail = err instanceof Error ? err.message : '';
+        say(
+          'error',
+          `${recoveryAttempt ? 'Recovery restore' : 'Import'} failed${detail ? `: ${detail}` : '.'}`,
+        );
       }
     },
-    [applyImport, say],
+    [applyImport, requestRecoveryConfirmation, say],
   );
 
   // --- export flow -----------------------------------------------------------
@@ -442,5 +598,13 @@ export function useImportExport(opts: Options): ImportExportApi {
     [doImport, doExport],
   );
 
-  return { feedback, clearFeedback, runImport, runExport };
+  return {
+    feedback,
+    recoveryConfirmation,
+    clearFeedback,
+    confirmRecoveryImport,
+    cancelRecoveryImport,
+    runImport,
+    runExport,
+  };
 }

@@ -7,6 +7,7 @@ import {
   subscribePendingDocumentRecoveries,
 } from '../api/pendingDocumentPersistence';
 import { exportSave } from '../features/files/importExportApi';
+import { pendingDocumentRecoveryEnvelope } from '../features/files/pendingRecoveryCopy';
 import {
   captureDocumentIncarnation,
   flushPendingDocSaves,
@@ -48,12 +49,7 @@ export function PendingDocumentRecoveryBanner() {
     setBusy(true);
     setFeedback(null);
     try {
-      const content = JSON.stringify({
-        format: 'logosforge-pending-document-recovery',
-        version: 1,
-        exported_at: new Date().toISOString(),
-        recovery,
-      }, null, 2);
+      const content = JSON.stringify(pendingDocumentRecoveryEnvelope(recovery));
       const result = await exportSave(
         content,
         `logosforge-${recovery.kind}-${recovery.documentId}-recovery.json`,

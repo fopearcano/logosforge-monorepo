@@ -125,7 +125,7 @@ interface Result {
   selectDocument: (id: string) => Promise<boolean>;
   newDocument: (title?: string, mode?: string) => Promise<boolean>;
   deleteDocument: (id: string) => Promise<boolean>;
-  renameDocument: (title: string) => void;
+  renameDocument: (title: string) => Promise<boolean>;
 }
 
 export function useWhiteboardDocument({ baseUrl, ready, onSaved }: Options): Result {
@@ -643,7 +643,7 @@ export function useWhiteboardDocument({ baseUrl, ready, onSaved }: Options): Res
 
   const renameDocument = useCallback(
     async (title: string) => {
-      if (!canStartDocumentMutationDuringClose()) return;
+      if (!canStartDocumentMutationDuringClose()) return false;
       const next = title.trim() || 'Untitled';
       const operationDocId = getCurrentDocId();
       setDoc((prev) => (prev ? { ...prev, title: next } : prev));
@@ -654,20 +654,22 @@ export function useWhiteboardDocument({ baseUrl, ready, onSaved }: Options): Res
         if (
           operationDocId !== getCurrentDocId()
           || !isActiveDocumentOperationOwner(lifecycleOwner)
-        ) return;
+        ) return false;
         setLoadError(null);
         await refreshList();
+        return true;
       } catch (err) {
         if (
           operationDocId !== getCurrentDocId()
           || !isActiveDocumentOperationOwner(lifecycleOwner)
-        ) return;
+        ) return false;
         // The shared outbox already retains the newest title. Keep the writer's
         // latest intent visible and retryable instead of overwriting it with an
         // older optimistic rollback from another in-flight rename.
         setLoadError(isPersistenceRecoveryError(err)
           ? REVISION_CONFLICT_MESSAGE
           : `Rename stopped: ${err instanceof Error ? err.message : String(err)}`);
+        return false;
       }
     },
     [flushDocument, lifecycleOwner, queuePatch, refreshList],

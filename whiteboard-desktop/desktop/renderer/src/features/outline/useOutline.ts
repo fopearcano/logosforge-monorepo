@@ -46,7 +46,9 @@ import {
   queueOutlineSnapshot,
 } from './pendingOutlineRecovery';
 import { isPersistenceRecoveryError } from '../../api/responseError';
+import { requireResourceRevision } from '../../api/resourceRevision';
 import { OutlineLoadCoordinator } from './outlineLoadCoordinator';
+import { outlineConflictEnvelope } from './outlineConflictCopy';
 import { publishOutlineColors } from './outlineColorStore';
 import { instantiateTemplate, type OutlineTemplate } from './outlineTemplates';
 import * as M from './outlineModel';
@@ -374,14 +376,12 @@ export function useOutline({ baseUrl, ready, mode }: Options): OutlineStore {
   const saveConflictCopy = useCallback(async (): Promise<boolean> => {
     const documentId = loadedDocIdRef.current;
     if (!documentId || !outlineRevisionConflict(documentId)) return false;
-    const content = JSON.stringify({
-      format: 'logosforge-whiteboard-outline-conflict',
-      version: 1,
-      document_id: documentId,
-      exported_at: new Date().toISOString(),
-      items: itemsRef.current,
-    }, null, 2);
     try {
+      const incarnation = captureDocumentIncarnation(documentId);
+      const baseRevision = requireResourceRevision('outline', documentId, incarnation);
+      const content = JSON.stringify(
+        outlineConflictEnvelope(documentId, incarnation, baseRevision, itemsRef.current),
+      );
       const result = await exportSave(
         content,
         `outline-${documentId}-conflict.json`,

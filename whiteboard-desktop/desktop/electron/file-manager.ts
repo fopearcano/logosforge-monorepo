@@ -9,6 +9,7 @@ import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 
 import { atomicWriteTextFile } from './atomic-file-save';
+import { readBoundedImportTextFile } from './import-file-limit';
 
 export interface OpenResult {
   ok: boolean;
@@ -121,7 +122,15 @@ export async function openImportDialog(
     const options = { properties: ['openFile' as const], filters };
     const res = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options);
     if (res.canceled || res.filePaths.length === 0) return { ok: true, canceled: true };
-    return readFileFromPath(res.filePaths[0]);
+    const filePath = res.filePaths[0];
+    const content = await readBoundedImportTextFile(filePath);
+    return {
+      ok: true,
+      canceled: false,
+      filePath,
+      fileName: path.basename(filePath),
+      content,
+    };
   } catch (err) {
     console.error('[import] open dialog error:', err);
     return { ok: false, error: String(err) };

@@ -51,6 +51,31 @@ export interface PendingDocumentConflictRecovery extends PendingDocumentConflict
   };
 }
 
+export type PendingDocumentRecoveryJournalErrorType = 'revision_conflict' | 'terminal';
+
+export interface PendingDocumentRecoveryJournalEntry {
+  recovery: PendingDocumentConflictRecovery;
+  dispatchSequence: number;
+  errorType: PendingDocumentRecoveryJournalErrorType;
+}
+
+export interface PendingDocumentRecoveryJournalSnapshot {
+  schemaVersion: 1;
+  nextConflictId: number;
+  dispatchSequences: Array<{
+    kind: PendingDocumentKind;
+    documentId: string;
+    sequence: number;
+  }>;
+  entries: PendingDocumentRecoveryJournalEntry[];
+}
+
+/** Synchronous by design: conflict receipts are not returned before durability. */
+export interface PendingDocumentRecoveryJournal {
+  load(): PendingDocumentRecoveryJournalSnapshot | null;
+  replace(snapshot: PendingDocumentRecoveryJournalSnapshot): void;
+}
+
 export interface PendingDocumentConflictUpdateResult {
   ok: boolean;
   recovery?: PendingDocumentConflictReceipt;
@@ -251,6 +276,180 @@ export function buildPendingDocumentHttpRequest(
   };
 }
 
+function validateBoundedJournalString(
+  value: unknown,
+  label: string,
+  maxLength: number,
+): string {
+  if (typeof value !== 'string' || !value.length || value.length > maxLength) {
+    throw new Error(`Invalid pending-document recovery ${label}.`);
+  }
+  return value;
+}
+
+function parseConflictSequence(value: string): number {
+  const match = /^main_conflict_([1-9]\d*)$/.exec(value);
+  if (!match) throw new Error('Invalid pending-document recovery conflict id.');
+  const sequence = Number(match[1]);
+  if (!Number.isSafeInteger(sequence) || sequence < 1) {
+    throw new Error('Invalid pending-document recovery conflict id.');
+  }
+  return sequence;
+}
+
+/** Revalidate all journal data at the trust boundary before startup hydration. */
+export function validatePendingDocumentRecoveryJournalSnapshot(
+  value: unknown,
+): PendingDocumentRecoveryJournalSnapshot {
+  if (
+    !isRecord(value)
+    || value.schemaVersion !== 1
+    || !Number.isSafeInteger(value.nextConflictId)
+    || (value.nextConflictId as number) < 0
+    || !Array.isArray(value.dispatchSequences)
+    || !Array.isArray(value.entries)
+  ) {
+    throw new Error('Invalid pending-document recovery journal schema.');
+  }
+  if (value.entries.length > 10_000 || value.dispatchSequences.length > 20_000) {
+    throw new Error('Pending-document recovery journal contains too many entries.');
+  }
+
+  const dispatchIdentities = new Set<string>();
+  const dispatchWatermarks = new Map<string, number>();
+  const dispatchSequences = value.dispatchSequences.map((item) => {
+    if (!isRecord(item) || (item.kind !== 'whiteboard' && item.kind !== 'outline')) {
+      throw new Error('Invalid pending-document recovery dispatch watermark.');
+    }
+    const documentId = validatePendingDocumentId(item.documentId);
+    if (!Number.isSafeInteger(item.sequence) || (item.sequence as number) < 1) {
+      throw new Error('Invalid pending-document recovery dispatch watermark.');
+    }
+    const identity = `${item.kind}:${documentId}`;
+    if (dispatchIdentities.has(identity)) {
+      throw new Error('Duplicate pending-document recovery dispatch watermark.');
+    }
+    dispatchIdentities.add(identity);
+    dispatchWatermarks.set(identity, item.sequence as number);
+    return {
+      kind: item.kind as PendingDocumentKind,
+      documentId,
+      sequence: item.sequence as number,
+    };
+  });
+
+  const identities = new Set<string>();
+  const conflictIds = new Set<string>();
+  const entries = value.entries.map((entryValue): PendingDocumentRecoveryJournalEntry => {
+    if (!isRecord(entryValue)) throw new Error('Invalid pending-document recovery entry.');
+    const receiptValue = isRecord(entryValue.recovery) ? entryValue.recovery : null;
+    if (!receiptValue) throw new Error('Invalid pending-document recovery receipt.');
+    const receipt = {
+      conflictId: validateBoundedJournalString(
+        receiptValue.conflictId,
+        'conflict id',
+        64,
+      ),
+      version: receiptValue.version,
+      kind: receiptValue.kind,
+      documentId: receiptValue.documentId,
+      incarnation: receiptValue.incarnation,
+    };
+    const conflictSequence = parseConflictSequence(receipt.conflictId);
+    if (conflictSequence > (value.nextConflictId as number)) {
+      throw new Error('Pending-document recovery conflict id exceeds its journal watermark.');
+    }
+    if (!Number.isSafeInteger(receipt.version) || (receipt.version as number) < 1) {
+      throw new Error('Invalid pending-document recovery conflict version.');
+    }
+    if (receipt.kind !== 'whiteboard' && receipt.kind !== 'outline') {
+      throw new Error('Invalid pending-document recovery kind.');
+    }
+    const kind = receipt.kind;
+    const documentId = validatePendingDocumentId(receipt.documentId);
+    const incarnation = validatePendingDocumentIncarnation(receipt.incarnation);
+    const write = validatePendingDocumentWrite(receiptValue.write);
+    if (
+      write.kind !== kind
+      || write.documentId !== documentId
+      || write.incarnation !== incarnation
+    ) {
+      throw new Error('Pending-document recovery identity does not match its write.');
+    }
+
+    const dispatchSequence = entryValue.dispatchSequence;
+    if (!Number.isSafeInteger(dispatchSequence) || (dispatchSequence as number) < 1) {
+      throw new Error('Invalid pending-document recovery dispatch sequence.');
+    }
+    if ((dispatchWatermarks.get(`${kind}:${documentId}`) ?? 0) < (dispatchSequence as number)) {
+      throw new Error('Recovery dispatch sequence exceeds its journal watermark.');
+    }
+    if (entryValue.errorType !== 'revision_conflict' && entryValue.errorType !== 'terminal') {
+      throw new Error('Invalid pending-document recovery error type.');
+    }
+    if (!isRecord(receiptValue.error)) {
+      throw new Error('Invalid pending-document recovery error.');
+    }
+    const errorValue = receiptValue.error;
+    const code = validateBoundedJournalString(errorValue.code, 'error code', 128);
+    if (!/^[a-z][a-z0-9_]*$/.test(code)) {
+      throw new Error('Invalid pending-document recovery error code.');
+    }
+    const status = errorValue.status;
+    if (
+      !Number.isSafeInteger(status)
+      || (status as number) < 400
+      || (status as number) > 499
+    ) {
+      throw new Error('Invalid pending-document recovery status.');
+    }
+    const message = validateBoundedJournalString(errorValue.message, 'error message', 8_192);
+    let error: PendingDocumentConflictRecovery['error'];
+    if (entryValue.errorType === 'revision_conflict') {
+      if (code !== 'revision_conflict' || status !== 409) {
+        throw new Error('Invalid revision-conflict recovery error.');
+      }
+      const currentRevision = validateResourceRevision(errorValue.currentRevision);
+      const currentEtag = validateBoundedJournalString(errorValue.currentEtag, 'etag', 256);
+      if (currentEtag !== resourceEtag(kind, incarnation, currentRevision)) {
+        throw new Error('Invalid revision-conflict recovery validator.');
+      }
+      error = { code, status: 409, message, currentRevision, currentEtag };
+    } else {
+      if (errorValue.currentRevision !== undefined || errorValue.currentEtag !== undefined) {
+        throw new Error('Terminal recovery unexpectedly contains revision-conflict validators.');
+      }
+      error = { code, status: status as number, message };
+    }
+
+    const identity = `${kind}:${documentId}:${incarnation}`;
+    if (identities.has(identity) || conflictIds.has(receipt.conflictId)) {
+      throw new Error('Pending-document recovery journal contains duplicate entries.');
+    }
+    identities.add(identity);
+    conflictIds.add(receipt.conflictId);
+    return {
+      recovery: {
+        conflictId: receipt.conflictId,
+        version: receipt.version as number,
+        kind,
+        documentId,
+        incarnation,
+        write,
+        error,
+      },
+      dispatchSequence: dispatchSequence as number,
+      errorType: entryValue.errorType,
+    };
+  });
+  return {
+    schemaVersion: 1,
+    nextConflictId: value.nextConflictId as number,
+    dispatchSequences,
+    entries,
+  };
+}
+
 /**
  * Main-process FIFO for document snapshots. Normal and teardown writes share
  * this queue, so pagehide can never overtake an older renderer save. Revisions
@@ -273,6 +472,8 @@ interface PendingDocumentConflictEntry {
   error: PendingDocumentRevisionConflictError | PendingDocumentTerminalError;
 }
 
+const MAX_STRANDED_CONFLICT_RECEIPTS_PER_RESOURCE = 64;
+
 export class PendingDocumentPersistence {
   private readonly tails = new Map<string, Promise<PendingDocumentWriteSuccess>>();
   private readonly pending = new Set<Promise<PendingDocumentWriteSuccess>>();
@@ -281,6 +482,19 @@ export class PendingDocumentPersistence {
   private readonly failedLatest = new Map<string, PendingDocumentOperation>();
   private readonly deferredLatest = new Map<string, PendingDocumentOperation>();
   private readonly conflictedLatest = new Map<string, PendingDocumentConflictEntry>();
+  /** Candidate ledger states whose durable journal commit failed. */
+  private readonly uncommittedConflicts = new Map<string, PendingDocumentConflictEntry>();
+  /**
+   * Exact renderer receipts stranded by a failed journal replacement. A later
+   * local-only flush can make the candidate authoritative without returning its
+   * newer receipt to the renderer. Remember only those proven versions so a
+   * strictly newer cumulative snapshot from the same renderer session can
+   * resynchronize; arbitrary stale receipts remain rejected.
+   */
+  private readonly strandedConflictReceiptVersions = new Map<string, {
+    conflictId: string;
+    versions: Set<number>;
+  }>();
   private readonly revisionChains = new Map<string, ResourceRevisionChain>();
   private readonly nextDispatchSequence = new Map<string, number>();
   private readonly deletingDocuments = new Set<string>();
@@ -291,7 +505,53 @@ export class PendingDocumentPersistence {
   constructor(
     private readonly writer: PendingDocumentWriter,
     private readonly writerTimeoutMs = 10_000,
-  ) {}
+    private readonly recoveryJournal?: PendingDocumentRecoveryJournal,
+  ) {
+    if (!recoveryJournal) return;
+    const snapshot = recoveryJournal.load();
+    if (!snapshot) return;
+    const validated = validatePendingDocumentRecoveryJournalSnapshot(snapshot);
+    this.nextConflictId = validated.nextConflictId;
+    for (const watermark of validated.dispatchSequences) {
+      this.nextDispatchSequence.set(
+        `${watermark.kind}:${watermark.documentId}`,
+        watermark.sequence,
+      );
+    }
+    for (const journalEntry of validated.entries) {
+      const { recovery, dispatchSequence, errorType } = journalEntry;
+      const error = errorType === 'revision_conflict'
+        ? new PendingDocumentRevisionConflictError(
+          recovery.error.message,
+          recovery.error.currentRevision as string,
+          recovery.error.currentEtag as string,
+        )
+        : new PendingDocumentTerminalError(
+          recovery.error.message,
+          recovery.error.code,
+          recovery.error.status,
+        );
+      const entry: PendingDocumentConflictEntry = {
+        conflictId: recovery.conflictId,
+        version: recovery.version,
+        operation: { write: recovery.write, dispatchSequence },
+        error,
+      };
+      const key = this.conflictKey(recovery.write);
+      this.conflictedLatest.set(key, entry);
+      this.nextDispatchSequence.set(
+        this.dispatchOrderKey(recovery.write),
+        Math.max(
+          this.nextDispatchSequence.get(this.dispatchOrderKey(recovery.write)) ?? 0,
+          dispatchSequence,
+        ),
+      );
+      this.nextConflictId = Math.max(
+        this.nextConflictId,
+        parseConflictSequence(recovery.conflictId),
+      );
+    }
+  }
 
   private async writeWithDeadline(
     write: PendingDocumentWrite,
@@ -348,6 +608,124 @@ export class PendingDocumentPersistence {
     };
   }
 
+  private recoveryFromEntry(entry: PendingDocumentConflictEntry): PendingDocumentConflictRecovery {
+    const recovery = this.conflictReceipt(entry);
+    const error = entry.error instanceof PendingDocumentRevisionConflictError
+      ? {
+        code: entry.error.code,
+        status: entry.error.status,
+        message: entry.error.message,
+        currentRevision: entry.error.currentRevision,
+        currentEtag: entry.error.currentEtag,
+      }
+      : {
+        code: entry.error.code,
+        status: entry.error.status ?? 409,
+        message: entry.error.message,
+      };
+    return { ...recovery, write: entry.operation.write, error };
+  }
+
+  private journalSnapshot(
+    entries: ReadonlyMap<string, PendingDocumentConflictEntry>,
+  ): PendingDocumentRecoveryJournalSnapshot {
+    return {
+      schemaVersion: 1,
+      nextConflictId: this.nextConflictId,
+      dispatchSequences: [...this.nextDispatchSequence.entries()].map(([key, sequence]) => {
+        const separator = key.indexOf(':');
+        return {
+          kind: key.slice(0, separator) as PendingDocumentKind,
+          documentId: key.slice(separator + 1),
+          sequence,
+        };
+      }),
+      entries: [...entries.values()].map((entry) => ({
+        recovery: this.recoveryFromEntry(entry),
+        dispatchSequence: entry.operation.dispatchSequence,
+        errorType: entry.error instanceof PendingDocumentRevisionConflictError
+          ? 'revision_conflict'
+          : 'terminal',
+      })),
+    };
+  }
+
+  private replaceCommittedConflicts(
+    next: ReadonlyMap<string, PendingDocumentConflictEntry>,
+  ): void {
+    this.recoveryJournal?.replace(this.journalSnapshot(next));
+  }
+
+  private flushUncommittedConflicts(): void {
+    if (!this.uncommittedConflicts.size) return;
+    const next = new Map(this.conflictedLatest);
+    for (const [key, entry] of this.uncommittedConflicts) next.set(key, entry);
+    this.replaceCommittedConflicts(next);
+    for (const [key, entry] of this.uncommittedConflicts) {
+      this.conflictedLatest.set(key, entry);
+    }
+    this.uncommittedConflicts.clear();
+  }
+
+  private commitConflictEntry(
+    key: string,
+    entry: PendingDocumentConflictEntry,
+    acceptedReceiptVersion?: number,
+  ): void {
+    const next = new Map(this.conflictedLatest);
+    next.set(key, entry);
+    try {
+      this.replaceCommittedConflicts(next);
+    } catch (error) {
+      // Do not publish a receipt for a state that was not journaled. Keep the
+      // candidate separately so drain can retry the local journal commit
+      // without ever retrying the deterministic backend rejection.
+      this.uncommittedConflicts.set(key, entry);
+      const current = this.conflictedLatest.get(key);
+      if (current && current.conflictId === entry.conflictId) {
+        const strandedVersion = acceptedReceiptVersion ?? current.version;
+        const remembered = this.strandedConflictReceiptVersions.get(key);
+        if (remembered?.conflictId === current.conflictId) {
+          // Never evict the oldest proven renderer receipt. Repeated
+          // background snapshots can advance the locally committed generation
+          // without returning any newer receipt to that renderer; replacing a
+          // full set with those silent generations would eventually strand the
+          // only receipt the renderer can use to resynchronize.
+          if (
+            remembered.versions.size < MAX_STRANDED_CONFLICT_RECEIPTS_PER_RESOURCE
+            || remembered.versions.has(strandedVersion)
+          ) remembered.versions.add(strandedVersion);
+        } else {
+          this.strandedConflictReceiptVersions.set(key, {
+            conflictId: current.conflictId,
+            versions: new Set([strandedVersion]),
+          });
+        }
+      }
+      throw error;
+    }
+    this.conflictedLatest.set(key, entry);
+    this.uncommittedConflicts.delete(key);
+    // The caller receives this exact committed generation synchronously.
+    this.strandedConflictReceiptVersions.delete(key);
+  }
+
+  private canResynchronizeConflictReceipt(
+    key: string,
+    receipt: PendingDocumentConflictReceipt,
+    current: PendingDocumentConflictEntry,
+    write: PendingDocumentWrite,
+  ): boolean {
+    const stranded = this.strandedConflictReceiptVersions.get(key);
+    return !!stranded
+      && stranded.conflictId === receipt.conflictId
+      && stranded.versions.has(receipt.version)
+      && current.conflictId === receipt.conflictId
+      && write.sessionId === current.operation.write.sessionId
+      && write.resourceRevision === current.operation.write.resourceRevision
+      && write.revision > current.operation.write.revision;
+  }
+
   private errorWithRecovery(
     error: PendingDocumentRevisionConflictError | PendingDocumentTerminalError,
     recovery: PendingDocumentConflictReceipt,
@@ -372,6 +750,7 @@ export class PendingDocumentPersistence {
     operation: PendingDocumentOperation,
     error: PendingDocumentRevisionConflictError | PendingDocumentTerminalError,
   ): PendingDocumentRevisionConflictError | PendingDocumentTerminalError {
+    this.flushUncommittedConflicts();
     const key = this.conflictKey(operation.write);
     const current = this.conflictedLatest.get(key);
     if (current && operation.dispatchSequence < current.operation.dispatchSequence) {
@@ -389,16 +768,17 @@ export class PendingDocumentPersistence {
       },
       error,
     };
-    this.conflictedLatest.set(key, entry);
+    this.commitConflictEntry(key, entry);
     return this.errorWithRecovery(error, this.conflictReceipt(entry));
   }
 
   private validateConflictReceipt(value: unknown): PendingDocumentConflictReceipt {
     if (!isRecord(value)) throw new Error('Invalid pending-document conflict receipt.');
     const { conflictId, version, kind, documentId, incarnation } = value;
-    if (typeof conflictId !== 'string' || !/^main_conflict_[1-9]\d*$/.test(conflictId)) {
+    if (typeof conflictId !== 'string') {
       throw new Error('Invalid pending-document conflict id.');
     }
+    parseConflictSequence(conflictId);
     if (!Number.isSafeInteger(version) || (version as number) < 1) {
       throw new Error('Invalid pending-document conflict version.');
     }
@@ -470,6 +850,7 @@ export class PendingDocumentPersistence {
 
   enqueue(value: unknown): Promise<PendingDocumentWriteSuccess> {
     const write = validatePendingDocumentWrite(value);
+    this.flushUncommittedConflicts();
     if (this.deletedDocuments.has(`${write.documentId}:${write.incarnation}`)) {
       return Promise.resolve({ ok: true, resourceRevision: write.resourceRevision });
     }
@@ -609,14 +990,24 @@ export class PendingDocumentPersistence {
   commitDocumentDelete(value: unknown, incarnationValue: unknown): void {
     const documentId = validatePendingDocumentId(value);
     const incarnation = validatePendingDocumentIncarnation(incarnationValue);
+    this.flushUncommittedConflicts();
     const serialKeys = [
       `whiteboard:${documentId}:${incarnation}`,
       `outline:${documentId}:${incarnation}`,
     ];
+    const nextConflicts = new Map(this.conflictedLatest);
+    let removesRecovery = false;
+    for (const serialKey of serialKeys) {
+      removesRecovery = nextConflicts.delete(serialKey) || removesRecovery;
+    }
+    // The durable ledger must stop referencing a successfully deleted
+    // incarnation before its in-memory rescue entries or delete fence change.
+    if (removesRecovery) this.replaceCommittedConflicts(nextConflicts);
     for (const serialKey of serialKeys) {
       this.failedLatest.delete(serialKey);
       this.deferredLatest.delete(serialKey);
       this.conflictedLatest.delete(serialKey);
+      this.strandedConflictReceiptVersions.delete(serialKey);
       for (const key of this.revisionChains.keys()) {
         if (key.startsWith(`${serialKey}:`)) this.revisionChains.delete(key);
       }
@@ -659,12 +1050,14 @@ export class PendingDocumentPersistence {
     ) {
       throw new Error('Pending-document conflict update identity does not match its receipt.');
     }
+    this.flushUncommittedConflicts();
     const key = this.conflictKey(write);
     const current = this.conflictedLatest.get(key);
+    if (!current || current.conflictId !== receipt.conflictId) return { ok: false };
+    const exactReceipt = current.version === receipt.version;
     if (
-      !current
-      || current.conflictId !== receipt.conflictId
-      || current.version !== receipt.version
+      !exactReceipt
+      && !this.canResynchronizeConflictReceipt(key, receipt, current, write)
     ) return { ok: false };
 
     const payload = write.kind === 'whiteboard'
@@ -678,12 +1071,13 @@ export class PendingDocumentPersistence {
         write: { ...write, payload },
       },
     };
-    this.conflictedLatest.set(key, updated);
+    this.commitConflictEntry(key, updated, receipt.version);
     return { ok: true, recovery: this.conflictReceipt(updated) };
   }
 
   /** Remove only the precise rescue generation the renderer explicitly resolved. */
   acknowledgeConflict(value: unknown): boolean {
+    this.flushUncommittedConflicts();
     const receipt = this.validateConflictReceipt(value);
     const key = `${receipt.kind}:${receipt.documentId}:${receipt.incarnation}`;
     const current = this.conflictedLatest.get(key);
@@ -692,7 +1086,13 @@ export class PendingDocumentPersistence {
       || current.conflictId !== receipt.conflictId
       || current.version !== receipt.version
     ) return false;
+    const next = new Map(this.conflictedLatest);
+    next.delete(key);
+    // Persist removal first. A disk failure leaves the exact prior receipt
+    // authoritative both in memory and after a process restart.
+    this.replaceCommittedConflicts(next);
     this.conflictedLatest.delete(key);
+    this.strandedConflictReceiptVersions.delete(key);
     return true;
   }
 
@@ -707,23 +1107,7 @@ export class PendingDocumentPersistence {
   }
 
   listConflicts(): PendingDocumentConflictRecovery[] {
-    return [...this.conflictedLatest.values()].map((entry) => {
-      const recovery = this.conflictReceipt(entry);
-      const error = entry.error instanceof PendingDocumentRevisionConflictError
-        ? {
-          code: entry.error.code,
-          status: entry.error.status,
-          message: entry.error.message,
-          currentRevision: entry.error.currentRevision,
-          currentEtag: entry.error.currentEtag,
-        }
-        : {
-          code: entry.error.code,
-          status: entry.error.status ?? 409,
-          message: entry.error.message,
-        };
-      return { ...recovery, write: entry.operation.write, error };
-    });
+    return [...this.conflictedLatest.values()].map((entry) => this.recoveryFromEntry(entry));
   }
 
   /** Wait for active writes and retry retained uncertain failures exactly once. */
@@ -731,6 +1115,10 @@ export class PendingDocumentPersistence {
     if (this.draining) return this.draining;
     const run = (async () => {
       while (this.pending.size) await Promise.allSettled([...this.pending]);
+
+      // A previous disk error may have prevented publication of a conflict
+      // receipt. Commit that state locally before any network retry logic.
+      this.flushUncommittedConflicts();
 
       const retryErrors: unknown[] = [];
       const retries = [...this.failedLatest.entries()];
@@ -757,9 +1145,9 @@ export class PendingDocumentPersistence {
           if (isTerminalPersistenceError(error)) {
             const deferred = this.deferredLatest.get(key);
             const retained = attempted !== failed ? attempted : deferred ?? failed;
-            this.recordRecoverableConflict(retained, error);
             if (this.failedLatest.get(key) === failed) this.failedLatest.delete(key);
             this.deferredLatest.delete(key);
+            this.recordRecoverableConflict(retained, error);
           } else if (attempted !== failed) {
             // The uncertain predecessor is now durable; the deferred newest
             // snapshot becomes the retry owner if its own dispatch failed.
@@ -787,6 +1175,7 @@ export class PendingDocumentPersistence {
           'Pending document persistence failed.',
         );
       }
+      this.flushUncommittedConflicts();
     })();
     const tracked = run.finally(() => {
       if (this.draining === tracked) this.draining = null;
@@ -813,6 +1202,9 @@ export class PendingDocumentPersistence {
   }
 
   get conflictCount(): number {
-    return this.conflictedLatest.size;
+    return new Set([
+      ...this.conflictedLatest.keys(),
+      ...this.uncommittedConflicts.keys(),
+    ]).size;
   }
 }

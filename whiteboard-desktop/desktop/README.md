@@ -70,19 +70,23 @@ process also assigns stable mutation IDs so an uncertain response can be retried
 without applying the same edit twice. If another client has advanced the same
 resource, autosave pauses, keeps the local draft or outline visible, and reports
 a conflict instead of overwriting either version. Main retains a versioned,
-incarnation-scoped recovery ledger across renderer reloads; later conflict-state
-edits synchronously refresh that ledger, and shutdown fails closed until the
-exact recovery generation is resolved. Whiteboard ledger entries carry the
-complete local manuscript/title/mode/settings snapshot, not only the last field
-patch. The document conflict UI and the app-lifetime recovery banner can export
-a complete JSON rescue copy, then require confirmation before discarding or
-reloading the saved version. A reload is rejected if another local edit arrives
-while the server copy is being fetched. The MCP companion remains read-only
-while this foundation is validated; write tools will require the same
-preconditions. The recovery ledger is process-memory protection for renderer
-loss, not a power-loss journal: export an offered rescue JSON before explicitly
-discarding it. Rescue envelopes are currently archival/manual-recovery files,
-not accepted by the normal project importer.
+incarnation-scoped recovery ledger across renderer reloads and process restarts;
+later conflict-state edits synchronously commit a new crash-safe journal
+generation, and shutdown fails closed until the exact recovery generation is
+resolved. The journal keeps a previous immutable generation for corruption
+fallback and quarantines malformed data instead of silently discarding it.
+Whiteboard ledger entries carry the complete local manuscript/title/mode/settings
+snapshot, not only the last field patch. The document conflict UI and the
+app-lifetime recovery banner can export complete JSON rescue copies, then require
+confirmation before discarding or reloading the saved version. **Import
+LogosForge…** recognizes manuscript, outline, and app-lifetime recovery JSON;
+it validates their bounded structure and identity metadata, asks for an explicit
+restore confirmation (including an additional target warning when importing
+into a different document generation), and applies their content only to the
+captured active document. Imported files never acknowledge or retarget a live
+recovery receipt. A reload is rejected if another local edit arrives while the
+server copy is being fetched. The MCP companion remains read-only while this
+foundation is validated; write tools will require the same preconditions.
 
 User data defaults to `~/.logosforge` (`%USERPROFILE%\.logosforge` on Windows).
 Set `LOGOSFORGE_DATA_DIR` and `LOGOSFORGE_DB_PATH` to isolate a development or

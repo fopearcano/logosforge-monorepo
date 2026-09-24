@@ -6,6 +6,10 @@ import {
   applyRetainedWhiteboardPatch,
   type RetainedWhiteboardPatch,
 } from './pendingWhiteboardRecovery';
+import {
+  canonicalizeWhiteboardRecoveryDocument,
+  canonicalizeWhiteboardRecoveryPayload,
+} from './whiteboardRecoveryCanonical';
 
 type ConflictCopySaver = (
   content: string,
@@ -33,6 +37,13 @@ export function whiteboardConflictEnvelope(
   if (retained.documentId !== document.id) {
     throw new Error('The conflicted draft no longer belongs to the open document.');
   }
+  const merged = canonicalizeWhiteboardRecoveryDocument(
+    applyRetainedWhiteboardPatch(document, retained),
+    exportedAt,
+  );
+  const pendingPatch = canonicalizeWhiteboardRecoveryPayload(
+    retained.patch as Record<string, unknown>,
+  );
   return {
     format: 'logosforge-whiteboard-conflict',
     version: 1,
@@ -40,8 +51,8 @@ export function whiteboardConflictEnvelope(
     incarnation: document.incarnation,
     base_revision: document.revision,
     exported_at: exportedAt,
-    pending_patch: retained.patch,
-    document: applyRetainedWhiteboardPatch(document, retained),
+    pending_patch: pendingPatch,
+    document: merged,
   };
 }
 
@@ -50,7 +61,9 @@ export function saveWhiteboardConflictCopy(
   retained: RetainedWhiteboardPatch,
   save: ConflictCopySaver = exportSave,
 ): Promise<SaveResult> {
-  const content = JSON.stringify(whiteboardConflictEnvelope(document, retained), null, 2);
+  // Compact form keeps the v1 duplicate patch+merged-document envelope within
+  // the shared bounded recovery-import budget at maximum pending payload size.
+  const content = JSON.stringify(whiteboardConflictEnvelope(document, retained));
   return save(
     content,
     `whiteboard-${document.id}-conflict.json`,

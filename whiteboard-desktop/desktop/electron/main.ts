@@ -1,4 +1,11 @@
-import { app, BrowserWindow, ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  type IpcMainEvent,
+  type IpcMainInvokeEvent,
+} from 'electron';
 import * as path from 'node:path';
 
 import { BackendManager, type BackendStatus } from './backend-manager';
@@ -44,10 +51,15 @@ import {
   validatePendingDocumentIncarnation,
   validateResourceRevision,
 } from './pending-document-persistence';
+import { FilePendingDocumentRecoveryJournal } from './pending-document-recovery-journal';
 
 // Keep packaged user data under the product identity rather than the npm name.
 // This must run before the first user-data path lookup below.
 app.setName('LogosForge Whiteboard');
+// Acquire ownership before constructing any component that reads or
+// quarantines shared userData state. A losing secondary process must never
+// inspect the primary process's recovery journal.
+const ownsSingleInstance = app.requestSingleInstanceLock();
 
 const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL ?? 'http://localhost:5173';
 const isProd = app.isPackaged || process.argv.includes('--prod');
@@ -70,6 +82,9 @@ let mainWindow: BrowserWindow | null = null;
 const backend = new BackendManager({ production: isProd, mcpRuntimePath });
 const writablePaths = new PathGrantRegistry();
 const mainFileWrites = new PendingOperationTracker();
+const documentRecoveryJournal = ownsSingleInstance
+  ? new FilePendingDocumentRecoveryJournal(app.getPath('userData'))
+  : null;
 const documentPersistence = new PendingDocumentPersistence(async (
   write,
   signal,
@@ -142,7 +157,7 @@ const documentPersistence = new PendingDocumentPersistence(async (
     );
   }
   return { ok: true, resourceRevision: nextRevision };
-});
+}, 10_000, documentRecoveryJournal ?? undefined);
 const DOCUMENT_DELETE_REQUEST_TIMEOUT_MS = 10_000;
 interface ActiveDocumentDelete {
   incarnation: string;
@@ -849,7 +864,7 @@ function registerFileIpc(): void {
   });
 }
 
-if (!app.requestSingleInstanceLock()) {
+if (!ownsSingleInstance) {
   app.quit();
 } else {
   app.on('second-instance', () => {
@@ -859,6 +874,17 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(() => {
+    if (documentRecoveryJournal?.startupWarnings.length) {
+      const quarantined = documentRecoveryJournal.startupWarnings
+        .map((warning) => warning.quarantinedPath)
+        .join('\n');
+      dialog.showErrorBox(
+        'Whiteboard recovery data needs attention',
+        'A malformed recovery-journal file was preserved in quarantine. '
+          + 'Whiteboard loaded a remaining valid recovery state when one was available. Keep the quarantined '
+          + `file for manual recovery:\n\n${quarantined}`,
+      );
+    }
     if (bundledMcpPath && installedMcpPath) {
       try {
         installMcpCompanion(bundledMcpPath, installedMcpPath);

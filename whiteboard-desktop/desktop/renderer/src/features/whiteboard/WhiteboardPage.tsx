@@ -386,7 +386,10 @@ export function WhiteboardPage({
   const docIdRef = useRef<string | null>(doc?.id ?? null);
   docIdRef.current = doc?.id ?? null;
   const loadBlocks = useCallback((blocks: WhiteboardBlock[]) => {
-    editorRef.current?.commands.setContent(blocksToDoc(blocks), { emitUpdate: true });
+    const activeEditor = editorRef.current;
+    if (!activeEditor) return false;
+    activeEditor.commands.setContent(blocksToDoc(blocks), { emitUpdate: true });
+    return true;
   }, []);
 
   // --- outline hard link: report the caret's manuscript block + the block texts,
@@ -470,6 +473,7 @@ export function WhiteboardPage({
     applySettings: settingsApi.replace,
     loadBlocks,
     setMode,
+    setTitle: renameDocument,
     markDirty: markFileDirty,
     confirmProceedPastUnsavedChanges: fileDoc.confirmProceedPastUnsavedChanges,
   });
@@ -670,6 +674,15 @@ export function WhiteboardPage({
         resetKey={`${doc?.id ?? 'none'}:${mode}`}
         className="wb-document-boundary"
       >
+        <ConfirmDialog
+          open={importExport.recoveryConfirmation !== null}
+          title={importExport.recoveryConfirmation?.title ?? 'Restore recovery?'}
+          message={importExport.recoveryConfirmation?.message ?? ''}
+          confirmLabel={importExport.recoveryConfirmation?.confirmLabel ?? 'Restore'}
+          cancelLabel="Cancel"
+          onConfirm={importExport.confirmRecoveryImport}
+          onCancel={importExport.cancelRecoveryImport}
+        />
         <ConfirmDialog
         open={pendingMode !== null}
         title="Change writing mode?"

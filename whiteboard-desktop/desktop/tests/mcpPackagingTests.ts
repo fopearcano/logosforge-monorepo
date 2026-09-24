@@ -73,6 +73,17 @@ check(
   'Whiteboard product identity is set before resolving user data',
   appNameIndex >= 0 && userDataIndex >= 0 && appNameIndex < userDataIndex,
 );
+
+const singleInstanceLockIndex = electronMain.indexOf('app.requestSingleInstanceLock()');
+const recoveryJournalIndex = electronMain.indexOf('new FilePendingDocumentRecoveryJournal');
+check(
+  'only the single-instance owner constructs the shared recovery journal',
+  singleInstanceLockIndex >= 0
+    && recoveryJournalIndex >= 0
+    && singleInstanceLockIndex < recoveryJournalIndex
+    && /const documentRecoveryJournal = ownsSingleInstance\s*\? new FilePendingDocumentRecoveryJournal\([\s\S]*?\)\s*:\s*null;/.test(electronMain)
+    && electronMain.includes('documentRecoveryJournal ?? undefined'),
+);
 check(
   'the installed app uses a stable per-user MCP companion path',
   electronMain.includes("runtimeDescriptorPath(app.getPath('userData'))")

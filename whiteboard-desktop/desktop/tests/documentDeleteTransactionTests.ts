@@ -45,6 +45,52 @@ await test('lost delete responses reconcile absence and commit', async () => {
   }
 });
 
+await test('durable local commit retries without repeating a successful backend delete', async () => {
+  let deleteAttempts = 0;
+  let commitAttempts = 0;
+  const waits: number[] = [];
+  await runDocumentDeleteTransaction({
+    begin: async () => floor,
+    deleteBackend: async () => { deleteAttempts += 1; },
+    backendDocumentExists: async () => { throw new Error('unexpected reconcile'); },
+    commit: () => {
+      commitAttempts += 1;
+      if (commitAttempts < 3) throw new Error('journal temporarily unavailable');
+    },
+    cancel: () => { throw new Error('unexpected cancel'); },
+    waitBeforeCommitRetry: async (attempt) => { waits.push(attempt); },
+  });
+  if (deleteAttempts !== 1 || commitAttempts !== 3 || waits.join(',') !== '1,2') {
+    throw new Error(
+      `Local commit retry crossed the backend boundary: deletes=${deleteAttempts}, commits=${commitAttempts}`,
+    );
+  }
+});
+
+await test('permanent local commit failure is bounded and keeps the delete fence fail-closed', async () => {
+  let deleteAttempts = 0;
+  let commitAttempts = 0;
+  let canceled = false;
+  let rejected = false;
+  try {
+    await runDocumentDeleteTransaction({
+      begin: async () => floor,
+      deleteBackend: async () => { deleteAttempts += 1; },
+      backendDocumentExists: async () => { throw new Error('unexpected reconcile'); },
+      commit: () => { commitAttempts += 1; throw new Error('disk remains full'); },
+      cancel: () => { canceled = true; },
+      waitBeforeCommitRetry: async () => {},
+    });
+  } catch {
+    rejected = true;
+  }
+  if (!rejected || deleteAttempts !== 1 || commitAttempts !== 3 || canceled) {
+    throw new Error(
+      `Permanent local failure was not bounded safely: deletes=${deleteAttempts}, commits=${commitAttempts}`,
+    );
+  }
+});
+
 await test('confirmed live document cancels the fence after two failures', async () => {
   let canceled = false;
   let rejected = false;
