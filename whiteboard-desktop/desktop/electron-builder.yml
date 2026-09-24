@@ -19,6 +19,10 @@ files:
 extraResources:
   - from: ../backend/dist/logosforge-whiteboard-backend
     to: backend
+  - from: ../backend/dist
+    to: mcp
+    filter:
+      - logosforge-whiteboard-mcp*
 win:
   icon: build/icon.ico
   target:

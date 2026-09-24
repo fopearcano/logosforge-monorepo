@@ -119,12 +119,14 @@ whiteboard-desktop/backend/.venv/bin/python -m pip check
 
 ## Packaging
 
-`electron-builder.yml` always expects a native frozen backend at
-`../backend/dist/logosforge-whiteboard-backend`; build it on the target operating
-system before invoking electron-builder. PyInstaller output is not portable
-between Windows, macOS, and Linux.
+`electron-builder.yml` always expects both native PyInstaller outputs: the
+frozen backend at `../backend/dist/logosforge-whiteboard-backend` and the
+one-file `../backend/dist/logosforge-whiteboard-mcp` companion (`.exe` on
+Windows). Build both on the target operating system before invoking
+electron-builder. PyInstaller output is not portable between Windows, macOS,
+and Linux.
 
-After the sidecar exists:
+After both native outputs exist:
 
 ```bash
 npm run pack        # unpacked application under release/
@@ -133,10 +135,14 @@ npm run dist:mac    # macOS 12+ Intel DMG
 npm run dist:linux  # Linux x64 AppImage
 ```
 
-These commands package the Electron shell **and** the bundled backend/core. The
-release workflows build the native backend first and then run the appropriate
-platform command. See [../RELEASING.md](../RELEASING.md) for the versioned,
-multi-platform release procedure and
+These commands package the Electron shell, bundled backend/core, **and** the MCP
+companion. The release workflows build and smoke-test the native backend and
+read-only companion before running the appropriate platform command. The
+packaged GUI installs the companion at a stable per-user path; the GUI must be
+running for it to connect to the nonce-verified loopback backend. See
+[../MCP_GATEWAY.md](../MCP_GATEWAY.md) for Codex setup, exact tools, paths, and
+the read-only/LAN safety boundary. See [../RELEASING.md](../RELEASING.md) for
+the versioned, multi-platform release procedure and
 [../scripts/validate-macos.sh](../scripts/validate-macos.sh) for local validation
 on the Intel Mac runner.
 

@@ -20,7 +20,7 @@ backend remains tokenless unless `LOGOSFORGE_WHITEBOARD_AUTH_TOKEN` is set.
 python -m venv .venv
 . .venv/Scripts/activate           # Windows; use bin/activate on POSIX
 pip install -e ../../logosforge    # the headless core + API (no PySide6)
-pip install -r requirements.txt    # fastapi / uvicorn / httpx
+pip install -r requirements.txt    # fastapi / uvicorn / httpx / MCP SDK
 ```
 
 ## Run
@@ -63,3 +63,59 @@ backend; only the venv (now has `logosforge`) and the wrapped routes differ.
 All tests use temporary data/DB state; the AI test uses loopback mock OpenAI
 and Anthropic servers and never needs or reads a real API key. Recovery tests
 exercise backup rotation, quarantine, fail-closed autosave, and complete export.
+
+## Read-only MCP companion
+
+Whiteboard ships a separate stdio server named `logosforge-whiteboard`. Its
+nine tools use the stable `logosforge_whiteboard_` prefix and can only call the
+authenticated wrapper's existing GET routes. There are no write, arbitrary
+HTTP, filesystem, SQLite, or export tools. Manuscript blocks, document lists,
+outline items, comments, PSYKE entries, and search results are returned through
+explicit page/result limits; the manuscript snapshot also has a character cap
+and truncation metadata.
+
+The installed app publishes `mcp-runtime-v1.json` inside its product-specific
+Electron user-data directory after the nonce-bound `/health` check succeeds.
+The private descriptor schema is:
+
+```json
+{
+  "schema_version": 1,
+  "base_url": "http://127.0.0.1:<port>",
+  "auth_token": "<per-process secret>",
+  "instance_nonce": "<per-process nonce>",
+  "app_pid": 123,
+  "backend_pid": 456,
+  "created_at": "<UTC ISO-8601>"
+}
+```
+
+The companion accepts only a plain-HTTP loopback URL, verifies both live PIDs
+and the health nonce, and sends the token only to `/api/*` reads. Tests may
+override discovery with `LOGOSFORGE_WHITEBOARD_MCP_CONNECTION_FILE`, provided
+the value is absolute and retains the `mcp-runtime-v1.json` basename; the
+installed executable is `logosforge-whiteboard-mcp` (`.exe` on Windows).
+
+Build and smoke-test both frozen executables from this directory:
+
+```sh
+pyinstaller logosforge-whiteboard-backend.spec
+pyinstaller logosforge-whiteboard-mcp.spec
+python smoke-frozen-mcp.py \
+  dist/logosforge-whiteboard-backend/logosforge-whiteboard-backend \
+  dist/logosforge-whiteboard-mcp
+```
+
+After Electron packaging, exercise descriptor publication, stable companion
+installation, backend identity, and authenticated stdio reads end to end:
+
+```sh
+python smoke-packaged-mcp.py <unpacked-exe-or-AppImage-or-DMG>
+# Add --codex-command codex for a real local Codex tool-call check.
+```
+
+Run the focused contract, descriptor-security, and real-stdio tests with:
+
+```sh
+python -m pytest tests/test_whiteboard_mcp.py tests/test_whiteboard_mcp_runtime.py -q
+```

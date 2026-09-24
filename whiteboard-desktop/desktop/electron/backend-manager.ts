@@ -15,8 +15,9 @@ import * as fs from 'node:fs';
 import * as http from 'node:http';
 import * as path from 'node:path';
 
+import { removeRuntimeDescriptor, writeRuntimeDescriptor } from './mcp-runtime';
 import { selectAvailablePort } from './port-selection';
-import { isExpectedBackendHealth } from './service-identity';
+import { isExpectedBackendHealth, resolveBackendHost } from './service-identity';
 
 export type BackendState = 'connecting' | 'connected' | 'error';
 
@@ -32,7 +33,13 @@ export interface BackendStatus {
   detail?: string;
 }
 
-const HOST = process.env.LOGOSFORGE_HOST ?? '127.0.0.1';
+export interface BackendManagerOptions {
+  /** Pin production launches to loopback; source development may opt into LAN binding. */
+  production?: boolean;
+  /** Private per-user descriptor used by the packaged stdio MCP companion. */
+  mcpRuntimePath?: string;
+}
+
 const RAW_PORT = process.env.LOGOSFORGE_PORT;
 const INITIAL_PORT = Number(RAW_PORT ?? 8777);
 const PORT_WAS_EXPLICIT = typeof RAW_PORT === 'string' && RAW_PORT.trim().length > 0;
@@ -95,16 +102,29 @@ export class BackendManager {
   private managed = false;
   private spawnFailed = false;
   private port = INITIAL_PORT;
-  private baseUrl = `http://${HOST}:${INITIAL_PORT}`;
+  private readonly host: string;
+  private baseUrl: string;
   private readonly authToken = randomBytes(32).toString('base64url');
   private readonly instanceNonce = randomBytes(18).toString('base64url');
-  private status: BackendStatus = {
-    state: 'connecting',
-    baseUrl: this.baseUrl,
-    managed: false,
-    authToken: this.authToken,
-  };
+  private status: BackendStatus;
   private readonly listeners = new Set<(status: BackendStatus) => void>();
+
+  constructor(private readonly opts: BackendManagerOptions = {}) {
+    const requestedHost = process.env.LOGOSFORGE_HOST?.trim();
+    this.host = resolveBackendHost(requestedHost, opts.production === true);
+    this.baseUrl = `http://${this.host}:${INITIAL_PORT}`;
+    this.status = {
+      state: 'connecting',
+      baseUrl: this.baseUrl,
+      managed: false,
+      authToken: this.authToken,
+    };
+    if (opts.production && requestedHost && requestedHost !== this.host) {
+      console.warn(
+        `[security] Ignoring LOGOSFORGE_HOST=${requestedHost}; production backends bind to ${this.host}.`,
+      );
+    }
+  }
 
   onStatus(cb: (status: BackendStatus) => void): () => void {
     this.listeners.add(cb);
@@ -122,7 +142,53 @@ export class BackendManager {
     for (const listener of this.listeners) listener(this.status);
   }
 
+  private clearRuntimeDescriptor(requireCurrentNonce = true): void {
+    const target = this.opts.mcpRuntimePath;
+    if (!target) return;
+    try {
+      removeRuntimeDescriptor(target, requireCurrentNonce ? this.instanceNonce : undefined);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      console.error(`[mcp] Could not remove the runtime descriptor: ${detail}`);
+    }
+  }
+
+  private publishRuntimeDescriptor(): string | null {
+    const target = this.opts.mcpRuntimePath;
+    if (!target) return null;
+    const backendPid = this.child?.pid;
+    if (!backendPid) return 'the managed backend process id is unavailable';
+    let descriptorUrl: URL;
+    try {
+      descriptorUrl = new URL(this.baseUrl);
+    } catch {
+      return 'the backend connection URL is invalid';
+    }
+    if (!['127.0.0.1', '::1', '[::1]'].includes(descriptorUrl.hostname)) {
+      return 'the backend connection is not loopback-only';
+    }
+    try {
+      writeRuntimeDescriptor(target, {
+        schema_version: 1,
+        base_url: this.baseUrl,
+        auth_token: this.authToken,
+        instance_nonce: this.instanceNonce,
+        app_pid: process.pid,
+        backend_pid: backendPid,
+        created_at: new Date().toISOString(),
+      });
+      return null;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      console.error(`[mcp] Could not publish the runtime descriptor: ${detail}`);
+      return 'the local Codex bridge could not publish its private connection file';
+    }
+  }
+
   async start(): Promise<void> {
+    // The single-instance Electron shell owns this exact path. Remove a crash
+    // leftover before a new session can publish credentials.
+    this.clearRuntimeDescriptor(false);
     this.setStatus({ state: 'connecting', detail: 'Looking for backend…' });
 
     // 1. Reuse only a process carrying this manager's one-time nonce (normally
@@ -137,11 +203,11 @@ export class BackendManager {
     // port so the writer can reopen the app without killing processes manually.
     try {
       const selectedPort = await selectAvailablePort(
-        HOST, this.port, !PORT_WAS_EXPLICIT,
+        this.host, this.port, !PORT_WAS_EXPLICIT,
       );
       if (selectedPort !== this.port) {
         this.port = selectedPort;
-        this.baseUrl = `http://${HOST}:${selectedPort}`;
+        this.baseUrl = `http://${this.host}:${selectedPort}`;
         this.setStatus({
           baseUrl: this.baseUrl,
           detail: `Default port was occupied; using local port ${selectedPort}.`,
@@ -163,11 +229,13 @@ export class BackendManager {
       this.managed = true;
       await this.markConnected(true);
     } else if (this.status.state !== 'error') {
+      this.clearRuntimeDescriptor();
       this.setStatus({ state: 'error', detail: 'Backend did not become healthy in time.' });
     }
   }
 
   stop(): void {
+    this.clearRuntimeDescriptor();
     // Only stop the backend if we launched it.
     if (this.child && this.managed) {
       const child = this.child;
@@ -201,13 +269,15 @@ export class BackendManager {
     } catch {
       /* version is best-effort */
     }
+    const bridgeError = this.publishRuntimeDescriptor();
+    const detail = managed ? 'Backend launched by the app.' : 'Connected to a running backend.';
     this.setStatus({
       state: 'connected',
       managed,
       version,
       apiVersion,
       service,
-      detail: managed ? 'Backend launched by the app.' : 'Connected to a running backend.',
+      detail: bridgeError ? `${detail} MCP unavailable: ${bridgeError}.` : detail,
     });
   }
 
@@ -224,7 +294,7 @@ export class BackendManager {
   private spawnBackend(): void {
     const env = {
       ...process.env,
-      LOGOSFORGE_HOST: HOST,
+      LOGOSFORGE_HOST: this.host,
       LOGOSFORGE_PORT: String(this.port),
       LOGOSFORGE_WHITEBOARD_AUTH_TOKEN: this.authToken,
       LOGOSFORGE_WHITEBOARD_INSTANCE_NONCE: this.instanceNonce,
@@ -234,7 +304,7 @@ export class BackendManager {
     // the core — no Python needed on the user's machine).
     const frozen = this.frozenBackendPath();
     if (frozen) {
-      const child = spawn(frozen, ['--host', HOST, '--port', String(this.port)], {
+      const child = spawn(frozen, ['--host', this.host, '--port', String(this.port)], {
         cwd: path.dirname(frozen),
         env,
         stdio: 'pipe',
@@ -257,7 +327,7 @@ export class BackendManager {
     const python = resolvePython(backendDir);
     const child = spawn(
       python,
-      ['-m', 'uvicorn', 'app.main:app', '--host', HOST, '--port', String(this.port)],
+      ['-m', 'uvicorn', 'app.main:app', '--host', this.host, '--port', String(this.port)],
       { cwd: backendDir, env, stdio: 'pipe' },
     );
     this.attachChildHandlers(child, 'dev');
@@ -270,6 +340,7 @@ export class BackendManager {
     child.stderr?.on('data', (d) => console.log('[backend]', String(d).trim()));
 
     child.on('error', (err) => {
+      this.clearRuntimeDescriptor();
       this.spawnFailed = true;
       this.child = null;
       const hint = kind === 'dev' ? ' Is Python installed and are backend deps set up?' : '';
@@ -277,6 +348,7 @@ export class BackendManager {
     });
 
     child.on('exit', (code) => {
+      this.clearRuntimeDescriptor();
       this.child = null;
       if (this.status.state !== 'connected') {
         this.spawnFailed = true;

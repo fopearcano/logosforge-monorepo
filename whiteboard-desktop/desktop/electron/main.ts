@@ -15,6 +15,8 @@ import {
   saveFileToPath,
 } from './file-manager';
 import { setAppMenu } from './menu';
+import { installMcpCompanion, mcpCompanionPath, runtimeDescriptorPath } from './mcp-runtime';
+import { bundledMcpExecutableName, resolveBundledMcpPath } from './platform-paths';
 import { runDocumentDeleteTransaction } from './document-delete-transaction';
 import { PathGrantRegistry } from './path-grants';
 import { PendingOperationTracker } from './pending-operation-tracker';
@@ -38,11 +40,29 @@ import {
   validatePendingDocumentIncarnation,
 } from './pending-document-persistence';
 
+// Keep packaged user data under the product identity rather than the npm name.
+// This must run before the first user-data path lookup below.
+app.setName('LogosForge Whiteboard');
+
 const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL ?? 'http://localhost:5173';
 const isProd = app.isPackaged || process.argv.includes('--prod');
+const bundledMcpPath = app.isPackaged ? resolveBundledMcpPath(process.resourcesPath) : undefined;
+let mcpRuntimePath: string | undefined;
+let installedMcpPath: string | undefined;
+try {
+  mcpRuntimePath = runtimeDescriptorPath(app.getPath('userData'));
+  installedMcpPath = mcpCompanionPath(
+    app.getPath('userData'),
+    bundledMcpExecutableName(process.platform),
+  );
+} catch (error) {
+  // A bad advanced-test override must disable the bridge, not the writing app.
+  const detail = error instanceof Error ? error.message : String(error);
+  console.error(`[mcp] Ignoring invalid local MCP path configuration: ${detail}`);
+}
 
 let mainWindow: BrowserWindow | null = null;
-const backend = new BackendManager();
+const backend = new BackendManager({ production: isProd, mcpRuntimePath });
 const writablePaths = new PathGrantRegistry();
 const mainFileWrites = new PendingOperationTracker();
 const documentPersistence = new PendingDocumentPersistence(async (write, signal, dispatchSequence) => {
@@ -692,6 +712,14 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(() => {
+    if (bundledMcpPath && installedMcpPath) {
+      try {
+        installMcpCompanion(bundledMcpPath, installedMcpPath);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        console.error(`[mcp] Could not install the local MCP companion: ${detail}`);
+      }
+    }
     ipcMain.handle('backend:get-status', (event) => {
       requireMainRenderer(event);
       return backend.getStatus();

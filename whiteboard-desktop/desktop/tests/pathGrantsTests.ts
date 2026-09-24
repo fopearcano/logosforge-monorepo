@@ -1,9 +1,10 @@
 import * as path from 'node:path';
 import { createServer } from 'node:net';
 
+import { BackendManager } from '../electron/backend-manager';
 import { PathGrantRegistry } from '../electron/path-grants';
 import { selectAvailablePort } from '../electron/port-selection';
-import { isExpectedBackendHealth } from '../electron/service-identity';
+import { isExpectedBackendHealth, resolveBackendHost } from '../electron/service-identity';
 
 let passed = 0;
 const failures: string[] = [];
@@ -41,6 +42,28 @@ check('stale backend nonce rejected', !isExpectedBackendHealth({
   api_version: '1.0.0',
   instance_nonce: 'old-nonce',
 }, 'nonce-1'));
+check('production host defaults to loopback', resolveBackendHost(undefined, true) === '127.0.0.1');
+check('production ignores a LAN host override', resolveBackendHost('0.0.0.0', true) === '127.0.0.1');
+check('source development retains a LAN host override', resolveBackendHost('0.0.0.0', false) === '0.0.0.0');
+
+const previousHost = process.env.LOGOSFORGE_HOST;
+process.env.LOGOSFORGE_HOST = '192.168.1.25';
+const originalWarn = console.warn;
+console.warn = () => {};
+try {
+  check(
+    'production BackendManager advertises only loopback',
+    new URL(new BackendManager({ production: true }).getStatus().baseUrl).hostname === '127.0.0.1',
+  );
+  check(
+    'development BackendManager keeps explicit LAN binding',
+    new URL(new BackendManager({ production: false }).getStatus().baseUrl).hostname === '192.168.1.25',
+  );
+} finally {
+  console.warn = originalWarn;
+  if (previousHost === undefined) delete process.env.LOGOSFORGE_HOST;
+  else process.env.LOGOSFORGE_HOST = previousHost;
+}
 
 const occupied = createServer();
 await new Promise<void>((resolve, reject) => {
