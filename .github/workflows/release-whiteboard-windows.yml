@@ -184,17 +184,22 @@ jobs:
         with:
           python-version: "3.11"
 
-      # --- 1. Bundle the Whiteboard backend (it embeds the core) -----------
-      - name: Build the backend bundle (PyInstaller)
+      # --- 1. Bundle the Whiteboard backend + read-only MCP companion -------
+      - name: Build the backend and MCP bundles (PyInstaller)
         run: |
           python -m venv build-venv
           ./build-venv/Scripts/python.exe -m pip install --upgrade pip
-          ./build-venv/Scripts/python.exe -m pip install "./logosforge[export]" fastapi "uvicorn[standard]" httpx pytest pyinstaller
+          ./build-venv/Scripts/python.exe -m pip install "./logosforge[export]" -r whiteboard-desktop/backend/requirements.txt pytest pyinstaller
           ./build-venv/Scripts/python.exe -m pytest whiteboard-desktop/backend/tests -q
-          ./build-venv/Scripts/python.exe -m compileall -q whiteboard-desktop/backend/app
+          ./build-venv/Scripts/python.exe -m compileall -q \
+            whiteboard-desktop/backend/app \
+            whiteboard-desktop/backend/whiteboard-mcp-entry.py \
+            whiteboard-desktop/backend/smoke-frozen-mcp.py \
+            whiteboard-desktop/backend/smoke-packaged-mcp.py
           ./build-venv/Scripts/python.exe -m pip check
           cd whiteboard-desktop/backend
           ../../build-venv/Scripts/python.exe -m PyInstaller logosforge-whiteboard-backend.spec --noconfirm --clean --log-level WARN
+          ../../build-venv/Scripts/python.exe -m PyInstaller logosforge-whiteboard-mcp.spec --noconfirm --clean --log-level WARN
 
       - name: Smoke-test the bundled backend
         shell: pwsh
@@ -395,6 +400,12 @@ jobs:
             throw $smokeError
           }
 
+      - name: Smoke-test the bundled MCP companion
+        run: >-
+          ./build-venv/Scripts/python.exe whiteboard-desktop/backend/smoke-frozen-mcp.py
+          whiteboard-desktop/backend/dist/logosforge-whiteboard-backend/logosforge-whiteboard-backend.exe
+          whiteboard-desktop/backend/dist/logosforge-whiteboard-mcp.exe
+
       # --- 2. Build + package the Electron app -----------------------------
       - name: Install whiteboard-desktop deps
         working-directory: whiteboard-desktop/desktop
@@ -415,6 +426,37 @@ jobs:
           # Unsigned build (no code-signing cert configured). Users will see a
           # Windows SmartScreen prompt until a cert is added — see repo notes.
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: Verify packaged Whiteboard MCP resource and architecture
+        working-directory: whiteboard-desktop/desktop
+        run: |
+          set -euo pipefail
+          MCP_EXE="$PWD/release/win-unpacked/resources/mcp/logosforge-whiteboard-mcp.exe" \
+            ../../build-venv/Scripts/python.exe - <<'PY'
+          import os
+          from pathlib import Path
+
+          companion = Path(os.environ["MCP_EXE"])
+
+          def pe_machine(path: Path):
+              with path.open("rb") as handle:
+                  dos = handle.read(64)
+                  if len(dos) != 64 or dos[:2] != b"MZ":
+                      return None
+                  handle.seek(int.from_bytes(dos[60:64], "little"))
+                  return handle.read(4), int.from_bytes(handle.read(2), "little")
+
+          if not companion.is_file():
+              raise SystemExit(f"::error::Packaged Whiteboard MCP companion is missing: {companion}")
+          if pe_machine(companion) != (b"PE\0\0", 0x8664):
+              raise SystemExit("::error::Packaged Whiteboard MCP companion is not Windows x64.")
+          print(f"packaged Windows x64 Whiteboard MCP companion OK: {companion}")
+          PY
+
+      - name: Exercise packaged Whiteboard MCP bridge
+        run: >-
+          ./build-venv/Scripts/python.exe whiteboard-desktop/backend/smoke-packaged-mcp.py
+          "whiteboard-desktop/desktop/release/win-unpacked/LogosForge Whiteboard.exe"
 
       # --- 3. Publish ------------------------------------------------------
       - name: Upload build artifacts

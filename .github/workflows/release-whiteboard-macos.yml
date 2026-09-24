@@ -240,17 +240,22 @@ jobs:
           echo "::error::No Python 3.11+ on the runner. Install one (e.g. 'brew install python@3.11') and re-run."
           exit 1
 
-      # --- 1. Bundle the Whiteboard backend (it embeds the core), x64 ------
-      - name: Build the backend bundle (PyInstaller)
+      # --- 1. Bundle the Whiteboard backend + read-only MCP companion, x64 -
+      - name: Build the backend and MCP bundles (PyInstaller)
         run: |
           "${{ steps.py.outputs.python }}" -m venv build-venv
           ./build-venv/bin/python -m pip install --upgrade pip
-          ./build-venv/bin/python -m pip install "./logosforge[export]" fastapi "uvicorn[standard]" httpx pytest pyinstaller
+          ./build-venv/bin/python -m pip install "./logosforge[export]" -r whiteboard-desktop/backend/requirements.txt pytest pyinstaller
           ./build-venv/bin/python -m pytest whiteboard-desktop/backend/tests -q
-          ./build-venv/bin/python -m compileall -q whiteboard-desktop/backend/app
+          ./build-venv/bin/python -m compileall -q \
+            whiteboard-desktop/backend/app \
+            whiteboard-desktop/backend/whiteboard-mcp-entry.py \
+            whiteboard-desktop/backend/smoke-frozen-mcp.py \
+            whiteboard-desktop/backend/smoke-packaged-mcp.py
           ./build-venv/bin/python -m pip check
           cd whiteboard-desktop/backend
           ../../build-venv/bin/python -m PyInstaller logosforge-whiteboard-backend.spec --noconfirm --clean --log-level WARN
+          ../../build-venv/bin/python -m PyInstaller logosforge-whiteboard-mcp.spec --noconfirm --clean --log-level WARN
 
       - name: Smoke-test the bundled backend
         run: |
@@ -355,6 +360,12 @@ jobs:
             exit 1
           fi
 
+      - name: Smoke-test the bundled MCP companion
+        run: >-
+          ./build-venv/bin/python whiteboard-desktop/backend/smoke-frozen-mcp.py
+          whiteboard-desktop/backend/dist/logosforge-whiteboard-backend/logosforge-whiteboard-backend
+          whiteboard-desktop/backend/dist/logosforge-whiteboard-mcp
+
       # --- 2. Build + package the Electron app (DMG) -----------------------
       - name: Install whiteboard-desktop deps
         working-directory: whiteboard-desktop/desktop
@@ -383,11 +394,13 @@ jobs:
           app="release/mac/LogosForge Whiteboard.app"
           executable="$app/Contents/MacOS/LogosForge Whiteboard"
           backend="$app/Contents/Resources/backend/logosforge-whiteboard-backend"
+          mcp="$app/Contents/Resources/mcp/logosforge-whiteboard-mcp"
           dmg="release/LogosForge Whiteboard-${version}-x64.dmg"
 
           [ -d "$app" ] || { echo "::error::Packaged app is missing: $app"; exit 1; }
           [ -x "$executable" ] || { echo "::error::Packaged Electron executable is missing: $executable"; exit 1; }
           [ -x "$backend" ] || { echo "::error::Packaged backend is missing: $backend"; exit 1; }
+          [ -x "$mcp" ] || { echo "::error::Packaged MCP companion is missing: $mcp"; exit 1; }
           [ -f "$dmg" ] || { echo "::error::Versioned DMG is missing: $dmg"; exit 1; }
 
           minimum_system_version="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$app/Contents/Info.plist")"
@@ -404,6 +417,10 @@ jobs:
             echo "::error::Packaged backend is not Intel x86_64."
             exit 1
           }
+          file "$mcp" | grep -Eq 'Mach-O 64-bit executable x86_64' || {
+            echo "::error::Packaged MCP companion is not Intel x86_64."
+            exit 1
+          }
 
           packaged_electron_version="$(ELECTRON_RUN_AS_NODE=1 "$executable" -p 'process.versions.electron')"
           case "$packaged_electron_version" in
@@ -416,6 +433,12 @@ jobs:
 
           echo "packaged app OK: Electron $packaged_electron_version, macOS $minimum_system_version, Intel x64"
           shasum -a 256 "$dmg"
+
+      - name: Exercise packaged Whiteboard MCP bridge
+        run: >-
+          ./build-venv/bin/python whiteboard-desktop/backend/smoke-packaged-mcp.py
+          "whiteboard-desktop/desktop/release/LogosForge Whiteboard-${{ steps.release.outputs.version }}-x64.dmg"
+          --timeout 120
 
       # --- 3. Publish ------------------------------------------------------
       - name: Upload build artifacts

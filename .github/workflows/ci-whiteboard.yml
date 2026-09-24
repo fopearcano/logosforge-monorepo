@@ -28,7 +28,7 @@ jobs:
   whiteboard-quality:
     name: Whiteboard quality (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -53,13 +53,31 @@ jobs:
       - name: Install Whiteboard backend and core
         run: |
           python -m pip install --upgrade pip
-          python -m pip install "./logosforge" -r whiteboard-desktop/backend/requirements.txt pytest
+          python -m pip install "./logosforge[export]" -r whiteboard-desktop/backend/requirements.txt pytest "pyinstaller==6.22.2"
 
       - name: Test Whiteboard backend
         run: |
           python -m pytest whiteboard-desktop/backend/tests -q
-          python -m compileall -q whiteboard-desktop/backend/app
+          python -m compileall -q \
+            whiteboard-desktop/backend/app \
+            whiteboard-desktop/backend/whiteboard-mcp-entry.py \
+            whiteboard-desktop/backend/smoke-frozen-mcp.py \
+            whiteboard-desktop/backend/smoke-packaged-mcp.py
           python -m pip check
+
+      - name: Build and smoke-test frozen Whiteboard sidecars
+        working-directory: whiteboard-desktop/backend
+        run: |
+          set -euo pipefail
+          python -m PyInstaller logosforge-whiteboard-backend.spec --noconfirm --clean --log-level WARN
+          python -m PyInstaller logosforge-whiteboard-mcp.spec --noconfirm --clean --log-level WARN
+          suffix=""
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            suffix=".exe"
+          fi
+          python smoke-frozen-mcp.py \
+            "dist/logosforge-whiteboard-backend/logosforge-whiteboard-backend${suffix}" \
+            "dist/logosforge-whiteboard-mcp${suffix}"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4

@@ -61,6 +61,10 @@ jobs:
             pro-desktop/core/logosforge-core.spec \
             whiteboard-desktop/backend/requirements.txt \
             whiteboard-desktop/backend/logosforge-whiteboard-backend.spec \
+            whiteboard-desktop/backend/logosforge-whiteboard-mcp.spec \
+            whiteboard-desktop/backend/whiteboard-mcp-entry.py \
+            whiteboard-desktop/backend/smoke-frozen-mcp.py \
+            whiteboard-desktop/backend/smoke-packaged-mcp.py \
             whiteboard-desktop/desktop/package.json \
             whiteboard-desktop/desktop/scripts/packaged-acceptance.mjs
           do
@@ -98,7 +102,13 @@ jobs:
         run: |
           set -euo pipefail
           ./acceptance-venv/Scripts/python.exe -m pytest whiteboard-desktop/backend/tests -q -p no:cacheprovider
-          ./acceptance-venv/Scripts/python.exe -m compileall -q logosforge/logosforge whiteboard-desktop/backend/app pro-desktop/core
+          ./acceptance-venv/Scripts/python.exe -m compileall -q \
+            logosforge/logosforge \
+            whiteboard-desktop/backend/app \
+            whiteboard-desktop/backend/whiteboard-mcp-entry.py \
+            whiteboard-desktop/backend/smoke-frozen-mcp.py \
+            whiteboard-desktop/backend/smoke-packaged-mcp.py \
+            pro-desktop/core
           ./acceptance-venv/Scripts/python.exe -m pip check
 
       - name: Test, build, and audit Whiteboard sources
@@ -135,7 +145,7 @@ jobs:
           npm run build
           npm audit --audit-level=moderate
 
-      - name: Build fresh Whiteboard backend sidecar
+      - name: Build fresh Whiteboard backend and MCP sidecars
         working-directory: whiteboard-desktop/backend
         run: |
           set -euo pipefail
@@ -144,6 +154,17 @@ jobs:
             --noconfirm \
             --clean \
             --log-level WARN
+          ../../acceptance-venv/Scripts/python.exe -m PyInstaller \
+            logosforge-whiteboard-mcp.spec \
+            --noconfirm \
+            --clean \
+            --log-level WARN
+
+      - name: Smoke-test frozen Whiteboard MCP companion
+        run: >-
+          ./acceptance-venv/Scripts/python.exe whiteboard-desktop/backend/smoke-frozen-mcp.py
+          whiteboard-desktop/backend/dist/logosforge-whiteboard-backend/logosforge-whiteboard-backend.exe
+          whiteboard-desktop/backend/dist/logosforge-whiteboard-mcp.exe
 
       - name: Build fresh Pro core sidecar
         working-directory: pro-desktop/core
@@ -160,6 +181,36 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: npm run pack
+
+      - name: Verify packaged Whiteboard MCP resource and architecture
+        run: |
+          set -euo pipefail
+          MCP_EXE="$PWD/whiteboard-desktop/desktop/release/win-unpacked/resources/mcp/logosforge-whiteboard-mcp.exe" \
+            ./acceptance-venv/Scripts/python.exe - <<'PY'
+          import os
+          from pathlib import Path
+
+          companion = Path(os.environ["MCP_EXE"])
+
+          def pe_machine(path: Path):
+              with path.open("rb") as handle:
+                  dos = handle.read(64)
+                  if len(dos) != 64 or dos[:2] != b"MZ":
+                      return None
+                  handle.seek(int.from_bytes(dos[60:64], "little"))
+                  return handle.read(4), int.from_bytes(handle.read(2), "little")
+
+          if not companion.is_file():
+              raise SystemExit(f"::error::Packaged Whiteboard MCP companion is missing: {companion}")
+          if pe_machine(companion) != (b"PE\0\0", 0x8664):
+              raise SystemExit("::error::Packaged Whiteboard MCP companion is not Windows x64.")
+          print(f"packaged Windows x64 Whiteboard MCP companion OK: {companion}")
+          PY
+
+      - name: Exercise packaged Whiteboard MCP bridge
+        run: >-
+          ./acceptance-venv/Scripts/python.exe whiteboard-desktop/backend/smoke-packaged-mcp.py
+          "whiteboard-desktop/desktop/release/win-unpacked/LogosForge Whiteboard.exe"
 
       - name: Package unpacked Pro app
         working-directory: pro-desktop

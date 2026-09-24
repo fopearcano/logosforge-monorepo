@@ -24,11 +24,13 @@ hatch on **2026-09-23**, after which this runner must be upgraded to macOS 13.5+
 before it can build another release. Already-built Electron 43 packages are not
 affected by that CI deadline.
 
-Every workflow freezes the Python Whiteboard wrapper and shared core with
-PyInstaller, smoke-tests that native backend, packages it beside the Electron
-app, uploads a workflow artifact, and optionally attaches it to the matching
-GitHub prerelease. PyInstaller output is platform-specific and must never be
-copied from one runner to another.
+Every workflow freezes the Python Whiteboard wrapper/shared core and the
+read-only MCP companion with PyInstaller, smoke-tests the native backend and an
+authenticated MCP read over stdio, packages both beside the Electron app,
+launches the resulting package through `smoke-packaged-mcp.py`, uploads a
+workflow artifact, and optionally attaches it to the matching GitHub
+prerelease. PyInstaller output is platform-specific and must never be copied
+from one runner to another.
 
 The three platform workflows attach their assets independently. Repository
 release immutability must therefore remain disabled until all platform assets
@@ -110,6 +112,11 @@ quality gates, freezes the native backend, builds the DMG, launches the packaged
 `.app` with isolated data and a dynamically selected port, and checks the
 packaged backend's identity and core version.
 
+Before tagging, confirm each target-platform packaging job also built the
+native `logosforge-whiteboard-mcp` companion, passed
+`smoke-frozen-mcp.py`, placed the companion under the packaged application's
+`resources/mcp` directory, and verified the expected executable architecture.
+
 Commit only the intended source, version, lockfile, and release-note changes.
 Open a pull request and wait for the normal Core/Pro and Whiteboard CI checks to
 pass. Merge the release commit before creating the public tag.
@@ -169,11 +176,16 @@ On a clean or isolated test account for each platform:
    `chmod +x "LogosForge Whiteboard-X.Y.Z-x86_64.AppImage"` first.
 2. Confirm the status reaches `Connected` and shows API v1.0.0 with core
    0.9.0-alpha.
-3. Create and edit a document, quit, reopen, and verify persistence.
-4. Exercise a loopback/local AI provider, PDF or text export, and `.lfbundle`
+3. Confirm the stable per-user MCP companion and private descriptor exist while
+   the GUI is running. From a local MCP client, discover exactly the nine
+   `logosforge_whiteboard_` read-only tools and complete an authenticated
+   document read. After quitting Whiteboard, confirm a new MCP connection is
+   rejected rather than using stale runtime state.
+4. Create and edit a document, quit, reopen, and verify persistence.
+5. Exercise a loopback/local AI provider, PDF or text export, and `.lfbundle`
    export. Import the `.lfbundle` in LogosForge Pro; Whiteboard does not restore
    bundles itself.
-5. Confirm Windows installer and portable builds use isolated expected data,
+6. Confirm Windows installer and portable builds use isolated expected data,
    and verify the macOS DMG and Linux AppImage on supported systems.
 
 The builds are unsigned. Document the expected Windows SmartScreen prompt and
