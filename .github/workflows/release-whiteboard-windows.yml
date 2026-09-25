@@ -34,7 +34,7 @@ on:
         description: "Existing Whiteboard tag to build and publish"
         type: string
         required: false
-        default: "whiteboard-v0.1.13"
+        default: "whiteboard-v0.1.14"
 
 permissions:
   contents: write
@@ -53,13 +53,13 @@ jobs:
 
     steps:
       - name: Checkout monorepo
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (Node 24)
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0 (Node 24)
         with:
           node-version: "22"
 
@@ -180,7 +180,7 @@ jobs:
           echo "monorepo layout OK"
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0 (Node 24)
         with:
           python-version: "3.11"
 
@@ -460,7 +460,7 @@ jobs:
 
       # --- 3. Publish ------------------------------------------------------
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (Node 24)
         with:
           name: logosforge-whiteboard-windows
           path: whiteboard-desktop/desktop/release/*.exe
@@ -468,7 +468,7 @@ jobs:
 
       - name: Publish GitHub prerelease
         if: steps.release.outputs.publish == 'true'
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3 (Node 24)
         with:
           tag_name: ${{ steps.release.outputs.tag }}
           name: LogosForge Whiteboard ${{ steps.release.outputs.version }} (Alpha)

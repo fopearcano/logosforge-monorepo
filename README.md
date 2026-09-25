@@ -30,9 +30,9 @@ published tag. For the version bump, release notes, validation, tag, manual
 workflow, and recovery procedures, follow
 **[whiteboard-desktop/RELEASING.md](whiteboard-desktop/RELEASING.md)**. The macOS
 jobs need a self-hosted Intel Mac runner labelled `self-hosted`, `macOS`, and
-`X64`, with Python 3.11+ installed. Whiteboard 0.1.13 supports macOS 12 through
-Electron 43 and the temporary GitHub Actions Node 20 fallback documented in its
-release guide; Pro requires macOS 13.5+ and Actions Runner 2.327.1+.
+`X64`, with Python 3.11+ installed. Whiteboard 0.1.14 supports macOS 12 through
+Electron 43 and a shell-only Monterey build job documented in its release guide;
+Pro requires macOS 13.5+ and Actions Runner 2.327.1+.
 
 ## Local development
 

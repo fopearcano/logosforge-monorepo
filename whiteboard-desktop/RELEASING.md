@@ -14,23 +14,33 @@ and a new tag.
 | Linux x64   | `release-whiteboard-linux.yml`   | `ubuntu-latest`             | `.AppImage`                        |
 
 The self-hosted Mac must be an Intel (`x86_64`) machine running **macOS 12
-Monterey or newer**, with Python 3.11+, Node.js 22.12+, npm, Xcode Command Line
-Tools, and the runner online. Keep all three labels exactly as shown above;
-changing their case or spelling prevents the job from being assigned.
+Monterey or newer**, with Python 3.11+, Xcode Command Line Tools, Git, curl, and
+the runner online. Keep all three labels exactly as shown above; changing their
+case or spelling prevents the job from being assigned. The workflow uses an
+installed native Node.js 22.12+ when available and otherwise downloads the
+checksum-pinned Intel Node.js build declared in the workflow.
 
-The Monterey workflow temporarily keeps JavaScript actions on GitHub's Node 20
-action runtime because Node 24 requires macOS 13.5+. GitHub removes that escape
-hatch on **2026-09-23**, after which this runner must be upgraded to macOS 13.5+
-before it can build another release. Already-built Electron 43 packages are not
-affected by that CI deadline.
+GitHub retired its Node 20 action runtime and the temporary opt-out on
+**2026-09-23**; Node 24 cannot run on macOS 13.4 or earlier. The Monterey build
+job therefore contains only shell steps. Publishing runs attach the verified
+DMG through GitHub's Releases REST API; non-publishing runs leave a checksummed
+build drop in the runner workspace for local testing. GitHub classifies this old
+self-hosted OS as unsupported, so this is a best-effort bridge for the existing
+Intel test machine rather than a permanent CI platform.
+
+Changes to the Monterey workflow or its packaging and validation inputs on
+`main` automatically run the same non-publishing build and leave a local build
+drop. Tag pushes still publish regardless of changed paths. This gives the
+legacy runner a release-path dry run before a new immutable tag is created.
 
 Every workflow freezes the Python Whiteboard wrapper/shared core and the
 read-only MCP companion with PyInstaller, smoke-tests the native backend and an
-authenticated MCP read over stdio, packages both beside the Electron app,
-launches the resulting package through `smoke-packaged-mcp.py`, uploads a
-workflow artifact, and optionally attaches it to the matching GitHub
-prerelease. PyInstaller output is platform-specific and must never be copied
-from one runner to another.
+authenticated MCP read over stdio, packages both beside the Electron app, and
+launches the resulting package through `smoke-packaged-mcp.py`. Windows and
+Linux upload workflow artifacts; Monterey either keeps a local checksummed
+build-only drop or attaches the DMG directly to the matching GitHub prerelease.
+PyInstaller output is platform-specific and must never be copied from one
+runner to another.
 
 The three platform workflows attach their assets independently. Repository
 release immutability must therefore remain disabled until all platform assets
@@ -146,17 +156,25 @@ release-note file, and tag.
 
 Pushing the tag starts the Windows, macOS, and Linux release workflows. The
 macOS job can remain queued until the labelled Intel self-hosted runner is
-online; that is not a reason to retag the commit.
+online; that is not a reason to retag the commit. Pro and future Electron lines
+requiring newer macOS must use their GitHub workflow and wait for a compatible
+macOS 13.5+ runner rather than compiling on the Monterey host.
 
 ## 4. Manual workflow runs
 
 A manual **Actions → Run workflow** invocation supports two modes:
 
-- Leave `publish_release` off to build and upload a workflow artifact without
-  modifying a GitHub Release.
+- Leave `publish_release` off to build without modifying a GitHub Release.
+  Windows and Linux upload a workflow artifact. The Monterey runner instead
+  preserves the DMG and `SHA256SUMS.txt` under
+  `macos-build-drop/run-<run-id>-attempt-<attempt>` in its Actions workspace and
+  writes the exact path to the workflow summary.
 - Turn `publish_release` on only when attaching or repairing an artifact for an
   existing tag. Enter the complete, exact `release_tag`, such as
-  `whiteboard-vX.Y.Z`. The workflow checks out and validates that tag.
+  `whiteboard-vX.Y.Z`. The workflow checks out and validates that tag. The
+  current bundled-MCP repair path starts with `whiteboard-v0.1.14`; older tags
+  do not contain its required packaging inputs and are rejected rather than
+  silently mixing current build code into a historical source release.
 
 Use the same immutable tag when retrying a failed platform. Do not publish an
 artifact built from a different branch or version under an existing release.
@@ -165,15 +183,15 @@ artifact built from a different branch or version under an existing release.
 
 Confirm the GitHub prerelease contains all expected, version-matched files:
 
-- `LogosForge Whiteboard-X.Y.Z-x64.exe`
-- `LogosForge Whiteboard-X.Y.Z-x64-portable.exe`
-- `LogosForge Whiteboard-X.Y.Z-x64.dmg`
-- `LogosForge Whiteboard-X.Y.Z-x86_64.AppImage`
+- `LogosForge.Whiteboard-X.Y.Z-x64.exe`
+- `LogosForge.Whiteboard-X.Y.Z-x64-portable.exe`
+- `LogosForge.Whiteboard-X.Y.Z-x64.dmg`
+- `LogosForge.Whiteboard-X.Y.Z-x86_64.AppImage`
 
 On a clean or isolated test account for each platform:
 
 1. Install or launch the artifact. For Linux, run
-   `chmod +x "LogosForge Whiteboard-X.Y.Z-x86_64.AppImage"` first.
+   `chmod +x "LogosForge.Whiteboard-X.Y.Z-x86_64.AppImage"` first.
 2. Confirm the status reaches `Connected` and shows API v1.0.0 with core
    0.9.0-alpha.
 3. Confirm the stable per-user MCP companion and private descriptor exist while
@@ -199,4 +217,6 @@ manually rerun that platform against the existing exact tag. If a bad artifact
 was published, mark the release clearly, remove only the bad release asset when
 appropriate, and publish the corrected product under a new version/tag. Keep
 the original Git tag immutable so source and distributed binaries remain
-auditable.
+auditable. Tags older than `whiteboard-v0.1.14` must not be repaired with the
+current bundled-MCP workflows; preserve their existing assets and issue a new
+version if a correction is required.

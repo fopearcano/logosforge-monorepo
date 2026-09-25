@@ -34,9 +34,9 @@ This is the deep guide. For a one-page cheat sheet, see **[QUICK_START.md](QUICK
 
 Download the build for your platform from the Releases page:
 
-- **Windows** — the installer (`LogosForge Whiteboard-<version>-x64.exe`) or the portable build (`LogosForge Whiteboard-<version>-x64-portable.exe`).
-- **macOS (Intel, macOS 13 Ventura or newer)** — the disk image (`LogosForge Whiteboard-<version>-x64.dmg`).
-- **Linux (x64)** — the AppImage (`LogosForge Whiteboard-<version>-x86_64.AppImage`). Make it executable with `chmod +x "LogosForge Whiteboard-<version>-x86_64.AppImage"`, then run it directly; installation and root access are not required.
+- **Windows** — the installer (`LogosForge.Whiteboard-<version>-x64.exe`) or the portable build (`LogosForge.Whiteboard-<version>-x64-portable.exe`).
+- **macOS (Intel, macOS 12 Monterey or newer)** — the disk image (`LogosForge.Whiteboard-<version>-x64.dmg`).
+- **Linux (x64)** — the AppImage (`LogosForge.Whiteboard-<version>-x86_64.AppImage`). Make it executable with `chmod +x "LogosForge.Whiteboard-<version>-x86_64.AppImage"`, then run it directly; installation and root access are not required.
 
 The builds are currently **unsigned**, so the OS will warn on first launch:
 

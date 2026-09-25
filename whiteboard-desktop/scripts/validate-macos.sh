@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# Build and smoke-test the unsigned LogosForge Whiteboard Intel release on the
-# same kind of Mac used by .github/workflows/release-whiteboard-macos.yml.
+# Build and smoke-test the unsigned LogosForge Whiteboard Intel release and its
+# local MCP companion on the same kind of Mac used by the release workflow.
 #
 # Prerequisites: Intel macOS 12 Monterey or newer, Node.js 22.12+, Python 3.11+,
-# npm, Xcode Command Line Tools, curl, file, and lsof. The source checkout must
-# contain sibling logosforge/ and whiteboard-desktop/ directories.
+# npm, Xcode Command Line Tools, curl, file, hdiutil, lsof, and otool. The source
+# checkout must contain sibling logosforge/ and whiteboard-desktop/ directories.
 #
 # Usage from anywhere inside the checkout:
 #   bash whiteboard-desktop/scripts/validate-macos.sh
@@ -16,6 +16,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BACKEND="$ROOT/whiteboard-desktop/backend"
 DESKTOP="$ROOT/whiteboard-desktop/desktop"
+MACHO_SCANNER="$ROOT/whiteboard-desktop/scripts/check-macos-deployment-targets.py"
 
 VALIDATION_DIR=""
 BPID=""
@@ -63,9 +64,10 @@ healthy_body() {
 say "0. Validate the release host"
 [ "$(uname -s)" = "Darwin" ] || die "this validator must run on macOS"
 
-for command_name in node npm python3 xcode-select curl file lsof; do
+for command_name in node npm python3 xcode-select curl file hdiutil lsof otool; do
   command -v "$command_name" >/dev/null 2>&1 || die "$command_name is required"
 done
+[ -x /usr/libexec/PlistBuddy ] || die "/usr/libexec/PlistBuddy is required"
 
 ARCH="$(uname -m)"
 [ "$ARCH" = "x86_64" ] || die "this release is Intel-only; expected x86_64, found $ARCH"
@@ -83,6 +85,7 @@ xcode-select -p >/dev/null 2>&1 || die "Xcode Command Line Tools are missing; ru
 [ -d "$ROOT/logosforge/logosforge" ] || die "shared core not found under $ROOT/logosforge"
 [ -f "$BACKEND/logosforge-whiteboard-backend.spec" ] || die "backend spec not found under $BACKEND"
 [ -f "$DESKTOP/package-lock.json" ] || die "desktop lockfile not found under $DESKTOP"
+[ -f "$MACHO_SCANNER" ] || die "Mach-O deployment-target scanner not found at $MACHO_SCANNER"
 
 printf 'arch: %s | macOS %s | node %s | %s\n' \
   "$ARCH" "$MACOS_VERSION" "$(node -v)" "$(python3 --version)"
@@ -107,19 +110,33 @@ printf 'expected bundled core: %s\n' "$EXPECTED_CORE_VERSION"
 
 say "2. Run backend tests, byte-compile, and dependency check"
 ( cd "$ROOT" && "$PYTHON" -m pytest "$BACKEND/tests" -q -p no:cacheprovider )
-PYTHONPYCACHEPREFIX="$VALIDATION_DIR/pycache" "$PYTHON" -m compileall -q "$BACKEND/app"
+PYTHONPYCACHEPREFIX="$VALIDATION_DIR/pycache" "$PYTHON" -m compileall -q \
+  "$BACKEND/app" \
+  "$BACKEND/whiteboard-mcp-entry.py" \
+  "$BACKEND/smoke-frozen-mcp.py" \
+  "$BACKEND/smoke-packaged-mcp.py" \
+  "$MACHO_SCANNER"
 "$PYTHON" -m pip check
+"$PYTHON" "$MACHO_SCANNER" --self-test
 
-# --- 2. Freeze and smoke-test the native backend ---------------------------
-say "3. Build the native PyInstaller backend"
+# --- 2. Freeze and smoke-test the native companions ------------------------
+say "3. Build the native PyInstaller backend and MCP companion"
 rm -rf -- "$BACKEND/dist" "$BACKEND/build"
 ( cd "$BACKEND" && "$PYTHON" -m PyInstaller logosforge-whiteboard-backend.spec --noconfirm --clean --log-level WARN )
+( cd "$BACKEND" && "$PYTHON" -m PyInstaller logosforge-whiteboard-mcp.spec --noconfirm --clean --log-level WARN )
 
 BE="$BACKEND/dist/logosforge-whiteboard-backend/logosforge-whiteboard-backend"
+MCP="$BACKEND/dist/logosforge-whiteboard-mcp"
 [ -f "$BE" ] || die "frozen backend was not produced at $BE"
 [ -x "$BE" ] || die "frozen backend is not executable: $BE"
+[ -f "$MCP" ] || die "frozen MCP companion was not produced at $MCP"
+[ -x "$MCP" ] || die "frozen MCP companion is not executable: $MCP"
 file "$BE"
-file "$BE" | grep -q 'x86_64' || die "frozen backend is not an Intel x86_64 executable"
+file "$BE" | grep -Eq 'Mach-O 64-bit executable x86_64' \
+  || die "frozen backend is not an Intel x86_64 executable"
+file "$MCP"
+file "$MCP" | grep -Eq 'Mach-O 64-bit executable x86_64' \
+  || die "frozen MCP companion is not an Intel x86_64 executable"
 
 SMOKE_PORT="$(free_port)"
 say "4. Smoke-test the frozen backend on dynamic port $SMOKE_PORT"
@@ -146,8 +163,11 @@ kill "$BPID" 2>/dev/null || true
 wait "$BPID" 2>/dev/null || true
 BPID=""
 
+say "5. Smoke-test the frozen MCP bridge"
+"$PYTHON" "$BACKEND/smoke-frozen-mcp.py" "$BE" "$MCP"
+
 # --- 3. Desktop dependency and build gates ---------------------------------
-say "5. Install desktop dependencies and verify Electron toolchain"
+say "6. Install desktop dependencies and verify Electron toolchain"
 ( cd "$DESKTOP" && npm ci )
 ELECTRON_VERSION="$(cd "$DESKTOP" && node -p 'require("./node_modules/electron/package.json").version')"
 BUILDER_VERSION="$(cd "$DESKTOP" && node -p 'require("./node_modules/electron-builder/package.json").version')"
@@ -155,7 +175,7 @@ case "$ELECTRON_VERSION" in 43.*) ;; *) die "expected Electron 43.x, found $ELEC
 case "$BUILDER_VERSION" in 26.*) ;; *) die "expected electron-builder 26.x, found $BUILDER_VERSION" ;; esac
 printf 'Electron %s | electron-builder %s\n' "$ELECTRON_VERSION" "$BUILDER_VERSION"
 
-say "6. Run desktop tests, build, and moderate-or-higher audit gate"
+say "7. Run desktop tests, build, and moderate-or-higher audit gate"
 ( cd "$DESKTOP" && npm test && npm run build && npm audit --audit-level=moderate )
 
 # --- 4. Package and inspect the app ----------------------------------------
@@ -163,9 +183,10 @@ PACKAGE_VERSION="$(cd "$DESKTOP" && node -p 'require("./package.json").version')
 DMG="$DESKTOP/release/LogosForge Whiteboard-${PACKAGE_VERSION}-x64.dmg"
 APP="$DESKTOP/release/mac/LogosForge Whiteboard.app"
 APP_BE="$APP/Contents/Resources/backend/logosforge-whiteboard-backend"
+APP_MCP="$APP/Contents/Resources/mcp/logosforge-whiteboard-mcp"
 APP_EXE="$APP/Contents/MacOS/LogosForge Whiteboard"
 
-say "7. Build the unsigned Intel DMG"
+say "8. Build the unsigned Intel DMG"
 rm -rf -- "$DESKTOP/release/mac"
 rm -f -- "$DMG"
 ( cd "$DESKTOP" && CSC_IDENTITY_AUTO_DISCOVERY=false npm run dist:mac )
@@ -174,16 +195,40 @@ rm -f -- "$DMG"
 [ -d "$APP" ] || die "packaged app was not produced at $APP"
 [ -f "$APP_BE" ] || die "bundled backend is missing from $APP"
 [ -x "$APP_BE" ] || die "bundled backend lost its executable bit: $APP_BE"
+[ -f "$APP_MCP" ] || die "bundled MCP companion is missing from $APP"
+[ -x "$APP_MCP" ] || die "bundled MCP companion lost its executable bit: $APP_MCP"
 [ -x "$APP_EXE" ] || die "packaged Electron executable is missing: $APP_EXE"
 file "$APP_BE"
-file "$APP_BE" | grep -q 'x86_64' || die "bundled backend is not Intel x86_64"
+file "$APP_BE" | grep -Eq 'Mach-O 64-bit executable x86_64' \
+  || die "bundled backend is not Intel x86_64"
+file "$APP_MCP"
+file "$APP_MCP" | grep -Eq 'Mach-O 64-bit executable x86_64' \
+  || die "bundled MCP companion is not Intel x86_64"
+file "$APP_EXE"
+file "$APP_EXE" | grep -Eq 'Mach-O 64-bit executable x86_64' \
+  || die "packaged Electron executable is not Intel x86_64"
 
-# --- 5. Launch the actual packaged app with isolated state -----------------
+MINIMUM_SYSTEM_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$APP/Contents/Info.plist")"
+[ "$MINIMUM_SYSTEM_VERSION" = "12.0.0" ] \
+  || die "expected LSMinimumSystemVersion 12.0.0, found $MINIMUM_SYSTEM_VERSION"
+
+PACKAGED_ELECTRON_VERSION="$(ELECTRON_RUN_AS_NODE=1 "$APP_EXE" -p 'process.versions.electron')"
+case "$PACKAGED_ELECTRON_VERSION" in
+  43.*) ;;
+  *) die "expected packaged Electron 43.x, found $PACKAGED_ELECTRON_VERSION" ;;
+esac
+printf 'packaged Electron %s | LSMinimumSystemVersion %s\n' \
+  "$PACKAGED_ELECTRON_VERSION" "$MINIMUM_SYSTEM_VERSION"
+
+say "9. Scan packaged Mach-O deployment targets"
+"$PYTHON" "$MACHO_SCANNER" "$APP" --maximum 12.0.0
+
+# --- 5. Launch and exercise the actual packaged app ------------------------
 APP_PORT="$(free_port)"
 lsof -nP -iTCP:"$APP_PORT" -sTCP:LISTEN >/dev/null 2>&1 \
   && die "dynamic app port $APP_PORT became occupied before launch"
 
-say "8. Launch the packaged app with isolated state on dynamic port $APP_PORT"
+say "10. Launch the packaged app with isolated state on dynamic port $APP_PORT"
 LOGOSFORGE_HOST=127.0.0.1 \
 LOGOSFORGE_PORT="$APP_PORT" \
 LOGOSFORGE_DATA_DIR="$APP_DATA" \
@@ -219,7 +264,10 @@ if kill -0 "$APP_BACKEND_PID" 2>/dev/null; then
 fi
 APP_BACKEND_PID=""
 
-printf '\n\033[1;32mPASS — backend tests, compile, pip check, desktop tests, build, audit, DMG packaging, and packaged-app health all passed.\033[0m\n'
+say "11. Exercise the packaged MCP bridge from the DMG"
+"$PYTHON" "$BACKEND/smoke-packaged-mcp.py" "$DMG" --timeout 120
+
+printf '\n\033[1;32mPASS — backend and MCP tests, freezes, smokes, desktop gates, Monterey metadata, Mach-O targets, DMG packaging, packaged-app health, and packaged MCP bridge all passed.\033[0m\n'
 printf 'Installer: %s\n' "$DMG"
 
 cat <<EOF
