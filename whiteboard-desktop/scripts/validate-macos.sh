@@ -4,7 +4,7 @@
 # local MCP companion on the same kind of Mac used by the release workflow.
 #
 # Prerequisites: Intel macOS 12 Monterey or newer, Node.js 22.12+, Python 3.11+,
-# npm, Xcode Command Line Tools, curl, file, hdiutil, lsof, and otool. The source
+# npm, Xcode Command Line Tools, curl, file, hdiutil, and lsof. The source
 # checkout must contain sibling logosforge/ and whiteboard-desktop/ directories.
 #
 # Usage from anywhere inside the checkout:
@@ -64,7 +64,7 @@ healthy_body() {
 say "0. Validate the release host"
 [ "$(uname -s)" = "Darwin" ] || die "this validator must run on macOS"
 
-for command_name in node npm python3 xcode-select curl file hdiutil lsof otool; do
+for command_name in node npm python3 xcode-select curl file hdiutil lsof; do
   command -v "$command_name" >/dev/null 2>&1 || die "$command_name is required"
 done
 [ -x /usr/libexec/PlistBuddy ] || die "/usr/libexec/PlistBuddy is required"
