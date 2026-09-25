@@ -665,6 +665,20 @@ jobs:
           [ -s "$dmg" ] || { echo "::error::Verified DMG is missing: $dmg"; exit 1; }
           [ -s "$NOTES_PATH" ] || { echo "::error::Release notes are missing: $NOTES_PATH"; exit 1; }
 
+          # Python.org/Homebrew Python builds on Monterey can lack a usable
+          # OpenSSL default CA path. Certifi is a direct LogosForge dependency
+          # already installed in this venv; pass its PEM explicitly so TLS keeps
+          # certificate and hostname verification without relying on host setup.
+          ca_file="$(./build-venv/bin/python -m certifi)"
+          case "$ca_file" in
+            /*) ;;
+            *) echo "::error::Certifi returned a non-absolute CA path."; exit 1 ;;
+          esac
+          [ -f "$ca_file" ] && [ -r "$ca_file" ] && [ -s "$ca_file" ] || {
+            echo "::error::Certifi CA bundle is missing, unreadable, or empty."
+            exit 1
+          }
+
           ./build-venv/bin/python \
             "$CONTROLS_ROOT/publish-github-release-asset.py" \
             --repo "$GITHUB_REPOSITORY" \
@@ -674,6 +688,7 @@ jobs:
             --notes "$NOTES_PATH" \
             --asset "$dmg" \
             --upload-name "$asset_name" \
+            --ca-file "$ca_file" \
             --api-url "${GITHUB_API_URL:-https://api.github.com}"
 
           local_digest="sha256:$(shasum -a 256 "$dmg" | awk '{print $1}')"

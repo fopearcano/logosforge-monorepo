@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import ssl
 import stat
 import sys
 import tempfile
@@ -86,9 +87,25 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
 class UrllibTransport:
     """Small standard-library HTTPS transport with bounded response reads."""
 
-    def __init__(self, *, timeout_seconds: float = 900.0) -> None:
+    def __init__(
+        self,
+        *,
+        timeout_seconds: float = 900.0,
+        ca_file: Path | None = None,
+    ) -> None:
         self._timeout_seconds = timeout_seconds
-        self._opener = urllib.request.build_opener(_NoRedirectHandler())
+        try:
+            context = ssl.create_default_context(
+                cafile=os.fspath(ca_file) if ca_file is not None else None
+            )
+        except (OSError, ssl.SSLError) as exc:
+            raise ValidationError("the configured TLS CA bundle could not be loaded") from exc
+        if context.verify_mode != ssl.CERT_REQUIRED or not context.check_hostname:
+            raise ValidationError("the TLS context must verify certificates and hostnames")
+        self._opener = urllib.request.build_opener(
+            _NoRedirectHandler(),
+            urllib.request.HTTPSHandler(context=context),
+        )
 
     @staticmethod
     def _read_response(response: BinaryIO) -> bytes:
@@ -123,8 +140,21 @@ class UrllibTransport:
             finally:
                 exc.close()
             return HttpResponse(status=int(exc.code), body=payload)
-        except (OSError, urllib.error.URLError) as exc:
-            raise PublishError("GitHub request failed because of a network or TLS error") from exc
+        except urllib.error.URLError as exc:
+            reason = getattr(exc, "reason", None)
+            if isinstance(reason, ssl.SSLCertVerificationError):
+                message = "GitHub TLS certificate verification failed"
+            elif isinstance(reason, ssl.SSLError):
+                message = "GitHub TLS connection failed"
+            else:
+                message = "GitHub network request failed"
+            raise PublishError(message) from exc
+        except ssl.SSLCertVerificationError as exc:
+            raise PublishError("GitHub TLS certificate verification failed") from exc
+        except ssl.SSLError as exc:
+            raise PublishError("GitHub TLS connection failed") from exc
+        except OSError as exc:
+            raise PublishError("GitHub network request failed") from exc
 
 
 @dataclass(frozen=True)
@@ -953,6 +983,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--upload-name", help="exact GitHub asset filename")
     parser.add_argument("--api-url", help="GitHub HTTPS API base URL")
     parser.add_argument(
+        "--ca-file",
+        type=Path,
+        help="PEM CA bundle used for verified HTTPS (defaults to the Python trust store)",
+    )
+    parser.add_argument(
         "--self-test",
         action="store_true",
         help="exercise all publishing branches with a fake transport and no network",
@@ -973,7 +1008,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         if getattr(args, name) is not None
     }
     if args.self_test:
-        if supplied:
+        if supplied or args.ca_file is not None:
             parser.error("publishing arguments cannot be combined with --self-test")
     elif len(supplied) != 8:
         missing = sorted(
@@ -1013,7 +1048,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         api_url=args.api_url,
     )
     try:
-        result = publish_release_asset(config, token)
+        transport = UrllibTransport(ca_file=args.ca_file)
+        result = publish_release_asset(config, token, transport=transport)
     except (ValidationError, PublishError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
