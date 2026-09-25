@@ -182,9 +182,26 @@ jobs:
 
       - name: Install packaged-app smoke runtimes
         run: |
+          set -euo pipefail
+
           sudo apt-get update
+
+          alsa_package=""
+          for candidate in libasound2t64 libasound2; do
+            candidate_version="$(apt-cache policy "$candidate" 2>/dev/null | awk '$1 == "Candidate:" { print $2; exit }' || true)"
+            if [ -n "$candidate_version" ] && [ "$candidate_version" != "(none)" ]; then
+              alsa_package="$candidate"
+              break
+            fi
+          done
+          if [ -z "$alsa_package" ]; then
+            echo "::error::No installable ALSA runtime package was found."
+            exit 1
+          fi
+          echo "Using ALSA runtime package: $alsa_package"
+
           sudo apt-get install -y --no-install-recommends \
-            libasound2 libatk-bridge2.0-0 libatk1.0-0 libcups2 libdrm2 \
+            "$alsa_package" libatk-bridge2.0-0 libatk1.0-0 libcups2 libdrm2 \
             libfuse2 libgbm1 libgtk-3-0 libnss3 libx11-xcb1 libxcomposite1 \
             libxdamage1 libxfixes3 libxrandr2 libxss1 libxtst6 xauth xdg-utils xvfb
 
