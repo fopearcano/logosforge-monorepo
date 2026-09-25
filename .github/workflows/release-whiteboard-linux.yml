@@ -355,7 +355,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          appimage="$PWD/release/LogosForge Whiteboard-${{ steps.release.outputs.version }}-x64.AppImage"
+          appimage="$PWD/release/LogosForge Whiteboard-${{ steps.release.outputs.version }}-x86_64.AppImage"
           [ -s "$appimage" ] || { echo "::error::Versioned AppImage is missing: $appimage"; exit 1; }
           file "$appimage" | grep -Eq 'ELF 64-bit.*x86-64' || {
             echo "::error::Packaged AppImage is not Linux x64."
@@ -383,7 +383,7 @@ jobs:
       - name: Exercise packaged Whiteboard MCP bridge
         run: >-
           ./build-venv/bin/python whiteboard-desktop/backend/smoke-packaged-mcp.py
-          "whiteboard-desktop/desktop/release/LogosForge Whiteboard-${{ steps.release.outputs.version }}-x64.AppImage"
+          "whiteboard-desktop/desktop/release/LogosForge Whiteboard-${{ steps.release.outputs.version }}-x86_64.AppImage"
           --timeout 120
 
       # --- 3. Publish ------------------------------------------------------
