@@ -565,9 +565,17 @@ class ChatView(QWidget):
         return card
 
     def _scroll_to_bottom(self) -> None:
-        QTimer.singleShot(0, lambda: self._messages_scroll.verticalScrollBar().setValue(
-            self._messages_scroll.verticalScrollBar().maximum(),
-        ))
+        # Bind the deferred callback to this widget's QObject lifetime.  A
+        # context-free singleShot can outlive a short-lived ChatView (notably
+        # in headless tests) and then dereference its already-destroyed scroll
+        # area when the event loop next runs.
+        QTimer.singleShot(
+            0,
+            self,
+            lambda: self._messages_scroll.verticalScrollBar().setValue(
+                self._messages_scroll.verticalScrollBar().maximum(),
+            ),
+        )
 
     # -- Settings ------------------------------------------------------------
 

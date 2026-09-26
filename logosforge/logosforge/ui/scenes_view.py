@@ -291,7 +291,7 @@ class ScenesView(QWidget):
         self._content_input.customContextMenuRequested.connect(
             self._show_editor_context_menu
         )
-        QTimer.singleShot(0, self._refresh_psyke_terms)
+        QTimer.singleShot(0, self, self._refresh_psyke_terms)
 
         # -- Detail fields (hidden in focus mode) ----------------------------
         self._detail_fields = QWidget()
@@ -394,8 +394,8 @@ class ScenesView(QWidget):
         self._refresh_filters()
         self._refresh_act_options()
         self._refresh_list()
-        QTimer.singleShot(0, self._load_characters_and_states)
-        QTimer.singleShot(0, self._load_places)
+        QTimer.singleShot(0, self, self._load_characters_and_states)
+        QTimer.singleShot(0, self, self._load_places)
 
     # -- Populate checkable lists --------------------------------------------
 

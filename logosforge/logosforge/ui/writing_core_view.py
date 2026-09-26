@@ -1097,7 +1097,7 @@ class _SceneEditor(QTextEdit):
 
     def showEvent(self, event):
         super().showEvent(event)
-        QTimer.singleShot(10, self._adjust_height)
+        QTimer.singleShot(10, self, self._adjust_height)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -3816,7 +3816,11 @@ class WritingCoreView(QWidget):
 
         scroll_val = self._pending_scroll
         if scroll_val:
-            QTimer.singleShot(50, lambda: self._scroll.verticalScrollBar().setValue(scroll_val))
+            QTimer.singleShot(
+                50,
+                self,
+                lambda: self._scroll.verticalScrollBar().setValue(scroll_val),
+            )
 
     # -- Focus mode -----------------------------------------------------------
 

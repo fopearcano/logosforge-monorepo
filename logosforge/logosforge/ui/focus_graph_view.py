@@ -11,7 +11,7 @@ import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QObject, Qt, QTimer
 from PySide6.QtGui import QActionGroup, QBrush, QColor, QFont, QPen
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -863,7 +863,15 @@ class _NodeInteractionMixin:
             # dangling grab on a freed C++ item ("Internal C++ object already
             # deleted"). Capture the callback + id, never `self`, past the rebuild.
             cb, nid = self._on_click, self.node_id
-            QTimer.singleShot(0, lambda: cb(nid))
+            owner = getattr(cb, "__self__", None)
+            if isinstance(owner, QObject):
+                QTimer.singleShot(0, owner, lambda: cb(nid))
+            else:
+                scene = self.scene()
+                if scene is not None:
+                    QTimer.singleShot(0, scene, lambda: cb(nid))
+                else:
+                    QTimer.singleShot(0, lambda: cb(nid))
         super().mousePressEvent(event)
 
     def hoverEnterEvent(self, event) -> None:

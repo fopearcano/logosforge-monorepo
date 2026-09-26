@@ -1662,7 +1662,7 @@ class MainWindow(QMainWindow):
         cfg = self._librechat_service.config
         if cfg.enabled and cfg.auto_connect and self._librechat_service.can_launch():
             from PySide6.QtCore import QTimer
-            QTimer.singleShot(1500, self._librechat_service.start)
+            QTimer.singleShot(1500, self, self._librechat_service.start)
 
     def _show_stages(self) -> None:
         self._set_content(

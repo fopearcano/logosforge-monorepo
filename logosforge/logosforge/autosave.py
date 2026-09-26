@@ -164,7 +164,7 @@ class AutosaveManager(QObject):
 
         if self._queued:
             self._queued = False
-            QTimer.singleShot(100, self._do_save)
+            QTimer.singleShot(100, self, self._do_save)
 
         return ok
 

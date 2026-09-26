@@ -567,7 +567,7 @@ class PsykeConsole(QWidget):
                     self._index_dirty = False
             elif event.type() == QEvent.Type.FocusOut:
                 self._animate_opacity(_OPACITY_IDLE)
-                QTimer.singleShot(200, self._maybe_hide_dropdown)
+                QTimer.singleShot(200, self, self._maybe_hide_dropdown)
             elif event.type() == QEvent.Type.KeyPress:
                 key = event.key()
                 if key == Qt.Key.Key_Escape:

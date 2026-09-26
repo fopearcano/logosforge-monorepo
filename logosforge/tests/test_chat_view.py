@@ -2,7 +2,7 @@
 
 import json
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QKeyEvent
 
 from logosforge.chat_memory import ActionProposal
@@ -62,6 +62,22 @@ def test_user_message_persists_when_submitted():
     view._on_user_submit("Hello world")
     msgs = db.get_chat_messages(proj.id)
     assert any(m.role == "user" and m.content == "Hello world" for m in msgs)
+
+
+def test_deferred_scroll_is_bound_to_view_lifetime(monkeypatch):
+    calls = []
+    monkeypatch.setattr(QTimer, "singleShot", lambda *args: calls.append(args))
+    db, proj = _setup()
+    view = ChatView(db, proj.id)
+
+    calls.clear()
+    view._scroll_to_bottom()
+
+    assert len(calls) == 1
+    delay, context, callback = calls[0]
+    assert delay == 0
+    assert context is view
+    assert callable(callback)
 
 
 def test_messages_reload_on_new_view():
