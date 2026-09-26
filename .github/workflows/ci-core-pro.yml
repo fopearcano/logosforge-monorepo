@@ -83,7 +83,7 @@ jobs:
 
       - name: Run complete core suite
         working-directory: logosforge
-        run: python -m pytest -q
+        run: python tools/run_pytest_modules.py
 
   contracts-and-pro:
     name: Contracts and Pro build

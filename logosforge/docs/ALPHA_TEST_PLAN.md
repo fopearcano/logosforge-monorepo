@@ -61,7 +61,8 @@ first. Automated coverage: `python -m pytest tests/` (5,900+ tests).
 
 ## 7. Regression checklist (before tagging alpha)
 
-- [ ] Full suite green: `QT_QPA_PLATFORM=offscreen python -m pytest -q`.
+- [ ] Full isolated suite green:
+      `QT_QPA_PLATFORM=offscreen python tools/run_pytest_modules.py`.
 - [ ] Safety-gate defaults unchanged: `logos_enabled=False`,
       `connector_enabled=False`, `connector_allow_writes=False`, API desktop mode.
 - [ ] No API key in any export or log.

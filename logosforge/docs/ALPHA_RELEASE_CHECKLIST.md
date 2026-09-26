@@ -7,12 +7,11 @@ Gate checklist for declaring **Alpha Closed (private alpha)**. Companion to
 
 ## Must pass before Alpha (hard gate)
 
-- [x] **Full test suite** — `QT_QPA_PLATFORM=offscreen python -m pytest -q`
-      (~6008 tests; safety-critical subset 214 passed / 0 skipped). The gate run
-      surfaced one regression (Outline-confirm dialog minimum) — **fixed** — and
-      one full-suite-ordering flake (a Logos toolbar test that passes in
-      isolation). Re-run the full suite to confirm a clean baseline before
-      tagging.
+- [x] **Full test suite** —
+      `QT_QPA_PLATFORM=offscreen python tools/run_pytest_modules.py`. Every
+      pytest module runs exactly once in a fresh process so native Qt state
+      cannot leak between modules; failures are aggregated after all modules
+      have run.
 - [x] **No data-loss paths** — autosave is atomic; per-keystroke edits flush
       before any editor rebuild; restore is non-destructive (new project).
 - [x] **Project switch clears stale state** — scenes/PSYKE/notes/Assistant/Logos

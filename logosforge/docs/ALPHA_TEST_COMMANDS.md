@@ -87,28 +87,23 @@ QT_QPA_PLATFORM=offscreen python -m pytest \
   rather than fail. This is expected and **not** a release blocker.
 - A non-Windows **"Segoe UI" font warning** is harmless (font fallback applies).
 
-## Time-cap caveat
+## Complete suite
 
-The full ~120-file suite cannot complete within the gate environment's time cap
-(heavy PSYKE / quantum / voice / visual suites). The **broad certification sweep
-(§2)** is the authoritative green check for the Alpha gate; on a machine without a
-time cap, run the whole suite with:
+The complete release gate runs every test module in its own Python process.
+This preserves all test coverage while giving Qt modules a fresh
+`QApplication` and native heap:
 
 ```bash
-QT_QPA_PLATFORM=offscreen python -m pytest -q
+QT_QPA_PLATFORM=offscreen python tools/run_pytest_modules.py
 ```
 
-## Combined-run caveat (Qt teardown flakiness)
+The runner discovers both standard pytest module patterns recursively, executes
+each module exactly once in deterministic path order, and reports all failed
+modules after the remaining modules have run. Successful child output is hidden
+to keep CI logs compact; failure output and native faulthandler diagnostics are
+retained.
 
-Keep combined Qt-UI runs to **moderate batches (≈ ≤20 files) per pytest
-process**. Very large single-process combinations can segfault on a
-**timing-dependent Qt/GC teardown interaction** that is unrelated to any
-product code path: tests construct many `MainWindow`s, each connects to the
-process-singleton project event bus (`main_window.py` →
-`get_event_bus().project_data_changed`), and when a garbage-collected window's
-C++ object dies at an unlucky moment a later bus *emit* (e.g.
-`test_psyke_project_isolation.py::test_switch_does_not_duplicate_psyke_console_subscriptions`)
-can touch the destroyed widget. Every suite passes alone and in the curated
-batches; the running app is unaffected (one window, process-lifetime bus).
-If a combined run segfaults, split it and re-run — a real failure reproduces
-in the suite's own process.
+Avoid replacing this gate with one monolithic `python -m pytest` process. The
+desktop suite intentionally exercises thousands of Qt object lifecycles, and a
+native lifetime fault in one module can otherwise surface much later in an
+unrelated test.

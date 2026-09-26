@@ -211,6 +211,7 @@ jobs:
         shell: bash
     env:
       QT_QPA_PLATFORM: offscreen
+      PYTHONFAULTHANDLER: "1"
       PYTHONUTF8: "1"
 
     steps:
@@ -257,7 +258,7 @@ jobs:
 
       - name: Run complete core suite
         working-directory: logosforge
-        run: python -m pytest -q
+        run: python tools/run_pytest_modules.py
 
   build_windows:
     name: Windows x64 — test, freeze, smoke, package
