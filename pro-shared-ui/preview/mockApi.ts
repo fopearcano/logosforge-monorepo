@@ -1,5 +1,9 @@
 import type {
   NoteDTO,
+  InlineCommentDTO,
+  InlineCommentCreateDTO,
+  InlineCommentUpdateDTO,
+  CommentReplyCreateDTO,
   CharacterDTO,
   CharacterUpdateDTO,
   ProjectDTO,
@@ -168,6 +172,64 @@ const NOTES: NoteDTO[] = [
   { id: 5, title: "Cold-open candidates", content: "Either the distress loop or the dead-planet drift. Lean drift — quieter, lonelier.", tags: ["structure"], pinned: false, psyke_links: [], scene_links: [1] },
 ];
 
+let MOCK_COMMENT_REVISION_SEQ = 3;
+const nextMockCommentRevision = (): string =>
+  (MOCK_COMMENT_REVISION_SEQ++).toString(16).padStart(64, "0");
+
+const COMMENTS: InlineCommentDTO[] = [
+  {
+    id: 1,
+    source_id: "wb-comment-open",
+    anchor: {
+      start_scene_id: 12,
+      start_field: "content",
+      from_offset: 5,
+      end_scene_id: 12,
+      end_field: "content",
+      to_offset: 13,
+      prefix: "INT. ",
+      suffix: " — NIGHT...",
+    },
+    quote: "HELIOS-9",
+    body: "Make the station feel less safe before Vesper answers.",
+    resolved: false,
+    replies: [
+      {
+        id: 1,
+        source_id: "wb-reply-1",
+        body: "The failing lights can carry that warning.",
+        author: "Billy",
+        sort_order: 0,
+        created_at: "2026-03-11T10:08:00Z",
+      },
+    ],
+    created_at: "2026-03-11T10:00:00Z",
+    updated_at: "2026-03-11T10:08:00Z",
+    revision: "1".padStart(64, "0"),
+  },
+  {
+    id: 2,
+    source_id: "wb-comment-resolved",
+    anchor: {
+      start_scene_id: 2,
+      start_field: "title",
+      from_offset: 0,
+      end_scene_id: 2,
+      end_field: "title",
+      to_offset: 13,
+      prefix: "",
+      suffix: "",
+    },
+    quote: "Distress Loop",
+    body: "Keep this scene title; it pays off the repeated signal.",
+    resolved: true,
+    replies: [],
+    created_at: "2026-03-10T14:00:00Z",
+    updated_at: "2026-03-12T09:30:00Z",
+    revision: "2".padStart(64, "0"),
+  },
+];
+
 /**
  * Minimal mock of the logosforge core ApiClient for the preview. Returns the
  * sample data for the wired domains; the brief delay makes loading states visible.
@@ -198,6 +260,93 @@ let MOCK_VOICE_SEQ = 1;
 export function createMockApiClient(): ApiClient {
   return {
     async listNotes() { await delay(); return NOTES.map((n) => ({ ...n })); },
+    async listComments() {
+      await delay();
+      return COMMENTS.map((comment) => ({
+        ...comment,
+        anchor: { ...comment.anchor },
+        replies: comment.replies.map((reply) => ({ ...reply })),
+      }));
+    },
+    async createComment(_p: number, body: InlineCommentCreateDTO) {
+      await delay(140);
+      const id = COMMENTS.reduce((maximum, comment) => Math.max(maximum, comment.id), 0) + 1;
+      const timestamp = new Date().toISOString();
+      const nextReplyId = COMMENTS.flatMap((candidate) => candidate.replies)
+        .reduce((maximum, candidate) => Math.max(maximum, candidate.id), 0) + 1;
+      const comment: InlineCommentDTO = {
+        id,
+        source_id: body.source_id ?? "",
+        anchor: { ...body.anchor },
+        quote: body.quote,
+        body: body.body ?? "",
+        resolved: body.resolved ?? false,
+        replies: (body.replies ?? []).map((reply, index) => ({
+          id: nextReplyId + index,
+          source_id: reply.source_id ?? "",
+          body: reply.body ?? "",
+          author: reply.author ?? "you",
+          sort_order: reply.sort_order ?? index,
+          created_at: reply.created_at ?? timestamp,
+        })),
+        created_at: body.created_at ?? timestamp,
+        updated_at: body.updated_at ?? timestamp,
+        revision: nextMockCommentRevision(),
+      };
+      COMMENTS.push(comment);
+      return { ...comment, anchor: { ...comment.anchor }, replies: comment.replies.map((reply) => ({ ...reply })) };
+    },
+    async updateComment(_p: number, commentId: number, body: InlineCommentUpdateDTO) {
+      await delay(140);
+      const comment = COMMENTS.find((candidate) => candidate.id === commentId);
+      if (!comment) throw new Error(`comment ${commentId} not found`);
+      if (body.anchor !== undefined) comment.anchor = { ...body.anchor };
+      if (body.body !== undefined) comment.body = body.body;
+      if (body.resolved !== undefined) comment.resolved = body.resolved;
+      comment.updated_at = new Date().toISOString();
+      comment.revision = nextMockCommentRevision();
+      return {
+        ...comment,
+        anchor: { ...comment.anchor },
+        replies: comment.replies.map((reply) => ({ ...reply })),
+      };
+    },
+    async deleteComment(_p: number, commentId: number) {
+      await delay(120);
+      const index = COMMENTS.findIndex((candidate) => candidate.id === commentId);
+      if (index < 0) throw new Error(`comment ${commentId} not found`);
+      COMMENTS.splice(index, 1);
+      return { ok: true, deleted: commentId };
+    },
+    async createCommentReply(_p: number, commentId: number, body: CommentReplyCreateDTO) {
+      await delay(140);
+      const comment = COMMENTS.find((candidate) => candidate.id === commentId);
+      if (!comment) throw new Error(`comment ${commentId} not found`);
+      const id = COMMENTS.flatMap((candidate) => candidate.replies)
+        .reduce((maximum, candidate) => Math.max(maximum, candidate.id), 0) + 1;
+      comment.replies.push({
+        id,
+        source_id: body.source_id ?? "",
+        body: body.body ?? "",
+        author: body.author ?? "you",
+        sort_order: body.sort_order ?? comment.replies.length,
+        created_at: body.created_at ?? new Date().toISOString(),
+      });
+      comment.updated_at = new Date().toISOString();
+      comment.revision = nextMockCommentRevision();
+      return { ...comment, anchor: { ...comment.anchor }, replies: comment.replies.map((reply) => ({ ...reply })) };
+    },
+    async deleteCommentReply(_p: number, commentId: number, replyId: number) {
+      await delay(120);
+      const comment = COMMENTS.find((candidate) => candidate.id === commentId);
+      if (!comment) throw new Error(`comment ${commentId} not found`);
+      const index = comment.replies.findIndex((reply) => reply.id === replyId);
+      if (index < 0) throw new Error(`reply ${replyId} not found`);
+      comment.replies.splice(index, 1);
+      comment.updated_at = new Date().toISOString();
+      comment.revision = nextMockCommentRevision();
+      return { ok: true, deleted: replyId };
+    },
     async listCharacters() { await delay(); return MOCK_CHARACTERS.map((c) => ({ ...c })); },
     async updateCharacter(_p: number, characterId: number, body: CharacterUpdateDTO) {
       await delay();
@@ -578,6 +727,13 @@ export function createMockApiClient(): ApiClient {
     async voiceUndo() {
       await delay(80);
       return { undone: false, message: "Nothing to undo in preview." };
+    },
+    async assistantChat(_p: number, body: { message: string; selected_text?: string }) {
+      await delay(500);
+      return {
+        reply: `The request is clear. I would sharpen ${body.selected_text ? `“${body.selected_text}”` : "this passage"} by making the character's immediate choice carry the tension, then let the next line reveal its cost.`,
+        cached: false,
+      };
     },
     async runCounterpart(_p: number, body: { mode?: string }) {
       await delay(500);

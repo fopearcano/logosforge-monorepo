@@ -119,6 +119,26 @@ for (const marker of ["<ModalPortal>", "useModalDialog(", "role=\"dialog\"", "ar
   if (!applyModal.includes(marker)) violations.push(`Controlled Apply dialog is missing ${marker}`);
 }
 
+const commentsPanel = fs.readFileSync(path.join(root, "manuscript", "CommentsPanel.tsx"), "utf8");
+for (const marker of [
+  "data-screen-label=\"Comments Panel\"",
+  "aria-label=\"Comment threads\"",
+  "aria-label=\"Replies\"",
+  "aria-label=\"Show all comments\"",
+  "aria-label=\"Show open comments\"",
+  "aria-label=\"Export comments as Markdown\"",
+  "aria-label=\"Reply to comment\"",
+  "aria-label=\"Delete comment thread\"",
+  "aria-label=\"Confirm thread deletion\"",
+  "aria-live=\"polite\"",
+  "\"Resolve comment\"",
+  "\"Reopen comment\"",
+  "Anchor unavailable",
+  "navigate(\"Manuscript\", { sceneId })",
+]) {
+  if (!commentsPanel.includes(marker)) violations.push(`CommentsPanel is missing ${marker}`);
+}
+
 console.log(`Accessibility markup checks: ${files.length} files · ${buttons} buttons · ${fields} fields`);
 for (const violation of violations) console.error(`  FAIL: ${violation}`);
 if (violations.length) throw new Error(`${violations.length} accessibility markup violation(s)`);

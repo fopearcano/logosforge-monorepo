@@ -21,7 +21,7 @@
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc --noEmit && tsc -p preview/tsconfig.json --noEmit",
-    "test": "npm run typecheck && npm run test:http-api && npm run test:runtime-dto && npm run test:http-lifetime && npm run test:client-lifetime && npm run test:get-coalescing && npm run test:preview-api && npm run test:project-bundle && npm run test:project-saves && npm run test:scene-saves && npm run test:manuscript-viewport && npm run test:controlled-apply && npm run test:latest-request && npm run test:extraction-polling && npm run test:extraction-session && npm run test:series-snapshot && npm run test:runtime-faults && npm run test:mic-lifecycle && npm run test:lifecycle && npm run test:accessibility",
+    "test": "npm run typecheck && npm run test:http-api && npm run test:runtime-dto && npm run test:http-lifetime && npm run test:client-lifetime && npm run test:get-coalescing && npm run test:preview-api && npm run test:project-bundle && npm run test:project-saves && npm run test:scene-saves && npm run test:comment-anchors && npm run test:title-comment-highlights && npm run test:manuscript-viewport && npm run test:controlled-apply && npm run test:latest-request && npm run test:extraction-polling && npm run test:extraction-session && npm run test:series-snapshot && npm run test:runtime-faults && npm run test:mic-lifecycle && npm run test:comments && npm run test:lifecycle && npm run test:accessibility",
     "test:http-api": "esbuild tests/httpApiClientTests.ts --bundle --format=esm --platform=node --log-level=error --outfile=dist/http-api-test.mjs && node dist/http-api-test.mjs",
     "test:runtime-dto": "esbuild tests/runtimeDtoValidationTests.ts --bundle --format=esm --platform=node --log-level=error --outfile=dist/runtime-dto-test.mjs && node dist/runtime-dto-test.mjs",
     "test:http-lifetime": "esbuild tests/httpTransportLifetimeTests.ts --bundle --format=esm --platform=node --log-level=error --outfile=dist/http-lifetime-test.mjs && node dist/http-lifetime-test.mjs",
@@ -31,6 +31,8 @@
     "test:project-bundle": "esbuild tests/projectBundleTests.ts --bundle --format=esm --platform=node --log-level=error --outfile=dist/project-bundle-test.mjs && node dist/project-bundle-test.mjs",
     "test:project-saves": "esbuild tests/projectSaveCoordinatorTests.ts --bundle --format=esm --platform=node --log-level=error --outfile=dist/project-saves-test.mjs && node dist/project-saves-test.mjs",
     "test:scene-saves": "esbuild tests/sceneSaveQueueTests.ts --bundle --format=esm --platform=node --log-level=error --outfile=dist/scene-saves-test.mjs && node dist/scene-saves-test.mjs",
+    "test:comment-anchors": "esbuild tests/commentAnchorTests.ts --bundle --format=esm --platform=node --log-level=error --outfile=dist/comment-anchor-test.mjs && node dist/comment-anchor-test.mjs",
+    "test:title-comment-highlights": "esbuild tests/titleCommentHighlightTests.ts --bundle --format=esm --platform=node --log-level=error --outfile=dist/title-comment-highlight-test.mjs && node dist/title-comment-highlight-test.mjs",
     "test:manuscript-viewport": "esbuild tests/manuscriptViewportTests.ts --bundle --format=esm --platform=node --log-level=error --outfile=dist/manuscript-viewport-test.mjs && node dist/manuscript-viewport-test.mjs",
     "test:controlled-apply": "esbuild tests/controlledApplyTests.ts --bundle --format=esm --platform=node --log-level=error --outfile=dist/controlled-apply-test.mjs && node dist/controlled-apply-test.mjs",
     "test:latest-request": "esbuild tests/latestRequestTests.ts --bundle --format=esm --platform=node --log-level=error --outfile=dist/latest-request-test.mjs && node dist/latest-request-test.mjs",
@@ -39,6 +41,7 @@
     "test:series-snapshot": "esbuild tests/seriesSnapshotTests.ts --bundle --format=esm --platform=node --log-level=error --outfile=dist/series-snapshot-test.mjs && node dist/series-snapshot-test.mjs",
     "test:runtime-faults": "esbuild tests/runtimeFaultTests.ts --bundle --format=esm --platform=node --log-level=error --outfile=dist/runtime-fault-test.mjs && node dist/runtime-fault-test.mjs",
     "test:mic-lifecycle": "esbuild tests/micLifecycleTests.ts --bundle --format=esm --platform=node --log-level=error --outfile=dist/mic-lifecycle-test.mjs && node dist/mic-lifecycle-test.mjs",
+    "test:comments": "esbuild tests/commentPanelLogicTests.ts --bundle --format=esm --platform=node --external:react --log-level=error --outfile=dist/comments-test.mjs && node dist/comments-test.mjs",
     "test:lifecycle": "esbuild tests/lifecycleMarkupTests.ts --bundle --format=esm --platform=node --log-level=error --outfile=dist/lifecycle-test.mjs && node dist/lifecycle-test.mjs",
     "test:accessibility": "esbuild tests/accessibilityMarkupTests.ts --bundle --format=esm --platform=node --external:typescript --log-level=error --outfile=dist/accessibility-test.mjs && node dist/accessibility-test.mjs",
     "preview:dev": "vite --config preview/vite.config.ts"

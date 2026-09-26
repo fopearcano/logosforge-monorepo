@@ -68,14 +68,27 @@ def build_counterpart_messages(
     psyke_context: str = "",
     graph_context: str = "",
     user_note: str = "",
+    notes_context: str = "",
+    comments_context: str = "",
 ) -> list[dict]:
     """Build messages for COUNTERPART mode — reflective, never generative."""
+    if notes_context or comments_context:
+        from logosforge.context_builder import fit_editorial_contexts
+        notes_context, comments_context = fit_editorial_contexts(
+            notes_context, comments_context,
+        )
     user_parts: list[str] = []
     if story_memory_context:
         user_parts.append(story_memory_context)
         user_parts.append("")
     if psyke_context:
         user_parts.append(psyke_context)
+        user_parts.append("")
+    if notes_context:
+        user_parts.append(notes_context)
+        user_parts.append("")
+    if comments_context:
+        user_parts.append(comments_context)
         user_parts.append("")
     if graph_context:
         user_parts.append(graph_context)
@@ -107,6 +120,8 @@ def run_counterpart(
     user_note: str = "",
     custom_prompt: str = "",
     provider: ProviderConfig | None = None,
+    notes_context: str = "",
+    comments_context: str = "",
 ) -> tuple[str, bool]:
     """Run a COUNTERPART reflection headlessly. Returns ``(reply, from_cache)``.
 
@@ -126,6 +141,8 @@ def run_counterpart(
         psyke_context=psyke_context,
         graph_context=graph_context,
         user_note=user_note,
+        notes_context=notes_context,
+        comments_context=comments_context,
     )
     if provider is None:
         from logosforge.providers import build_active_provider

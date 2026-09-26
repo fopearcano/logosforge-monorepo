@@ -7,6 +7,7 @@ import type {
   DeleteResultDTO,
   ExtractionJobDTO,
   ExtractionResultDTO,
+  InlineCommentDTO,
   LogosActionDTO,
   LogosResultDTO,
   LogosSuggestionDTO,
@@ -22,6 +23,7 @@ import type {
   SceneExtractionDTO,
   SettingsDTO,
   VoiceBillyProposalDTO,
+  WhiteboardImportResultDTO,
 } from "@logosforge/ui-contracts";
 
 type JsonRecord = Record<string, unknown>;
@@ -157,6 +159,71 @@ function deleteResult(value: unknown, path: string): DeleteResultDTO {
   booleanValue(requireField(dto, "ok", path), fieldPath(path, "ok"));
   stringOrIntegerValue(requireField(dto, "deleted", path), fieldPath(path, "deleted"));
   return value as DeleteResultDTO;
+}
+
+function inlineCommentField(value: unknown, path: string): "content" | "title" {
+  return value === "content" || value === "title"
+    ? value
+    : fail(path, '"content" or "title"', value);
+}
+
+function inlineCommentAnchor(value: unknown, path: string): void {
+  const dto = record(value, path);
+  integerValue(requireField(dto, "start_scene_id", path), fieldPath(path, "start_scene_id"));
+  inlineCommentField(requireField(dto, "start_field", path), fieldPath(path, "start_field"));
+  integerValue(requireField(dto, "from_offset", path), fieldPath(path, "from_offset"));
+  integerValue(requireField(dto, "end_scene_id", path), fieldPath(path, "end_scene_id"));
+  inlineCommentField(requireField(dto, "end_field", path), fieldPath(path, "end_field"));
+  integerValue(requireField(dto, "to_offset", path), fieldPath(path, "to_offset"));
+  stringValue(requireField(dto, "prefix", path), fieldPath(path, "prefix"));
+  stringValue(requireField(dto, "suffix", path), fieldPath(path, "suffix"));
+}
+
+function commentReply(value: unknown, path: string): void {
+  const dto = record(value, path);
+  integerValue(requireField(dto, "id", path), fieldPath(path, "id"));
+  stringValue(requireField(dto, "source_id", path), fieldPath(path, "source_id"));
+  stringValue(requireField(dto, "body", path), fieldPath(path, "body"));
+  stringValue(requireField(dto, "author", path), fieldPath(path, "author"));
+  integerValue(requireField(dto, "sort_order", path), fieldPath(path, "sort_order"));
+  stringValue(requireField(dto, "created_at", path), fieldPath(path, "created_at"));
+}
+
+function inlineComment(value: unknown, path: string): InlineCommentDTO {
+  const dto = record(value, path);
+  integerValue(requireField(dto, "id", path), fieldPath(path, "id"));
+  stringValue(requireField(dto, "source_id", path), fieldPath(path, "source_id"));
+  inlineCommentAnchor(requireField(dto, "anchor", path), fieldPath(path, "anchor"));
+  stringValue(requireField(dto, "quote", path), fieldPath(path, "quote"));
+  stringValue(requireField(dto, "body", path), fieldPath(path, "body"));
+  booleanValue(requireField(dto, "resolved", path), fieldPath(path, "resolved"));
+  arrayOf(requireField(dto, "replies", path), fieldPath(path, "replies"), (reply, replyPath) => {
+    commentReply(reply, replyPath);
+    return reply;
+  });
+  stringValue(requireField(dto, "created_at", path), fieldPath(path, "created_at"));
+  stringValue(requireField(dto, "updated_at", path), fieldPath(path, "updated_at"));
+  stringValue(requireField(dto, "revision", path), fieldPath(path, "revision"));
+  return value as InlineCommentDTO;
+}
+
+function whiteboardImportResult(value: unknown, path: string): WhiteboardImportResultDTO {
+  const dto = record(value, path);
+  integerValue(requireField(dto, "project_id", path), fieldPath(path, "project_id"));
+  stringValue(requireField(dto, "title", path), fieldPath(path, "title"));
+  stringValue(requireField(dto, "mode", path), fieldPath(path, "mode"));
+  integerValue(requireField(dto, "scenes_created", path), fieldPath(path, "scenes_created"));
+  stringArray(requireField(dto, "scene_titles", path), fieldPath(path, "scene_titles"));
+  integerArray(requireField(dto, "scene_ids_by_block", path), fieldPath(path, "scene_ids_by_block"));
+  for (const key of [
+    "comments_created",
+    "comments_skipped",
+    "comment_replies_created",
+    "comment_replies_skipped",
+  ]) {
+    integerValue(requireField(dto, key, path), fieldPath(path, key));
+  }
+  return value as WhiteboardImportResultDTO;
 }
 
 function scene(value: unknown, path: string): SceneDTO {
@@ -443,6 +510,12 @@ export const validateProjectActionResultDTO: RuntimeDtoValidator<ProjectActionRe
   projectActionResult(value, "$");
 export const validateDeleteResultDTO: RuntimeDtoValidator<DeleteResultDTO> = (value) =>
   deleteResult(value, "$");
+export const validateInlineCommentDTO: RuntimeDtoValidator<InlineCommentDTO> = (value) =>
+  inlineComment(value, "$");
+export const validateInlineCommentListDTO: RuntimeDtoValidator<InlineCommentDTO[]> = (value) =>
+  arrayOf(value, "$", inlineComment);
+export const validateWhiteboardImportResultDTO: RuntimeDtoValidator<WhiteboardImportResultDTO> = (value) =>
+  whiteboardImportResult(value, "$");
 export const validateSceneDTO: RuntimeDtoValidator<SceneDTO> = (value) => scene(value, "$");
 export const validateSceneListDTO: RuntimeDtoValidator<SceneDTO[]> = (value) =>
   arrayOf(value, "$", scene);

@@ -43,4 +43,30 @@ try {
 check(staleConflict instanceof ApiRequestError && staleConflict.code === "scene_conflict",
   "preview mock should reject a stale scene revision like the core");
 
+const initialComments = await api.listComments(1);
+const rootComment = initialComments[0]!;
+const withReply = await api.createCommentReply(1, rootComment.id, { body: "Native review reply", author: "you" });
+const nativeReply = withReply.replies.find((reply) => reply.body === "Native review reply");
+check(nativeReply?.source_id === "", "preview comment replies preserve native provenance");
+await api.deleteCommentReply(1, rootComment.id, nativeReply!.id);
+check(!(await api.listComments(1))[0]!.replies.some((reply) => reply.id === nativeReply!.id), "preview reply deletion round-trips");
+
+const createdComment = await api.createComment(1, {
+  anchor: { ...rootComment.anchor },
+  quote: rootComment.quote,
+  body: "Native panel comment",
+});
+check(createdComment.source_id === "" && createdComment.body === "Native panel comment", "preview comment creation uses native provenance");
+const editedComment = await api.updateComment(1, createdComment.id, { body: "Edited native panel comment" });
+check(editedComment.body === "Edited native panel comment", "preview comment editing round-trips");
+await api.deleteComment(1, createdComment.id);
+check(!(await api.listComments(1)).some((comment) => comment.id === createdComment.id), "preview thread deletion round-trips");
+const editedImported = await api.updateComment(1, rootComment.id, { body: "Imported provenance stays immutable" });
+check(editedImported.source_id === rootComment.source_id && editedImported.body === "Imported provenance stays immutable",
+  "imported comment bodies remain editable without changing provenance");
+const importedReply = editedImported.replies.find((reply) => reply.source_id)!;
+await api.deleteCommentReply(1, rootComment.id, importedReply.id);
+check(!(await api.listComments(1))[0]!.replies.some((reply) => reply.id === importedReply.id),
+  "imported replies remain deletable while provenance is present");
+
 console.log(`Preview API tests: ${passed} passed, 0 failed`);

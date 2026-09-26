@@ -10,6 +10,8 @@ import {
   validateConnectorResultDTO,
   validateDeleteResultDTO,
   validateExtractionJobDTO,
+  validateInlineCommentDTO,
+  validateInlineCommentListDTO,
   validateLogosActionListDTO,
   validateLogosResultDTO,
   validateLogosSuggestionListDTO,
@@ -25,6 +27,7 @@ import {
   validateSceneListDTO,
   validateSettingsDTO,
   validateVoiceBillyProposalDTO,
+  validateWhiteboardImportResultDTO,
   type RuntimeDtoValidator,
 } from "./runtimeDtoValidation";
 
@@ -414,7 +417,7 @@ export function createHttpApiClient(
     writingModes: () => get(ROUTES.writingModes),
     listProjects: () => get(ROUTES.projects, validateProjectListDTO),
     createProject: (b) => writePost(ROUTES.projects, b, validateProjectDTO),
-    importWhiteboard: (b) => writePost(ROUTES.whiteboardImport, b),
+    importWhiteboard: (b) => writePost(ROUTES.whiteboardImport, b, validateWhiteboardImportResultDTO),
     importManuscript: (b) => writePost(ROUTES.manuscriptImport, b),
     getProject: (id) => get(ROUTES.project(id), validateProjectDTO),
     updateProject: (id, b) => patch(ROUTES.project(id), b, validateProjectDTO),
@@ -468,6 +471,15 @@ export function createHttpApiClient(
     unlinkNoteScene: (p, n, s) => del(ROUTES.noteSceneLink(p, n, s)),
     linkNotePsyke: (p, n, e) => writePost(ROUTES.notePsykeLink(p, n, e)),
     unlinkNotePsyke: (p, n, e) => del(ROUTES.notePsykeLink(p, n, e)),
+
+    listComments: (p) => get(ROUTES.comments(p), validateInlineCommentListDTO),
+    createComment: (p, b) => writePost(ROUTES.comments(p), b, validateInlineCommentDTO),
+    updateComment: (p, c, b) => patch(ROUTES.comment(p, c), b, validateInlineCommentDTO),
+    deleteComment: (p, c) => del(ROUTES.comment(p, c), validateDeleteResultDTO),
+    createCommentReply: (p, c, b) =>
+      writePost(ROUTES.commentReplies(p, c), b, validateInlineCommentDTO),
+    deleteCommentReply: (p, c, r) =>
+      del(ROUTES.commentReply(p, c, r), validateDeleteResultDTO),
 
     listCharacters: (p) => get(ROUTES.characters(p)),
     createCharacter: (p, b) => writePost(ROUTES.characters(p), b),

@@ -7,7 +7,7 @@ import {
   // 01 shell
   WorkspaceShell,
   // 02 manuscript
-  ManuscriptEditor, StoryGrid, OutlinePanel, StructurePanel, NotesPanel,
+  ManuscriptEditor, StoryGrid, OutlinePanel, StructurePanel, NotesPanel, CommentsPanel,
   // 04 psyke
   PsykeBible, RelationGraph, PsykeInspector, ControllingIdeaCompass, PsykeConsoleInbox, CharacterLinks, ThemeScenes,
   // 06 project os
@@ -40,6 +40,7 @@ const GROUPS: Group[] = [
     ["Outline Panel", <OutlinePanel />, 600, 880],
     ["Structure Panel", <StructurePanel />, 600, 880],
     ["Notes Panel", <NotesPanel />, 1280, 440],
+    ["Comments Panel", <CommentsPanel />, 1280, 700],
   ] },
   { name: "03 · Spatial Canvases", items: [
     ["Knowledge Graph", <KnowledgeGraph />, 1760, 980],

@@ -7,6 +7,7 @@ import {
   WorkspaceShell,
   ManuscriptEditor,
   NotesPanel,
+  CommentsPanel,
   StoryGrid,
   StructurePanel,
   OutlinePanel,
@@ -76,6 +77,7 @@ const PANEL_GROUPS: PanelGroup[] = [
       { label: 'Dashboard', node: <NarrativeDashboard /> },
       { label: 'Manuscript', node: <ManuscriptEditor /> },
       { label: 'Notes', node: <NotesPanel /> },
+      { label: 'Comments', node: <CommentsPanel /> },
       { label: "Dexter's Room", node: <VoiceHud /> },
     ],
   },
@@ -278,7 +280,10 @@ export function App() {
   // (when the palette isn't the one consuming the keystroke).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'c') {
+        e.preventDefault();
+        void selectPanel('Comments');
+      } else if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
         e.preventDefault();
         setPaletteOpen((o) => !o);
       } else if (e.key === 'Escape' && layout === 'focus' && !paletteOpen) {
@@ -287,7 +292,7 @@ export function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [layout, paletteOpen]);
+  }, [layout, paletteOpen, selectPanel]);
 
   // Everything the palette can do: jump to any section, open any AI companion,
   // toggle focus mode.

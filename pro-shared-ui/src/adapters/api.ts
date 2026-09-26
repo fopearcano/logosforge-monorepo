@@ -70,6 +70,10 @@ import type {
   NoteDTO,
   NoteCreateDTO,
   NoteUpdateDTO,
+  InlineCommentDTO,
+  InlineCommentCreateDTO,
+  InlineCommentUpdateDTO,
+  CommentReplyCreateDTO,
   CharacterDTO,
   CharacterUpdateDTO,
   CharacterCreateDTO,
@@ -198,6 +202,15 @@ export interface ApiClient {
   unlinkNoteScene(p: number, noteId: number, sceneId: number): Promise<NoteSceneLinksDTO>;
   linkNotePsyke(p: number, noteId: number, entryId: number): Promise<NotePsykeLinksDTO>;
   unlinkNotePsyke(p: number, noteId: number, entryId: number): Promise<NotePsykeLinksDTO>;
+
+  // Inline comments
+  listComments(p: number): Promise<InlineCommentDTO[]>;
+  createComment(p: number, body: InlineCommentCreateDTO): Promise<InlineCommentDTO>;
+  updateComment(p: number, commentId: number, body: InlineCommentUpdateDTO): Promise<InlineCommentDTO>;
+  deleteComment(p: number, commentId: number): Promise<DeleteResultDTO>;
+  /** Reply mutations return the refreshed thread so callers retain server ordering. */
+  createCommentReply(p: number, commentId: number, body: CommentReplyCreateDTO): Promise<InlineCommentDTO>;
+  deleteCommentReply(p: number, commentId: number, replyId: number): Promise<DeleteResultDTO>;
 
   // Characters (manuscript cast + the stable PSYKE bible link)
   listCharacters(p: number): Promise<CharacterDTO[]>;

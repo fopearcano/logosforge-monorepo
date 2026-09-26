@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import type { NoteDTO, CharacterDTO, SceneDTO, PsykeEntryDTO, PsykeRelationDTO, PsykeProgressionDTO, OutlineNodeDTO, ProjectDTO, TimelineEventDTO, PlotBlockDTO, ExportRequestDTO, ExportResponseDTO, NarrativeDashboardDTO, ContinuityReportDTO, PacingInsightDTO, BalanceDataDTO, StoryHealthDTO, StructuralAnalysisDTO, WorkflowRunDTO, DecisionRadarDTO, GraphGravityDTO, AdaptDTO, ReviewReportDTO, FormatReviewDTO, QuantumResultDTO, AssistantResponseDTO, ExtractionResultDTO, ExtractionApplyRequestDTO, ExtractionApplyReportDTO } from "@logosforge/ui-contracts";
+import type { NoteDTO, InlineCommentDTO, CharacterDTO, SceneDTO, PsykeEntryDTO, PsykeRelationDTO, PsykeProgressionDTO, OutlineNodeDTO, ProjectDTO, TimelineEventDTO, PlotBlockDTO, ExportRequestDTO, ExportResponseDTO, NarrativeDashboardDTO, ContinuityReportDTO, PacingInsightDTO, BalanceDataDTO, StoryHealthDTO, StructuralAnalysisDTO, WorkflowRunDTO, DecisionRadarDTO, GraphGravityDTO, AdaptDTO, ReviewReportDTO, FormatReviewDTO, QuantumResultDTO, AssistantResponseDTO, ExtractionResultDTO, ExtractionApplyRequestDTO, ExtractionApplyReportDTO } from "@logosforge/ui-contracts";
 import type { ExtractionJobDTO } from "@logosforge/ui-contracts";
 import { useStudio } from "../adapters/StudioProvider";
 import { useResource, type Resource } from "./useResource";
@@ -572,6 +572,12 @@ export function usePsykeProgressions(): Resource<PsykeProgressionDTO[]> {
 export function useNotes(): Resource<NoteDTO[]> {
   const { api, projectId } = useStudio();
   return useResource(projectId ?? null, () => api.listNotes(projectId as number), ["notes_changed"]);
+}
+
+/** Inline manuscript comment threads, including imported replies and anchors. */
+export function useComments(): Resource<InlineCommentDTO[]> {
+  const { api, projectId } = useStudio();
+  return useResource(projectId ?? null, () => api.listComments(projectId as number), ["comments_changed"]);
 }
 
 /** The manuscript cast (with the stable Character->PSYKE bible link). Refetches on

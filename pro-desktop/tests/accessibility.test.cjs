@@ -58,6 +58,9 @@ const app = fs.readFileSync(path.join(root, 'App.tsx'), 'utf8');
 for (const marker of ['<PanelErrorBoundary name="Studio workspace"', 'name={`${current.label} panel`}']) {
   if (!app.includes(marker)) failures.push(`App render containment missing ${marker}`);
 }
+for (const marker of ['CommentsPanel,', "{ label: 'Comments', node: <CommentsPanel /> }"]) {
+  if (!app.includes(marker)) failures.push(`Comments navigation missing ${marker}`);
+}
 if (!dock.includes('<PanelErrorBoundary name={`${t.label} AI`}')) {
   failures.push('AI tools do not have per-tool render containment');
 }

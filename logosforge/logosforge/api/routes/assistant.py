@@ -57,9 +57,9 @@ def assistant_chat(
 
     # Project-aware context so Billy answers about THIS manuscript, not a
     # hallucinated generic one. build_chat_context bundles project header +
-    # (optional) active scene + outline + PSYKE bible + story memory, already
-    # capped at CONTEXT_MAX_CHARS. A context failure degrades to no context so
-    # it can never break chat.
+    # (optional) active scene + outline + PSYKE bible + Notes + Comments + story
+    # memory, already capped at CONTEXT_MAX_CHARS. A context failure degrades to
+    # no context so it can never break chat.
     from logosforge.settings import get_manager
     _s = get_manager()
     try:
@@ -127,6 +127,7 @@ def assistant_chat(
 def counterpart(
     body: schemas.CounterpartRequestDTO,
     project=Depends(get_project),
+    db: Database = Depends(get_db),
 ):
     """COUNTERPART — a reflective second reader (feedback/critique/interpret/…).
 
@@ -134,6 +135,27 @@ def counterpart(
     endpoints there is no offline stub, so a missing provider returns 502.
     """
     from logosforge import counterpart as cp
+
+    # Counterpart receives the same independently-selected Notes and Comments
+    # as the other core assistant surfaces. It has no stable scene id in this
+    # request contract, so Notes retain their project-level (pinned) selection
+    # while Comments include both open and resolved project threads.
+    from logosforge.context_builder import (
+        fit_editorial_contexts,
+        gather_comments_context,
+        gather_notes_context,
+    )
+    try:
+        notes_context = gather_notes_context(db, project.id)
+    except Exception:
+        notes_context = ""
+    try:
+        comments_context = gather_comments_context(db, project.id)
+    except Exception:
+        comments_context = ""
+    notes_context, comments_context = fit_editorial_contexts(
+        notes_context, comments_context,
+    )
 
     try:
         reply, cached = cp.run_counterpart(
@@ -145,6 +167,8 @@ def counterpart(
             graph_context=body.graph_context,
             user_note=body.user_note,
             custom_prompt=body.custom_prompt,
+            notes_context=notes_context,
+            comments_context=comments_context,
         )
     except Exception as exc:
         raise ApiError(502, f"Counterpart request failed: {exc}", code="counterpart_error")

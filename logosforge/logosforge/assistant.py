@@ -221,8 +221,17 @@ def build_messages(
     controlling_idea_context: str = "",
     system_prompt: str = "",
     memory_context_params: dict | None = None,
+    comments_context: str = "",
 ) -> list[dict]:
     system = system_prompt or DEFAULT_SYSTEM_PROMPT
+
+    # Notes (durable research) and Comments (passage-bound editorial threads)
+    # remain separate prompt sections, but share one deterministic budget.
+    if notes_context or comments_context:
+        from logosforge.context_builder import fit_editorial_contexts
+        notes_context, comments_context = fit_editorial_contexts(
+            notes_context, comments_context,
+        )
 
     user_parts: list[str] = []
     # Phase 6 — optional, default-OFF passive LogosForge memory context. Only
@@ -258,6 +267,9 @@ def build_messages(
         user_parts.append("")
     if notes_context:
         user_parts.append(notes_context)
+        user_parts.append("")
+    if comments_context:
+        user_parts.append(comments_context)
         user_parts.append("")
     if graph_context:
         user_parts.append(graph_context)

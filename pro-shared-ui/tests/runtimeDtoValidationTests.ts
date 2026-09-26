@@ -54,6 +54,56 @@ const scene = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+const inlineCommentAnchor = (overrides: Record<string, unknown> = {}) => ({
+  start_scene_id: 2,
+  start_field: "content",
+  from_offset: 0,
+  end_scene_id: 2,
+  end_field: "content",
+  to_offset: 7,
+  prefix: "",
+  suffix: " line",
+  ...overrides,
+});
+
+const commentReply = (overrides: Record<string, unknown> = {}) => ({
+  id: 6,
+  source_id: "whiteboard-reply-1",
+  body: "Agreed.",
+  author: "writer",
+  sort_order: 0,
+  created_at: "2026-09-01T10:01:00Z",
+  ...overrides,
+});
+
+const inlineComment = (overrides: Record<string, unknown> = {}) => ({
+  id: 5,
+  source_id: "whiteboard-comment-1",
+  anchor: inlineCommentAnchor(),
+  quote: "Opening",
+  body: "Sharpen this.",
+  resolved: false,
+  replies: [commentReply()],
+  created_at: "2026-09-01T10:00:00Z",
+  updated_at: "2026-09-01T10:01:00Z",
+  revision: "a".repeat(64),
+  ...overrides,
+});
+
+const whiteboardImportResult = (overrides: Record<string, unknown> = {}) => ({
+  project_id: 1,
+  title: "Imported",
+  mode: "novel",
+  scenes_created: 1,
+  scene_titles: ["Imported"],
+  scene_ids_by_block: [2],
+  comments_created: 1,
+  comments_skipped: 0,
+  comment_replies_created: 1,
+  comment_replies_skipped: 0,
+  ...overrides,
+});
+
 const outline = (overrides: Record<string, unknown> = {}) => ({
   id: 3,
   parent_id: null,
@@ -301,6 +351,19 @@ try {
     "/api/projects/1",
     "$.id",
   );
+  await expectValid(
+    "Whiteboard import validates comment migration counters",
+    () => client.importWhiteboard({ blocks: [] }),
+    whiteboardImportResult(),
+  );
+  await expectInvalid(
+    "Whiteboard import rejects malformed comment migration counters",
+    () => client.importWhiteboard({ blocks: [] }),
+    json(whiteboardImportResult({ comments_skipped: false })),
+    "POST",
+    "/api/import/whiteboard",
+    "$.comments_skipped",
+  );
 
   await expectInvalid(
     "scene lists reject a malformed nested member",
@@ -318,6 +381,58 @@ try {
     ok: true,
     deleted: 2,
   });
+
+  await expectValid(
+    "inline comment lists validate cross-field anchors and ordered replies",
+    () => client.listComments(1),
+    [inlineComment({
+      anchor: inlineCommentAnchor({ start_field: "title", end_field: "content" }),
+    })],
+  );
+  await expectInvalid(
+    "inline comment lists reject an unknown anchor field",
+    () => client.listComments(1),
+    json([inlineComment({ anchor: inlineCommentAnchor({ end_field: "summary" }) })]),
+    "GET",
+    "/api/projects/1/comments",
+    "$[0].anchor.end_field",
+  );
+  await expectInvalid(
+    "inline comment lists require the optimistic revision",
+    () => client.listComments(1),
+    json([inlineComment({ revision: undefined })]),
+    "GET",
+    "/api/projects/1/comments",
+    "$[0].revision",
+  );
+  await expectValid(
+    "inline comment creation validates its returned thread",
+    () => client.createComment(1, { anchor: inlineCommentAnchor(), quote: "Opening" }),
+    inlineComment(),
+  );
+  await expectInvalid(
+    "inline comment replies reject malformed source ids",
+    () => client.createCommentReply(1, 5, { body: "Reply" }),
+    json(inlineComment({ replies: [commentReply({ source_id: 9 })] })),
+    "POST",
+    "/api/projects/1/comments/5/replies",
+    "$.replies[0].source_id",
+  );
+  await expectValid(
+    "inline comment updates validate the refreshed thread",
+    () => client.updateComment(1, 5, { resolved: true }),
+    inlineComment({ resolved: true }),
+  );
+  await expectValid(
+    "inline comment delete validates its result",
+    () => client.deleteComment(1, 5),
+    { ok: true, deleted: 5 },
+  );
+  await expectValid(
+    "inline comment reply delete validates its result",
+    () => client.deleteCommentReply(1, 5, 6),
+    { ok: true, deleted: 6 },
+  );
 
   await expectValid("settings accept arbitrary values inside their open map", () =>
     client.getSettings(1), { settings: { nested: { enabled: true }, list: [1, "two"] } });

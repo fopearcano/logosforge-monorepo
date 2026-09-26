@@ -21,10 +21,18 @@ requireMarkers("components/common/useRuntimeFaultReporter.ts", ["for (const time
 requireMarkers("adapters/httpApiClient.ts", ["if (timer) clearTimeout(timer)", "es.close()"]);
 requireMarkers("adapters/httpApiClient.ts", ["ApiRequestTimeoutError", "const timeoutOptions = { ...options }", "clientAbort.abort", "activeAbort?.abort", "getInflight.clear()", "cloneTransportValue", "streams.clear()", "dispose: () =>"]);
 requireMarkers("adapters/clientLifetime.ts", ["queueMicrotask", "leases.get(value) !== 0", "dispose(value)"]);
-const manuscript = requireMarkers("components/manuscript/ManuscriptEditor.tsx", ["new IntersectionObserver", "observer.disconnect()", "data-prose-static", "data-scene-prose", "touchWarmSceneIds", "contentVisibility"]);
+const manuscript = requireMarkers("components/manuscript/ManuscriptEditor.tsx", [
+  "new IntersectionObserver", "observer.disconnect()", "data-prose-static", "data-scene-prose", "touchWarmSceneIds", "contentVisibility",
+  "beginCrossScenePointerSelection", "finishCrossScenePointerSelection", "proseDomPointFromViewport",
+  "commentDraft && !commentComposerOpen && !commentBusy",
+  "contentVisibility: commentOverlayActive ? \"visible\" : \"auto\"",
+  "jump(next.location.sceneId, false)",
+]);
 if ((manuscript.match(/<ProseEditor/g) ?? []).length !== 1) failures.push("ManuscriptEditor must keep one conditional ProseEditor render site");
 if (manuscript.includes("contentById")) failures.push("ManuscriptEditor duplicates the whole manuscript in parent content state");
 requireMarkers("components/manuscript/ManuscriptEditor.tsx", ["sceneObserverRef.current !== observer", "status === \"dirty\"", "status === \"saving\"", "status === \"error\""]);
+requireMarkers("components/manuscript/CommentsPanel.tsx", ["window.setInterval", "window.clearInterval(timer)", "mutationSequence.current += 1"]);
+requireMarkers("components/manuscript/commentPreferences.ts", ["removeEventListener(COMMENT_VISIBILITY_EVENT", "removeEventListener(\"storage\""]);
 const mountedRef = requireMarkers("hooks/useMountedRef.ts", ["mounted.current = true", "mounted.current = false"]);
 if (mountedRef.indexOf("mounted.current = true") > mountedRef.indexOf("mounted.current = false")) {
   failures.push("useMountedRef does not re-open before its cleanup");

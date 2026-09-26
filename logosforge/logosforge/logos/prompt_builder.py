@@ -44,6 +44,7 @@ def gather_context_strings(db, ctx: LogosContext) -> dict[str, str]:
         "outline_context": "",
         "psyke_context": "",
         "notes_context": "",
+        "comments_context": "",
     }
     pid = ctx.project_id
     query = ctx.selected_text or ctx.outline_node_label or ctx.cursor_text_excerpt
@@ -54,7 +55,15 @@ def gather_context_strings(db, ctx: LogosContext) -> dict[str, str]:
     if ctx.section_name == "Outline" or ctx.current_scene_id is not None:
         out["outline_context"] = _safe(cb.gather_outline_context, db, pid)
     out["psyke_context"] = _safe(cb.gather_psyke_context, db, pid, ctx.current_scene_id, query)
-    out["notes_context"] = _safe(cb.gather_notes_context, db, pid, ctx.current_scene_id, query)
+    notes_context = _safe(
+        cb.gather_notes_context, db, pid, ctx.current_scene_id, query,
+    )
+    comments_context = _safe(
+        cb.gather_comments_context, db, pid, ctx.current_scene_id,
+    )
+    out["notes_context"], out["comments_context"] = cb.fit_editorial_contexts(
+        notes_context, comments_context,
+    )
     return out
 
 
@@ -98,6 +107,7 @@ def build_logos_messages(db, ctx: LogosContext, action: LogosAction) -> list[dic
         outline_context=ctx_strings["outline_context"],
         psyke_context=ctx_strings["psyke_context"],
         notes_context=ctx_strings["notes_context"],
+        comments_context=ctx_strings["comments_context"],
         system_prompt=LOGOS_SYSTEM_PROMPT,
     )
 

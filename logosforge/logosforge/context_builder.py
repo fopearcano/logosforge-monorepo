@@ -871,6 +871,18 @@ def find_psyke_scene_references(
 NOTES_MAX_RELEVANT = 12
 NOTES_EXCERPT_MAX = 150
 
+# Notes and comments are distinct editorial sources, but every assistant surface
+# must budget them together so neither can silently crowd the other out.
+EDITORIAL_CONTEXT_MAX_CHARS = 2000
+_EDITORIAL_TRUNCATED = "\n[...source truncated]"
+
+COMMENTS_OPEN_MAX = 30
+COMMENTS_RESOLVED_MAX = 15
+COMMENTS_QUOTE_MAX = 100
+COMMENTS_BODY_MAX = 240
+COMMENTS_REPLY_MAX = 180
+COMMENTS_REPLIES_PER_THREAD_MAX = 8
+
 
 def gather_notes_context(
     db: Database,
@@ -972,6 +984,212 @@ def gather_notes_context(
         lines.append(line)
 
     return "\n".join(lines)
+
+
+# -- Comments Context --------------------------------------------------------
+
+def _one_line_excerpt(value: object, max_chars: int) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= max_chars:
+        return text
+    if max_chars <= 3:
+        return text[:max_chars]
+    return text[:max_chars - 3].rstrip() + "..."
+
+
+def _comment_location(comment, scenes_by_id: dict[int, object]) -> str:
+    start_scene_id = int(comment.start_scene_id)
+    end_scene_id = int(comment.end_scene_id)
+    start_scene = scenes_by_id.get(start_scene_id)
+    end_scene = scenes_by_id.get(end_scene_id)
+    start_name = _one_line_excerpt(
+        getattr(start_scene, "title", "") or f"Scene {start_scene_id}", 60,
+    )
+    end_name = _one_line_excerpt(
+        getattr(end_scene, "title", "") or f"Scene {end_scene_id}", 60,
+    )
+    start = (
+        f'{start_name} · {comment.start_field} '
+        f'{comment.from_offset}'
+    )
+    end = f'{end_name} · {comment.end_field} {comment.to_offset}'
+    if (
+        start_scene_id == end_scene_id
+        and comment.start_field == comment.end_field
+    ):
+        return (
+            f'{start_name} · {comment.start_field} '
+            f'{comment.from_offset}-{comment.to_offset}'
+        )
+    return f"{start} -> {end}"
+
+
+def gather_comments_context(
+    db: Database,
+    project_id: int,
+    scene_id: int | None = None,
+) -> str:
+    """Build a deterministic, project-scoped comment-thread context block.
+
+    Open threads are live editorial requests. Resolved threads are retained as
+    settled decisions so an assistant does not unknowingly reopen them. Replies
+    remain in their persisted order. ``scene_id`` only raises threads touching
+    the active scene to the front; it never hides the rest of the project.
+    """
+    comments = list(db.get_all_comments(project_id))
+    if not comments:
+        return ""
+
+    scenes = list(db.get_all_scenes(project_id))
+    scenes_by_id = {scene.id: scene for scene in scenes}
+    scene_order = {scene.id: index for index, scene in enumerate(scenes)}
+
+    threads: list[tuple[object, list[object], int]] = []
+    for original_index, comment in enumerate(comments):
+        replies = list(db.get_comment_replies(comment.id))
+        if not (str(comment.body or "").strip()
+                or any(str(reply.body or "").strip() for reply in replies)):
+            continue
+        threads.append((comment, replies, original_index))
+    if not threads:
+        return ""
+
+    def _thread_key(item: tuple[object, list[object], int]) -> tuple[int, int, int]:
+        comment, _replies, original_index = item
+        start_position = scene_order.get(comment.start_scene_id, len(scene_order))
+        end_position = scene_order.get(comment.end_scene_id, len(scene_order))
+        active_position = scene_order.get(scene_id) if scene_id is not None else None
+        touches_active = (
+            active_position is not None
+            and min(start_position, end_position) <= active_position
+            <= max(start_position, end_position)
+        )
+        position = min(start_position, end_position)
+        return (0 if touches_active else 1, position, original_index)
+
+    def _thread_lines(comment, replies: list[object]) -> list[str]:
+        quote = _one_line_excerpt(comment.quote, COMMENTS_QUOTE_MAX)
+        body = _one_line_excerpt(comment.body, COMMENTS_BODY_MAX)
+        subject = f'On "{quote}"' if quote else "On the selected passage"
+        root = body or "(no root message)"
+        lines = [f"- [{_comment_location(comment, scenes_by_id)}] {subject}: {root}"]
+        nonempty_replies = [
+            reply for reply in replies if str(reply.body or "").strip()
+        ]
+        for reply in nonempty_replies[:COMMENTS_REPLIES_PER_THREAD_MAX]:
+            author = _one_line_excerpt(reply.author or "writer", 40)
+            reply_body = _one_line_excerpt(reply.body, COMMENTS_REPLY_MAX)
+            lines.append(f"  - Reply by {author}: {reply_body}")
+        omitted = len(nonempty_replies) - COMMENTS_REPLIES_PER_THREAD_MAX
+        if omitted > 0:
+            lines.append(f"  - ... {omitted} more repl{'y' if omitted == 1 else 'ies'}")
+        return lines
+
+    all_open_threads = sorted(
+        (item for item in threads if not item[0].resolved), key=_thread_key,
+    )
+    all_resolved_threads = sorted(
+        (item for item in threads if item[0].resolved), key=_thread_key,
+    )
+    open_threads = all_open_threads[:COMMENTS_OPEN_MAX]
+    resolved_threads = all_resolved_threads[:COMMENTS_RESOLVED_MAX]
+
+    lines = ["[Project Comments]"]
+    if open_threads:
+        lines.append("OPEN threads — active editorial requests:")
+        for comment, replies, _index in open_threads:
+            lines.extend(_thread_lines(comment, replies))
+        omitted = len(all_open_threads) - len(open_threads)
+        if omitted:
+            lines.append(f"... {omitted} more open thread{'s' if omitted != 1 else ''} omitted")
+    if resolved_threads:
+        lines.append("RESOLVED threads — settled decisions; respect them and do not reopen:")
+        for comment, replies, _index in resolved_threads:
+            lines.extend(_thread_lines(comment, replies))
+        omitted = len(all_resolved_threads) - len(resolved_threads)
+        if omitted:
+            lines.append(
+                f"... {omitted} more resolved thread{'s' if omitted != 1 else ''} omitted"
+            )
+    return "\n".join(lines)
+
+
+def _clip_editorial_source(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    if limit <= len(_EDITORIAL_TRUNCATED):
+        return text[:limit]
+    return text[:limit - len(_EDITORIAL_TRUNCATED)] + _EDITORIAL_TRUNCATED
+
+
+def fit_editorial_contexts(
+    notes_context: str,
+    comments_context: str,
+    *,
+    char_budget: int = EDITORIAL_CONTEXT_MAX_CHARS,
+) -> tuple[str, str]:
+    """Fit Notes and Comments fairly inside one explicit character budget.
+
+    Space is water-filled between the two non-empty sources. Short content gives
+    its unused share to the longer source, and both retain their leading labels.
+    The two-character separator used by prompt builders is part of the budget.
+    Notes-only input is returned unchanged to preserve the pre-comments prompt
+    contract; comments-only input remains bounded because it is a new source.
+    """
+    raw_notes = str(notes_context or "")
+    raw_comments = str(comments_context or "")
+    blocks = [raw_notes.strip(), raw_comments.strip()]
+    budget = max(0, int(char_budget))
+    if raw_notes and not blocks[1]:
+        return raw_notes, ""
+    if not blocks[0] and not blocks[1]:
+        return "", ""
+    nonempty = [index for index, block in enumerate(blocks) if block]
+    separator_chars = 2 * max(0, len(nonempty) - 1)
+    available = max(0, budget - separator_chars)
+    allocations = [0, 0]
+    remaining = available
+    open_indexes = list(nonempty)
+    while remaining > 0 and open_indexes:
+        share = max(1, remaining // len(open_indexes))
+        spent = 0
+        next_open: list[int] = []
+        for index in open_indexes:
+            need = len(blocks[index]) - allocations[index]
+            add = min(need, share, remaining - spent)
+            allocations[index] += add
+            spent += add
+            if allocations[index] < len(blocks[index]):
+                next_open.append(index)
+            if spent >= remaining:
+                next_open.extend(
+                    candidate for candidate in open_indexes
+                    if candidate > index and allocations[candidate] < len(blocks[candidate])
+                )
+                break
+        if spent == 0:
+            break
+        remaining -= spent
+        open_indexes = next_open
+
+    return (
+        _clip_editorial_source(blocks[0], allocations[0]),
+        _clip_editorial_source(blocks[1], allocations[1]),
+    )
+
+
+def gather_editorial_contexts(
+    db: Database,
+    project_id: int,
+    scene_id: int | None = None,
+    query_text: str = "",
+    *,
+    char_budget: int = EDITORIAL_CONTEXT_MAX_CHARS,
+) -> tuple[str, str]:
+    """Select Notes and Comments independently, then apply their shared budget."""
+    notes = gather_notes_context(db, project_id, scene_id, query_text)
+    comments = gather_comments_context(db, project_id, scene_id)
+    return fit_editorial_contexts(notes, comments, char_budget=char_budget)
 
 
 # -- Graph Context -----------------------------------------------------------

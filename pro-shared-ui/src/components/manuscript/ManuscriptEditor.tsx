@@ -1,11 +1,34 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import type { SceneDTO } from "@logosforge/ui-contracts";
+import type { CommentReplyDTO, InlineCommentDTO, SceneDTO } from "@logosforge/ui-contracts";
 import { PanelShell, Corners, type PanelProps } from "../shell/PanelShell";
-import { useStudio, useManuscriptTarget } from "../../adapters/StudioProvider";
+import { useStudio, useManuscriptTarget, useNavigate } from "../../adapters/StudioProvider";
 import { useSelection } from "../../adapters/selection";
-import { useScenes } from "../../hooks";
+import { useComments, useScenes } from "../../hooks";
 import { classifyLines, renderLineText, fountainLineStyle } from "../../format/fountain";
-import { ProseEditor } from "./ProseEditor";
+import { ProseEditor, type ProseCommentHighlight, type ProseSelectionRange } from "./ProseEditor";
+import { TitleCommentInput, type TitleCommentHighlight } from "./TitleCommentInput";
+import {
+  createMultiFieldCommentDraft,
+  createSingleFieldCommentDraft,
+  findOrphanedCommentIds,
+  locateComment,
+  reconcileCommentSpans,
+  reconciledCommentPatch,
+  type CommentAnchorDraft,
+  type CommentSelectionEndpoint,
+  type CommentSpan,
+} from "./commentAnchors";
+import {
+  proseDomPointFromViewport,
+  proseDomPointToTextOffset,
+  proseRootForDomPoint,
+} from "./commentDomSelection";
+import { useHideResolvedPreference } from "./commentPreferences";
+import {
+  detectCommentAssistantMention,
+  persistCommentAssistantReply,
+} from "./commentAssistant";
+import { absoluteTime, formatRelativeTime, isImportedSource } from "./commentPresentation";
 import { createSceneSaveQueue, type SceneSaveQueue } from "./sceneSaveQueue";
 import {
   flushPendingProjectSaves,
@@ -51,6 +74,17 @@ const message = (text: string) => (
 
 const linkBtn: CSSProperties = { background: "transparent", border: "none", padding: 0, font: "inherit", cursor: "pointer", letterSpacing: ".14em", fontSize: 9.5 };
 const iconBtn: CSSProperties = { background: "transparent", border: "none", padding: "0 3px", font: "inherit", cursor: "pointer", color: "var(--txt3)", fontSize: 12, lineHeight: 1 };
+const commentAction: CSSProperties = { ...linkBtn, padding: "5px 8px", border: "1px solid var(--line2)", background: "var(--panel2)", color: "var(--amber)", letterSpacing: ".1em", fontSize: 8.5 };
+const commentPopover: CSSProperties = {
+  position: "absolute", zIndex: 14, right: 0, top: 42, width: 320, maxWidth: "min(320px,90vw)",
+  border: "1px solid var(--amber)", background: "var(--panel)", boxShadow: "0 16px 44px rgba(0,0,0,.72)",
+  padding: 12, color: "var(--txt)", fontSize: 10,
+};
+const commentTextArea: CSSProperties = {
+  width: "100%", minHeight: 66, resize: "vertical", boxSizing: "border-box",
+  border: "1px solid var(--line2)", background: "var(--base)", color: "var(--txt)",
+  padding: 8, font: "inherit", fontSize: 10.5, lineHeight: 1.5,
+};
 
 type SaveStatus = "idle" | "dirty" | "saving" | "saved" | "error";
 interface SceneDraft {
@@ -62,6 +96,80 @@ interface SceneDraft {
   summary: string;
 }
 type FlushHandlers = { flush: () => Promise<boolean>; cancel: () => void };
+type LiveSceneText = { title: string; content: string };
+type LiveSceneTextStore = { projectId: number | null; byScene: Record<number, LiveSceneText> };
+type ViewportAnchor = { left: number; right: number; top: number; bottom: number };
+type ExternalCommentDraft = {
+  requestId: number;
+  projectId: number;
+  sceneId: number;
+  draft: CommentAnchorDraft;
+  anchor: ViewportAnchor | null;
+};
+type CrossScenePointerStart = {
+  root: HTMLElement;
+  endpoint: CommentSelectionEndpoint;
+  x: number;
+  y: number;
+};
+type CommentOperation = {
+  kind: "create" | "resolve" | "reply" | "assistant" | "delete-reply" | "delete-thread";
+  commentId?: number;
+  replyId?: number;
+  assistantLabel?: "Assistant" | "Counterpart";
+};
+
+const viewportAnchorFromRect = (rect: Pick<DOMRect, "left" | "right" | "top" | "bottom">): ViewportAnchor => ({
+  left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom,
+});
+
+function anchoredPopoverStyle(anchor: ViewportAnchor | null, width: number, heightHint: number): CSSProperties {
+  if (typeof window === "undefined") return { ...commentPopover, position: "fixed", top: 64, right: 24, width };
+  const gutter = 12;
+  const availableWidth = Math.max(240, window.innerWidth - gutter * 2);
+  const panelWidth = Math.min(width, availableWidth);
+  if (!anchor) {
+    return {
+      ...commentPopover, position: "fixed", top: 64, right: gutter, width: panelWidth,
+      maxWidth: availableWidth, maxHeight: "calc(100vh - 76px)", overflowY: "auto",
+    };
+  }
+  const left = Math.min(Math.max(gutter, anchor.right - panelWidth), window.innerWidth - panelWidth - gutter);
+  const below = anchor.bottom + 8;
+  const top = below + heightHint <= window.innerHeight - gutter
+    ? below
+    : Math.max(gutter, anchor.top - heightHint - 8);
+  return {
+    ...commentPopover, position: "fixed", top, left, right: "auto", width: panelWidth,
+    maxWidth: availableWidth, maxHeight: `calc(100vh - ${top + gutter}px)`, overflowY: "auto",
+  };
+}
+
+function anchoredCommentButtonStyle(anchor: ViewportAnchor | null): CSSProperties {
+  if (typeof window === "undefined" || !anchor) return { ...commentAction, position: "absolute", right: 0, top: 42, zIndex: 12 };
+  const width = 104;
+  const left = Math.min(Math.max(8, anchor.right + 7), window.innerWidth - width - 8);
+  const top = Math.min(Math.max(8, anchor.bottom + 7), window.innerHeight - 36);
+  return { ...commentAction, position: "fixed", left, top, zIndex: 16, boxShadow: "0 8px 24px rgba(0,0,0,.55)" };
+}
+
+function commentSelectionEndpointFromDomPoint(
+  root: HTMLElement,
+  container: Node,
+  offset: number,
+): CommentSelectionEndpoint | null {
+  const sceneElement = root.closest<HTMLElement>("[data-scene-id]");
+  const sceneId = Number(sceneElement?.dataset.sceneId);
+  const textOffset = proseDomPointToTextOffset(root, container, offset);
+  if (!Number.isSafeInteger(sceneId) || textOffset == null) return null;
+  return { sceneId, field: "content", offset: textOffset };
+}
+
+function viewportAnchorForSelectionRange(range: Range): ViewportAnchor | null {
+  const rects = Array.from(range.getClientRects()).filter((rect) => rect.width > 0 || rect.height > 0);
+  const rect = rects.at(-1) ?? range.getBoundingClientRect();
+  return rect.width > 0 || rect.height > 0 ? viewportAnchorFromRect(rect) : null;
+}
 const STATUS_GLYPH: Record<SaveStatus, { g: string; c: string; t: string }> = {
   idle: { g: "", c: "var(--txt3)", t: "" },
   dirty: { g: "●", c: "var(--amber)", t: "unsaved" },
@@ -108,11 +216,13 @@ function SceneStaticProse({
 function SceneEditor({
   scene, index, showAct, formatted, mode, busy, onWords, onContent, onStatus, onActive, registerFlush,
   onDelete, onMoveUp, onMoveDown, isFirst, isLast, renderProse, registerSceneNode, onRequestEdit,
+  commentSpans, comments, openCommentIds, onOpenComments, onCommentsChanged, onCommentCreated, onLiveText,
+  activeCommentDraftSceneId, onCommentDraftOwnership, externalCommentDraft, onExternalCommentDraftConsumed,
 }: {
   scene: SceneDTO; index: number; showAct: boolean; formatted: boolean; mode: string; busy: boolean;
   onWords: (id: number, n: number) => void;
   onContent: (id: number, c: string) => void;
-  onStatus: (id: number, s: SaveStatus) => void;
+  onStatus: (ownerProjectId: number | null, id: number, s: SaveStatus) => void;
   onActive: (id: number) => void;
   registerFlush: (id: number, h: FlushHandlers | null) => void;
   onDelete: () => void; onMoveUp: () => void; onMoveDown: () => void;
@@ -120,12 +230,24 @@ function SceneEditor({
   renderProse: boolean;
   registerSceneNode: (id: number, node: HTMLDivElement | null) => void;
   onRequestEdit: (id: number) => void;
+  commentSpans: CommentSpan[];
+  comments: InlineCommentDTO[];
+  openCommentIds: number[];
+  onOpenComments: (ids: number[]) => void;
+  onCommentsChanged: () => void;
+  onCommentCreated: () => void;
+  onLiveText: (ownerProjectId: number | null, id: number, value: LiveSceneText) => void;
+  activeCommentDraftSceneId: number | null;
+  onCommentDraftOwnership: (sceneId: number | null) => void;
+  externalCommentDraft: ExternalCommentDraft | null;
+  onExternalCommentDraftConsumed: (requestId: number) => void;
 }) {
   const { api, projectId } = useStudio();
+  const navigate = useNavigate();
   // A SceneEditor belongs to the project it mounted under. Keep that owner id
   // even if a host accidentally rerenders once with a new active project before
   // this old scene unmounts.
-  const ownerProjectId = useRef(projectId).current;
+  const ownerProjectId = useRef<number | null>(projectId ?? null).current;
   const { setSelection } = useSelection();
   const [title, setTitle] = useState(scene.title ?? "");
   const [content, setContent] = useState(scene.content ?? "");
@@ -139,11 +261,34 @@ function SceneEditor({
   const [saveError, setSaveError] = useState("");
   const [resolvingConflict, setResolvingConflict] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
+  const [commentDraft, setCommentDraft] = useState<CommentAnchorDraft | null>(null);
+  const [commentComposerOpen, setCommentComposerOpen] = useState(false);
+  const [commentBody, setCommentBody] = useState("");
+  const [commentBusy, setCommentBusy] = useState(false);
+  const [commentError, setCommentError] = useState("");
+  const [commentOperation, setCommentOperation] = useState<CommentOperation | null>(null);
+  const [replyDrafts, setReplyDrafts] = useState<Record<number, string>>({});
+  const [confirmDeleteCommentId, setConfirmDeleteCommentId] = useState<number | null>(null);
+  const [deletedReplyIds, setDeletedReplyIds] = useState<Set<number>>(() => new Set());
+  const [commentDraftAnchor, setCommentDraftAnchor] = useState<ViewportAnchor | null>(null);
+  const [commentMarkAnchor, setCommentMarkAnchor] = useState<ViewportAnchor | null>(null);
+  const [commentClock, setCommentClock] = useState(Date.now);
   const timer = useRef<number | null>(null);
   const mounted = useMountedRef();
-  const sceneNodeRef = useCallback((node: HTMLDivElement | null) => registerSceneNode(scene.id, node), [registerSceneNode, scene.id]);
+  const sceneElementRef = useRef<HTMLDivElement | null>(null);
+  const commentCloseRef = useRef<HTMLButtonElement | null>(null);
+  const commentPopoverRef = useRef<HTMLElement | null>(null);
+  const commentConfirmDeleteRef = useRef<HTMLButtonElement | null>(null);
+  const commentReturnFocusRef = useRef<HTMLElement | null>(null);
+  const replyComposerRefs = useRef(new Map<number, HTMLTextAreaElement>());
+  const deleteThreadButtonRefs = useRef(new Map<number, HTMLButtonElement>());
+  const lastPointerRef = useRef<{ x: number; y: number; at: number } | null>(null);
+  const sceneNodeRef = useCallback((node: HTMLDivElement | null) => {
+    sceneElementRef.current = node;
+    registerSceneNode(scene.id, node);
+  }, [registerSceneNode, scene.id]);
 
-  const setStat = useCallback((s: SaveStatus) => { if (!mounted.current) return; setStatus(s); onStatus(scene.id, s); }, [onStatus, scene.id]);
+  const setStat = useCallback((s: SaveStatus) => { if (!mounted.current) return; setStatus(s); onStatus(ownerProjectId, scene.id, s); }, [onStatus, ownerProjectId, scene.id]);
   const statusRef = useRef(setStat);
   statusRef.current = setStat;
   const draftRef = useRef<SceneDraft>({ title, content, act, chapter, plotline, summary });
@@ -181,6 +326,11 @@ function SceneEditor({
   // report word count + live content (for the FORMAT preview) upward
   useEffect(() => { onWords(scene.id, wordCount(content)); onContent(scene.id, content); }, [content, onWords, onContent, scene.id]);
   useEffect(() => { onContent(scene.id, content); }, [formatted, onContent, scene.id]);
+  // Comment marks use the editor's live UTF-16 coordinate space. Publishing both
+  // fields keeps relocation correct before the debounced scene refetch catches up.
+  useEffect(() => {
+    onLiveText(ownerProjectId, scene.id, { title, content });
+  }, [content, onLiveText, ownerProjectId, scene.id, title]);
 
   useEffect(() => {
     const queue = queueRef.current!;
@@ -275,23 +425,392 @@ function SceneEditor({
     setSelection({ sceneId: scene.id, text, section: "Manuscript" });
   }, [scene.id, setSelection]);
 
+  const proseHighlights = useMemo<ProseCommentHighlight[]>(() => commentSpans
+    .filter((span) => span.field === "content")
+    .map((span) => ({
+      commentId: span.commentId,
+      fromOffset: span.fromOffset,
+      toOffset: span.toOffset,
+      resolved: span.resolved,
+    })), [commentSpans]);
+  const titleHighlights = useMemo<TitleCommentHighlight[]>(() => commentSpans
+    .filter((span) => span.field === "title")
+    .map((span) => ({
+      commentId: span.commentId,
+      fromOffset: span.fromOffset,
+      toOffset: span.toOffset,
+      resolved: span.resolved,
+    })), [commentSpans]);
+  const titleHighlighted = titleHighlights.length > 0;
+  const activeComments = openCommentIds
+    .map((id) => comments.find((comment) => comment.id === id))
+    .filter((comment): comment is InlineCommentDTO => Boolean(comment));
+  const openCommentIdsKey = openCommentIds.join(",");
+
+  const restoreCommentFocus = useCallback(() => {
+    const target = commentReturnFocusRef.current;
+    commentReturnFocusRef.current = null;
+    if (target?.isConnected) window.setTimeout(() => target.focus({ preventScroll: true }), 0);
+  }, []);
+
+  const closeCommentPopover = useCallback(() => {
+    setConfirmDeleteCommentId(null);
+    setCommentError("");
+    onOpenComments([]);
+    restoreCommentFocus();
+  }, [onOpenComments, restoreCommentFocus]);
+
+  const clearCommentDraft = useCallback((restoreFocus = false) => {
+    setCommentDraft(null);
+    setCommentComposerOpen(false);
+    setCommentBody("");
+    setCommentDraftAnchor(null);
+    onCommentDraftOwnership(null);
+    if (restoreFocus) restoreCommentFocus();
+  }, [onCommentDraftOwnership, restoreCommentFocus]);
+
+  const findCommentMarkAnchor = useCallback((ids: readonly number[]): ViewportAnchor | null => {
+    const root = sceneElementRef.current;
+    if (!root || ids.length === 0) return null;
+    const requested = new Set(ids);
+    const candidates = Array.from(root.querySelectorAll<HTMLElement>("[data-comment-ids]"))
+      .filter((element) => (element.dataset.commentIds ?? "").split(",").map(Number).some((id) => requested.has(id)))
+      .map((element) => ({ element, rect: element.getBoundingClientRect() }))
+      .filter(({ rect }) => rect.width > 0 || rect.height > 0);
+    if (!candidates.length) return null;
+    const pointer = lastPointerRef.current;
+    const pointed = pointer && Date.now() - pointer.at < 1_000
+      ? candidates.find(({ rect }) => pointer.x >= rect.left && pointer.x <= rect.right && pointer.y >= rect.top && pointer.y <= rect.bottom)
+      : undefined;
+    const viewportMiddle = window.innerHeight / 2;
+    const visible = candidates.filter(({ rect }) => rect.bottom >= 0 && rect.top <= window.innerHeight);
+    const selected = pointed ?? (visible.length ? visible : candidates)
+      .slice()
+      .sort((left, right) => Math.abs((left.rect.top + left.rect.bottom) / 2 - viewportMiddle) - Math.abs((right.rect.top + right.rect.bottom) / 2 - viewportMiddle))[0];
+    return selected ? viewportAnchorFromRect(selected.rect) : null;
+  }, []);
+
+  const openCommentThreads = useCallback((ids: number[], explicitAnchor?: ViewportAnchor) => {
+    if (!ids.length) return;
+    if (document.activeElement instanceof HTMLElement && !commentPopoverRef.current?.contains(document.activeElement)) {
+      commentReturnFocusRef.current = document.activeElement;
+    }
+    clearCommentDraft(false);
+    setCommentError("");
+    setCommentMarkAnchor(explicitAnchor ?? findCommentMarkAnchor(ids));
+    onOpenComments(ids);
+  }, [clearCommentDraft, findCommentMarkAnchor, onOpenComments]);
+
+  useEffect(() => {
+    if (
+      !externalCommentDraft
+      || externalCommentDraft.projectId !== ownerProjectId
+      || externalCommentDraft.sceneId !== scene.id
+    ) return;
+    if (document.activeElement instanceof HTMLElement) commentReturnFocusRef.current = document.activeElement;
+    onCommentDraftOwnership(scene.id);
+    onOpenComments([]);
+    setCommentDraft(externalCommentDraft.draft);
+    setCommentDraftAnchor(externalCommentDraft.anchor);
+    setCommentComposerOpen(false);
+    setCommentBody("");
+    setCommentError("");
+    onExternalCommentDraftConsumed(externalCommentDraft.requestId);
+  }, [externalCommentDraft, onCommentDraftOwnership, onExternalCommentDraftConsumed, onOpenComments, ownerProjectId, scene.id]);
+
+  useEffect(() => {
+    if (activeCommentDraftSceneId === scene.id) return;
+    setCommentDraft(null);
+    setCommentComposerOpen(false);
+    setCommentBody("");
+    setCommentDraftAnchor(null);
+  }, [activeCommentDraftSceneId, scene.id]);
+
+  useEffect(() => {
+    if (!openCommentIdsKey) {
+      setConfirmDeleteCommentId(null);
+      setCommentMarkAnchor(null);
+      return undefined;
+    }
+    if (document.activeElement instanceof HTMLElement && !commentPopoverRef.current?.contains(document.activeElement)) {
+      commentReturnFocusRef.current = document.activeElement;
+    }
+    setCommentMarkAnchor(findCommentMarkAnchor(openCommentIds));
+    const timer = window.setTimeout(() => commentCloseRef.current?.focus({ preventScroll: true }), 0);
+    return () => window.clearTimeout(timer);
+    // openCommentIdsKey is the stable identity; the array is recreated by render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [findCommentMarkAnchor, openCommentIdsKey]);
+
+  useEffect(() => {
+    setDeletedReplyIds((current) => {
+      const serverIds = new Set(activeComments.flatMap((comment) => comment.replies.map((reply) => reply.id)));
+      const next = new Set([...current].filter((id) => serverIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [comments, openCommentIdsKey]);
+
+  useEffect(() => {
+    if (!openCommentIdsKey) return undefined;
+    setCommentClock(Date.now());
+    const timer = window.setInterval(() => setCommentClock(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, [openCommentIdsKey]);
+
+  useEffect(() => {
+    if (confirmDeleteCommentId == null) return undefined;
+    const timer = window.setTimeout(() => commentConfirmDeleteRef.current?.focus({ preventScroll: true }), 0);
+    return () => window.clearTimeout(timer);
+  }, [confirmDeleteCommentId]);
+
+  useEffect(() => {
+    if (!commentDraft && !openCommentIdsKey) return undefined;
+    let frame: number | null = null;
+    const onViewportChange = (event: Event) => {
+      const target = event.target;
+      if (target instanceof Node && commentPopoverRef.current?.contains(target)) return;
+      if (commentDraft && !commentComposerOpen && !commentBusy) clearCommentDraft(false);
+      if (openCommentIds.length) {
+        if (frame != null) window.cancelAnimationFrame(frame);
+        frame = window.requestAnimationFrame(() => {
+          frame = null;
+          setCommentMarkAnchor(findCommentMarkAnchor(openCommentIds));
+        });
+      }
+    };
+    window.addEventListener("scroll", onViewportChange, true);
+    window.addEventListener("resize", onViewportChange);
+    return () => {
+      window.removeEventListener("scroll", onViewportChange, true);
+      window.removeEventListener("resize", onViewportChange);
+      if (frame != null) window.cancelAnimationFrame(frame);
+    };
+  }, [clearCommentDraft, commentBusy, commentComposerOpen, commentDraft, findCommentMarkAnchor, openCommentIds, openCommentIdsKey]);
+
+  const captureCommentSelection = (field: "content" | "title", fromOffset: number, toOffset: number, anchor?: ViewportAnchor) => {
+    if (commentComposerOpen) return;
+    const draft = createSingleFieldCommentDraft({ ...scene, title, content }, field, fromOffset, toOffset);
+    if (document.activeElement instanceof HTMLElement) commentReturnFocusRef.current = document.activeElement;
+    onCommentDraftOwnership(scene.id);
+    onOpenComments([]);
+    setCommentDraft(draft);
+    setCommentDraftAnchor(anchor ?? null);
+    setCommentError("");
+  };
+
+  const captureProseCommentSelection = (range: ProseSelectionRange | null) => {
+    if (!range) {
+      if (!commentComposerOpen && activeCommentDraftSceneId === scene.id) clearCommentDraft(false);
+      return;
+    }
+    const selection = window.getSelection();
+    const domRange = selection?.rangeCount ? selection.getRangeAt(0) : null;
+    const rect = domRange?.getBoundingClientRect();
+    captureCommentSelection(
+      "content",
+      range.fromOffset,
+      range.toOffset,
+      rect && (rect.width > 0 || rect.height > 0) ? viewportAnchorFromRect(rect) : undefined,
+    );
+  };
+
+  const submitComment = async () => {
+    if (ownerProjectId == null || !commentDraft || !commentBody.trim() || commentBusy) return;
+    const writerMessage = commentBody.trim();
+    setCommentBusy(true);
+    setCommentOperation({ kind: "create" });
+    setCommentError("");
+    try {
+      const spansMultipleFields = commentDraft.anchor.start_scene_id !== commentDraft.anchor.end_scene_id
+        || commentDraft.anchor.start_field !== commentDraft.anchor.end_field;
+      if (spansMultipleFields) {
+        await flushPendingProjectSaves();
+      } else {
+        const saved = await flushNow();
+        if (!saved) throw new Error("Save this scene before attaching a comment.");
+      }
+      const created = await trackProjectWrite(api.createComment(ownerProjectId, {
+        anchor: commentDraft.anchor,
+        quote: commentDraft.quote,
+        body: writerMessage,
+      }));
+      const mention = detectCommentAssistantMention(writerMessage);
+      setCommentBody("");
+      setCommentDraft(null);
+      setCommentDraftAnchor(null);
+      setCommentComposerOpen(false);
+      onCommentDraftOwnership(null);
+      onCommentCreated();
+      onOpenComments([created.id]);
+      if (mention) {
+        try {
+          const assistantLabel = mention === "counterpart" ? "Counterpart" : "Assistant";
+          setCommentOperation({ kind: "assistant", commentId: created.id, assistantLabel });
+          await persistCommentAssistantReply(api, ownerProjectId, created, writerMessage, mention);
+          onCommentsChanged();
+        } catch (assistantError) {
+          setCommentError(`Comment saved, but ${mention} couldn't reply — ${assistantError instanceof Error ? assistantError.message : String(assistantError)}`);
+        }
+      }
+    } catch (error) {
+      setCommentError(`Couldn't create the comment — ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setCommentBusy(false);
+      setCommentOperation(null);
+    }
+  };
+
+  const toggleCommentResolved = async (comment: InlineCommentDTO) => {
+    if (ownerProjectId == null || commentBusy) return;
+    setCommentBusy(true);
+    setCommentOperation({ kind: "resolve", commentId: comment.id });
+    setCommentError("");
+    try {
+      await trackProjectWrite(api.updateComment(ownerProjectId, comment.id, { resolved: !comment.resolved }));
+      onCommentsChanged();
+    } catch (error) {
+      setCommentError(`Couldn't update the comment — ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setCommentBusy(false);
+      setCommentOperation(null);
+    }
+  };
+
+  const submitCommentReply = async (comment: InlineCommentDTO) => {
+    if (ownerProjectId == null || commentBusy) return;
+    const writerMessage = (replyDrafts[comment.id] ?? "").trim();
+    if (!writerMessage) return;
+    const mention = detectCommentAssistantMention(writerMessage);
+    setCommentBusy(true);
+    setCommentOperation({ kind: "reply", commentId: comment.id });
+    setCommentError("");
+    let nativeReplySaved = false;
+    try {
+      await trackProjectWrite(api.createCommentReply(ownerProjectId, comment.id, { body: writerMessage, author: "you" }));
+      nativeReplySaved = true;
+      setReplyDrafts((current) => ({ ...current, [comment.id]: "" }));
+      onCommentsChanged();
+      if (mention) {
+        const assistantLabel = mention === "counterpart" ? "Counterpart" : "Assistant";
+        setCommentOperation({ kind: "assistant", commentId: comment.id, assistantLabel });
+        await persistCommentAssistantReply(api, ownerProjectId, comment, writerMessage, mention);
+        onCommentsChanged();
+      }
+    } catch (error) {
+      const label = mention === "counterpart" ? "Counterpart" : "Assistant";
+      setCommentError(nativeReplySaved && mention
+        ? `Your reply was saved, but ${label} couldn't answer — ${error instanceof Error ? error.message : String(error)}`
+        : `Couldn't post the reply — ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setCommentBusy(false);
+      setCommentOperation(null);
+      window.setTimeout(() => replyComposerRefs.current.get(comment.id)?.focus({ preventScroll: true }), 0);
+    }
+  };
+
+  const deleteCommentReply = async (comment: InlineCommentDTO, reply: CommentReplyDTO) => {
+    if (ownerProjectId == null || commentBusy) return;
+    setCommentBusy(true);
+    setCommentOperation({ kind: "delete-reply", commentId: comment.id, replyId: reply.id });
+    setCommentError("");
+    try {
+      await trackProjectWrite(api.deleteCommentReply(ownerProjectId, comment.id, reply.id));
+      setDeletedReplyIds((current) => new Set(current).add(reply.id));
+      onCommentsChanged();
+    } catch (error) {
+      setCommentError(`Couldn't delete the reply — ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setCommentBusy(false);
+      setCommentOperation(null);
+      window.setTimeout(() => replyComposerRefs.current.get(comment.id)?.focus({ preventScroll: true }), 0);
+    }
+  };
+
+  const deleteCommentThread = async (comment: InlineCommentDTO) => {
+    if (ownerProjectId == null || commentBusy || confirmDeleteCommentId !== comment.id) return;
+    setCommentBusy(true);
+    setCommentOperation({ kind: "delete-thread", commentId: comment.id });
+    setCommentError("");
+    try {
+      await trackProjectWrite(api.deleteComment(ownerProjectId, comment.id));
+      const remaining = openCommentIds.filter((id) => id !== comment.id);
+      setConfirmDeleteCommentId(null);
+      onOpenComments(remaining);
+      onCommentsChanged();
+      if (!remaining.length) restoreCommentFocus();
+    } catch (error) {
+      setCommentError(`Couldn't delete the thread — ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setCommentBusy(false);
+      setCommentOperation(null);
+    }
+  };
+
   const st = STATUS_GLYPH[status];
+  // content-visibility:auto establishes layout/paint containment, which also
+  // changes the containing block for our viewport-positioned comment overlays.
+  // Lift containment while this scene owns a FAB/composer/thread popover so
+  // fixed coordinates stay viewport-relative and the overlay cannot be culled.
+  const commentOverlayActive = commentDraft != null || activeComments.length > 0;
   const keepLiveEditor = renderProse || saveConflict || status === "dirty" || status === "saving" || status === "error";
   return (
-    <div ref={sceneNodeRef} id={`ms-scene-${scene.id}`} data-scene-id={scene.id} data-scene-prose={keepLiveEditor ? "live" : "static"} style={{ marginBottom: 30, scrollMarginTop: 18, contentVisibility: "auto", containIntrinsicSize: "auto 360px" }}>
+    <div
+      ref={sceneNodeRef}
+      id={`ms-scene-${scene.id}`}
+      data-scene-id={scene.id}
+      data-scene-prose={keepLiveEditor ? "live" : "static"}
+      onPointerDownCapture={(event) => { lastPointerRef.current = { x: event.clientX, y: event.clientY, at: Date.now() }; }}
+      style={{ position: "relative", marginBottom: 30, scrollMarginTop: 18, contentVisibility: commentOverlayActive ? "visible" : "auto", containIntrinsicSize: "auto 360px" }}
+    >
       {showAct && scene.act && <ActDivider scene={scene} />}
       <div style={{ display: "flex", gap: 12, alignItems: "baseline", marginBottom: 10 }}>
         <span style={{ fontFamily: "'Chakra Petch'", color: "var(--txt3)", fontSize: 13, flex: "none" }}>{index + 1}</span>
-        <input
+        <TitleCommentInput
           value={title}
-          onChange={(e) => { setTitle(e.target.value); schedule({ title: e.target.value }); }}
+          highlights={titleHighlights}
+          onChange={(e) => {
+            const nextTitle = e.target.value;
+            setTitle(nextTitle);
+            onLiveText(ownerProjectId, scene.id, { title: nextTitle, content });
+            schedule({ title: nextTitle });
+          }}
           onFocus={() => { onActive(scene.id); onContent(scene.id, content); }}
+          onCommentActivate={(commentIds, event) => {
+            const rect = event.currentTarget.getBoundingClientRect();
+            openCommentThreads(commentIds, {
+              left: event.clientX,
+              right: event.clientX,
+              top: rect.top,
+              bottom: rect.bottom,
+            });
+          }}
+          onSelect={(event) => {
+            const from = event.currentTarget.selectionStart ?? 0;
+            const to = event.currentTarget.selectionEnd ?? from;
+            if (to > from) {
+              const rect = event.currentTarget.getBoundingClientRect();
+              const centerRatio = title.length ? Math.min(1, Math.max(0, ((from + to) / 2) / title.length)) : .5;
+              const center = rect.left + rect.width * centerRatio;
+              captureCommentSelection("title", from, to, { left: center, right: center, top: rect.top, bottom: rect.bottom });
+            } else if (!commentComposerOpen && activeCommentDraftSceneId === scene.id) clearCommentDraft(false);
+          }}
           onBlur={() => void flushNow()}
           placeholder="UNTITLED SCENE"
-          aria-label={`Scene ${index + 1} title`}
+          ariaLabel={`Scene ${index + 1} title`}
           spellCheck={false}
-          style={{ flex: 1, minWidth: 0, background: "transparent", border: "none", outline: "none", color: "var(--strong)", fontWeight: 700, letterSpacing: ".02em", fontSize: 15, fontFamily: "'Courier Prime',monospace", padding: 0 }}
         />
+        {titleHighlighted && (
+          <button
+            type="button"
+            aria-label={`Open comments on scene ${index + 1} title`}
+            title="Open title comment"
+            onClick={(event) => openCommentThreads(
+              commentSpans.filter((span) => span.field === "title").map((span) => span.commentId),
+              viewportAnchorFromRect(event.currentTarget.getBoundingClientRect()),
+            )}
+            style={{ ...iconBtn, color: "var(--amber)" }}
+          >◈</button>
+        )}
         <span title={st.t} style={{ flex: "none", fontSize: 11, color: st.c, minWidth: 12, textAlign: "right" }}>{st.g}</span>
         {confirmDel ? (
           <span style={{ display: "flex", gap: 4, alignItems: "center", flex: "none", fontSize: 9 }}>
@@ -343,15 +862,240 @@ function SceneEditor({
       {keepLiveEditor
         ? <ProseEditor
           value={content}
-          onChange={(v) => { setContent(v); schedule({ content: v }); }}
+          onChange={(v) => {
+            setContent(v);
+            onLiveText(ownerProjectId, scene.id, { title, content: v });
+            schedule({ content: v });
+          }}
           onFocusActive={() => { onActive(scene.id); onContent(scene.id, content); publishText(""); }}
           onSelectionText={publishText}
+          onSelectionRange={captureProseCommentSelection}
+          commentHighlights={proseHighlights}
+          onCommentActivate={openCommentThreads}
           onBlur={() => void flushNow()}
           formatted={formatted}
           mode={mode}
           placeholder="Write the scene…"
         />
         : <SceneStaticProse content={content} title={title} onActivate={() => onRequestEdit(scene.id)} />}
+      {commentDraft && !commentComposerOpen && activeComments.length === 0 && (
+        <button
+          type="button"
+          aria-label={`Comment on selected text “${commentDraft.quote.slice(0, 60)}”`}
+          onPointerDown={(event) => event.preventDefault()}
+          onPointerUp={(event) => { event.stopPropagation(); setCommentComposerOpen(true); }}
+          onMouseDown={(event) => event.preventDefault()}
+          onMouseUp={(event) => { event.stopPropagation(); setCommentComposerOpen(true); }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              setCommentComposerOpen(true);
+            }
+          }}
+          onClick={() => setCommentComposerOpen(true)}
+          style={anchoredCommentButtonStyle(commentDraftAnchor)}
+        >
+          ＋ COMMENT
+        </button>
+      )}
+      {commentDraft && commentComposerOpen && (
+        <div
+          ref={(node) => { commentPopoverRef.current = node; }}
+          role="dialog"
+          aria-label="Add comment to selection"
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && !commentBusy) {
+              event.preventDefault();
+              clearCommentDraft(true);
+            }
+          }}
+          style={anchoredPopoverStyle(commentDraftAnchor, 340, 310)}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+            <span style={{ color: "var(--amber)", letterSpacing: ".14em", fontSize: 8.5 }}>NEW COMMENT</span>
+            <span style={{ flex: 1 }} />
+            <button type="button" aria-label="Cancel new comment" disabled={commentBusy} onClick={() => { setCommentError(""); clearCommentDraft(true); }} style={{ ...iconBtn, opacity: commentBusy ? .45 : 1 }}>✕</button>
+          </div>
+          <blockquote style={{ margin: "0 0 9px", padding: "7px 9px", borderLeft: "2px solid var(--amber)", background: "var(--tint)", color: "var(--txt2)", fontFamily: "'Courier Prime',monospace", fontSize: 10.5, lineHeight: 1.45, maxHeight: 90, overflow: "auto" }}>“{commentDraft.quote}”</blockquote>
+          <textarea
+            autoFocus
+            aria-label="Comment text"
+            value={commentBody}
+            onChange={(event) => setCommentBody(event.target.value)}
+            onKeyDown={(event) => {
+              if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                event.preventDefault();
+                void submitComment();
+              }
+            }}
+            placeholder="What should change here?"
+            rows={4}
+            style={commentTextArea}
+          />
+          {commentError && <div role="alert" style={{ color: "var(--crimson)", marginTop: 7 }}>{commentError}</div>}
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 7, marginTop: 9 }}>
+            <button type="button" disabled={commentBusy} onClick={() => { setCommentError(""); clearCommentDraft(true); }} style={{ ...commentAction, color: "var(--txt2)", opacity: commentBusy ? .45 : 1 }}>CANCEL</button>
+            <button type="button" disabled={commentBusy || !commentBody.trim()} onClick={() => void submitComment()} style={{ ...commentAction, opacity: commentBusy || !commentBody.trim() ? .45 : 1 }}>{commentOperation?.kind === "assistant" ? `${commentOperation.assistantLabel?.toUpperCase()} THINKING…` : commentBusy ? "SAVING…" : "ADD COMMENT"}</button>
+          </div>
+        </div>
+      )}
+      {!commentComposerOpen && activeComments.length > 0 && (
+        <aside
+          ref={(node) => { commentPopoverRef.current = node; }}
+          role="dialog"
+          aria-label={activeComments.length === 1 ? "Comment thread" : `${activeComments.length} overlapping comment threads`}
+          tabIndex={-1}
+          onKeyDown={(event) => {
+            if (event.key !== "Escape" || commentBusy) return;
+            event.preventDefault();
+            if (confirmDeleteCommentId != null) {
+              const id = confirmDeleteCommentId;
+              setConfirmDeleteCommentId(null);
+              window.setTimeout(() => deleteThreadButtonRefs.current.get(id)?.focus({ preventScroll: true }), 0);
+            } else {
+              closeCommentPopover();
+            }
+          }}
+          style={anchoredPopoverStyle(commentMarkAnchor, 390, 620)}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+            <span style={{ color: "var(--amber)", letterSpacing: ".14em", fontSize: 8.5 }}>{activeComments.length === 1 ? "COMMENT THREAD" : `${activeComments.length} OVERLAPPING THREADS`}</span>
+            <span style={{ flex: 1 }} />
+            <button ref={commentCloseRef} type="button" aria-label="Close comment thread" disabled={commentBusy} onClick={closeCommentPopover} style={{ ...iconBtn, opacity: commentBusy ? .45 : 1 }}>✕</button>
+          </div>
+          {commentError && (
+            <div role="alert" style={{ display: "flex", alignItems: "start", gap: 7, color: "var(--crimson)", border: "1px solid rgba(232,68,58,.45)", background: "rgba(232,68,58,.08)", padding: "7px 8px", marginBottom: 8, lineHeight: 1.45 }}>
+              <span style={{ flex: 1 }}>{commentError}</span>
+              <button type="button" aria-label="Dismiss comment error" onClick={() => setCommentError("")} style={{ ...iconBtn, color: "var(--crimson)" }}>✕</button>
+            </div>
+          )}
+          {activeComments.map((comment) => {
+            const replies = comment.replies
+              .filter((reply) => !deletedReplyIds.has(reply.id))
+              .slice()
+              .sort((left, right) => left.sort_order - right.sort_order || left.id - right.id);
+            const threadOperation = commentOperation?.commentId === comment.id ? commentOperation : null;
+            const assistantThinking = threadOperation?.kind === "assistant";
+            const confirmingDelete = confirmDeleteCommentId === comment.id;
+            const imported = isImportedSource(comment.source_id);
+            return (
+              <article key={comment.id} aria-labelledby={`manuscript-comment-${comment.id}`} style={{ borderTop: "1px solid var(--line2)", padding: "11px 0 13px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 7, flexWrap: "wrap" }}>
+                  <span id={`manuscript-comment-${comment.id}`} style={{ color: comment.resolved ? "var(--green)" : "var(--amber)", letterSpacing: ".13em", fontSize: 7.5 }}>{comment.resolved ? "✓ RESOLVED" : "● OPEN"}</span>
+                  <span style={{ color: "var(--txt3)", fontSize: 7 }}>{imported ? "IMPORTED" : "NATIVE PRO"}</span>
+                  <time dateTime={comment.created_at} title={absoluteTime(comment.created_at)} style={{ color: "var(--txt3)", fontSize: 7.5 }}>{formatRelativeTime(comment.created_at, commentClock)}</time>
+                  <span style={{ flex: 1 }} />
+                  <button
+                    type="button"
+                    disabled={commentBusy}
+                    aria-label={comment.resolved ? "Reopen comment" : "Resolve comment"}
+                    onClick={() => void toggleCommentResolved(comment)}
+                    style={{ ...commentAction, color: comment.resolved ? "var(--green)" : "var(--amber)", opacity: commentBusy ? .45 : 1 }}
+                  >{threadOperation?.kind === "resolve" ? "SAVING…" : comment.resolved ? "REOPEN" : "RESOLVE"}</button>
+                </div>
+                <blockquote style={{ margin: "0 0 8px", padding: "6px 8px", borderLeft: "2px solid var(--amber)", background: "var(--tint)", color: "var(--txt2)", fontFamily: "'Courier Prime',monospace", fontSize: 9.5, lineHeight: 1.45, maxHeight: 86, overflowY: "auto", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>“{comment.quote}”</blockquote>
+                <div style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", lineHeight: 1.5, fontSize: 10.5 }}>{comment.body || <em style={{ color: "var(--txt3)" }}>(No comment text)</em>}</div>
+
+                <div style={{ marginTop: 11, color: "var(--txt3)", letterSpacing: ".13em", fontSize: 7.5 }}>REPLIES · {replies.length}</div>
+                {replies.length === 0 && !assistantThinking
+                  ? <div style={{ color: "var(--txt3)", marginTop: 7, fontStyle: "italic" }}>No replies in this thread.</div>
+                  : (
+                      <div role="list" aria-label={`Replies to comment ${comment.id}`} style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 7 }}>
+                        {replies.map((reply) => {
+                          const deleting = threadOperation?.kind === "delete-reply" && threadOperation.replyId === reply.id;
+                          return (
+                            <div key={reply.id} role="listitem" style={{ border: "1px solid var(--line2)", background: "var(--tint)", padding: "7px 8px" }}>
+                              <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginBottom: 4 }}>
+                                <strong style={{ color: "var(--accent)", fontSize: 9 }}>{reply.author || "Unknown author"}</strong>
+                                {isImportedSource(reply.source_id) && <span style={{ color: "var(--amber)", fontSize: 6.5, letterSpacing: ".1em" }}>IMPORTED</span>}
+                                <time dateTime={reply.created_at} title={absoluteTime(reply.created_at)} style={{ color: "var(--txt3)", fontSize: 7 }}>{formatRelativeTime(reply.created_at, commentClock)}</time>
+                                <span style={{ flex: 1 }} />
+                                <button
+                                  type="button"
+                                  aria-label={`Delete reply from ${reply.author || "Unknown author"}`}
+                                  disabled={commentBusy}
+                                  onClick={() => void deleteCommentReply(comment, reply)}
+                                  style={{ ...commentAction, padding: "2px 5px", color: "var(--crimson)", borderColor: "rgba(232,68,58,.45)", opacity: commentBusy ? .45 : 1 }}
+                                >{deleting ? "DELETING…" : "DELETE"}</button>
+                              </div>
+                              <div style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", lineHeight: 1.5 }}>{reply.body}</div>
+                            </div>
+                          );
+                        })}
+                        {assistantThinking && (
+                          <div role="status" aria-live="polite" style={{ border: "1px dashed var(--line-cy)", padding: "7px 8px", color: "var(--accent)" }}>
+                            {threadOperation.assistantLabel} is thinking…
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                <form onSubmit={(event) => { event.preventDefault(); void submitCommentReply(comment); }} style={{ marginTop: 10 }}>
+                  <label htmlFor={`manuscript-comment-reply-${comment.id}`} style={{ display: "block", color: "var(--txt3)", fontSize: 7.5, letterSpacing: ".13em", marginBottom: 5 }}>ADD REPLY</label>
+                  <textarea
+                    ref={(node) => {
+                      if (node) replyComposerRefs.current.set(comment.id, node);
+                      else replyComposerRefs.current.delete(comment.id);
+                    }}
+                    id={`manuscript-comment-reply-${comment.id}`}
+                    aria-label="Reply to comment"
+                    aria-describedby={`manuscript-comment-reply-help-${comment.id}`}
+                    value={replyDrafts[comment.id] ?? ""}
+                    disabled={commentBusy}
+                    onChange={(event) => setReplyDrafts((current) => ({ ...current, [comment.id]: event.target.value }))}
+                    onKeyDown={(event) => {
+                      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+                        event.preventDefault();
+                        void submitCommentReply(comment);
+                      }
+                    }}
+                    placeholder="Write a reply… Mention @assistant or @counterpart for an AI response."
+                    rows={3}
+                    style={commentTextArea}
+                  />
+                  <div style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 6, flexWrap: "wrap" }}>
+                    <button type="submit" disabled={commentBusy || !(replyDrafts[comment.id] ?? "").trim()} style={{ ...commentAction, opacity: commentBusy || !(replyDrafts[comment.id] ?? "").trim() ? .45 : 1 }}>
+                      {threadOperation?.kind === "reply" ? "POSTING…" : assistantThinking ? `${threadOperation.assistantLabel?.toUpperCase()} THINKING…` : "POST REPLY"}
+                    </button>
+                    <span id={`manuscript-comment-reply-help-${comment.id}`} style={{ color: "var(--txt3)", fontSize: 7 }}>Ctrl/⌘ + Enter to post · Esc closes</span>
+                    <span style={{ flex: 1 }} />
+                    {confirmingDelete ? (
+                      <span role="group" aria-label="Confirm thread deletion" style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
+                        <span style={{ color: "var(--crimson)", fontSize: 7.5 }}>Delete thread and {replies.length} {replies.length === 1 ? "reply" : "replies"}?</span>
+                        <button ref={commentConfirmDeleteRef} type="button" disabled={commentBusy} onClick={() => void deleteCommentThread(comment)} style={{ ...commentAction, color: "white", background: "var(--crimson)", borderColor: "var(--crimson)", opacity: commentBusy ? .45 : 1 }}>{threadOperation?.kind === "delete-thread" ? "DELETING…" : "DELETE PERMANENTLY"}</button>
+                        <button
+                          type="button"
+                          disabled={commentBusy}
+                          onClick={() => {
+                            setConfirmDeleteCommentId(null);
+                            window.setTimeout(() => deleteThreadButtonRefs.current.get(comment.id)?.focus({ preventScroll: true }), 0);
+                          }}
+                          style={{ ...commentAction, color: "var(--txt2)", opacity: commentBusy ? .45 : 1 }}
+                        >CANCEL</button>
+                      </span>
+                    ) : (
+                      <button
+                        ref={(node) => {
+                          if (node) deleteThreadButtonRefs.current.set(comment.id, node);
+                          else deleteThreadButtonRefs.current.delete(comment.id);
+                        }}
+                        type="button"
+                        aria-label="Delete comment thread"
+                        disabled={commentBusy}
+                        onClick={() => setConfirmDeleteCommentId(comment.id)}
+                        style={{ ...commentAction, color: "var(--crimson)", borderColor: "rgba(232,68,58,.45)", opacity: commentBusy ? .45 : 1 }}
+                      >DELETE THREAD</button>
+                    )}
+                  </div>
+                </form>
+              </article>
+            );
+          })}
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
+            <button type="button" onClick={() => { onOpenComments([]); navigate("Comments"); }} style={commentAction}>OPEN COMMENTS PANEL ›</button>
+          </div>
+        </aside>
+      )}
     </div>
   );
 }
@@ -442,7 +1186,10 @@ function ManuscriptRail({
 // ------------------------------------------------------------------- Manuscript
 export function ManuscriptEditor(props: PanelProps) {
   const { api, projectId, writingMode } = useStudio();
+  const projectKey = projectId ?? null;
   const { data: scenes, loading, error, refetch } = useScenes();
+  const { data: commentData, loading: commentsLoading, error: commentsError, refetch: refetchComments } = useComments();
+  const [hideResolvedComments, setHideResolvedComments] = useHideResolvedPreference();
   const sorted = useMemo(() => [...(scenes ?? [])].sort((a, b) => a.sort_order - b.sort_order), [scenes]);
   const isScript = SCRIPT_MODES.has(String(writingMode ?? ""));
 
@@ -456,9 +1203,25 @@ export function ManuscriptEditor(props: PanelProps) {
   const [activeId, setActiveId] = useState<number | null>(null);
   const [warmSceneIds, setWarmSceneIds] = useState<number[]>([]);
   const [nearSceneIds, setNearSceneIds] = useState<Set<number>>(() => new Set());
+  const [openCommentTarget, setOpenCommentTarget] = useState<{ sceneId: number; ids: number[] } | null>(null);
+  const [activeCommentDraftSceneId, setActiveCommentDraftSceneId] = useState<number | null>(null);
+  const [externalCommentDraft, setExternalCommentDraft] = useState<ExternalCommentDraft | null>(null);
+  const [liveSceneTextStore, setLiveSceneTextStore] = useState<LiveSceneTextStore>({ projectId: null, byScene: {} });
   const flushers = useRef(new Map<number, FlushHandlers>());
   const focusAfter = useRef<number | null>(null);
   const jumpTimer = useRef<number | null>(null);
+  const commentNavIndex = useRef(-1);
+  const externalCommentDraftId = useRef(0);
+  const crossScenePointerStart = useRef<CrossScenePointerStart | null>(null);
+  const orphanCleanup = useRef(new Set<number>());
+  const reconciliationAttempts = useRef(new Map<number, string>());
+  const statusGuardRef = useRef<{ projectId: number | null; byScene: Record<number, SaveStatus> }>({ projectId: null, byScene: {} });
+  const commentMutationGuardRef = useRef<{
+    projectId: number | null;
+    safe: boolean;
+    sceneSnapshot: readonly SceneDTO[] | null;
+    commentsSnapshot: readonly InlineCommentDTO[] | undefined;
+  }>({ projectId: null, safe: false, sceneSnapshot: null, commentsSnapshot: undefined });
   const manuscriptScrollRef = useRef<HTMLDivElement | null>(null);
   const sceneNodesRef = useRef(new Map<number, HTMLDivElement>());
   const sceneObserverRef = useRef<IntersectionObserver | null>(null);
@@ -472,15 +1235,32 @@ export function ManuscriptEditor(props: PanelProps) {
   useEffect(() => {
     setWordsById({}); setActiveContent(null); setStatusById({}); setActiveId(null);
     setWarmSceneIds([]); setNearSceneIds(new Set()); setActionError(null);
+    setOpenCommentTarget(null); setActiveCommentDraftSceneId(null); setExternalCommentDraft(null); commentNavIndex.current = -1; externalCommentDraftId.current = 0; crossScenePointerStart.current = null; orphanCleanup.current.clear(); reconciliationAttempts.current.clear();
+    statusGuardRef.current = { projectId: projectKey, byScene: {} };
+    setLiveSceneTextStore((current) => current.projectId === projectKey ? current : { projectId: projectKey, byScene: {} });
     activeIdRef.current = null; focusAfter.current = null;
-  }, [projectId]);
+  }, [projectKey]);
 
   const onWords = useCallback((id: number, n: number) => setWordsById((m) => (m[id] === n ? m : { ...m, [id]: n })), []);
   const onContent = useCallback((id: number, content: string) => {
     if (activeIdRef.current !== id || !showFormatRef.current) return;
     setActiveContent((current) => current?.id === id && current.content === content ? current : { id, content });
   }, []);
-  const onStatus = useCallback((id: number, s: SaveStatus) => setStatusById((m) => (m[id] === s ? m : { ...m, [id]: s })), []);
+  const onStatus = useCallback((ownerProjectId: number | null, id: number, s: SaveStatus) => {
+    if (ownerProjectId !== projectKey) return;
+    const guarded = statusGuardRef.current.projectId === projectKey ? statusGuardRef.current.byScene : {};
+    if (guarded[id] !== s) statusGuardRef.current = { projectId: projectKey, byScene: { ...guarded, [id]: s } };
+    setStatusById((m) => (m[id] === s ? m : { ...m, [id]: s }));
+  }, [projectKey]);
+  const onLiveText = useCallback((ownerProjectId: number | null, id: number, value: LiveSceneText) => {
+    if (ownerProjectId !== projectKey) return;
+    setLiveSceneTextStore((current) => {
+      const byScene = current.projectId === projectKey ? current.byScene : {};
+      const previous = byScene[id];
+      if (previous?.title === value.title && previous.content === value.content) return current;
+      return { projectId: projectKey, byScene: { ...byScene, [id]: value } };
+    });
+  }, [projectKey]);
   const onActive = useCallback((id: number) => {
     activeIdRef.current = id;
     setActiveId(id);
@@ -534,6 +1314,12 @@ export function ManuscriptEditor(props: PanelProps) {
     const valid = new Set(sorted.map((scene) => scene.id));
     setWordsById((current) => pruneSceneRecord(current, valid));
     setStatusById((current) => pruneSceneRecord(current, valid));
+    if (statusGuardRef.current.projectId === projectKey) {
+      statusGuardRef.current = { projectId: projectKey, byScene: pruneSceneRecord(statusGuardRef.current.byScene, valid) };
+    }
+    setLiveSceneTextStore((current) => current.projectId === projectKey
+      ? { projectId: projectKey, byScene: pruneSceneRecord(current.byScene, valid) }
+      : current);
     setActiveContent((current) => current && valid.has(current.id) ? current : null);
     setWarmSceneIds((current) => pruneSceneIds(current, valid));
     setNearSceneIds((current) => {
@@ -544,11 +1330,239 @@ export function ManuscriptEditor(props: PanelProps) {
       const next = current != null && valid.has(current) ? current : sorted[0]?.id ?? null;
       return next;
     });
-  }, [sceneIdsKey]);
+  }, [projectKey, sceneIdsKey]);
 
   useEffect(() => () => {
     if (jumpTimer.current !== null) window.clearTimeout(jumpTimer.current);
   }, []);
+
+  const comments = commentData ?? [];
+  const liveSceneText = liveSceneTextStore.projectId === projectKey ? liveSceneTextStore.byScene : {};
+  const liveScenesReady = sorted.every((scene) => liveSceneText[scene.id] != null);
+  const commentScenes = useMemo(() => sorted.map((scene) => {
+    const live = liveSceneText[scene.id];
+    return live ? { ...scene, title: live.title, content: live.content } : scene;
+  }), [liveSceneText, sorted]);
+  const consumeExternalCommentDraft = useCallback((requestId: number) => {
+    setExternalCommentDraft((current) => current?.requestId === requestId ? null : current);
+  }, []);
+  const publishCrossSceneCommentDraft = useCallback((
+    start: CommentSelectionEndpoint,
+    end: CommentSelectionEndpoint,
+    anchor: ViewportAnchor | null,
+  ) => {
+    if (projectId == null) return;
+    const draft = createMultiFieldCommentDraft(commentScenes, start, end);
+    if (!draft) return;
+    const requestId = externalCommentDraftId.current + 1;
+    externalCommentDraftId.current = requestId;
+    setOpenCommentTarget(null);
+    setActiveCommentDraftSceneId(start.sceneId);
+    onActive(start.sceneId);
+    setExternalCommentDraft({ requestId, projectId, sceneId: start.sceneId, draft, anchor });
+  }, [commentScenes, onActive, projectId]);
+  const captureCrossSceneCommentSelection = useCallback(() => {
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || selection.rangeCount !== 1) return;
+    const range = selection.getRangeAt(0);
+    const startRoot = proseRootForDomPoint(range.startContainer);
+    const endRoot = proseRootForDomPoint(range.endContainer);
+    const manuscriptRoot = manuscriptScrollRef.current;
+    if (
+      !startRoot
+      || !endRoot
+      || startRoot === endRoot
+      || !manuscriptRoot?.contains(startRoot)
+      || !manuscriptRoot.contains(endRoot)
+    ) return;
+    const start = commentSelectionEndpointFromDomPoint(startRoot, range.startContainer, range.startOffset);
+    const end = commentSelectionEndpointFromDomPoint(endRoot, range.endContainer, range.endOffset);
+    if (!start || !end) return;
+    publishCrossSceneCommentDraft(start, end, viewportAnchorForSelectionRange(range));
+  }, [publishCrossSceneCommentDraft]);
+  const beginCrossScenePointerSelection = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    crossScenePointerStart.current = null;
+    if (event.button !== 0 || !(event.target instanceof Node)) return;
+    const root = proseRootForDomPoint(event.target);
+    if (!root || !manuscriptScrollRef.current?.contains(root)) return;
+    const point = proseDomPointFromViewport(root, event.clientX, event.clientY);
+    if (!point) return;
+    const endpoint = commentSelectionEndpointFromDomPoint(root, point.container, point.offset);
+    if (endpoint) crossScenePointerStart.current = { root, endpoint, x: event.clientX, y: event.clientY };
+  }, []);
+  const finishCrossScenePointerSelection = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const started = crossScenePointerStart.current;
+    crossScenePointerStart.current = null;
+    if (!started || event.button !== 0) {
+      captureCrossSceneCommentSelection();
+      return;
+    }
+    if (Math.hypot(event.clientX - started.x, event.clientY - started.y) < 6) {
+      captureCrossSceneCommentSelection();
+      return;
+    }
+    const hit = document.elementFromPoint(event.clientX, event.clientY);
+    const endRoot = proseRootForDomPoint(hit);
+    if (!endRoot || endRoot === started.root || !manuscriptScrollRef.current?.contains(endRoot)) {
+      captureCrossSceneCommentSelection();
+      return;
+    }
+    const endPoint = proseDomPointFromViewport(endRoot, event.clientX, event.clientY);
+    if (!endPoint) return;
+    const released = commentSelectionEndpointFromDomPoint(endRoot, endPoint.container, endPoint.offset);
+    if (!released) return;
+    const relationship = started.root.compareDocumentPosition(endRoot);
+    if (relationship & Node.DOCUMENT_POSITION_DISCONNECTED) return;
+    const startComesFirst = Boolean(relationship & Node.DOCUMENT_POSITION_FOLLOWING);
+    const start = startComesFirst ? started.endpoint : released;
+    const end = startComesFirst ? released : started.endpoint;
+    publishCrossSceneCommentDraft(start, end, {
+      left: event.clientX,
+      right: event.clientX,
+      top: event.clientY,
+      bottom: event.clientY,
+    });
+  }, [captureCrossSceneCommentSelection, publishCrossSceneCommentDraft]);
+  const commentSaveBlocked = sorted.some((scene) => {
+    const status = statusById[scene.id];
+    return status === "dirty" || status === "saving" || status === "error";
+  });
+  const commentMutationsSafe = projectId != null
+    && !loading && !commentsLoading && !error && !commentsError
+    && scenes != null && commentData != null && liveScenesReady && !commentSaveBlocked;
+  commentMutationGuardRef.current = {
+    projectId: projectKey,
+    safe: commentMutationsSafe,
+    sceneSnapshot: commentScenes,
+    commentsSnapshot: commentData,
+  };
+  const visibleComments = useMemo(
+    () => hideResolvedComments ? comments.filter((comment) => !comment.resolved) : comments,
+    [comments, hideResolvedComments],
+  );
+  const resolvedCommentSpans = useMemo(
+    () => reconcileCommentSpans(visibleComments, commentScenes),
+    [commentScenes, visibleComments],
+  );
+  const commentSpansByScene = useMemo(() => {
+    const result = new Map<number, CommentSpan[]>();
+    for (const span of resolvedCommentSpans) {
+      const bucket = result.get(span.sceneId);
+      if (bucket) bucket.push(span); else result.set(span.sceneId, [span]);
+    }
+    return result;
+  }, [resolvedCommentSpans]);
+  const unresolvedCommentTargets = useMemo(() => comments
+    .filter((comment) => !comment.resolved)
+    .map((comment) => ({ comment, location: locateComment(comment, commentScenes) }))
+    .filter((item): item is { comment: InlineCommentDTO; location: CommentSpan } => item.location != null)
+    .sort((left, right) => {
+      const leftScene = commentScenes.findIndex((scene) => scene.id === left.location.sceneId);
+      const rightScene = commentScenes.findIndex((scene) => scene.id === right.location.sceneId);
+      return leftScene - rightScene
+        || (left.location.field === right.location.field ? 0 : left.location.field === "title" ? -1 : 1)
+        || left.location.fromOffset - right.location.fromOffset
+        || left.comment.id - right.comment.id;
+    }), [commentScenes, comments]);
+
+  // Persist a relocated range only after every scene editor has reported its
+  // live text and every save queue is settled. A delayed, identity-checked guard
+  // prevents a keystroke or resource refetch from racing a stale anchor patch.
+  useEffect(() => {
+    if (!commentMutationsSafe || projectId == null || !commentData) return undefined;
+    const pending = commentData.flatMap((comment) => {
+      const patch = reconciledCommentPatch(comment, commentScenes);
+      if (!patch) {
+        reconciliationAttempts.current.delete(comment.id);
+        return [];
+      }
+      const signature = JSON.stringify([comment.anchor, comment.quote, patch]);
+      return reconciliationAttempts.current.get(comment.id) === signature
+        ? []
+        : [{ commentId: comment.id, patch, signature }];
+    });
+    if (!pending.length) return undefined;
+    const ownerProjectId = projectId;
+    const sceneSnapshot = commentScenes;
+    const commentsSnapshot = commentData;
+    const timer = window.setTimeout(() => {
+      const guard = commentMutationGuardRef.current;
+      const guardedStatuses = statusGuardRef.current.projectId === ownerProjectId
+        ? statusGuardRef.current.byScene
+        : {};
+      const newlyBlocked = sceneSnapshot.some((scene) => {
+        const status = guardedStatuses[scene.id];
+        return status === "dirty" || status === "saving" || status === "error";
+      });
+      if (
+        !guard.safe
+        || newlyBlocked
+        || guard.projectId !== ownerProjectId
+        || guard.sceneSnapshot !== sceneSnapshot
+        || guard.commentsSnapshot !== commentsSnapshot
+      ) return;
+
+      for (const item of pending) reconciliationAttempts.current.set(item.commentId, item.signature);
+      void Promise.all(pending.map(async (item) => {
+        try {
+          await trackProjectWrite(api.updateComment(ownerProjectId, item.commentId, item.patch));
+          return null;
+        } catch (updateError) {
+          if (reconciliationAttempts.current.get(item.commentId) === item.signature) {
+            reconciliationAttempts.current.delete(item.commentId);
+          }
+          return updateError;
+        }
+      })).then((results) => {
+        const failure = results.find((result) => result != null);
+        if (commentMutationGuardRef.current.projectId !== ownerProjectId) return;
+        refetchComments();
+        if (failure) {
+          setActionError(`Couldn't preserve a relocated comment — ${failure instanceof Error ? failure.message : String(failure)}`);
+        }
+      });
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  }, [api, commentData, commentMutationsSafe, commentScenes, projectId, refetchComments]);
+
+  // A comment is deleted only after its live text has saved and neither its quote
+  // nor either context landmark can be found. The same delayed guard prevents
+  // stale parent data, project switches, and in-flight edits from deleting it.
+  useEffect(() => {
+    if (!commentMutationsSafe || projectId == null || !commentData) return undefined;
+    const ids = findOrphanedCommentIds(commentData, commentScenes).filter((id) => !orphanCleanup.current.has(id));
+    if (!ids.length) return undefined;
+    const ownerProjectId = projectId;
+    const sceneSnapshot = commentScenes;
+    const commentsSnapshot = commentData;
+    const timer = window.setTimeout(() => {
+      const guard = commentMutationGuardRef.current;
+      const guardedStatuses = statusGuardRef.current.projectId === ownerProjectId
+        ? statusGuardRef.current.byScene
+        : {};
+      const newlyBlocked = sceneSnapshot.some((scene) => {
+        const status = guardedStatuses[scene.id];
+        return status === "dirty" || status === "saving" || status === "error";
+      });
+      if (
+        !guard.safe
+        || newlyBlocked
+        || guard.projectId !== ownerProjectId
+        || guard.sceneSnapshot !== sceneSnapshot
+        || guard.commentsSnapshot !== commentsSnapshot
+      ) return;
+      for (const id of ids) orphanCleanup.current.add(id);
+      void Promise.all(ids.map((id) => trackProjectWrite(api.deleteComment(ownerProjectId, id))))
+        .then(() => refetchComments())
+        .catch((cleanupError) => {
+          for (const id of ids) orphanCleanup.current.delete(id);
+          if (commentMutationGuardRef.current.projectId === ownerProjectId) {
+            setActionError(`Couldn't clean up an orphaned comment — ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
+          }
+        });
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  }, [api, commentData, commentMutationsSafe, commentScenes, projectId, refetchComments]);
 
   const total = useMemo(() => sorted.reduce((n, s) => n + (wordsById[s.id] ?? wordCount(s.content)), 0), [sorted, wordsById]);
   const statuses = useMemo(() => sorted.map((s) => statusById[s.id]).filter(Boolean) as SaveStatus[], [sorted, statusById]);
@@ -559,7 +1573,7 @@ export function ManuscriptEditor(props: PanelProps) {
   const activeScene = sorted.find((s) => s.id === effectiveActiveId) ?? sorted[0];
   const previewContent = activeScene ? (activeContent?.id === activeScene.id ? activeContent.content : activeScene.content) : "";
 
-  const jump = useCallback((id: number) => {
+  const jump = useCallback((id: number, focusProse = true) => {
     onActive(id);
     const el = document.getElementById(`ms-scene-${id}`);
     el?.scrollIntoView({ block: "center", behavior: "smooth" });
@@ -568,7 +1582,7 @@ export function ManuscriptEditor(props: PanelProps) {
       jumpTimer.current = null;
       const current = document.getElementById(`ms-scene-${id}`);
       current?.scrollIntoView({ block: "center", behavior: "smooth" });
-      (current?.querySelector("[data-prose]") as HTMLElement | null)?.focus({ preventScroll: true });
+      if (focusProse) (current?.querySelector("[data-prose]") as HTMLElement | null)?.focus({ preventScroll: true });
     }, 40);
   }, [onActive]);
 
@@ -647,6 +1661,19 @@ export function ManuscriptEditor(props: PanelProps) {
       void flushPendingProjectSaves().catch((error) => setActionError(
         `Save failed — ${error instanceof Error ? error.message : String(error)}`,
       ));
+    } else if (e.altKey && !e.metaKey && !e.ctrlKey && (e.key === "ArrowDown" || e.key === "ArrowUp") && unresolvedCommentTargets.length > 0) {
+      e.preventDefault();
+      const openId = openCommentTarget?.ids[0];
+      const openIndex = openId == null ? -1 : unresolvedCommentTargets.findIndex((item) => item.comment.id === openId);
+      const base = openIndex >= 0 ? openIndex : commentNavIndex.current;
+      const delta = e.key === "ArrowDown" ? 1 : -1;
+      const nextIndex = (base + delta + unresolvedCommentTargets.length) % unresolvedCommentTargets.length;
+      const next = unresolvedCommentTargets[nextIndex]!;
+      commentNavIndex.current = nextIndex;
+      setOpenCommentTarget({ sceneId: next.location.sceneId, ids: [next.comment.id] });
+      // The destination thread popover owns focus. A normal scene jump focuses
+      // prose after its delayed scroll, which would steal focus from the dialog.
+      jump(next.location.sceneId, false);
     }
   };
 
@@ -661,14 +1688,37 @@ export function ManuscriptEditor(props: PanelProps) {
             <span style={{ width: 5, height: 5, borderRadius: "50%", background: saveColor }} />{saveLabel}
           </div>
           <div style={{ flex: 1 }} />
+          <button
+            type="button"
+            aria-label={hideResolvedComments ? "Show all comment marks" : "Show open comment marks"}
+            aria-pressed={hideResolvedComments}
+            title={hideResolvedComments ? "Resolved comment marks are hidden" : "Resolved comment marks are visible"}
+            onClick={() => setHideResolvedComments(!hideResolvedComments)}
+            style={{ ...linkBtn, color: hideResolvedComments ? "var(--amber)" : "var(--txt2)" }}
+          >
+            ◈ {hideResolvedComments ? "OPEN MARKS" : "ALL MARKS"}
+          </button>
           {isScript && <button type="button" onClick={() => setFormat((f) => !f)} disabled={focus} aria-pressed={format} title="Live screenplay-format preview of the scene you're editing" style={{ ...linkBtn, color: format ? "var(--accent)" : "var(--txt2)", opacity: focus ? 0.4 : 1 }}>❏ FORMAT</button>}
           <button type="button" onClick={addScene} disabled={busy || projectId == null} style={{ ...linkBtn, color: "var(--txt2)", opacity: busy || projectId == null ? 0.5 : 1 }}>＋ SCENE</button>
           <button type="button" onClick={() => setFocus((f) => !f)} aria-pressed={focus} style={{ ...linkBtn, color: focus ? "var(--accent)" : "var(--txt2)" }}>⊹ FOCUS</button>
         </div>
         {actionError && <button type="button" role="alert" title="Dismiss" onClick={() => setActionError(null)} style={{ flex: "none", width: "100%", textAlign: "left", border: "none", borderBottom: "1px solid var(--crimson)", background: "rgba(255,82,96,.08)", color: "var(--crimson)", padding: "7px 18px", font: "inherit", fontSize: 9.5, cursor: "pointer" }}>{actionError}</button>}
+        {commentsError && (
+          <div role="alert" style={{ flex: "none", display: "flex", alignItems: "center", gap: 10, borderBottom: "1px solid var(--crimson)", background: "rgba(255,82,96,.08)", color: "var(--crimson)", padding: "7px 18px", fontSize: 9.5 }}>
+            <span style={{ flex: 1 }}>Comments couldn't load — {commentsError}</span>
+            <button type="button" onClick={refetchComments} style={{ ...commentAction, color: "var(--crimson)", borderColor: "rgba(232,68,58,.45)" }}>RETRY COMMENTS</button>
+          </div>
+        )}
 
         <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
-          <div ref={manuscriptScrollRef} data-manuscript-scroll style={{ flex: 1, minWidth: 0, display: "flex", justifyContent: "center", padding: "26px 26px 60px", overflowY: "auto" }}>
+          <div
+            ref={manuscriptScrollRef}
+            data-manuscript-scroll
+            onPointerDownCapture={beginCrossScenePointerSelection}
+            onPointerUp={finishCrossScenePointerSelection}
+            onKeyUpCapture={captureCrossSceneCommentSelection}
+            style={{ flex: 1, minWidth: 0, display: "flex", justifyContent: "center", padding: "26px 26px 60px", overflowY: "auto" }}
+          >
             <div style={{ width: "100%", maxWidth: focus ? 720 : 660 }}>
               {projectId == null ? message("Open a project to start writing.")
                 : loading ? message("Loading manuscript…")
@@ -681,7 +1731,7 @@ export function ManuscriptEditor(props: PanelProps) {
                 )
                 : sorted.map((s, i) => (
                   <SceneEditor
-                    key={s.id} scene={s} index={i}
+                    key={`${projectKey ?? "none"}:${s.id}`} scene={s} index={i}
                     showAct={i === 0 || sorted[i - 1]!.act !== s.act}
                     formatted={isScript && format} mode={String(writingMode ?? "")} busy={busy}
                     onWords={onWords} onContent={onContent} onStatus={onStatus} onActive={onActive} registerFlush={registerFlush}
@@ -689,6 +1739,17 @@ export function ManuscriptEditor(props: PanelProps) {
                     isFirst={i === 0} isLast={i === sorted.length - 1}
                     renderProse={!intersectionSupported || s.id === effectiveActiveId || nearSceneIds.has(s.id) || warmSceneIds.includes(s.id)}
                     registerSceneNode={registerSceneNode} onRequestEdit={jump}
+                    commentSpans={commentSpansByScene.get(s.id) ?? []}
+                    comments={visibleComments}
+                    openCommentIds={openCommentTarget?.sceneId === s.id ? openCommentTarget.ids : []}
+                    onOpenComments={(ids) => setOpenCommentTarget(ids.length ? { sceneId: s.id, ids } : null)}
+                    onCommentsChanged={refetchComments}
+                    onCommentCreated={() => { refetch(); refetchComments(); }}
+                    onLiveText={onLiveText}
+                    activeCommentDraftSceneId={activeCommentDraftSceneId}
+                    onCommentDraftOwnership={setActiveCommentDraftSceneId}
+                    externalCommentDraft={externalCommentDraft?.projectId === projectKey && externalCommentDraft.sceneId === s.id ? externalCommentDraft : null}
+                    onExternalCommentDraftConsumed={consumeExternalCommentDraft}
                   />
                 ))}
             </div>

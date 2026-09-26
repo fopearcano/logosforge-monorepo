@@ -10,6 +10,9 @@ import logging
 from collections.abc import Callable
 
 from logosforge.context_builder import (
+    fit_editorial_contexts,
+    gather_comments_context,
+    gather_notes_context,
     gather_outline_context,
     gather_psyke_context,
     gather_scene_context,
@@ -28,6 +31,8 @@ _SOURCE_MIN_CHARS = {
     "scene": 1200,
     "outline": 1200,
     "psyke": 1200,
+    "notes": 600,
+    "comments": 600,
     "memory": 400,
 }
 _TRUNCATED = "\n[...source truncated]"
@@ -40,14 +45,19 @@ def _append_context_source(
     build: Callable[[], str],
 ) -> None:
     """Append one source without letting it erase every other grounding source."""
+    block = _read_context_source(label, build)
+    if block:
+        sections.append((key, block))
+
+
+def _read_context_source(label: str, build: Callable[[], str]) -> str:
+    """Build one source, degrading independently to a bounded warning."""
     try:
         block = build()
     except Exception:
         _LOG.exception("Could not build %s assistant context", label)
-        sections.append((key, f"[Context Warning] {label} context unavailable for this reply."))
-        return
-    if block:
-        sections.append((key, block))
+        return f"[Context Warning] {label} context unavailable for this reply."
+    return block or ""
 
 
 def _fit_context_sections(sections: list[tuple[str, str]]) -> str:
@@ -113,12 +123,14 @@ def build_chat_context(
     include_outline: bool = True,
     include_psyke: bool = True,
     include_memory: bool = True,
+    include_notes: bool = True,
+    include_comments: bool = True,
 ) -> str:
     """Assemble a single context block for a chat turn.
 
-    Reuses the existing gather_* functions. The result is bounded by
-    CONTEXT_MAX_CHARS — anything past that is dropped from the tail
-    so the most-relevant earlier sections survive.
+    Reuses the existing gather_* functions. Notes and Comments are selected
+    independently, share the editorial sub-budget, and then participate in the
+    same global ``CONTEXT_MAX_CHARS`` water-fill as every other source.
     """
     sections: list[tuple[str, str]] = []
 
@@ -159,6 +171,22 @@ def build_chat_context(
                 db, project_id, scene_id=active_scene_id,
             ),
         )
+
+    notes_context = _read_context_source(
+        "Notes",
+        lambda: gather_notes_context(db, project_id, active_scene_id),
+    ) if include_notes else ""
+    comments_context = _read_context_source(
+        "Comments",
+        lambda: gather_comments_context(db, project_id, active_scene_id),
+    ) if include_comments else ""
+    notes_context, comments_context = fit_editorial_contexts(
+        notes_context, comments_context,
+    )
+    if notes_context:
+        sections.append(("notes", notes_context))
+    if comments_context:
+        sections.append(("comments", comments_context))
 
     if include_memory:
         _append_context_source(

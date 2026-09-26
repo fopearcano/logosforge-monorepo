@@ -21,6 +21,9 @@ const SHORTCUTS: [string, string][] = [
   ["Enter  /  Space", "Activate the focused button, toggle or selectable card"],
   ["↑ ↓ · Enter · Esc", "In the palette: move · run the highlighted command · close"],
   ["⌘S  /  Ctrl+S", "Save now in the Manuscript (scenes also autosave as you type)"],
+  ["⌘⇧C  /  Ctrl+Shift+C", "Open the Comments panel"],
+  ["Alt+↑  /  Alt+↓", "In the Manuscript: cycle backward / forward through open anchored comments"],
+  ["⌘/Ctrl + Enter (comment)", "Post a new comment or thread reply"],
   ["Enter", "Send your message to Billy   (Shift+Enter = new line)"],
   ["⌘/Ctrl + Enter", "Apply an AI edit in the Controlled-Apply diff   (Esc = cancel; focus returns where you started)"],
   ["Enter  /  Esc", "Confirm / cancel an inline rename or field (Outline, Projects, PSYKE, Notes)"],
@@ -33,6 +36,9 @@ const GUIDE: { title: string; items: [string, string][] }[] = [
     ["Projects", "Create a project — pick a project mode (novel · screenplay · graphic novel · stage · series) — or open one. The mode follows each project and locks once it contains work, preventing accidental reinterpretation. You can also ⇩ Import Whiteboard (.json) or ⇩ Import Project (.lfbundle)."],
     ["AI Settings", "Point Studio at your AI model — LM Studio, Ollama, OpenAI, Anthropic, OpenRouter or a custom endpoint. Use Save to accept credentials/configuration or Revert to discard them; Studio will stop navigation while this sensitive form is unsaved."],
     ["Manuscript", "Write. Scenes autosave; panel changes, project changes, and app close wait for pending manuscript, Note and PSYKE saves. Create, delete, reorder and manual-save failures stay visible. If a scene changed elsewhere, your local draft is preserved and you choose Reload or an explicit Overwrite. In very long manuscripts, off-screen scenes remain readable but use a lightweight view; scrolling near them or clicking their prose activates the full editor. ＋ SCENE adds one; FOCUS hides everything but the page."],
+    ["Comments", "Select text in a scene title or prose, choose ＋ COMMENT, and write. Drag from prose in one scene into another to anchor one cross-scene thread. Saved passages stay visibly marked; activate a mark for its anchored thread popover, or open the full Comments panel with ⌘/Ctrl+Shift+C."],
+    ["Comment threads", "Reply, edit the original comment, delete replies or whole threads, and Resolve/Reopen. ALL / OPEN is remembered and also controls resolved marks. Export the full review as Markdown. Mention @assistant or @counterpart in a reply for a project-aware AI answer in the thread."],
+    ["Comment anchors", "Quote-and-context anchors relocate safely as prose moves, including imported Whiteboard ranges across title/content or scene boundaries. Imported source provenance remains visible; only a genuinely missing passage is cleaned up, after pending scene saves settle."],
     ["Panel recovery", "If one screen or AI companion fails while rendering, only that area is replaced by a visible error card. RETRY remounts that area; the rest of the workspace and your project data remain available."],
     ["Unexpected errors", "Failures outside React panels — such as an unhandled background task — appear in a dismissible error banner and remain in the developer console for diagnosis. Stalled health checks, reads and AI operations end with a visible timeout; ordinary data writes are not cut off mid-commit. Normal request cancellations stay quiet."],
   ] },
@@ -61,7 +67,7 @@ const GUIDE: { title: string; items: [string, string][] }[] = [
   ] },
   { title: "⑥ Voice, import & export", items: [
     ["Voice — Dexter's Room", "Dictate with local faster-whisper, then clean a transcript, ask Billy, or commit it to the active scene, a Note or PSYKE. Voice history is project-isolated; finish or dismiss a preview before navigating. If newer scene text blocks an insertion, the returned text is preserved for Retry or explicit Discard without rerunning Billy. Stop, cancel, setup failure and leaving the panel all release the microphone."],
-    ["Import", "From Projects: bring a Free Whiteboard draft (.json) or a whole project bundle (.lfbundle — manuscript + bible + outline) into a new Pro project."],
+    ["Import", "From Projects: bring a Free Whiteboard draft (.json) or a whole project bundle (.lfbundle — manuscript, bible entries and relationships, progression beats, outline, and safely mapped comment threads) into a new Pro project."],
     ["Export", "Fountain / PDF / FDX / DOCX from the Export panel."],
   ] },
 ];
