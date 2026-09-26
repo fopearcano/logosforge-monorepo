@@ -33,12 +33,16 @@ Changes to the Monterey workflow or its packaging and validation inputs on
 drop. Tag pushes still publish regardless of changed paths. This gives the
 legacy runner a release-path dry run before a new immutable tag is created.
 
-Every workflow freezes the Python Whiteboard wrapper/shared core and the
-read-only MCP companion with PyInstaller, smoke-tests the native backend and an
-authenticated MCP read over stdio, packages both beside the Electron app, and
-launches the resulting package through `smoke-packaged-mcp.py`. Windows and
-Linux upload workflow artifacts; Monterey either keeps a local checksummed
-build-only drop or attaches the DMG directly to the matching GitHub prerelease.
+Every workflow freezes the Python Whiteboard wrapper/shared core and the MCP
+companion with PyInstaller, smoke-tests the native backend, guarded tool
+annotations, an authenticated MCP read with the default write gate, and a
+disposable write-enabled manuscript, PSYKE entry/relationship/progression, and
+comment reply/resolution proposal/apply round trip over stdio. It packages both
+beside the Electron app and launches the result through
+`smoke-packaged-mcp.py`.
+Windows and Linux upload workflow artifacts; Monterey either keeps a local
+checksummed build-only drop or attaches the DMG directly to the matching GitHub
+prerelease.
 PyInstaller output is platform-specific and must never be copied from one
 runner to another.
 
@@ -195,14 +199,25 @@ On a clean or isolated test account for each platform:
 2. Confirm the status reaches `Connected` and shows API v1.0.0 with core
    0.9.0-alpha.
 3. Confirm the stable per-user MCP companion and private descriptor exist while
-   the GUI is running. From a local MCP client, discover exactly the nine
-   `logosforge_whiteboard_` read-only tools and complete an authenticated
-   document read. After quitting Whiteboard, confirm a new MCP connection is
-   rejected rather than using stale runtime state.
+   the GUI is running. From a local MCP client, discover exactly the 24
+   `logosforge_whiteboard_` read/proposal tools, verify capabilities report
+   version 1.4.0 with writes disabled by default, and complete authenticated
+   document, comment, and PSYKE entry/relationship/progression reads, including
+   the comment revision and shared aggregate PSYKE revision. After quitting
+   Whiteboard, confirm a new MCP connection is rejected rather than using stale
+   runtime state.
 4. Create and edit a document, quit, reopen, and verify persistence.
 5. Exercise a loopback/local AI provider, PDF or text export, and `.lfbundle`
-   export. Import the `.lfbundle` in LogosForge Pro; Whiteboard does not restore
-   bundles itself.
+   export. Inspect that the bundle carries PSYKE `elements`, `relations`, and
+   `progressions`, then import it in LogosForge Pro. Pro recreates the entries,
+   restores relationships and ordered progression beats through entry-ID
+   remapping, and restores a progression's scene anchor only when its scene
+   title has one unique match in the imported manuscript. Missing or ambiguous
+   scene matches remain unlinked and are reported by the importer. Pro also
+   recreates comment threads whose Whiteboard block spans map safely to the
+   imported scene title/content, preserving replies and resolution state while
+   explicitly reporting unmappable anchors. Verify them in Pro's Comments
+   panel. Whiteboard does not restore bundles itself.
 6. Confirm Windows installer and portable builds use isolated expected data,
    and verify the macOS DMG and Linux AppImage on supported systems.
 

@@ -327,10 +327,43 @@ Whiteboard and Pro are separate apps. To graduate a project to Pro:
 2. In Pro: import that `.lfbundle`.
 
 Pro converts the manuscript blocks to scenes, imports the document settings,
-PSYKE entries, outline, and outline links, and preserves Whiteboard-only settings
-in the imported project's settings store. Comments remain archived in the bundle
-and are counted in Pro's import report, but span-anchored comment threads are not
-yet recreated in the Pro project.
+PSYKE entries, relationships, progression beats, outline, and outline links, and
+preserves Whiteboard-only settings in the imported project's settings store.
+Progression scene anchors are remapped only when their title uniquely matches an
+imported scene; unresolved anchors keep their progression beat unlinked and are reported.
+Whiteboard comment threads are also recreated in Pro when their text span can be
+mapped safely to the imported scene title/content. Replies, open/resolved state,
+timestamps, cross-field or cross-scene ranges, and source provenance are
+preserved; unmappable threads are skipped and reported rather than attached to
+the wrong passage.
+
+In Pro's Manuscript, safely mapped passages are visibly marked; activate a mark
+to open its anchored thread. Select text in a scene title or prose and choose
+**＋ COMMENT** to start a native thread. Drag a prose selection into another
+scene to anchor one thread across both scenes and any fields between them. From the mark popover or dedicated
+**Comments** panel you can reply, Resolve/Reopen, and delete a reply or thread;
+the panel also edits the original comment and exports all threads as Markdown.
+Its remembered **ALL / OPEN** choice controls both the list and whether resolved
+marks appear in the Manuscript. Press **Alt+Down / Alt+Up** to cycle through open
+anchored threads, or **Ctrl+Shift+C** to open Comments. Mention `@assistant` or
+`@counterpart` in a reply to ask that project-aware companion to answer in the
+same thread.
+
+If you connect a local MCP client such as Codex or LibreChat to the optional Pro
+gateway, it can list and search complete comment threads, propose a reply
+attributed to **MCP assistant**, and propose Resolve/Reopen. The writer still
+reviews and applies every proposal. Each comment proposal is bound to the exact
+thread revision the agent read; if the root, a reply, its resolution, or its
+anchor changes first, Pro rejects the stale apply and the agent must reread.
+Comment text is treated as project content, not as instructions to the agent.
+Creating anchored comments, changing their anchor or original body, and
+deleting threads or replies remain actions for Pro's Comments UI.
+
+Pro uses the stored quote and surrounding context to relocate marks after edits,
+including imported spans that cross title/content or scene boundaries. It saves
+only safe reanchors after scene edits settle and removes a thread only when its
+passage and usable context are genuinely gone; imported threads retain their
+source provenance throughout.
 
 ---
 

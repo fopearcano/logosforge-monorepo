@@ -109,9 +109,13 @@ routes through `logosforge/librechat/api_client.py`; it never opens the SQLite
 database or exposes arbitrary HTTP, filesystem, or Python execution.
 
 MCP reads cover complete revisioned scenes, outline and PSYKE data, notes,
-search, events, diagnostics, exports, and desktop live context when available.
-Writes use focused `logosforge_propose_*` tools. Each proposal stores the exact
-validated request and stale-state guard under an opaque, expiring id. Only
+complete comment threads, search, events, diagnostics, exports, and desktop
+live context when available. The 38-tool surface includes
+`logosforge_list_comments` (paged, with an optional resolved-thread filter),
+`logosforge_propose_comment_reply`, and
+`logosforge_propose_comment_resolution` (Resolve or Reopen). Writes use focused
+`logosforge_propose_*` tools. Each proposal stores the exact validated request
+and stale-state guard under an opaque, expiring id. Only
 `logosforge_apply_proposal(proposal_id)` can apply that stored request, and a
 proposal is single-use. There is no generic action tool and no
 `confirmed=true` shortcut.
@@ -120,6 +124,15 @@ Writes are disabled by default. They require the explicit MCP write gate and,
 by default, a shared API token; scene writes also require the current revision
 so the API can reject stale prose atomically. Configure the MCP client to ask
 for approval before invoking the apply tool.
+
+Comment mutations have the same stronger boundary: reply and Resolve/Reopen
+proposals require the exact current thread revision, which the API rechecks in
+the same database transaction as apply. Any intervening root, reply,
+resolution, anchor, or deletion change rejects the stale proposal. Replies are
+stored as `MCP assistant` and never invoke the app's AI-provider mention
+workflow. Comment quotes, bodies, and replies are user-authored project data,
+not instructions to the agent. Anchored comment creation, anchor/root-body
+editing, and reply/thread deletion remain available only in Pro's own UI.
 
 See [Pro MCP gateway](docs/MCP_GATEWAY.md) for the complete tool model,
 environment variables, Codex setup, remote-host restrictions, and checkpoint
@@ -249,7 +262,8 @@ keeps LibreChat as an *interface*, never an *authority*.
   it and keeping the process alive while proposals are pending.
 * Project export is a manual checkpoint, not an automatic transactional
   rollback. Manuscript imports and delete operations are intentionally not
-  exposed as MCP tools.
+  exposed as MCP tools. Comment creation, anchor/root-body editing, and
+  reply/thread deletion are likewise UI-only.
 * Auto-launch covers only a simple local startup command; Docker-stack
   orchestration is deferred (§6).
 * `get_entity_context` for non-character PSYKE types filters the full entry
