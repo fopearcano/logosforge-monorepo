@@ -364,6 +364,7 @@ class WhiteboardUpdate(BaseModel):
 _WB_DIRNAME = "whiteboards"
 _OL_DIRNAME = "outlines"
 _COMMENTS_DIRNAME = "comments"
+_PSYKE_REVISIONS_DIRNAME = "psyke-revisions"
 _LEGACY_WB = "whiteboard.json"
 _LEGACY_OL = "outline.json"
 
@@ -652,6 +653,185 @@ class OutlineItemsStore:
         return {path.stem for path in self._dir.glob("*.json")}
 
 
+# -- PSYKE collection revision + conditional retry receipt ------------------
+
+class PsykeRevisionState(BaseModel):
+    """Durable validator for the core-owned story-bible entry collection.
+
+    The core database remains the source of truth for entries.  This sidecar
+    binds an opaque revision to the last observed canonical collection digest,
+    and retains the one exact conditional mutation result that may be replayed
+    after a lost HTTP response.  It never stores an independently editable copy
+    of the story bible.
+    """
+
+    incarnation: str
+    source_digest: str
+    revision: str
+    last_mutation_id: str = ""
+    last_mutation_fingerprint: str = ""
+    last_mutation_result: dict[str, Any] | None = None
+
+
+_PSYKE_DIGEST_LENGTH = 64
+
+
+def _valid_psyke_revision_state(state: PsykeRevisionState) -> bool:
+    mutation_characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._:-"
+    valid_mutation_id = (
+        not state.last_mutation_id
+        or (
+            len(state.last_mutation_id) <= 128
+            and state.last_mutation_id[0].isalnum()
+            and all(character in mutation_characters for character in state.last_mutation_id)
+        )
+    )
+    valid_fingerprint = (
+        not state.last_mutation_fingerprint
+        or (
+            len(state.last_mutation_fingerprint) == _PSYKE_DIGEST_LENGTH
+            and all(
+                character in "0123456789abcdef"
+                for character in state.last_mutation_fingerprint
+            )
+        )
+    )
+    receipt_is_complete = (
+        bool(state.last_mutation_id)
+        == bool(state.last_mutation_fingerprint)
+        == (state.last_mutation_result is not None)
+    )
+    return (
+        _valid_revision(state.incarnation)
+        and _valid_revision(state.revision)
+        and len(state.source_digest) == _PSYKE_DIGEST_LENGTH
+        and all(character in "0123456789abcdef" for character in state.source_digest)
+        and valid_mutation_id
+        and valid_fingerprint
+        and receipt_is_complete
+    )
+
+
+class PsykeRevisionStore:
+    """Per-document PSYKE validators and exact-retry receipts.
+
+    A changed source digest always mints a fresh opaque revision.  Consequently
+    an observed A -> B -> A collection transition cannot revive an old
+    ``If-Match`` validator merely because the content hash returned to A.
+    """
+
+    def __init__(self, root: Path | None = None) -> None:
+        self._dir = (root or _data_dir()) / _PSYKE_REVISIONS_DIRNAME
+
+    def _path(self, doc_id: str) -> Path:
+        return self._dir / f"{doc_id}.json"
+
+    @staticmethod
+    def _parse(text: str) -> PsykeRevisionState:
+        state = PsykeRevisionState.model_validate_json(text)
+        if not _valid_psyke_revision_state(state):
+            raise ValueError("invalid PSYKE revision state")
+        return state
+
+    def _load(self, doc_id: str) -> PsykeRevisionState | None:
+        path = self._path(doc_id)
+
+        def prepare_recovery(
+            recovered: PsykeRevisionState,
+        ) -> tuple[PsykeRevisionState, bytes]:
+            # A restored backup describes an older observation.  Rotate its
+            # validator and discard the retry receipt before making it current.
+            rotated = recovered.model_copy(update={
+                "revision": _new_revision(),
+                "last_mutation_id": "",
+                "last_mutation_fingerprint": "",
+                "last_mutation_result": None,
+            })
+            return rotated, rotated.model_dump_json(indent=2).encode("utf-8")
+
+        state, _recovered = _read_with_recovery(
+            path,
+            self._parse,
+            label=f"PSYKE revision metadata for document {doc_id}",
+            prepare_recovery=prepare_recovery,
+        )
+        return state
+
+    @staticmethod
+    def _fresh(incarnation: str, source_digest: str) -> PsykeRevisionState:
+        return PsykeRevisionState(
+            incarnation=incarnation,
+            source_digest=source_digest,
+            revision=_new_revision(),
+        )
+
+    def observe(
+        self,
+        doc_id: str,
+        incarnation: str,
+        source_digest: str,
+    ) -> PsykeRevisionState:
+        """Return the stable revision for one authoritative core snapshot."""
+        candidate = self._fresh(incarnation, source_digest)
+        if not _valid_psyke_revision_state(candidate):
+            raise ValueError("invalid PSYKE collection identity")
+        with _STATE_LOCK:
+            current = self._load(doc_id)
+            if current is None or not hmac.compare_digest(
+                current.incarnation, incarnation
+            ):
+                current = candidate
+                _atomic_write_text(self._path(doc_id), current.model_dump_json(indent=2))
+            elif not hmac.compare_digest(current.source_digest, source_digest):
+                current = current.model_copy(update={
+                    "source_digest": source_digest,
+                    "revision": _new_revision(),
+                    "last_mutation_id": "",
+                    "last_mutation_fingerprint": "",
+                    "last_mutation_result": None,
+                })
+                _atomic_write_text(self._path(doc_id), current.model_dump_json(indent=2))
+            return current.model_copy(deep=True)
+
+    def commit_mutation(
+        self,
+        doc_id: str,
+        incarnation: str,
+        source_digest: str,
+        *,
+        mutation_id: str | None,
+        mutation_fingerprint: str = "",
+        result: dict[str, Any] | None = None,
+    ) -> PsykeRevisionState:
+        """Publish a post-write snapshot and optional exact-retry receipt."""
+        if mutation_id and (not mutation_fingerprint or result is None):
+            raise ValueError("conditional PSYKE mutations require a complete receipt")
+        state = PsykeRevisionState(
+            incarnation=incarnation,
+            source_digest=source_digest,
+            revision=_new_revision(),
+            last_mutation_id=mutation_id or "",
+            last_mutation_fingerprint=mutation_fingerprint if mutation_id else "",
+            last_mutation_result=dict(result) if mutation_id and result is not None else None,
+        )
+        if not _valid_psyke_revision_state(state):
+            raise ValueError("invalid PSYKE mutation receipt")
+        with _STATE_LOCK:
+            # Validate/recover any existing file before replacing it.  Corrupt
+            # metadata must never be silently overwritten after a core write.
+            self._load(doc_id)
+            _atomic_write_text(self._path(doc_id), state.model_dump_json(indent=2))
+            return state.model_copy(deep=True)
+
+    def delete(self, doc_id: str) -> None:
+        _delete_state_files(self._path(doc_id))
+
+    def list_document_ids(self) -> set[str]:
+        if not self._dir.exists():
+            return set()
+        return {path.stem for path in self._dir.glob("*.json")}
+
+
 # -- Comments (per-document inline notes anchored to block spans) -------------
 
 class CommentAnchor(BaseModel):
@@ -715,6 +895,17 @@ class CommentReplyCreate(BaseModel):
 
 class CommentsDocument(BaseModel):
     comments: list[Comment] = Field(default_factory=list)
+    # Opaque collection validator.  It covers every thread and reply for this
+    # document, including resolved comments, and rotates on each durable change.
+    revision: str = ""
+
+
+class _StoredCommentsDocument(CommentsDocument):
+    """On-disk comment envelope; retry metadata is never an API field."""
+
+    last_mutation_id: str = ""
+    last_mutation_fingerprint: str = ""
+    last_mutation_comment_id: str = ""
 
 
 class CommentsStore:
@@ -727,19 +918,106 @@ class CommentsStore:
     def _path(self, doc_id: str) -> Path:
         return self._dir / f"{doc_id}.json"
 
-    def _load(self, doc_id: str) -> CommentsDocument:
-        doc, _recovered = _read_with_recovery(
-            self._path(doc_id),
-            CommentsDocument.model_validate_json,
-            label=f"comments for document {doc_id}",
-        )
-        return CommentsDocument() if doc is None else doc
+    @staticmethod
+    def _public(doc: _StoredCommentsDocument) -> CommentsDocument:
+        return CommentsDocument.model_validate(doc.model_dump())
 
-    def _save(self, doc_id: str, doc: CommentsDocument) -> None:
+    def _load(
+        self,
+        doc_id: str,
+        *,
+        persist_missing: bool = True,
+    ) -> _StoredCommentsDocument:
+        path = self._path(doc_id)
+
+        def prepare_recovery(
+            recovered: _StoredCommentsDocument,
+        ) -> tuple[_StoredCommentsDocument, bytes]:
+            rotated = recovered.model_copy(update={
+                "revision": _new_revision(),
+                "last_mutation_id": "",
+                "last_mutation_fingerprint": "",
+                "last_mutation_comment_id": "",
+            })
+            return rotated, rotated.model_dump_json(indent=2).encode("utf-8")
+
+        doc, recovered = _read_with_recovery(
+            path,
+            _StoredCommentsDocument.model_validate_json,
+            label=f"comments for document {doc_id}",
+            prepare_recovery=prepare_recovery,
+        )
+        if doc is None:
+            doc = _StoredCommentsDocument(comments=[], revision=_new_revision())
+            if persist_missing:
+                _atomic_write_text(path, doc.model_dump_json(indent=2))
+            return doc
+        if recovered:
+            assert _valid_revision(doc.revision)
+        elif not _valid_revision(doc.revision):
+            # Add a transport validator to legacy comment files without
+            # changing any thread timestamps or other user-authored data.
+            doc = doc.model_copy(update={
+                "revision": _new_revision(),
+                "last_mutation_id": "",
+                "last_mutation_fingerprint": "",
+                "last_mutation_comment_id": "",
+            })
+            _atomic_write_text(path, doc.model_dump_json(indent=2))
+        return doc
+
+    def _save(self, doc_id: str, doc: _StoredCommentsDocument) -> None:
         _atomic_write_text(self._path(doc_id), doc.model_dump_json(indent=2))
 
     def get(self, doc_id: str) -> CommentsDocument:
-        return self._load(doc_id)
+        with _STATE_LOCK:
+            return self._public(self._load(doc_id))
+
+    @staticmethod
+    def _conditional_retry(
+        doc: _StoredCommentsDocument,
+        mutation_id: str | None,
+        fingerprint: str,
+        expected_revision: str | None,
+    ) -> Comment | None:
+        """Return an exact prior result before evaluating its old revision."""
+        if mutation_id and doc.last_mutation_id == mutation_id:
+            if doc.last_mutation_fingerprint != fingerprint:
+                raise MutationIdConflict(mutation_id)
+            result = next(
+                (
+                    comment
+                    for comment in doc.comments
+                    if comment.id == doc.last_mutation_comment_id
+                ),
+                None,
+            )
+            if result is None:
+                # A complete receipt cannot point at a missing result.  Fail
+                # closed instead of risking a second application.
+                raise MutationIdConflict(mutation_id)
+            return result
+        if expected_revision is not None and not hmac.compare_digest(
+            expected_revision, doc.revision
+        ):
+            raise ResourceRevisionConflict(expected_revision, doc.revision)
+        return None
+
+    @staticmethod
+    def _committed(
+        comments: list[Comment],
+        *,
+        mutation_id: str | None = None,
+        fingerprint: str = "",
+        result_comment_id: str = "",
+    ) -> _StoredCommentsDocument:
+        return _StoredCommentsDocument(
+            comments=comments,
+            revision=_new_revision(),
+            last_mutation_id=mutation_id or "",
+            last_mutation_fingerprint=fingerprint if mutation_id else "",
+            last_mutation_comment_id=result_comment_id if mutation_id else "",
+        )
 
     def create(self, doc_id: str, comment_id: str, payload: CommentCreate) -> Comment:
         with _STATE_LOCK:
@@ -748,13 +1026,29 @@ class CommentsStore:
             comment = Comment(
                 id=comment_id, anchor=payload.anchor, quote=payload.quote,
                 body=payload.body, resolved=False, created_at=now, updated_at=now)
-            doc.comments.append(comment)
-            self._save(doc_id, doc)
+            committed = self._committed([*doc.comments, comment])
+            self._save(doc_id, committed)
             return comment
 
-    def update(self, doc_id: str, comment_id: str, payload: CommentUpdate) -> Comment | None:
+    def update(
+        self,
+        doc_id: str,
+        comment_id: str,
+        payload: CommentUpdate,
+        *,
+        expected_revision: str | None = None,
+        mutation_id: str | None = None,
+    ) -> Comment | None:
         with _STATE_LOCK:
             doc = self._load(doc_id)
+            fingerprint = _mutation_fingerprint(
+                f"comments:update:{comment_id}", payload, expected_revision
+            )
+            retry = self._conditional_retry(
+                doc, mutation_id, fingerprint, expected_revision
+            )
+            if retry is not None:
+                return retry
             for i, c in enumerate(doc.comments):
                 if c.id == comment_id:
                     updated = Comment(
@@ -765,8 +1059,15 @@ class CommentsStore:
                         resolved=c.resolved if payload.resolved is None else payload.resolved,
                         replies=c.replies,
                         created_at=c.created_at, updated_at=_now())
-                    doc.comments[i] = updated
-                    self._save(doc_id, doc)
+                    comments = list(doc.comments)
+                    comments[i] = updated
+                    committed = self._committed(
+                        comments,
+                        mutation_id=mutation_id,
+                        fingerprint=fingerprint,
+                        result_comment_id=comment_id,
+                    )
+                    self._save(doc_id, committed)
                     return updated
             return None
 
@@ -774,16 +1075,26 @@ class CommentsStore:
         with _STATE_LOCK:
             doc = self._load(doc_id)
             before = len(doc.comments)
-            doc.comments = [c for c in doc.comments if c.id != comment_id]
-            if len(doc.comments) < before:
-                self._save(doc_id, doc)
+            comments = [c for c in doc.comments if c.id != comment_id]
+            if len(comments) < before:
+                self._save(doc_id, self._committed(comments))
                 return True
             return False
 
     def add_reply(self, doc_id: str, comment_id: str, reply_id: str,
-                  payload: CommentReplyCreate) -> Comment | None:
+                  payload: CommentReplyCreate, *,
+                  expected_revision: str | None = None,
+                  mutation_id: str | None = None) -> Comment | None:
         with _STATE_LOCK:
             doc = self._load(doc_id)
+            fingerprint = _mutation_fingerprint(
+                f"comments:reply:{comment_id}:{reply_id}", payload, expected_revision
+            )
+            retry = self._conditional_retry(
+                doc, mutation_id, fingerprint, expected_revision
+            )
+            if retry is not None:
+                return retry
             for i, c in enumerate(doc.comments):
                 if c.id == comment_id:
                     if any(reply.id == reply_id for reply in c.replies):
@@ -793,8 +1104,15 @@ class CommentsStore:
                         author=payload.author or "you", created_at=_now())
                     updated = c.model_copy(update={
                         "replies": [*c.replies, reply], "updated_at": _now()})
-                    doc.comments[i] = updated
-                    self._save(doc_id, doc)
+                    comments = list(doc.comments)
+                    comments[i] = updated
+                    committed = self._committed(
+                        comments,
+                        mutation_id=mutation_id,
+                        fingerprint=fingerprint,
+                        result_comment_id=comment_id,
+                    )
+                    self._save(doc_id, committed)
                     return updated
             return None
 
@@ -807,8 +1125,9 @@ class CommentsStore:
                     if len(kept) == len(c.replies):
                         return None  # no such reply
                     updated = c.model_copy(update={"replies": kept, "updated_at": _now()})
-                    doc.comments[i] = updated
-                    self._save(doc_id, doc)
+                    comments = list(doc.comments)
+                    comments[i] = updated
+                    self._save(doc_id, self._committed(comments))
                     return updated
             return None
 
@@ -865,3 +1184,4 @@ def migrate_legacy(default_doc_id: str) -> None:
 whiteboard_store = WhiteboardStore()
 outline_items_store = OutlineItemsStore()
 comments_store = CommentsStore()
+psyke_revision_store = PsykeRevisionStore()

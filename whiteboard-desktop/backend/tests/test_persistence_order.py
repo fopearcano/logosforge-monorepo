@@ -14,6 +14,21 @@ from app.persistence_order import (
 )
 
 
+class _EmptyLocalStore:
+    def list_document_ids(self) -> set[str]:
+        return set()
+
+    def delete(self, _document_id: str) -> None:
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _isolate_psyke_revision_cleanup(monkeypatch):
+    monkeypatch.setattr(
+        documents_router, "psyke_revision_store", _EmptyLocalStore()
+    )
+
+
 def test_older_timed_out_request_cannot_overwrite_a_newer_dispatch() -> None:
     doc_id = "910001"
     saved: list[str] = []

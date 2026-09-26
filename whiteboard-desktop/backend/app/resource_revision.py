@@ -8,12 +8,12 @@ from typing import Literal
 from fastapi import HTTPException, Request, status
 
 
-ResourceKind = Literal["whiteboard", "outline"]
+ResourceKind = Literal["whiteboard", "outline", "psyke", "comments"]
 IF_MATCH_HEADER = "If-Match"
 MUTATION_ID_HEADER = "X-LogosForge-Mutation-Id"
 
 _TAG_RE = re.compile(
-    r'^"lfwb:(whiteboard|outline):([0-9a-f]{32}):([0-9a-f]{32})"$'
+    r'^"lfwb:(whiteboard|outline|psyke|comments):([0-9a-f]{32}):([0-9a-f]{32})"$'
 )
 _MUTATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
@@ -71,9 +71,19 @@ def request_revision_precondition(
     )
 
 
-def request_mutation_id(request: Request) -> str | None:
+def request_mutation_id(request: Request, *, required: bool = False) -> str | None:
     raw = getattr(request, "headers", {}).get("x-logosforge-mutation-id")
     if raw is None:
+        if required:
+            raise ResourceProtocolError(
+                status_code=status.HTTP_428_PRECONDITION_REQUIRED,
+                detail={
+                    "code": "mutation_id_required",
+                    "message": (
+                        "A mutation id is required for this conditional write."
+                    ),
+                },
+            )
         return None
     value = raw.strip()
     if _MUTATION_ID_RE.fullmatch(value) is None:

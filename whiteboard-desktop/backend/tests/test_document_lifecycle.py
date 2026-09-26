@@ -64,6 +64,13 @@ class _EmptyLocalStore:
         pass
 
 
+@pytest.fixture(autouse=True)
+def _isolate_psyke_revision_cleanup(monkeypatch):
+    store = _EmptyLocalStore()
+    monkeypatch.setattr(lifecycle, "psyke_revision_store", store)
+    monkeypatch.setattr(documents_router, "psyke_revision_store", store)
+
+
 def _request(core: _Core, incarnation: str | None = None):
     headers = {} if incarnation is None else {DOCUMENT_INCARNATION_HEADER: incarnation}
     return SimpleNamespace(

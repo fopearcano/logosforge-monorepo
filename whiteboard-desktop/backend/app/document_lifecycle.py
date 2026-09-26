@@ -27,6 +27,7 @@ from app.local_state import (
     WhiteboardCreate,
     comments_store,
     outline_items_store,
+    psyke_revision_store,
     whiteboard_store,
 )
 from app.persistence_order import begin_document_delete, create_document_incarnation
@@ -113,6 +114,7 @@ def _clear_allocated_document_state(document_id: str) -> list[str]:
         ("manuscript", whiteboard_store),
         ("outline", outline_items_store),
         ("comments", comments_store),
+        ("PSYKE revision metadata", psyke_revision_store),
     ):
         try:
             store.delete(document_id)

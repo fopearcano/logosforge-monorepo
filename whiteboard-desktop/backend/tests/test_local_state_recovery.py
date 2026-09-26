@@ -38,9 +38,12 @@ from app.routers import documents as documents_router  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
-def _isolate_recovery_notices():
+def _isolate_recovery_notices(monkeypatch):
     consume_recovery_notices()
     documents_router._pending_local_cleanup.clear()
+    # Document cleanup now includes PSYKE validator metadata.  Keep this module's
+    # synthetic ids inside the same fake-store boundary as the older namespaces.
+    monkeypatch.setattr(documents_router, "psyke_revision_store", _CleanupStore())
     yield
     consume_recovery_notices()
     documents_router._pending_local_cleanup.clear()

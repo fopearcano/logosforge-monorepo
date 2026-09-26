@@ -27,6 +27,7 @@ from app.local_state import (
     WhiteboardCreate,
     comments_store,
     outline_items_store,
+    psyke_revision_store,
     whiteboard_store,
 )
 from app.persistence_order import (
@@ -47,6 +48,7 @@ def _local_document_ids() -> set[str]:
         whiteboard_store.list_document_ids(),
         outline_items_store.list_document_ids(),
         comments_store.list_document_ids(),
+        psyke_revision_store.list_document_ids(),
     )
 
 
@@ -61,6 +63,7 @@ def _cleanup_local_document_state(doc_id: str) -> list[str]:
         ("manuscript", whiteboard_store),
         ("outline", outline_items_store),
         ("comments", comments_store),
+        ("PSYKE revision metadata", psyke_revision_store),
     ):
         try:
             store.delete(doc_id)
