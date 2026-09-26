@@ -52,6 +52,21 @@ const OUTLINE_TITLE = 'Acceptance Arc';
 const PSYKE_NAME = 'Mara Acceptance';
 const PSYKE_DESCRIPTION = 'Packaged acceptance protagonist';
 const PSYKE_NOTES = 'Created through the packaged Whiteboard UI.';
+const PSYKE_SECOND_NAME = 'Ivo Acceptance';
+const PSYKE_SECOND_DESCRIPTION = 'Packaged acceptance rival';
+const PSYKE_SECOND_NOTES = 'Created through the authenticated packaged Whiteboard API.';
+// Use a relation with a distinct stored inverse so the packaged gate catches
+// endpoint reversal as well as missing/unmapped relations.
+const PSYKE_RELATION_TYPE = 'payoff';
+const PSYKE_PROGRESSION_TEXTS = [
+  'Mara vows to expose the archive.',
+  'Mara risks the archive to reveal the truth.',
+];
+const OPEN_COMMENT_BODY = 'Tighten this opening image before the next draft.';
+const OPEN_COMMENT_REPLY = 'Keep the concrete image; remove the explanatory clause.';
+const RESOLVED_COMMENT_BODY = 'Chapter promise checked against the outline.';
+const COMMENT_SCENE_TITLE = 'Chapter Two';
+const FIRST_SCENE_BODY = 'The archive waits behind a sealed brass door.';
 const QA_PREFIX = 'Ada stepped into the archive, dust hanging in the dawn light.';
 const STARTUP_TIMEOUT_MS = 90_000;
 const UI_TIMEOUT_MS = 30_000;
@@ -68,6 +83,7 @@ let validatedRemovalRoot = null;
 let rootCameFromOverride = false;
 let playwrightElectronLoader = null;
 let realSettingsGuard = null;
+let acceptanceMutationSequence = 0;
 
 function now() {
   return new Date().toISOString();
@@ -299,6 +315,171 @@ async function waitFile(filePath, label, timeoutMs = UI_TIMEOUT_MS) {
     }
   }, label, timeoutMs);
   record('file', `${label}: ${filePath}`);
+}
+
+function serviceStatusMethod(session) {
+  if (session.product === 'whiteboard') return 'getBackendStatus';
+  if (session.product === 'pro') return 'getCoreStatus';
+  throw new Error(`Unsupported packaged product: ${session.product}`);
+}
+
+async function inspectLocalService(session) {
+  const bridgeMethod = serviceStatusMethod(session);
+  return session.page.evaluate(async ({ bridgeMethod: method, expectedPort }) => {
+    const bridge = globalThis.logosforge;
+    const readStatus = bridge?.[method];
+    if (typeof readStatus !== 'function') {
+      throw new Error(`The packaged bridge does not expose ${method}.`);
+    }
+    const status = await readStatus();
+    if (!status || typeof status !== 'object') {
+      throw new Error('The packaged service returned an invalid status payload.');
+    }
+    if (typeof status.baseUrl !== 'string' || !status.baseUrl) {
+      throw new Error('The packaged service status has no endpoint.');
+    }
+    const endpoint = new URL(status.baseUrl);
+    const loopback = endpoint.hostname === '127.0.0.1'
+      || endpoint.hostname === '::1'
+      || endpoint.hostname === '[::1]';
+    if (endpoint.protocol !== 'http:' || !loopback || endpoint.username || endpoint.password
+        || (endpoint.pathname !== '' && endpoint.pathname !== '/')
+        || endpoint.search || endpoint.hash) {
+      throw new Error('The packaged service endpoint is not a plain loopback HTTP origin.');
+    }
+    if (Number(endpoint.port) !== expectedPort) {
+      throw new Error(`The packaged service endpoint did not use the isolated port ${expectedPort}.`);
+    }
+    if (typeof status.authToken !== 'string'
+        || !/^[A-Za-z0-9_-]{32,}$/.test(status.authToken)) {
+      throw new Error('The packaged service status has no valid in-memory credential.');
+    }
+    // Deliberately return no credential. Acceptance diagnostics may log this
+    // object, while the secret must remain inside the sandboxed renderer.
+    return {
+      state: status.state,
+      baseUrl: endpoint.origin,
+      managed: status.managed === true,
+      service: typeof status.service === 'string' ? status.service : '',
+    };
+  }, { bridgeMethod, expectedPort: session.port });
+}
+
+async function waitLocalServiceConnected(session, label = session.label) {
+  let safeStatus = null;
+  await waitFor(async () => {
+    safeStatus = await inspectLocalService(session);
+    return safeStatus.state === 'connected';
+  }, `${label} authenticated local service`, STARTUP_TIMEOUT_MS, 250);
+  assert.equal(safeStatus?.managed, true, `${label} did not launch its packaged local service`);
+  record('process', `${label} authenticated local service connected on isolated port ${session.port}`);
+  return safeStatus;
+}
+
+async function localServiceRequest(
+  session,
+  requestPath,
+  { method = 'GET', headers = {}, body, timeoutMs = UI_TIMEOUT_MS } = {},
+) {
+  assert.match(requestPath, /^\/api\//, `Unsafe packaged service path: ${requestPath}`);
+  assert.ok(
+    Number.isSafeInteger(timeoutMs) && timeoutMs > 0 && timeoutMs <= STARTUP_TIMEOUT_MS,
+    `Unsafe packaged service timeout: ${timeoutMs}`,
+  );
+  assert.ok(
+    !Object.keys(headers).some((name) => name.toLowerCase() === 'authorization'),
+    'Callers must not supply or retain packaged service credentials.',
+  );
+  const bridgeMethod = serviceStatusMethod(session);
+  const upperMethod = String(method).toUpperCase();
+  const result = await session.page.evaluate(async (request) => {
+    const bridge = globalThis.logosforge;
+    const readStatus = bridge?.[request.bridgeMethod];
+    if (typeof readStatus !== 'function') {
+      throw new Error(`The packaged bridge does not expose ${request.bridgeMethod}.`);
+    }
+    const status = await readStatus();
+    if (!status || status.state !== 'connected'
+        || typeof status.baseUrl !== 'string'
+        || typeof status.authToken !== 'string'
+        || !/^[A-Za-z0-9_-]{32,}$/.test(status.authToken)) {
+      throw new Error('The packaged service is not connected with an in-memory credential.');
+    }
+    const endpoint = new URL(status.baseUrl);
+    const loopback = endpoint.hostname === '127.0.0.1'
+      || endpoint.hostname === '::1'
+      || endpoint.hostname === '[::1]';
+    if (endpoint.protocol !== 'http:' || !loopback || endpoint.username || endpoint.password
+        || (endpoint.pathname !== '' && endpoint.pathname !== '/')
+        || endpoint.search || endpoint.hash
+        || Number(endpoint.port) !== request.expectedPort) {
+      throw new Error('The packaged service endpoint escaped its isolated loopback origin.');
+    }
+    const url = new URL(request.path, `${endpoint.origin}/`);
+    if (url.origin !== endpoint.origin || !url.pathname.startsWith('/api/')) {
+      throw new Error('The packaged service request escaped its API origin.');
+    }
+    const requestHeaders = new Headers(request.headers);
+    requestHeaders.set('Authorization', `Bearer ${status.authToken}`);
+    if (request.hasBody && !requestHeaders.has('Content-Type')) {
+      requestHeaders.set('Content-Type', 'application/json');
+    }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), request.timeoutMs);
+    try {
+      const response = await fetch(url, {
+        method: request.method,
+        headers: requestHeaders,
+        body: request.hasBody ? JSON.stringify(request.body) : undefined,
+        signal: controller.signal,
+      });
+      const text = await response.text();
+      if (text.length > 4 * 1024 * 1024) {
+        throw new Error('The packaged service response exceeded the acceptance limit.');
+      }
+      let data = null;
+      if (text) {
+        try {
+          data = JSON.parse(text);
+        } catch {
+          data = text;
+        }
+      }
+      return {
+        ok: response.ok,
+        status: response.status,
+        data,
+        etag: response.headers.get('ETag'),
+      };
+    } catch (error) {
+      if (controller.signal.aborted) {
+        throw new Error(`The packaged service request exceeded ${request.timeoutMs}ms.`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }, {
+    bridgeMethod,
+    expectedPort: session.port,
+    path: requestPath,
+    method: upperMethod,
+    headers,
+    hasBody: body !== undefined,
+    body,
+    timeoutMs,
+  });
+  if (!result.ok) {
+    const detail = typeof result.data === 'string'
+      ? result.data
+      : JSON.stringify(result.data ?? {});
+    throw new Error(
+      `${session.label} ${upperMethod} ${requestPath} failed with HTTP ${result.status}`
+      + (detail ? `: ${detail.slice(0, 1000)}` : ''),
+    );
+  }
+  record('api', `${session.label} ${upperMethod} ${requestPath} -> ${result.status}`);
+  return result;
 }
 
 async function allocateStrictPort() {
@@ -756,9 +937,15 @@ async function createAndEditWhiteboard(session, bodyMarker) {
   await page.keyboard.type('# ');
   await page.keyboard.type('Chapter One');
   await page.keyboard.press('Enter');
+  await page.keyboard.type(FIRST_SCENE_BODY);
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('# ');
+  await page.keyboard.type(COMMENT_SCENE_TITLE);
+  await page.keyboard.press('Enter');
   await page.keyboard.type(bodyMarker);
   await waitText(editor, bodyMarker, 'typed Whiteboard marker');
-  await waitText(editor.locator('h1'), 'Chapter One', 'Whiteboard heading', { exact: true });
+  await waitVisible(editor.getByRole('heading', { name: 'Chapter One', exact: true }), 'Whiteboard heading');
+  await waitVisible(editor.getByRole('heading', { name: COMMENT_SCENE_TITLE, exact: true }), 'Whiteboard second heading');
   await waitText(page.locator('.wb-draft-saved'), 'Draft saved', 'Whiteboard autosave', {
     exact: true,
     timeoutMs: UI_TIMEOUT_MS,
@@ -799,6 +986,300 @@ async function addWhiteboardPsyke(page) {
   record('journey', 'Whiteboard PSYKE creation complete');
 }
 
+function assertRevisionToken(value, label) {
+  assert.equal(typeof value, 'string', `${label} is not a string`);
+  assert.match(value, /^[0-9a-f]{32}$/, `${label} is not a resource revision`);
+  return value;
+}
+
+function timestampMillis(value, label) {
+  assert.equal(typeof value, 'string', `${label} is not a string`);
+  const parsed = Date.parse(value);
+  assert.ok(Number.isFinite(parsed), `${label} is not a valid timestamp`);
+  return parsed;
+}
+
+function psykeEtag(incarnation, revision) {
+  return `"lfwb:psyke:${incarnation}:${revision}"`;
+}
+
+function nextAcceptanceMutationId(label) {
+  acceptanceMutationSequence += 1;
+  const suffix = label.toLowerCase().replace(/[^a-z0-9._:-]+/g, '-').replace(/^-+|-+$/g, '');
+  return `packaged-acceptance-${process.pid}-${acceptanceMutationSequence}-${suffix}`.slice(0, 128);
+}
+
+function assertWhiteboardPsykeResponse(result, document, label) {
+  assert.ok(result.data && typeof result.data === 'object', `${label} returned no object`);
+  const revision = assertRevisionToken(result.data.revision, `${label} revision`);
+  assert.equal(
+    result.etag,
+    psykeEtag(document.incarnation, revision),
+    `${label} returned an invalid PSYKE ETag`,
+  );
+  return revision;
+}
+
+async function conditionalWhiteboardPsykeWrite(
+  session,
+  document,
+  revision,
+  requestPath,
+  body,
+  label,
+) {
+  const result = await localServiceRequest(session, requestPath, {
+    method: 'POST',
+    headers: {
+      'X-LogosForge-Document-Incarnation': document.incarnation,
+      'If-Match': psykeEtag(document.incarnation, revision),
+      'X-LogosForge-Mutation-Id': nextAcceptanceMutationId(label),
+    },
+    body,
+  });
+  const nextRevision = assertWhiteboardPsykeResponse(result, document, label);
+  assert.notEqual(nextRevision, revision, `${label} did not advance the aggregate PSYKE revision`);
+  return { result, revision: nextRevision };
+}
+
+async function addWhiteboardPsykeGraph(session) {
+  await waitLocalServiceConnected(session, 'Whiteboard graph setup');
+  const documentsResult = await localServiceRequest(session, '/api/documents');
+  assert.ok(
+    documentsResult.data && Array.isArray(documentsResult.data.documents),
+    'Whiteboard document library response is invalid',
+  );
+  const matches = documentsResult.data.documents.filter((document) => document?.title === PROJECT_TITLE);
+  assert.equal(matches.length, 1, `Expected exactly one ${PROJECT_TITLE} Whiteboard document`);
+  const document = matches[0];
+  assert.match(String(document.id), /^[1-9][0-9]*$/, 'Whiteboard document id is invalid');
+  assertRevisionToken(document.incarnation, 'Whiteboard document incarnation');
+
+  const documentQuery = `doc=${encodeURIComponent(document.id)}`;
+  const identityHeaders = {
+    'X-LogosForge-Document-Incarnation': document.incarnation,
+  };
+  const initialEntries = await localServiceRequest(
+    session,
+    `/api/psyke/search?q=&${documentQuery}`,
+    { headers: identityHeaders },
+  );
+  let revision = assertWhiteboardPsykeResponse(
+    initialEntries,
+    document,
+    'Whiteboard initial PSYKE read',
+  );
+  assert.ok(Array.isArray(initialEntries.data.results), 'Whiteboard PSYKE entry list is invalid');
+  assert.equal(initialEntries.data.results.length, 1, 'Whiteboard UI should have created one PSYKE entry');
+  const primary = initialEntries.data.results[0];
+  assert.equal(primary?.name, PSYKE_NAME, 'Whiteboard wrapper lost the UI-created PSYKE entry');
+  const primaryId = Number(primary?.id);
+  assert.ok(Number.isSafeInteger(primaryId) && primaryId > 0, 'Whiteboard primary PSYKE id is invalid');
+
+  const secondWrite = await conditionalWhiteboardPsykeWrite(
+    session,
+    document,
+    revision,
+    `/api/psyke/elements?${documentQuery}`,
+    {
+      type: 'character',
+      name: PSYKE_SECOND_NAME,
+      description: PSYKE_SECOND_DESCRIPTION,
+      notes: PSYKE_SECOND_NOTES,
+    },
+    'create-second-entry',
+  );
+  revision = secondWrite.revision;
+  assert.equal(secondWrite.result.data.ok, true, 'Whiteboard second-entry write was not acknowledged');
+  const secondary = secondWrite.result.data.element;
+  assert.equal(secondary?.name, PSYKE_SECOND_NAME, 'Whiteboard second-entry receipt has the wrong name');
+  assert.equal(secondary?.entry_type, 'character', 'Whiteboard second-entry receipt has the wrong type');
+  assert.equal(secondary?.description, PSYKE_SECOND_DESCRIPTION, 'Whiteboard second-entry description changed');
+  assert.equal(secondary?.notes, PSYKE_SECOND_NOTES, 'Whiteboard second-entry notes changed');
+  const secondaryId = Number(secondary?.id);
+  assert.ok(Number.isSafeInteger(secondaryId) && secondaryId > 0, 'Whiteboard secondary PSYKE id is invalid');
+  assert.notEqual(secondaryId, primaryId, 'Whiteboard returned the same id for two PSYKE entries');
+
+  const relationWrite = await conditionalWhiteboardPsykeWrite(
+    session,
+    document,
+    revision,
+    `/api/psyke/relations?${documentQuery}`,
+    { source_id: primaryId, target_id: secondaryId, relation_type: PSYKE_RELATION_TYPE },
+    'create-relation',
+  );
+  revision = relationWrite.revision;
+  assert.equal(relationWrite.result.data.ok, true, 'Whiteboard relation write was not acknowledged');
+  const relationReceipt = relationWrite.result.data.relation;
+  assert.equal(relationReceipt?.source_id, primaryId, 'Whiteboard relation receipt source changed');
+  assert.equal(relationReceipt?.target_id, secondaryId, 'Whiteboard relation receipt target changed');
+  assert.equal(relationReceipt?.source, PSYKE_NAME, 'Whiteboard relation receipt source name changed');
+  assert.equal(relationReceipt?.target, PSYKE_SECOND_NAME, 'Whiteboard relation receipt target name changed');
+  assert.equal(
+    relationReceipt?.relation_type,
+    PSYKE_RELATION_TYPE,
+    'Whiteboard relation receipt type changed',
+  );
+
+  for (let index = 0; index < PSYKE_PROGRESSION_TEXTS.length; index += 1) {
+    const progressionWrite = await conditionalWhiteboardPsykeWrite(
+      session,
+      document,
+      revision,
+      `/api/psyke/progressions?${documentQuery}`,
+      { entry_id: primaryId, text: PSYKE_PROGRESSION_TEXTS[index], scene_id: null },
+      `create-progression-${index + 1}`,
+    );
+    revision = progressionWrite.revision;
+    assert.equal(
+      progressionWrite.result.data.ok,
+      true,
+      `Whiteboard progression ${index + 1} write was not acknowledged`,
+    );
+  }
+
+  const [entryList, relationList, progressionList] = await Promise.all([
+    localServiceRequest(
+      session,
+      `/api/psyke/search?q=&${documentQuery}`,
+      { headers: identityHeaders },
+    ),
+    localServiceRequest(
+      session,
+      `/api/psyke/relations?${documentQuery}`,
+      { headers: identityHeaders },
+    ),
+    localServiceRequest(
+      session,
+      `/api/psyke/progressions?${documentQuery}`,
+      { headers: identityHeaders },
+    ),
+  ]);
+  for (const [label, result] of [
+    ['Whiteboard final PSYKE entry read', entryList],
+    ['Whiteboard final PSYKE relation read', relationList],
+    ['Whiteboard final PSYKE progression read', progressionList],
+  ]) {
+    assert.equal(
+      assertWhiteboardPsykeResponse(result, document, label),
+      revision,
+      `${label} did not observe the final aggregate revision`,
+    );
+  }
+
+  assert.ok(Array.isArray(entryList.data.results), 'Whiteboard final PSYKE entries are invalid');
+  assert.equal(entryList.data.results.length, 2, 'Whiteboard wrapper did not retain exactly two PSYKE entries');
+  assert.deepEqual(
+    new Set(entryList.data.results.map((entry) => entry.name)),
+    new Set([PSYKE_NAME, PSYKE_SECOND_NAME]),
+    'Whiteboard wrapper PSYKE names changed',
+  );
+  assert.ok(Array.isArray(relationList.data.relations), 'Whiteboard PSYKE relations are invalid');
+  assert.equal(relationList.data.relations.length, 1, 'Whiteboard wrapper did not retain one relation');
+  const relation = relationList.data.relations[0];
+  assert.equal(relation?.source_id, primaryId, 'Whiteboard relation source changed');
+  assert.equal(relation?.target_id, secondaryId, 'Whiteboard relation target changed');
+  assert.equal(relation?.source, PSYKE_NAME, 'Whiteboard relation source name changed');
+  assert.equal(relation?.target, PSYKE_SECOND_NAME, 'Whiteboard relation target name changed');
+  assert.equal(relation?.relation_type, PSYKE_RELATION_TYPE, 'Whiteboard relation type changed');
+  assert.ok(Array.isArray(progressionList.data.progressions), 'Whiteboard PSYKE progressions are invalid');
+  const progressions = progressionList.data.progressions.filter((item) => item?.entry_id === primaryId);
+  assert.equal(progressions.length, 2, 'Whiteboard wrapper did not retain two primary-entry progressions');
+  assert.deepEqual(
+    progressions.map((item) => item.text),
+    PSYKE_PROGRESSION_TEXTS,
+    'Whiteboard wrapper progression order changed',
+  );
+  assert.deepEqual(
+    progressions.map((item) => item.sort_order),
+    [1, 2],
+    'Whiteboard wrapper progression sort orders changed',
+  );
+  assert.ok(
+    progressions.every((item) => item.scene_id === null && item.scene_title === ''),
+    'Whiteboard wrapper unexpectedly anchored a progression to a core scene',
+  );
+  record('journey', 'Whiteboard authenticated relation/progression setup and wrapper reads verified');
+  return {
+    documentId: String(document.id),
+    incarnation: document.incarnation,
+    primaryId,
+    secondaryId,
+  };
+}
+
+async function addWhiteboardComments(session, document, bodyMarker) {
+  const documentQuery = `doc=${encodeURIComponent(document.documentId)}`;
+  const identityHeaders = {
+    'X-LogosForge-Document-Incarnation': document.incarnation,
+  };
+  const manuscript = await localServiceRequest(
+    session,
+    `/api/whiteboard?${documentQuery}`,
+    { headers: identityHeaders },
+  );
+  const blocks = manuscript.data?.blocks;
+  assert.ok(Array.isArray(blocks), 'Whiteboard manuscript read returned no blocks');
+  const bodyIndex = blocks.findIndex((block) => block?.text === bodyMarker);
+  const titleIndex = blocks.findIndex(
+    (block) => block?.type === 'heading' && block?.text === 'Chapter One',
+  );
+  assert.ok(bodyIndex >= 0, 'Whiteboard body block is unavailable for comment setup');
+  assert.ok(titleIndex >= 0, 'Whiteboard title block is unavailable for comment setup');
+
+  const create = async (blockIndex, quote, body) => {
+    const block = blocks[blockIndex];
+    const result = await localServiceRequest(session, `/api/comments?${documentQuery}`, {
+      method: 'POST',
+      headers: identityHeaders,
+      body: {
+        anchor: {
+          block_index: blockIndex,
+          block_id: block.id,
+          from_offset: 0,
+          to_offset: quote.length,
+          prefix: '',
+          suffix: '',
+        },
+        quote,
+        body,
+      },
+    });
+    assert.match(String(result.data?.id), /^[A-Za-z0-9_-]+$/, 'Whiteboard comment id is invalid');
+    return result.data;
+  };
+
+  const open = await create(bodyIndex, bodyMarker, OPEN_COMMENT_BODY);
+  const replied = await localServiceRequest(
+    session,
+    `/api/comments/${encodeURIComponent(open.id)}/replies?${documentQuery}`,
+    {
+      method: 'POST',
+      headers: identityHeaders,
+      body: { body: OPEN_COMMENT_REPLY, author: 'Acceptance Editor' },
+    },
+  );
+  assert.equal(replied.data?.replies?.length, 1, 'Whiteboard comment reply was not stored');
+  assert.equal(replied.data.replies[0]?.body, OPEN_COMMENT_REPLY, 'Whiteboard reply body changed');
+
+  const title = await create(titleIndex, 'Chapter One', RESOLVED_COMMENT_BODY);
+  const resolved = await localServiceRequest(
+    session,
+    `/api/comments/${encodeURIComponent(title.id)}?${documentQuery}`,
+    { method: 'PUT', headers: identityHeaders, body: { resolved: true } },
+  );
+  assert.equal(resolved.data?.resolved, true, 'Whiteboard title comment was not resolved');
+
+  const final = await localServiceRequest(
+    session,
+    `/api/comments?${documentQuery}`,
+    { headers: identityHeaders },
+  );
+  assert.equal(final.data?.comments?.length, 2, 'Whiteboard did not retain both comment threads');
+  record('journey', 'Whiteboard open/resolved comment threads and reply verified');
+  return { openId: open.id, resolvedId: title.id };
+}
+
 async function configureWhiteboardAi(page) {
   await page.getByRole('button', { name: 'AI provider settings', exact: true }).click();
   const dialog = await waitVisible(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Whiteboard Settings');
@@ -832,6 +1313,81 @@ async function chatWithWhiteboardBilly(page) {
   record('journey', 'Whiteboard Billy controlled-provider chat complete');
 }
 
+function assertBundlePsykeGraph(bundle) {
+  const psyke = bundle?.project?.psyke;
+  assert.ok(psyke && typeof psyke === 'object', 'Whiteboard bundle has no PSYKE section');
+  assert.ok(Array.isArray(psyke.elements), 'Whiteboard bundle has no PSYKE entry list');
+  assert.ok(Array.isArray(psyke.relations), 'Whiteboard bundle has no PSYKE relation list');
+  assert.ok(Array.isArray(psyke.progressions), 'Whiteboard bundle has no PSYKE progression list');
+  assert.equal(psyke.elements.length, 2, 'Whiteboard bundle should contain exactly two PSYKE entries');
+  const primary = psyke.elements.find((entry) => entry?.name === PSYKE_NAME);
+  const secondary = psyke.elements.find((entry) => entry?.name === PSYKE_SECOND_NAME);
+  assert.equal(primary?.entry_type, 'character', 'Whiteboard bundle lost the primary character type');
+  assert.equal(primary?.description, PSYKE_DESCRIPTION, 'Whiteboard bundle lost the primary description');
+  assert.equal(primary?.notes, PSYKE_NOTES, 'Whiteboard bundle lost the primary notes');
+  assert.equal(secondary?.entry_type, 'character', 'Whiteboard bundle lost the secondary character type');
+  assert.equal(secondary?.description, PSYKE_SECOND_DESCRIPTION, 'Whiteboard bundle lost the secondary description');
+  assert.equal(secondary?.notes, PSYKE_SECOND_NOTES, 'Whiteboard bundle lost the secondary notes');
+  const primaryId = Number(primary?.id);
+  const secondaryId = Number(secondary?.id);
+  assert.ok(Number.isSafeInteger(primaryId) && primaryId > 0, 'Whiteboard bundle primary PSYKE id is invalid');
+  assert.ok(Number.isSafeInteger(secondaryId) && secondaryId > 0, 'Whiteboard bundle secondary PSYKE id is invalid');
+  assert.notEqual(primaryId, secondaryId, 'Whiteboard bundle collapsed two PSYKE source ids');
+
+  assert.equal(psyke.relations.length, 1, 'Whiteboard bundle should contain exactly one PSYKE relation');
+  const relation = psyke.relations[0];
+  assert.equal(relation?.source_id, primaryId, 'Whiteboard bundle relation source changed');
+  assert.equal(relation?.target_id, secondaryId, 'Whiteboard bundle relation target changed');
+  assert.equal(relation?.source, PSYKE_NAME, 'Whiteboard bundle relation source name changed');
+  assert.equal(relation?.target, PSYKE_SECOND_NAME, 'Whiteboard bundle relation target name changed');
+  assert.equal(relation?.relation_type, PSYKE_RELATION_TYPE, 'Whiteboard bundle relation type changed');
+
+  assert.equal(psyke.progressions.length, 2, 'Whiteboard bundle should contain exactly two progression beats');
+  const progressions = psyke.progressions
+    .filter((item) => item?.entry_id === primaryId)
+    .slice()
+    .sort((left, right) => left.sort_order - right.sort_order || left.id - right.id);
+  assert.equal(progressions.length, 2, 'Whiteboard bundle progression beats target the wrong source entry');
+  assert.deepEqual(
+    progressions.map((item) => item.text),
+    PSYKE_PROGRESSION_TEXTS,
+    'Whiteboard bundle progression text/order changed',
+  );
+  assert.deepEqual(
+    progressions.map((item) => item.sort_order),
+    [1, 2],
+    'Whiteboard bundle progression sort orders changed',
+  );
+  assert.ok(
+    progressions.every((item) => item.scene_id === null && item.scene_title === ''),
+    'Whiteboard bundle unexpectedly contains a progression scene anchor',
+  );
+  return {
+    primaryId,
+    secondaryId,
+    sourceIds: new Set([primaryId, secondaryId]),
+  };
+}
+
+function assertBundleComments(bundle, bodyMarker) {
+  const comments = bundle?.project?.comments;
+  assert.ok(Array.isArray(comments), 'Whiteboard bundle has no comments list');
+  assert.equal(comments.length, 2, 'Whiteboard bundle should contain exactly two comment threads');
+  const open = comments.find((comment) => comment?.body === OPEN_COMMENT_BODY);
+  const resolved = comments.find((comment) => comment?.body === RESOLVED_COMMENT_BODY);
+  assert.ok(open, 'Whiteboard bundle lost the open comment thread');
+  assert.equal(open.quote, bodyMarker, 'Whiteboard bundle changed the open comment quote');
+  assert.equal(open.resolved, false, 'Whiteboard bundle changed the open comment state');
+  assert.equal(open.replies?.length, 1, 'Whiteboard bundle lost the comment reply');
+  assert.equal(open.replies[0]?.body, OPEN_COMMENT_REPLY, 'Whiteboard bundle changed the reply body');
+  assert.equal(open.replies[0]?.author, 'Acceptance Editor', 'Whiteboard bundle changed the reply author');
+  assert.equal(resolved?.quote, 'Chapter One', 'Whiteboard bundle changed the title comment quote');
+  assert.equal(resolved?.resolved, true, 'Whiteboard bundle changed the resolved comment state');
+  assert.match(String(open.id), /^[A-Za-z0-9_-]+$/, 'Whiteboard bundle open-comment id is invalid');
+  assert.match(String(resolved.id), /^[A-Za-z0-9_-]+$/, 'Whiteboard bundle resolved-comment id is invalid');
+  return { open, resolved };
+}
+
 async function exportWhiteboardBundle(session, bundlePath, bodyMarker) {
   const { page } = session;
   const menu = await openWhiteboardFileMenu(page);
@@ -855,15 +1411,17 @@ async function exportWhiteboardBundle(session, bundlePath, bodyMarker) {
     blocks.some((block) => block?.type === 'heading' && block?.level === 1 && block?.text === 'Chapter One'),
     'Whiteboard bundle lost the typed Chapter One heading',
   );
+  assert.ok(
+    blocks.some((block) => block?.type === 'heading' && block?.level === 1 && block?.text === COMMENT_SCENE_TITLE),
+    'Whiteboard bundle lost the typed Chapter Two heading',
+  );
   assert.ok(blocks.some((block) => block?.text?.includes(bodyMarker)), 'Whiteboard bundle lost the body marker');
   assert.ok(
     bundle.project?.outline?.some((node) => node?.title === OUTLINE_TITLE),
     'Whiteboard bundle lost the Outline item',
   );
-  const psykeEntry = bundle.project?.psyke?.elements?.find((entry) => entry?.name === PSYKE_NAME);
-  assert.equal(psykeEntry?.entry_type, 'character', 'Whiteboard bundle lost the PSYKE character type');
-  assert.equal(psykeEntry?.description, PSYKE_DESCRIPTION, 'Whiteboard bundle lost the PSYKE description');
-  assert.equal(psykeEntry?.notes, PSYKE_NOTES, 'Whiteboard bundle lost the PSYKE notes');
+  assertBundlePsykeGraph(bundle);
+  assertBundleComments(bundle, bodyMarker);
   record('journey', 'Whiteboard .lfbundle parsed and all cross-product data verified');
   return bundle;
 }
@@ -901,9 +1459,18 @@ async function runWhiteboardJourney({ electron, exePath, root, bundlePath, bodyM
   const editor = await waitWhiteboardReady(second.page);
   await waitText(second.page.locator('button.app-title'), PROJECT_TITLE, 'Whiteboard title after restart', { exact: true });
   await waitText(editor, bodyMarker, 'Whiteboard body after restart');
-  await waitText(editor.locator('h1'), 'Chapter One', 'Whiteboard heading after restart', { exact: true });
+  await waitVisible(
+    editor.getByRole('heading', { name: 'Chapter One', exact: true }),
+    'Whiteboard heading after restart',
+  );
+  await waitVisible(
+    editor.getByRole('heading', { name: COMMENT_SCENE_TITLE, exact: true }),
+    'Whiteboard second heading after restart',
+  );
   await addWhiteboardOutline(second.page);
   await addWhiteboardPsyke(second.page);
+  const sourceDocument = await addWhiteboardPsykeGraph(second);
+  await addWhiteboardComments(second, sourceDocument, bodyMarker);
   await configureWhiteboardAi(second.page);
   await assertRealSettingsUnchanged('Whiteboard packaged journey');
   await waitFile(
@@ -911,12 +1478,13 @@ async function runWhiteboardJourney({ electron, exePath, root, bundlePath, bodyM
     'isolated Whiteboard core settings',
   );
   await chatWithWhiteboardBilly(second.page);
-  await exportWhiteboardBundle(second, bundlePath, bodyMarker);
+  const bundle = await exportWhiteboardBundle(second, bundlePath, bodyMarker);
   await captureScreenshot(second, 'bundle-exported');
   await closeSession(second);
 
   await assertFile(path.join(root, 'data', 'whiteboard.db'), 'isolated Whiteboard core DB');
   record('journey', 'Whiteboard graceful restart journey complete');
+  return bundle;
 }
 
 function proScreen(page, name) {
@@ -930,19 +1498,10 @@ function proProjectSelect(page) {
   return page.locator('aside.rail > label.field > select').nth(1);
 }
 
-async function waitProReady(page) {
+async function waitProReady(session) {
+  const { page } = session;
   const projects = await waitVisible(proScreen(page, 'Projects'), 'Pro Projects screen', STARTUP_TIMEOUT_MS);
-  await waitFor(
-    () => page.evaluate(async () => {
-      const bridge = globalThis.logosforge;
-      if (typeof bridge?.getCoreStatus !== 'function') return false;
-      const status = await bridge.getCoreStatus();
-      return status?.state === 'connected';
-    }),
-    'Pro bundled core connection',
-    STARTUP_TIMEOUT_MS,
-    250,
-  );
+  await waitLocalServiceConnected(session, 'Pro bundled core');
   record('ui', 'Pro bundled core connected');
   return projects;
 }
@@ -962,9 +1521,294 @@ async function collapseProAiDock(page) {
   );
 }
 
-async function importAndVerifyInPro(session, bundlePath, bodyMarker) {
+async function preseedProPsykeIdSpace(session, bundle) {
+  const source = assertBundlePsykeGraph(bundle);
+  const maxSourceId = Math.max(source.primaryId, source.secondaryId);
+  assert.ok(maxSourceId <= 64, `Unexpectedly large packaged source PSYKE id: ${maxSourceId}`);
+  let projects = [];
+  await waitFor(async () => {
+    const result = await localServiceRequest(session, '/api/projects');
+    projects = Array.isArray(result.data) ? result.data : [];
+    return projects.length > 0;
+  }, 'fresh Pro starter project');
+  const activeProjectId = Number(await proProjectSelect(session.page).inputValue());
+  const starter = projects.find((project) => project?.id === activeProjectId) ?? projects[0];
+  const starterId = Number(starter?.id);
+  assert.ok(Number.isSafeInteger(starterId) && starterId > 0, 'Fresh Pro starter project id is invalid');
+
+  let highestSentinelId = 0;
+  let sentinels = 0;
+  while (highestSentinelId <= maxSourceId) {
+    sentinels += 1;
+    assert.ok(sentinels <= maxSourceId + 2, 'Could not advance the Pro PSYKE id space safely');
+    const result = await localServiceRequest(
+      session,
+      `/api/projects/${starterId}/psyke/entries`,
+      {
+        method: 'POST',
+        body: {
+          name: `Packaged Acceptance ID Sentinel ${process.pid}-${sentinels}`,
+          type: 'other',
+          notes: 'Acceptance-only id offset in the isolated starter project.',
+        },
+      },
+    );
+    const createdId = Number(result.data?.id);
+    assert.ok(Number.isSafeInteger(createdId) && createdId > highestSentinelId, 'Pro sentinel id did not advance');
+    highestSentinelId = createdId;
+  }
+  assert.ok(highestSentinelId > maxSourceId, 'Pro destination id space still overlaps source ids');
+  record(
+    'journey',
+    `Pro isolated starter seeded with ${sentinels} PSYKE id sentinel(s); imported ids must exceed ${maxSourceId}`,
+  );
+}
+
+async function verifyProPsykeApi(session, projectId, bundle, expectedDestination = null) {
+  const source = assertBundlePsykeGraph(bundle);
+  const [entriesResult, relationsResult, progressionsResult] = await Promise.all([
+    localServiceRequest(session, `/api/projects/${projectId}/psyke/entries`),
+    localServiceRequest(session, `/api/projects/${projectId}/psyke/relations`),
+    localServiceRequest(session, `/api/projects/${projectId}/psyke/progressions`),
+  ]);
+  assert.ok(Array.isArray(entriesResult.data), 'Pro PSYKE entry response is invalid');
+  assert.ok(Array.isArray(relationsResult.data), 'Pro PSYKE relation response is invalid');
+  assert.ok(Array.isArray(progressionsResult.data), 'Pro PSYKE progression response is invalid');
+  assert.equal(entriesResult.data.length, 2, 'Imported Pro project should contain exactly two PSYKE entries');
+  const primary = entriesResult.data.find((entry) => entry?.name === PSYKE_NAME);
+  const secondary = entriesResult.data.find((entry) => entry?.name === PSYKE_SECOND_NAME);
+  const primaryId = Number(primary?.id);
+  const secondaryId = Number(secondary?.id);
+  assert.ok(Number.isSafeInteger(primaryId) && primaryId > 0, 'Imported Pro primary id is invalid');
+  assert.ok(Number.isSafeInteger(secondaryId) && secondaryId > 0, 'Imported Pro secondary id is invalid');
+  assert.notEqual(primaryId, secondaryId, 'Imported Pro entries share an id');
+  for (const destinationId of [primaryId, secondaryId]) {
+    assert.equal(
+      source.sourceIds.has(destinationId),
+      false,
+      `Imported Pro PSYKE id ${destinationId} reused a source id instead of remapping it`,
+    );
+  }
+  if (expectedDestination) {
+    assert.equal(primaryId, expectedDestination.primaryId, 'Primary PSYKE id changed across Pro restart');
+    assert.equal(secondaryId, expectedDestination.secondaryId, 'Secondary PSYKE id changed across Pro restart');
+  }
+  assert.equal(primary?.type, 'character', 'Imported Pro primary entry type changed');
+  assert.equal(primary?.notes, PSYKE_NOTES, 'Imported Pro primary notes changed');
+  assert.equal(primary?.details?.description, PSYKE_DESCRIPTION, 'Imported Pro primary description changed');
+  assert.equal(secondary?.type, 'character', 'Imported Pro secondary entry type changed');
+  assert.equal(secondary?.notes, PSYKE_SECOND_NOTES, 'Imported Pro secondary notes changed');
+  assert.equal(
+    secondary?.details?.description,
+    PSYKE_SECOND_DESCRIPTION,
+    'Imported Pro secondary description changed',
+  );
+
+  assert.equal(relationsResult.data.length, 1, 'Imported Pro project should contain one PSYKE relation');
+  const relation = relationsResult.data[0];
+  assert.equal(relation?.source_id, primaryId, 'Imported Pro relation source was not remapped');
+  assert.equal(relation?.target_id, secondaryId, 'Imported Pro relation target was not remapped');
+  assert.equal(relation?.source, PSYKE_NAME, 'Imported Pro relation source name changed');
+  assert.equal(relation?.target, PSYKE_SECOND_NAME, 'Imported Pro relation target name changed');
+  assert.equal(relation?.relation_type, PSYKE_RELATION_TYPE, 'Imported Pro relation type changed');
+
+  assert.equal(progressionsResult.data.length, 2, 'Imported Pro project should contain two progression beats');
+  const progressions = progressionsResult.data
+    .slice()
+    .sort((left, right) => left.sort_order - right.sort_order || left.id - right.id);
+  assert.ok(
+    progressions.every((item) => item.entry_id === primaryId),
+    'Imported Pro progressions did not target the remapped primary entry',
+  );
+  assert.deepEqual(
+    progressions.map((item) => item.text),
+    PSYKE_PROGRESSION_TEXTS,
+    'Imported Pro progression text/order changed',
+  );
+  assert.deepEqual(
+    progressions.map((item) => item.sort_order),
+    [1, 2],
+    'Imported Pro progression sort orders changed',
+  );
+  assert.ok(
+    progressions.every((item) => item.scene_id === null && item.scene_title === ''),
+    'Imported Pro progression unexpectedly gained a scene anchor',
+  );
+  record('journey', `Pro API verified remapped PSYKE graph for project ${projectId}`);
+  return { projectId, primaryId, secondaryId };
+}
+
+async function verifyProCommentsApi(session, projectId, bundle, bodyMarker, expectedDestination = null) {
+  const source = assertBundleComments(bundle, bodyMarker);
+  const result = await localServiceRequest(session, `/api/projects/${projectId}/comments`);
+  assert.ok(Array.isArray(result.data), 'Pro comments response is invalid');
+  assert.equal(result.data.length, 2, 'Imported Pro project should contain two comment threads');
+  const open = result.data.find((comment) => comment?.source_id === source.open.id);
+  const resolved = result.data.find((comment) => comment?.source_id === source.resolved.id);
+  assert.ok(open, 'Pro comments lost the open Whiteboard thread provenance');
+  assert.ok(resolved, 'Pro comments lost the resolved Whiteboard thread provenance');
+  assert.equal(open.quote, bodyMarker, 'Pro changed the open comment quote');
+  assert.equal(open.body, OPEN_COMMENT_BODY, 'Pro changed the open comment body');
+  assert.equal(open.resolved, false, 'Pro changed the open comment state');
+  assert.equal(open.replies?.length, 1, 'Pro lost the imported comment reply');
+  assert.equal(open.replies[0]?.source_id, source.open.replies[0].id, 'Pro lost reply provenance');
+  assert.equal(open.replies[0]?.body, OPEN_COMMENT_REPLY, 'Pro changed the reply body');
+  assert.equal(open.replies[0]?.author, 'Acceptance Editor', 'Pro changed the reply author');
+  assert.equal(
+    timestampMillis(open.replies[0]?.created_at, 'Pro reply created_at'),
+    timestampMillis(source.open.replies[0]?.created_at, 'Whiteboard reply created_at'),
+    'Pro changed the reply timestamp',
+  );
+  assert.equal(open.anchor?.start_field, 'content', 'Pro mapped the body comment to the wrong field');
+  assert.equal(open.anchor?.end_field, 'content', 'Pro mapped the body comment end to the wrong field');
+  assert.equal(open.anchor?.start_scene_id, open.anchor?.end_scene_id, 'Pro split a single-block body comment across scenes');
+  assert.equal(open.anchor?.from_offset, 0, 'Pro changed the body comment start offset');
+  assert.equal(open.anchor?.to_offset, bodyMarker.length, 'Pro changed the body comment end offset');
+
+  assert.equal(resolved.quote, 'Chapter One', 'Pro changed the title comment quote');
+  assert.equal(resolved.body, RESOLVED_COMMENT_BODY, 'Pro changed the title comment body');
+  assert.equal(resolved.resolved, true, 'Pro changed the resolved comment state');
+  assert.equal(resolved.anchor?.start_field, 'title', 'Pro mapped the title comment to the wrong field');
+  assert.equal(resolved.anchor?.end_field, 'title', 'Pro mapped the title comment end to the wrong field');
+  assert.equal(resolved.anchor?.from_offset, 0, 'Pro changed the title comment start offset');
+  assert.equal(resolved.anchor?.to_offset, 'Chapter One'.length, 'Pro changed the title comment end offset');
+  assert.equal(
+    resolved.anchor?.start_scene_id,
+    resolved.anchor?.end_scene_id,
+    'Pro split the single-block title comment across scenes',
+  );
+  assert.notEqual(
+    resolved.anchor?.start_scene_id,
+    open.anchor?.start_scene_id,
+    'Packaged navigation fixture did not place the body comment in a distinct scene',
+  );
+
+  for (const [thread, sourceThread] of [[open, source.open], [resolved, source.resolved]]) {
+    assert.ok(Number.isSafeInteger(thread.id) && thread.id > 0, 'Pro comment id is invalid');
+    assert.match(thread.created_at, /^\d{4}-\d{2}-\d{2}T/, 'Pro comment created_at is invalid');
+    assert.match(thread.updated_at, /^\d{4}-\d{2}-\d{2}T/, 'Pro comment updated_at is invalid');
+    assert.equal(
+      timestampMillis(thread.created_at, 'Pro comment created_at'),
+      timestampMillis(sourceThread.created_at, 'Whiteboard comment created_at'),
+      'Pro changed a comment creation timestamp',
+    );
+    if (!expectedDestination) {
+      assert.equal(
+        timestampMillis(thread.updated_at, 'Pro comment updated_at'),
+        timestampMillis(sourceThread.updated_at, 'Whiteboard comment updated_at'),
+        'Pro changed an imported comment update timestamp',
+      );
+    }
+  }
+  if (expectedDestination) {
+    assert.equal(open.id, expectedDestination.openCommentId, 'Open comment id changed across Pro restart');
+    assert.equal(resolved.id, expectedDestination.resolvedCommentId, 'Resolved comment id changed across Pro restart');
+  }
+  record('journey', `Pro API verified migrated comment threads for project ${projectId}`);
+  return {
+    openCommentId: open.id,
+    resolvedCommentId: resolved.id,
+    openCommentSceneId: open.anchor.start_scene_id,
+  };
+}
+
+async function verifyProPsykeUi(page) {
+  const psyke = await selectProPanel(page, 'PSYKE', 'PSYKE Bible');
+  const search = await waitVisible(
+    psyke.getByLabel('Search PSYKE names and aliases', { exact: true }),
+    'Pro PSYKE search',
+  );
+  await search.fill(PSYKE_NAME);
+  await waitText(psyke, PSYKE_NAME, 'Pro imported PSYKE character');
+  await psyke.locator('button').filter({ hasText: PSYKE_NAME }).first().click();
+  await waitText(psyke, PSYKE_NOTES, 'Pro imported PSYKE notes');
+  await psyke.getByRole('button', { name: 'DETAILS', exact: true }).click();
+  await waitText(psyke, PSYKE_DESCRIPTION, 'Pro imported PSYKE description');
+
+  const relationsTab = await waitVisible(
+    psyke.getByRole('button', { name: /^RELATIONS\s+1$/ }),
+    'Pro PSYKE relation tab count',
+  );
+  await relationsTab.click();
+  await waitText(psyke, PSYKE_SECOND_NAME, 'Pro visible remapped PSYKE relation endpoint');
+  await waitText(psyke, PSYKE_RELATION_TYPE, 'Pro visible PSYKE relation type');
+
+  const progressionsTab = await waitVisible(
+    psyke.getByRole('button', { name: /^PROGRESSIONS\s+2$/ }),
+    'Pro PSYKE progression tab count',
+  );
+  await progressionsTab.click();
+  for (let index = 0; index < PSYKE_PROGRESSION_TEXTS.length; index += 1) {
+    await waitText(
+      psyke,
+      PSYKE_PROGRESSION_TEXTS[index],
+      `Pro visible progression beat ${index + 1}`,
+    );
+  }
+  await search.fill('');
+  record('journey', 'Pro PSYKE relation/progression UI verified');
+}
+
+async function verifyProCommentsUi(
+  page,
+  bodyMarker,
+  { exerciseWrites = false, expectedSceneId = null } = {},
+) {
+  const comments = await selectProPanel(page, 'Comments', 'Comments Panel');
+  const openThread = comments.getByRole('button', { name: `Open comment on “${bodyMarker}”`, exact: true });
+  await waitVisible(openThread, 'Pro open imported comment thread');
+  await openThread.click();
+  await waitText(comments, OPEN_COMMENT_BODY, 'Pro imported open comment body');
+  await waitText(comments, OPEN_COMMENT_REPLY, 'Pro imported comment reply');
+  await waitText(comments, 'Acceptance Editor', 'Pro imported comment reply author');
+
+  if (exerciseWrites) {
+    const resolve = comments.getByRole('button', { name: 'Resolve comment', exact: true });
+    await waitVisible(resolve, 'Pro resolve-comment action');
+    await resolve.click();
+    const reopen = comments.getByRole('button', { name: 'Reopen comment', exact: true });
+    await waitVisible(reopen, 'Pro comment resolved state');
+    await reopen.click();
+    await waitVisible(resolve, 'Pro comment reopened state');
+
+    const resolvedThread = comments.getByRole('button', { name: 'Open comment on “Chapter One”', exact: true });
+    await resolvedThread.click();
+    await waitText(comments, RESOLVED_COMMENT_BODY, 'Pro imported resolved comment body');
+    await waitVisible(reopen, 'Pro imported resolved state');
+    await reopen.click();
+    await waitVisible(resolve, 'Pro title comment reopened state');
+    await resolve.click();
+    await waitVisible(reopen, 'Pro title comment restored resolved state');
+  }
+
+  await openThread.click();
+  const openScene = comments.getByRole('button', { name: /^Open .+ in Manuscript$/ }).first();
+  await waitVisible(openScene, 'Pro comment scene navigation');
+  await openScene.click();
+  const manuscript = await waitVisible(proScreen(page, 'Manuscript Editor'), 'Pro Manuscript after comment navigation');
+  await waitText(manuscript, bodyMarker, 'comment-anchored Pro scene');
+  assert.ok(Number.isSafeInteger(expectedSceneId) && expectedSceneId > 0, 'Expected comment scene id is invalid');
+  const targetScene = manuscript.locator(`#ms-scene-${expectedSceneId}`);
+  await waitFor(
+    async () => (await targetScene.getAttribute('data-scene-prose')) === 'live',
+    'comment-targeted Pro scene to become the active live editor',
+  );
+  // Activating a virtualized scene commits the live editor first, then the
+  // navigation jump focuses it on the following short timer.  Wait for that
+  // user-visible outcome instead of racing the two intentional commits.
+  await waitFor(
+    async () => targetScene.locator('[data-prose]').evaluate(
+      (element) => element === document.activeElement,
+    ),
+    'comment navigation to focus the anchored scene editor',
+  );
+  record('journey', 'Pro Comments panel threads, state changes, and scene navigation verified');
+}
+
+async function importAndVerifyInPro(session, bundlePath, bundle, bodyMarker) {
   const { page } = session;
-  const projects = await waitProReady(page);
+  const projects = await waitProReady(session);
+  await preseedProPsykeIdSpace(session, bundle);
   await projects.getByRole('button', { name: /IMPORT PROJECT/ }).click();
   const projectSelect = proProjectSelect(page);
   await waitFor(
@@ -973,6 +1817,23 @@ async function importAndVerifyInPro(session, bundlePath, bodyMarker) {
     60_000,
   );
   assert.equal(await projectSelect.inputValue() !== '', true, 'Pro imported project has no selected id');
+  const projectId = Number(await projectSelect.inputValue());
+  assert.ok(Number.isSafeInteger(projectId) && projectId > 0, 'Pro imported project id is invalid');
+  const importReport = projects.locator('div').filter({
+    hasText: new RegExp(`^✓ Imported “${PROJECT_TITLE}”`),
+  }).last();
+  await waitText(importReport, '2 bible entries', 'Pro import report bible-entry count');
+  await waitText(importReport, '1 bible relationship', 'Pro import report relationship count');
+  await waitText(importReport, '2 progression beats', 'Pro import report progression count');
+  await waitText(importReport, '2 comment threads', 'Pro import report comment count');
+  await waitText(importReport, '1 comment reply', 'Pro import report comment-reply count');
+  const reportText = (await importReport.textContent()) ?? '';
+  assert.ok(
+    !reportText.includes('progression scene link') && !reportText.includes('progression scene anchor'),
+    'Pro import report unexpectedly claimed a progression scene link',
+  );
+  const destination = await verifyProPsykeApi(session, projectId, bundle);
+  const commentDestination = await verifyProCommentsApi(session, projectId, bundle, bodyMarker);
 
   // GitHub's hosted Windows desktop is limited to a 1024px-wide work area.
   // Collapse the dock so the manuscript editor is exercised at that supported width.
@@ -985,23 +1846,17 @@ async function importAndVerifyInPro(session, bundlePath, bodyMarker) {
   const outline = await selectProPanel(page, 'Outline', 'Outline Panel');
   await waitText(outline, OUTLINE_TITLE, 'Pro imported Outline item');
 
-  const psyke = await selectProPanel(page, 'PSYKE', 'PSYKE Bible');
-  const search = await waitVisible(
-    psyke.getByLabel('Search PSYKE names and aliases', { exact: true }),
-    'Pro PSYKE search',
-  );
-  await search.fill(PSYKE_NAME);
-  await waitText(psyke, PSYKE_NAME, 'Pro imported PSYKE character');
-  await psyke.locator('button').filter({ hasText: PSYKE_NAME }).first().click();
-  await waitText(psyke, PSYKE_NOTES, 'Pro imported PSYKE notes');
-  await psyke.getByRole('button', { name: 'DETAILS', exact: true }).click();
-  await waitText(psyke, PSYKE_DESCRIPTION, 'Pro imported PSYKE description');
-  await search.fill('');
+  await verifyProPsykeUi(page);
+  await verifyProCommentsUi(page, bodyMarker, {
+    exerciseWrites: true,
+    expectedSceneId: commentDestination.openCommentSceneId,
+  });
   const dialogState = await dialogQueueState(session);
   assert.equal(dialogState.open, 0, 'Pro did not consume the queued bundle-import path');
   assert.equal(dialogState.usedOpen.length, 1, 'Pro consumed an unexpected number of open-dialog paths');
   assert.equal(dialogState.save, 1, 'Pro consumed the Markdown save path before export');
   record('journey', `Pro imported and verified ${bundlePath}`);
+  return { ...destination, ...commentDestination };
 }
 
 async function configureProAiAndChat(page) {
@@ -1078,8 +1933,9 @@ async function exportProMarkdown(session, outputPath, bodyMarker, proMarker) {
   record('journey', 'Pro Markdown export written and verified');
 }
 
-async function verifyProRestart(page, bodyMarker, proMarker) {
-  await waitProReady(page);
+async function verifyProRestart(session, bundle, expectedDestination, bodyMarker, proMarker) {
+  const { page } = session;
+  await waitProReady(session);
   const projectSelect = proProjectSelect(page);
   await waitFor(
     async () => (await projectSelect.locator('option').allTextContents()).some((title) => title.trim() === PROJECT_TITLE),
@@ -1090,6 +1946,11 @@ async function verifyProRestart(page, bodyMarker, proMarker) {
     async () => (await projectSelect.locator('option:checked').textContent())?.trim() === PROJECT_TITLE,
     'imported Pro project to become active after restart',
   );
+  assert.equal(
+    Number(await projectSelect.inputValue()),
+    expectedDestination.projectId,
+    'A different Pro project id was selected after restart',
+  );
   const manuscript = await selectProPanel(page, 'Manuscript', 'Manuscript Editor');
   await waitText(manuscript, bodyMarker, 'Whiteboard marker after Pro restart');
   await waitText(manuscript, proMarker, 'Pro marker after Pro restart');
@@ -1098,10 +1959,27 @@ async function verifyProRestart(page, bodyMarker, proMarker) {
     'Chapter One',
     'Pro scene title changed across restart',
   );
+  await verifyProPsykeApi(
+    session,
+    expectedDestination.projectId,
+    bundle,
+    expectedDestination,
+  );
+  await verifyProCommentsApi(
+    session,
+    expectedDestination.projectId,
+    bundle,
+    bodyMarker,
+    expectedDestination,
+  );
+  await verifyProPsykeUi(page);
+  await verifyProCommentsUi(page, bodyMarker, {
+    expectedSceneId: expectedDestination.openCommentSceneId,
+  });
   record('journey', 'Pro graceful restart persistence verified');
 }
 
-async function runProJourney({ electron, exePath, root, bundlePath, markdownPath, bodyMarker, proMarker }) {
+async function runProJourney({ electron, exePath, root, bundlePath, bundle, markdownPath, bodyMarker, proMarker }) {
   const first = await launchPackagedApp({
     electron,
     label: 'pro-1',
@@ -1110,7 +1988,7 @@ async function runProJourney({ electron, exePath, root, bundlePath, markdownPath
     productRoot: root,
     dialogs: { open: [bundlePath], save: [markdownPath] },
   });
-  await importAndVerifyInPro(first, bundlePath, bodyMarker);
+  const expectedDestination = await importAndVerifyInPro(first, bundlePath, bundle, bodyMarker);
   await configureProAiAndChat(first.page);
   await assertRealSettingsUnchanged('Pro packaged journey');
   await waitFile(
@@ -1132,7 +2010,7 @@ async function runProJourney({ electron, exePath, root, bundlePath, markdownPath
     productRoot: root,
     dialogs: {},
   });
-  await verifyProRestart(second.page, bodyMarker, proMarker);
+  await verifyProRestart(second, bundle, expectedDestination, bodyMarker, proMarker);
   await captureScreenshot(second, 'restart-persistence');
   await closeSession(second);
   record('journey', 'Pro import/edit/export/graceful-restart journey complete');
@@ -1247,7 +2125,7 @@ async function main() {
 
   let succeeded = false;
   try {
-    await runWhiteboardJourney({
+    const bundle = await runWhiteboardJourney({
       electron,
       exePath: whiteboardExe,
       root: whiteboardRoot,
@@ -1259,6 +2137,7 @@ async function main() {
       exePath: proExe,
       root: proRoot,
       bundlePath,
+      bundle,
       markdownPath,
       bodyMarker,
       proMarker,
