@@ -160,11 +160,15 @@ def _reap_top_level_widgets():
     """
     yield
     import gc
-    from PySide6.QtCore import QCoreApplication, QEvent, QThread
+
+    from PySide6.QtCore import QCoreApplication, QEvent, QObject, QThread
     app = QApplication.instance()
     if app is None:
         return
-    tops = list(app.topLevelWidgets())
+    # A parented dialog can still be a Qt "top-level widget".  Delete only
+    # QObject ownership roots; their descendants are destroyed with them and
+    # must not receive a second deleteLater request.
+    tops = [w for w in app.topLevelWidgets() if w.parent() is None]
     if tops:
         # Join running worker threads first. A gc scan finds them no matter how
         # they're referenced (they're parentless, so findChildren can't reach
@@ -178,13 +182,22 @@ def _reap_top_level_widgets():
                     pass  # underlying C++ thread already gone
     for w in tops:
         app.removeEventFilter(w)
+
+        # Queued cross-thread signal deliveries are QMetaCallEvents addressed
+        # to the receiving QObject.  Drop only those calls, and only for the
+        # widget tree that is about to be destroyed.  The previous blanket
+        # ``removePostedEvents(None)`` also removed internal events belonging
+        # to long-lived Qt subsystems (notably QtWebEngine); Qt explicitly
+        # warns that removing every event can break receiver invariants and it
+        # caused a later ``processEvents()`` to segfault on Linux CI.
+        receivers = [w, *w.findChildren(QObject)]
+        for receiver in receivers:
+            try:
+                QCoreApplication.removePostedEvents(
+                    receiver, QEvent.Type.MetaCall,
+                )
+            except RuntimeError:
+                pass  # the underlying C++ receiver was already destroyed
+
         w.deleteLater()
     app.sendPostedEvents(None, QEvent.Type.DeferredDelete)  # delete the widgets now
-    # Discard any still-queued posted events WITHOUT delivering them — chiefly
-    # stale cross-thread QMetaCallEvents from worker ``done`` signals. We must
-    # neither deliver them (``processEvents`` runs those slots against the
-    # half-torn-down widgets we just deleted → "C++ object already deleted" /
-    # access violation) nor leave them queued (they fire in a LATER test's
-    # ``processEvents`` against freed objects — the test_logos_integration:97
-    # crash). ``removePostedEvents`` clears them safely, running no slot at all.
-    QCoreApplication.removePostedEvents(None)

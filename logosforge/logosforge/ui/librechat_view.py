@@ -12,6 +12,7 @@ project/editor state untouched.
 
 from __future__ import annotations
 
+import importlib.util
 from collections.abc import Callable
 
 from PySide6.QtCore import Qt, QUrl
@@ -34,11 +35,16 @@ from logosforge.ui import theme
 
 
 def webengine_available() -> bool:
-    """True when Qt WebEngine can be imported (PySide6-Addons present)."""
+    """True when the optional Qt WebEngine module is installed.
+
+    Keep this capability probe side-effect free.  Importing QtWebEngine loads a
+    native rendering subsystem into the process; disabled/offline LibreChat
+    views only need to know whether the module exists and must not initialize
+    that subsystem.  The real import remains guarded at the point of use.
+    """
     try:
-        from PySide6.QtWebEngineWidgets import QWebEngineView  # noqa: F401
-        return True
-    except Exception:
+        return importlib.util.find_spec("PySide6.QtWebEngineWidgets") is not None
+    except (ImportError, AttributeError, ValueError):
         return False
 
 
@@ -165,9 +171,11 @@ class LibreChatView(QWidget):
         self._open_btn.setEnabled(connected)
         self._browser_btn.setEnabled(cfg.is_valid_url() and cfg.enabled)
 
-        if connected and cfg.prefer_embedded and webengine_available():
-            self._show_embedded(cfg.normalized_url())
-        else:
+        if not (
+            connected
+            and cfg.prefer_embedded
+            and self._show_embedded(cfg.normalized_url())
+        ):
             self._stack.setCurrentIndex(0)  # message panel
         return status
 
@@ -179,9 +187,9 @@ class LibreChatView(QWidget):
             self.refresh()
             return
         cfg = self._service.config
-        if cfg.prefer_embedded and webengine_available():
-            self._show_embedded(cfg.normalized_url())
-        elif cfg.browser_fallback:
+        if cfg.prefer_embedded and self._show_embedded(cfg.normalized_url()):
+            return
+        if cfg.browser_fallback:
             self._open_in_browser()
         else:
             self.refresh()
@@ -197,15 +205,24 @@ class LibreChatView(QWidget):
         # closes; reflect any change immediately.
         self.refresh()
 
-    def _show_embedded(self, url: str) -> None:
+    def _show_embedded(self, url: str) -> bool:
         if not webengine_available():
             self._stack.setCurrentIndex(0)
-            return
-        from PySide6.QtWebEngineWidgets import QWebEngineView
-        if self._web is None:
-            self._web = QWebEngineView()
-            self._stack.addWidget(self._web)  # index 1
+            return False
+        try:
+            from PySide6.QtWebEngineWidgets import QWebEngineView
+            if self._web is None:
+                self._web = QWebEngineView()
+                self._stack.addWidget(self._web)  # index 1
+        except (ImportError, OSError, RuntimeError):
+            # A discoverable optional module can still fail to load on a host
+            # missing one of its native runtime dependencies.  Retain the
+            # connected message/browser fallback instead of crashing the app.
+            self._web = None
+            self._stack.setCurrentIndex(0)
+            return False
         current = self._web.url().toString() if self._web.url() else ""
         if current != url:
             self._web.setUrl(QUrl(url))
         self._stack.setCurrentWidget(self._web)
+        return True

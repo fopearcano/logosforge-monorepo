@@ -4,6 +4,7 @@ browser fallback, and that the existing Chat section is untouched."""
 from __future__ import annotations
 
 import os
+import sys
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -58,6 +59,22 @@ def test_webengine_available_is_bool():
     assert isinstance(webengine_available(), bool)
 
 
+def test_webengine_availability_probe_does_not_import_native_module(monkeypatch):
+    from logosforge.ui import librechat_view
+
+    assert "PySide6.QtWebEngineWidgets" not in sys.modules
+    probes = []
+    monkeypatch.setattr(
+        librechat_view.importlib.util,
+        "find_spec",
+        lambda name: probes.append(name) or object(),
+    )
+
+    assert librechat_view.webengine_available() is True
+    assert probes == ["PySide6.QtWebEngineWidgets"]
+    assert "PySide6.QtWebEngineWidgets" not in sys.modules
+
+
 # -- View --------------------------------------------------------------------
 
 def test_view_shows_disabled_state(qapp):
@@ -89,6 +106,32 @@ def test_view_open_in_browser_uses_desktop_services(qapp, monkeypatch):
     view = LibreChatView(service=LibreChatService(cfg))
     view._open_in_browser()
     assert opened == ["http://localhost:3080"]
+
+
+def test_open_falls_back_to_browser_when_embedded_runtime_fails(qapp, monkeypatch):
+    cfg = LibreChatConfig(
+        enabled=True,
+        base_url="http://localhost:3080",
+        prefer_embedded=False,
+        browser_fallback=True,
+    )
+    svc = LibreChatService(cfg)
+    monkeypatch.setattr(
+        svc,
+        "check_connection",
+        lambda: ConnectionStatus(
+            ConnectionState.CONNECTED, "connected", cfg.normalized_url(),
+        ),
+    )
+    view = LibreChatView(service=svc)
+    cfg.prefer_embedded = True
+    opened = []
+    monkeypatch.setattr(view, "_show_embedded", lambda _url: False)
+    monkeypatch.setattr(view, "_open_in_browser", lambda: opened.append(True))
+
+    view._on_open()
+
+    assert opened == [True]
 
 
 def test_view_open_settings_callback(qapp):

@@ -43,6 +43,7 @@ jobs:
         shell: bash
     env:
       QT_QPA_PLATFORM: offscreen
+      PYTHONFAULTHANDLER: "1"
       PYTHONUTF8: "1"
 
     steps:
