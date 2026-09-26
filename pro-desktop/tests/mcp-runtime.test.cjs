@@ -129,6 +129,10 @@ const releaseWorkflow = fs.readFileSync(
   path.join(process.cwd(), '..', '.github', 'workflows', 'release-windows.yml'),
   'utf8',
 );
+const packagedWorkflow = fs.readFileSync(
+  path.join(process.cwd(), '..', '.github', 'workflows', 'ci-packaged-windows.yml'),
+  'utf8',
+);
 const packagedSmoke = fs.readFileSync(
   path.join(process.cwd(), 'scripts', 'smoke-packaged-mcp.py'),
   'utf8',
@@ -162,11 +166,60 @@ check('the GUI deploys the MCP companion before starting its core',
 check('every native release build installs the MCP packaging extra',
   (releaseWorkflow.match(/logosforge\[export,voice,mcp\]/g) || []).length === 3);
 check('packaged smoke tears down descriptor-owned processes before temp cleanup',
-  packagedSmoke.includes('app_pid = descriptor.get("app_pid")') &&
+  packagedSmoke.includes('base_url, auth_token, nonce, app_pid, core_pid = _validate_descriptor(') &&
   packagedSmoke.includes('_stop_process_tree(process, app_pid, core_pid)') &&
   packagedSmoke.includes('ignore_cleanup_errors=True'));
+check('packaged smoke confines direct MCP writes to its isolated test session',
+  packagedSmoke.includes('"LOGOSFORGE_MCP_ALLOW_WRITES": "0"') &&
+  packagedSmoke.includes('writable_mcp_env["LOGOSFORGE_MCP_ALLOW_WRITES"] = "1"') &&
+  packagedSmoke.includes('mcp_servers.logosforge.env.LOGOSFORGE_MCP_ALLOW_WRITES=\\"0\\"') &&
+  packagedSmoke.includes('"--sandbox", "read-only"'));
+check('packaged smoke validates the exact descriptor endpoint before seeding writes',
+  packagedSmoke.includes('expected_base_url = f"http://127.0.0.1:{expected_port}"') &&
+  packagedSmoke.includes('or base_url.rstrip("/") != expected_base_url') &&
+  packagedSmoke.includes('or len(auth_token) < 32') &&
+  packagedSmoke.includes('parsed_created_at.utcoffset() != timedelta(0)') &&
+  packagedSmoke.includes('not _process_is_alive(app_pid) or not _process_is_alive(core_pid)') &&
+  packagedSmoke.includes('base_url, auth_token, nonce, app_pid, core_pid = _validate_descriptor(') &&
+  packagedSmoke.indexOf('= _validate_descriptor(') <
+    packagedSmoke.indexOf('project_id, comment_id, comment_revision = _seed_comment('));
+check('packaged smoke applies comment proposals and rejects stale and replayed writes',
+  packagedSmoke.includes('"logosforge_apply_proposal"') &&
+  packagedSmoke.includes('installed MCP stale sibling apply') &&
+  packagedSmoke.includes('after_stale != after_reply') &&
+  packagedSmoke.includes('installed MCP applied proposal replay') &&
+  packagedSmoke.includes('replies[0].get("author") != "MCP assistant"'));
 check('Windows release CI exercises both unpacked and portable MCP companions',
   releaseWorkflow.includes('Exercise packaged Windows MCP companion') &&
   releaseWorkflow.includes('Exercise portable Windows MCP companion'));
+check('required packaged CI pins every Pro MCP build and smoke input',
+  [
+    'pro-desktop/core/logosforge-mcp.spec',
+    'pro-desktop/core/mcp_entry.py',
+    'pro-desktop/scripts/smoke-frozen-mcp.py',
+    'pro-desktop/scripts/smoke-packaged-mcp.py',
+  ].every((requiredPath) => packagedWorkflow.includes(requiredPath)));
+check('required packaged CI installs the Pro MCP runtime dependency',
+  packagedWorkflow.includes('"./logosforge[export,mcp]"'));
+check('required packaged CI freezes and smokes the standalone Pro MCP companion',
+  packagedWorkflow.includes('Build fresh Pro core and MCP sidecars') &&
+  packagedWorkflow.includes('logosforge-mcp.spec') &&
+  packagedWorkflow.includes('Smoke-test frozen Pro MCP companion') &&
+  packagedWorkflow.includes('--mcp-executable pro-desktop/core/dist/logosforge-mcp.exe'));
+check('required packaged CI rejects a missing or wrong-architecture Pro MCP resource',
+  packagedWorkflow.includes('Verify packaged Pro MCP resource and architecture') &&
+  packagedWorkflow.includes('resources/mcp/logosforge-mcp.exe') &&
+  packagedWorkflow.includes('(b"PE\\0\\0", 0x8664)'));
+check('required packaged CI exercises the MCP companion from the unpacked Pro app',
+  packagedWorkflow.includes('Exercise packaged Pro MCP companion') &&
+  packagedWorkflow.includes('pro-desktop/scripts/smoke-packaged-mcp.py') &&
+  packagedWorkflow.includes('pro-desktop/release/win-unpacked/LogosForge Pro.exe'));
+check('required packaged CI orders MCP build, frozen smoke, package, and packaged smoke',
+  packagedWorkflow.indexOf('Build fresh Pro core and MCP sidecars') <
+    packagedWorkflow.indexOf('Smoke-test frozen Pro MCP companion') &&
+  packagedWorkflow.indexOf('Smoke-test frozen Pro MCP companion') <
+    packagedWorkflow.indexOf('Package unpacked Pro app') &&
+  packagedWorkflow.indexOf('Package unpacked Pro app') <
+    packagedWorkflow.indexOf('Exercise packaged Pro MCP companion'));
 
 console.log(`MCP runtime descriptor tests: ${passed} passed, 0 failed`);

@@ -59,6 +59,10 @@ jobs:
             pro-shared-ui/package.json \
             pro-desktop/package.json \
             pro-desktop/core/logosforge-core.spec \
+            pro-desktop/core/logosforge-mcp.spec \
+            pro-desktop/core/mcp_entry.py \
+            pro-desktop/scripts/smoke-frozen-mcp.py \
+            pro-desktop/scripts/smoke-packaged-mcp.py \
             whiteboard-desktop/backend/requirements.txt \
             whiteboard-desktop/backend/logosforge-whiteboard-backend.spec \
             whiteboard-desktop/backend/logosforge-whiteboard-mcp.spec \
@@ -93,7 +97,7 @@ jobs:
           python -m venv acceptance-venv
           ./acceptance-venv/Scripts/python.exe -m pip install --upgrade pip
           ./acceptance-venv/Scripts/python.exe -m pip install \
-            "./logosforge[export]" \
+            "./logosforge[export,mcp]" \
             -r whiteboard-desktop/backend/requirements.txt \
             pytest \
             "pyinstaller==6.22.2"
@@ -108,7 +112,9 @@ jobs:
             whiteboard-desktop/backend/whiteboard-mcp-entry.py \
             whiteboard-desktop/backend/smoke-frozen-mcp.py \
             whiteboard-desktop/backend/smoke-packaged-mcp.py \
-            pro-desktop/core
+            pro-desktop/core \
+            pro-desktop/scripts/smoke-frozen-mcp.py \
+            pro-desktop/scripts/smoke-packaged-mcp.py
           ./acceptance-venv/Scripts/python.exe -m pip check
 
       - name: Test, build, and audit Whiteboard sources
@@ -166,7 +172,7 @@ jobs:
           whiteboard-desktop/backend/dist/logosforge-whiteboard-backend/logosforge-whiteboard-backend.exe
           whiteboard-desktop/backend/dist/logosforge-whiteboard-mcp.exe
 
-      - name: Build fresh Pro core sidecar
+      - name: Build fresh Pro core and MCP sidecars
         working-directory: pro-desktop/core
         run: |
           set -euo pipefail
@@ -175,6 +181,17 @@ jobs:
             --noconfirm \
             --clean \
             --log-level WARN
+          ../../acceptance-venv/Scripts/python.exe -m PyInstaller \
+            logosforge-mcp.spec \
+            --noconfirm \
+            --clean \
+            --log-level WARN
+
+      - name: Smoke-test frozen Pro MCP companion
+        run: >-
+          ./acceptance-venv/Scripts/python.exe pro-desktop/scripts/smoke-frozen-mcp.py
+          pro-desktop/core/dist/logosforge-core/logosforge-core.exe
+          --mcp-executable pro-desktop/core/dist/logosforge-mcp.exe
 
       - name: Package unpacked Whiteboard app
         working-directory: whiteboard-desktop/desktop
@@ -217,6 +234,36 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: npm run pack
+
+      - name: Verify packaged Pro MCP resource and architecture
+        run: |
+          set -euo pipefail
+          MCP_EXE="$PWD/pro-desktop/release/win-unpacked/resources/mcp/logosforge-mcp.exe" \
+            ./acceptance-venv/Scripts/python.exe - <<'PY'
+          import os
+          from pathlib import Path
+
+          companion = Path(os.environ["MCP_EXE"])
+
+          def pe_machine(path: Path):
+              with path.open("rb") as handle:
+                  dos = handle.read(64)
+                  if len(dos) != 64 or dos[:2] != b"MZ":
+                      return None
+                  handle.seek(int.from_bytes(dos[60:64], "little"))
+                  return handle.read(4), int.from_bytes(handle.read(2), "little")
+
+          if not companion.is_file():
+              raise SystemExit(f"::error::Packaged Pro MCP companion is missing: {companion}")
+          if pe_machine(companion) != (b"PE\0\0", 0x8664):
+              raise SystemExit("::error::Packaged Pro MCP companion is not Windows x64.")
+          print(f"packaged Windows x64 Pro MCP companion OK: {companion}")
+          PY
+
+      - name: Exercise packaged Pro MCP companion
+        run: >-
+          ./acceptance-venv/Scripts/python.exe pro-desktop/scripts/smoke-packaged-mcp.py
+          "pro-desktop/release/win-unpacked/LogosForge Pro.exe"
 
       - name: Run genuine packaged cross-product acceptance
         working-directory: whiteboard-desktop/desktop
