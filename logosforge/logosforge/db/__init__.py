@@ -1,3 +1,3 @@
-from logosforge.db.database import Database
+from logosforge.db.database import CommentRevisionConflict, Database
 
-__all__ = ["Database"]
+__all__ = ["CommentRevisionConflict", "Database"]

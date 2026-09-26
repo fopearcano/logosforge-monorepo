@@ -389,6 +389,38 @@ def test_psyke_relations(env):
     assert client.get(f"/api/projects/{pid}/psyke/relations").json() == []
 
 
+def test_directional_psyke_relation_serializes_once_in_canonical_orientation(env):
+    client, _, pid = env
+    lower = client.post(
+        f"/api/projects/{pid}/psyke/entries", json={"name": "Setup"}
+    ).json()
+    higher = client.post(
+        f"/api/projects/{pid}/psyke/entries", json={"name": "Payoff"}
+    ).json()
+
+    # Create in descending-id direction. The reverse database edge is stored as
+    # "payoff"; collection reads canonically expose the lower-id direction once.
+    client.post(
+        f"/api/projects/{pid}/psyke/relations",
+        json={
+            "source_id": higher["id"],
+            "target_id": lower["id"],
+            "relation_type": "supports_setup",
+        },
+    ).raise_for_status()
+
+    assert client.get(f"/api/projects/{pid}/psyke/relations").json() == [
+        {
+            "id": f'{lower["id"]}:{higher["id"]}',
+            "source_id": lower["id"],
+            "target_id": higher["id"],
+            "source": "Setup",
+            "target": "Payoff",
+            "relation_type": "payoff",
+        }
+    ]
+
+
 def test_relation_delete_rejects_cross_project_target(env):
     """Deleting a relation must validate both endpoints belong to the project."""
     client, db, pid = env

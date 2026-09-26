@@ -161,6 +161,46 @@ class Scene(SQLModel, table=True):
     created_at: datetime = Field(default_factory=_now)
 
 
+class Comment(SQLModel, table=True):
+    """A project-owned inline comment anchored to one or two Scene fields.
+
+    Offsets are UTF-16 code-unit offsets so the persisted values match the
+    JavaScript editor contract.  ``source_id`` is import provenance only; it is
+    deliberately not unique because one Whiteboard bundle may be imported into
+    more than one project.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    project_id: int = Field(foreign_key="project.id", index=True)
+    source_id: str = ""
+    start_scene_id: int = Field(foreign_key="scene.id", index=True)
+    start_field: str = "content"
+    from_offset: int = 0
+    end_scene_id: int = Field(foreign_key="scene.id", index=True)
+    end_field: str = "content"
+    to_offset: int = 0
+    quote: str = ""
+    prefix: str = ""
+    suffix: str = ""
+    body: str = ""
+    resolved: bool = False
+    created_at: datetime = Field(default_factory=_now)
+    updated_at: datetime = Field(default_factory=_now)
+
+
+class CommentReply(SQLModel, table=True):
+    """One ordered reply in an inline-comment thread."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    project_id: int = Field(foreign_key="project.id", index=True)
+    comment_id: int = Field(foreign_key="comment.id", index=True)
+    source_id: str = ""
+    body: str = ""
+    author: str = "you"
+    sort_order: int = 0
+    created_at: datetime = Field(default_factory=_now)
+
+
 class SceneCharacterLink(SQLModel, table=True):
     """Links a scene to a character (many-to-many)."""
 

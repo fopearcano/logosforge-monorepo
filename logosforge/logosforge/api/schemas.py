@@ -7,10 +7,10 @@ stable across releases.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, RootModel
-
 
 # ---------------------------------------------------------------------------
 # Projects
@@ -102,11 +102,41 @@ class WhiteboardImportBlockDTO(BaseModel):
     marks: list[dict[str, Any]] | None = None  # [{type:'bold'|'italic', from, to}]
 
 
+class WhiteboardImportCommentAnchorDTO(BaseModel):
+    block_index: int = Field(ge=0)
+    block_id: str | None = None
+    from_offset: int = Field(ge=0)
+    to_offset: int = Field(ge=0)
+    end_block_index: int | None = Field(default=None, ge=0)
+    end_block_id: str | None = None
+    prefix: str = ""
+    suffix: str = ""
+
+
+class WhiteboardImportCommentReplyDTO(BaseModel):
+    id: str
+    body: str = ""
+    author: str = "you"
+    created_at: datetime | None = None
+
+
+class WhiteboardImportCommentDTO(BaseModel):
+    id: str
+    anchor: WhiteboardImportCommentAnchorDTO
+    quote: str
+    body: str = ""
+    resolved: bool = False
+    replies: list[WhiteboardImportCommentReplyDTO] = Field(default_factory=list)
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
 class WhiteboardImportDTO(BaseModel):
     """A Whiteboard document to graduate into a new Pro project."""
     title: str = ""
     mode: str = "novel"              # novel | screenplay | graphic_novel | stage_script
     blocks: list[WhiteboardImportBlockDTO] = Field(default_factory=list)
+    comments: list[WhiteboardImportCommentDTO] = Field(default_factory=list)
 
 
 class WhiteboardImportResultDTO(BaseModel):
@@ -119,6 +149,10 @@ class WhiteboardImportResultDTO(BaseModel):
     # the id of the scene that block landed in (-1 if it mapped to none). Lets a
     # caller resolve a block-anchored link (e.g. an outline node's) to a scene.
     scene_ids_by_block: list[int] = Field(default_factory=list)
+    comments_created: int = 0
+    comments_skipped: int = 0
+    comment_replies_created: int = 0
+    comment_replies_skipped: int = 0
 
 
 class ManuscriptImportDTO(BaseModel):
@@ -760,6 +794,80 @@ class NoteUpdateDTO(BaseModel):
     content: str | None = None
     tags: list[str] | None = None
     pinned: bool | None = None
+
+
+# ---------------------------------------------------------------------------
+# Inline comments
+# ---------------------------------------------------------------------------
+
+
+class InlineCommentAnchorDTO(BaseModel):
+    """A UTF-16 range across one or two persisted Scene fields."""
+
+    start_scene_id: int
+    start_field: Literal["content", "title"]
+    from_offset: int = Field(ge=0)
+    end_scene_id: int
+    end_field: Literal["content", "title"]
+    to_offset: int = Field(ge=0)
+    prefix: str = ""
+    suffix: str = ""
+
+
+class CommentReplyDTO(BaseModel):
+    id: int
+    source_id: str = ""
+    body: str = ""
+    author: str = "you"
+    sort_order: int = 0
+    created_at: datetime
+
+
+class CommentReplyCreateDTO(BaseModel):
+    source_id: str = ""
+    body: str = ""
+    author: str = "you"
+    sort_order: int | None = Field(default=None, ge=0)
+    created_at: datetime | None = None
+    expected_revision: str | None = Field(
+        default=None, min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$",
+    )
+
+
+class InlineCommentDTO(BaseModel):
+    id: int
+    source_id: str = ""
+    anchor: InlineCommentAnchorDTO
+    quote: str
+    body: str = ""
+    resolved: bool = False
+    replies: list[CommentReplyDTO] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+    revision: str = Field(
+        min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$",
+    )
+
+
+class InlineCommentCreateDTO(BaseModel):
+    source_id: str = ""
+    anchor: InlineCommentAnchorDTO
+    quote: str = Field(min_length=1)
+    body: str = ""
+    resolved: bool = False
+    replies: list[CommentReplyCreateDTO] = Field(default_factory=list)
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class InlineCommentUpdateDTO(BaseModel):
+    anchor: InlineCommentAnchorDTO | None = None
+    quote: str | None = Field(default=None, min_length=1)
+    body: str | None = None
+    resolved: bool | None = None
+    expected_revision: str | None = Field(
+        default=None, min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$",
+    )
 
 
 # ---------------------------------------------------------------------------

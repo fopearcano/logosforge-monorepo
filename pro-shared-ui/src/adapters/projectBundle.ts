@@ -1,13 +1,16 @@
-import type { WhiteboardImportBlockDTO } from "@logosforge/ui-contracts";
+import type {
+  WhiteboardImportBlockDTO,
+  WhiteboardImportCommentDTO,
+} from "@logosforge/ui-contracts";
 import type { ApiClient } from "./api";
 
 /**
  * A LogosForge project bundle (`.lfbundle`) — the single-project migration
  * artifact exported by Whiteboard (File → Export → Export Project). One bundle
- * carries a whole project: manuscript blocks + the PSYKE story bible (imported
- * here in Phase 1) plus, for a later phase, the manual outline and inline
- * comments. The format is a fixed contract owned by the Whiteboard exporter —
- * this module only READS it and orchestrates existing Pro endpoints.
+ * carries a whole project: manuscript blocks + the PSYKE story bible (entries,
+ * relations and progression beats), the manual outline, and inline comments.
+ * The format is a fixed contract owned by the Whiteboard exporter — this module
+ * only READS it and orchestrates existing Pro endpoints.
  */
 export interface ProjectBundlePsykeElement {
   id?: string;
@@ -16,6 +19,29 @@ export interface ProjectBundlePsykeElement {
   aliases?: string[];
   description?: string;     // free text; Whiteboard round-trips it via details.description
   notes?: string;
+}
+
+/** Canonical relation DTO written by the Whiteboard bundle exporter. IDs refer
+ * to source-project PSYKE entries and therefore must be remapped on import. */
+export interface ProjectBundlePsykeRelation {
+  id?: string;
+  source_id?: number;
+  target_id?: number;
+  source?: string;
+  target?: string;
+  relation_type?: string;
+}
+
+/** Canonical progression DTO written by the Whiteboard bundle exporter. Both
+ * entry_id and scene_id belong to the source project; neither may be reused in
+ * the newly-created Pro project. */
+export interface ProjectBundlePsykeProgression {
+  id?: number;
+  entry_id?: number;
+  text?: string;
+  scene_id?: number | null;
+  scene_title?: string;
+  sort_order?: number;
 }
 
 /** A Whiteboard manual-outline node. Flat list; the tree is `parentId` + `order`.
@@ -50,9 +76,13 @@ export interface ProjectBundle {
     mode?: string;          // novel | screenplay | scene | graphic_novel | stage_script
     settings?: Record<string, unknown>; // project-scoped Whiteboard voice/format settings
     manuscript?: { blocks?: WhiteboardImportBlockDTO[] };
-    psyke?: { elements?: ProjectBundlePsykeElement[] };
+    psyke?: {
+      elements?: ProjectBundlePsykeElement[];
+      relations?: ProjectBundlePsykeRelation[];
+      progressions?: ProjectBundlePsykeProgression[];
+    };
     outline?: ProjectBundleOutlineNode[];   // Phase 2 — imported
-    comments?: unknown[];   // carried by the bundle; DEFERRED (Pro has no inline comments)
+    comments?: WhiteboardImportCommentDTO[];
   };
 }
 
@@ -65,11 +95,20 @@ export interface BundleImportResult {
   settingsSkipped: boolean;
   entries: number;          // PSYKE bible entries created
   entriesSkipped: number;   // invalid, duplicate, or failed PSYKE rows
+  relations: number;        // PSYKE relationships recreated with remapped ids
+  relationsSkipped: number; // invalid, duplicate, unmappable, or failed rows
+  progressions: number;     // PSYKE progression beats recreated
+  progressionsSkipped: number; // invalid, unmappable, or failed rows
+  progressionSceneLinks: number; // source scene anchors resolved to new scenes
+  progressionSceneLinksSkipped: number; // linked beats kept, but unanchored
   outlineNodes: number;     // outline nodes recreated (Phase 2)
   outlineSkipped: number;   // outline rows whose create call failed
   outlineReparented: number;// missing/cyclic/failed parents that fell back to root
   outlineDuplicateIds: number; // duplicate source ids (all rows still imported)
-  comments: number;         // comments the bundle carries but that were NOT migrated (deferred)
+  comments: number;         // inline comment threads created
+  commentsSkipped: number;  // stale or otherwise unmappable comment threads
+  commentReplies: number;   // replies created with their parent threads
+  commentRepliesSkipped: number; // replies rejected while importing a thread
   links: number;            // outline→scene hard links reconstructed (Phase 3)
   linksSkipped: number;     // outline nodes that carried a link that couldn't be resolved
 }
@@ -78,6 +117,37 @@ export const BUNDLE_FORMAT = "logosforge-project-bundle";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function positiveSafeInteger(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0
+    ? value
+    : null;
+}
+
+function nonNegativeSafeInteger(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : null;
+}
+
+/** Whiteboard serializes PSYKE entry ids as decimal strings. Normalize them to
+ * numbers so they can be matched against relation/progression DTO references,
+ * while rejecting imprecise values rather than silently rounding an id. */
+function sourceEntryId(value: unknown): number | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  if (!/^\d+$/.test(normalized)) return null;
+  const parsed = Number(normalized);
+  return positiveSafeInteger(parsed);
+}
+
+function entryKey(element: ProjectBundlePsykeElement): string {
+  const name = typeof element.name === "string" ? element.name.trim() : "";
+  const type = typeof element.entry_type === "string" && element.entry_type
+    ? element.entry_type
+    : "other";
+  return JSON.stringify([type, name]);
 }
 
 /**
@@ -124,6 +194,20 @@ export function parseProjectBundle(text: string): ProjectBundle {
         project.psyke.elements.some((element) => !isRecord(element))) {
       throw new Error("This bundle contains an invalid PSYKE entry.");
     }
+    if (project.psyke.relations != null && !Array.isArray(project.psyke.relations)) {
+      throw new Error("This bundle has an invalid PSYKE relations section.");
+    }
+    if (Array.isArray(project.psyke.relations) &&
+        project.psyke.relations.some((relation) => !isRecord(relation))) {
+      throw new Error("This bundle contains an invalid PSYKE relation.");
+    }
+    if (project.psyke.progressions != null && !Array.isArray(project.psyke.progressions)) {
+      throw new Error("This bundle has an invalid PSYKE progressions section.");
+    }
+    if (Array.isArray(project.psyke.progressions) &&
+        project.psyke.progressions.some((progression) => !isRecord(progression))) {
+      throw new Error("This bundle contains an invalid PSYKE progression.");
+    }
   }
   if (project.outline != null && !Array.isArray(project.outline)) {
     throw new Error("This bundle has an invalid outline section.");
@@ -133,6 +217,22 @@ export function parseProjectBundle(text: string): ProjectBundle {
   }
   if (project.comments != null && !Array.isArray(project.comments)) {
     throw new Error("This bundle has an invalid comments section.");
+  }
+  if (Array.isArray(project.comments)) {
+    for (const comment of project.comments) {
+      if (!isRecord(comment)) {
+        throw new Error("This bundle contains an invalid inline comment.");
+      }
+      if (!isRecord(comment.anchor)) {
+        throw new Error("This bundle contains an invalid inline comment anchor.");
+      }
+      if (comment.replies != null && !Array.isArray(comment.replies)) {
+        throw new Error("This bundle contains an invalid inline comment replies section.");
+      }
+      if (Array.isArray(comment.replies) && comment.replies.some((reply) => !isRecord(reply))) {
+        throw new Error("This bundle contains an invalid inline comment reply.");
+      }
+    }
   }
   return parsed as ProjectBundle;
 }
@@ -227,11 +327,12 @@ function resolveSceneLink(
  * existing endpoints, no core change:
  *   1. Manuscript → reuse the blocks→scenes converter via `api.importWhiteboard`,
  *      which creates the new project (mode-correct) and returns its id.
- *   2. PSYKE → loop the bible elements into that project via `api.createPsyke`,
- *      mapping the bundle's frontend shape (`entry_type`, free-text
- *      `description`) back onto the core entry (`type`, and
- *      `details.description` — the same slot Whiteboard round-trips it in, which
- *      Pro's PSYKE overview renders).
+ *   2. PSYKE → recreate bible entries and retain an old-entry-id → new-entry-id
+ *      map. Relations and progression beats are then recreated through their
+ *      existing endpoints using only destination ids. Source scene ids are never
+ *      reused; a linked progression is re-anchored only when its exact trimmed
+ *      scene title identifies one destination scene, otherwise its text is kept
+ *      as an unanchored progression.
  *   3. OUTLINE (Phase 2) → recreate the manual outline via `api.createOutlineNode`,
  *      topologically (parents first), remapping the string parentId → the new
  *      numeric parent_id and folding Whiteboard's type/status/colour/tags into
@@ -241,14 +342,15 @@ function resolveSceneLink(
  *      it to a scene id via the import's `scene_ids_by_block` map (quote-validated)
  *      and set the node's `scene_id`, so the "this section lives here" association
  *      survives. Unresolvable links are skipped and counted.
- *   4. COMMENTS → DEFERRED. Pro has no inline-comments subsystem, and Whiteboard's
- *      are span-anchored — no honest 1:1 target. We carry the COUNT so the caller
- *      can report "N not migrated"; the comments stay in the bundle for a future
- *      span-level import.
+ *   4. COMMENTS → pass the source threads with the manuscript blocks in step 1.
+ *      The core owns the exact block-local → scene title/content anchor mapping,
+ *      so it can account for segmentation, trimming, heading promotion, markup,
+ *      and UTF-16 offsets in one deterministic conversion. It reports created and
+ *      skipped roots/replies independently.
  *
- * A single failing bible/outline entry is skipped, not fatal. A failure in
- * step 1 propagates (no project should exist without its manuscript); the caller
- * reports it and nothing partial is opened.
+ * A single failing bible/relationship/progression/outline row is skipped, not
+ * fatal. A failure in step 1 propagates (no project should exist without its
+ * manuscript); the caller reports it and nothing partial is opened.
  */
 export async function importProjectBundle(api: ApiClient, bundle: ProjectBundle): Promise<BundleImportResult> {
   const project = bundle.project ?? {};
@@ -258,6 +360,7 @@ export async function importProjectBundle(api: ApiClient, bundle: ProjectBundle)
     title: project.title ?? "",
     mode: project.mode ?? "novel",
     blocks,
+    comments: project.comments ?? [],
   });
   const projectId = res.project_id;
 
@@ -282,35 +385,118 @@ export async function importProjectBundle(api: ApiClient, bundle: ProjectBundle)
     }
   }
 
-  // `elements` may be absent or, in a hand-edited/corrupt bundle, not an array —
-  // guard it (like `aliases` below) so a bad shape degrades to an empty import
-  // instead of throwing after the project + scenes were already created.
+  // Missing PSYKE collections are valid for older bundles. The parser rejects a
+  // present non-array collection before this function creates the project.
   const elements = Array.isArray(project.psyke?.elements) ? project.psyke!.elements : [];
-  // The core's create is idempotent on (name, type) — a bundle that carried the
-  // same entry twice would otherwise fire redundant no-op creates and inflate the
-  // count. Dedupe on the same (case-sensitive) key the core uses.
+  const sourceRelations = Array.isArray(project.psyke?.relations) ? project.psyke!.relations : [];
+  const sourceProgressions = Array.isArray(project.psyke?.progressions) ? project.psyke!.progressions : [];
+
+  // An old id reused for different source entries cannot be mapped honestly.
+  // Detect that before any writes so iteration order cannot choose a winner.
+  const sourceEntryKeys = new Map<number, Set<string>>();
+  for (const element of elements) {
+    const oldId = sourceEntryId(element.id);
+    if (oldId == null) continue;
+    const keys = sourceEntryKeys.get(oldId) ?? new Set<string>();
+    keys.add(entryKey(element));
+    sourceEntryKeys.set(oldId, keys);
+  }
+  const ambiguousSourceEntryIds = new Set<number>();
+  for (const [oldId, keys] of sourceEntryKeys) {
+    if (keys.size > 1) ambiguousSourceEntryIds.add(oldId);
+  }
+
+  // The core's create is idempotent on (name, type). Dedupe on that exact,
+  // case-sensitive key, but map every distinct, unambiguous source id carried by
+  // duplicate rows to the already-created destination entry.
   const seen = new Set<string>();
+  const destinationEntryByKey = new Map<string, number>();
+  const destinationEntryBySourceId = new Map<number, number>();
   let entries = 0;
   let entriesSkipped = 0;
   for (const el of elements) {
-    const name = el?.name?.trim();
+    const name = typeof el?.name === "string" ? el.name.trim() : "";
     if (!name) { entriesSkipped += 1; continue; }   // a nameless entry can't be created
-    const type = el.entry_type || "other";
-    const key = JSON.stringify([type, name]);
-    if (seen.has(key)) { entriesSkipped += 1; continue; }
+    const type = typeof el.entry_type === "string" && el.entry_type
+      ? el.entry_type
+      : "other";
+    const key = entryKey(el);
+    const oldId = sourceEntryId(el.id);
+    if (seen.has(key)) {
+      entriesSkipped += 1;
+      const existingDestination = destinationEntryByKey.get(key);
+      if (oldId != null && existingDestination != null &&
+          !ambiguousSourceEntryIds.has(oldId)) {
+        destinationEntryBySourceId.set(oldId, existingDestination);
+      }
+      continue;
+    }
     seen.add(key);
     try {
-      await api.createPsyke(projectId, {
+      const created = await api.createPsyke(projectId, {
         name,
         type,
         aliases: Array.isArray(el.aliases) ? el.aliases : [],
-        notes: el.notes ?? "",
-        details: el.description ? { description: el.description } : {},
+        notes: typeof el.notes === "string" ? el.notes : "",
+        details: typeof el.description === "string" && el.description
+          ? { description: el.description }
+          : {},
       });
       entries += 1;
+      const destinationId = positiveSafeInteger(created.id);
+      if (destinationId != null) {
+        destinationEntryByKey.set(key, destinationId);
+        if (oldId != null && !ambiguousSourceEntryIds.has(oldId)) {
+          destinationEntryBySourceId.set(oldId, destinationId);
+        }
+      }
     } catch {
       entriesSkipped += 1;
       /* skip one bad element — keep migrating the rest */
+    }
+  }
+
+  // Relations are canonical source DTOs, but their endpoint ids belong to the
+  // old project. Remap both ends, reject collapsed/self edges, and keep only the
+  // first row for an unordered destination pair. Calling createRelation with the
+  // row's original source/target orientation preserves directional relation
+  // semantics such as payoff ↔ supports_setup even if new numeric ids reorder.
+  const destinationRelationPairs = new Set<string>();
+  let relations = 0;
+  let relationsSkipped = 0;
+  for (const relation of sourceRelations) {
+    const sourceId = positiveSafeInteger(relation.source_id);
+    const targetId = positiveSafeInteger(relation.target_id);
+    if (sourceId == null || targetId == null ||
+        typeof relation.relation_type !== "string") {
+      relationsSkipped += 1;
+      continue;
+    }
+    const destinationSourceId = destinationEntryBySourceId.get(sourceId);
+    const destinationTargetId = destinationEntryBySourceId.get(targetId);
+    if (destinationSourceId == null || destinationTargetId == null ||
+        destinationSourceId === destinationTargetId) {
+      relationsSkipped += 1;
+      continue;
+    }
+    const pair = destinationSourceId < destinationTargetId
+      ? `${destinationSourceId}:${destinationTargetId}`
+      : `${destinationTargetId}:${destinationSourceId}`;
+    if (destinationRelationPairs.has(pair)) {
+      relationsSkipped += 1;
+      continue;
+    }
+    destinationRelationPairs.add(pair);
+    try {
+      await api.createRelation(projectId, {
+        source_id: destinationSourceId,
+        target_id: destinationTargetId,
+        relation_type: relation.relation_type,
+      });
+      relations += 1;
+    } catch {
+      relationsSkipped += 1;
+      /* preserve the first row's authority even when its API write fails */
     }
   }
 
@@ -327,18 +513,128 @@ export async function importProjectBundle(api: ApiClient, bundle: ProjectBundle)
     else sourceIds.add(id);
   }
 
-  // Phase 3: the Phase-1 import returns block index → scene id; a node's `link`
-  // (blockIndex + quote) resolves to the scene it now lives in. Fetch the scene
-  // texts once (only if any node is linked) for the quote sanity check.
+  // The Phase-1 import returns block index → scene id for outline links. Fetch
+  // destination scenes exactly once when either those links need quote checking
+  // or a progression carries a source scene anchor. The same snapshot serves
+  // both import surfaces. If the read fails, outline links retain their existing
+  // index-only fallback while progression beats are safely kept unanchored.
   const sceneIdsByBlock = Array.isArray(res.scene_ids_by_block) ? res.scene_ids_by_block : [];
   const anyLinks = outline.some((n) => n && n.link && typeof n.link.blockIndex === "number");
+  const anyLinkedProgressions = sourceProgressions.some(
+    (progression) => positiveSafeInteger(progression.scene_id) != null,
+  );
   const sceneTextById = new Map<number, string>();
-  if (anyLinks) {
+  const destinationSceneIdsByTitle = new Map<string, number[]>();
+  if (anyLinks || anyLinkedProgressions) {
     try {
       for (const s of await api.listScenes(projectId)) {
         sceneTextById.set(s.id, `${s.title ?? ""}\n${s.content ?? ""}`);
+        const sceneId = positiveSafeInteger(s.id);
+        const title = typeof s.title === "string" ? s.title.trim() : "";
+        if (sceneId != null && title) {
+          const ids = destinationSceneIdsByTitle.get(title) ?? [];
+          ids.push(sceneId);
+          destinationSceneIdsByTitle.set(title, ids);
+        }
       }
     } catch { /* validation degrades to index-only resolution */ }
+  }
+
+  // One source scene id must describe one title. Conflicting titles make that
+  // source id ambiguous even if either title happens to be unique in Pro.
+  const sourceSceneTitles = new Map<number, Set<string>>();
+  for (const progression of sourceProgressions) {
+    const sourceSceneId = positiveSafeInteger(progression.scene_id);
+    if (sourceSceneId == null) continue;
+    const title = typeof progression.scene_title === "string"
+      ? progression.scene_title.trim()
+      : "";
+    const titles = sourceSceneTitles.get(sourceSceneId) ?? new Set<string>();
+    titles.add(title);
+    sourceSceneTitles.set(sourceSceneId, titles);
+  }
+  const destinationSceneBySourceId = new Map<number, number | null>();
+  for (const [sourceSceneId, titles] of sourceSceneTitles) {
+    let destinationSceneId: number | null = null;
+    if (titles.size === 1) {
+      const title = titles.values().next().value as string;
+      const candidates = title ? destinationSceneIdsByTitle.get(title) : undefined;
+      if (candidates?.length === 1) destinationSceneId = candidates[0] ?? null;
+    }
+    destinationSceneBySourceId.set(sourceSceneId, destinationSceneId);
+  }
+
+  // The core assigns progression sort_order monotonically per entry. Process
+  // valid source rows by entry/order/id so their relative arc order survives;
+  // original array index is the deterministic final tie-break (and the fallback
+  // when either optional source progression id is not a positive integer).
+  const orderedProgressions = sourceProgressions
+    .map((progression, index) => ({ progression, index }))
+    .sort((left, right) => {
+      const leftEntry = positiveSafeInteger(left.progression.entry_id);
+      const rightEntry = positiveSafeInteger(right.progression.entry_id);
+      if (leftEntry != null && rightEntry != null && leftEntry !== rightEntry) {
+        return leftEntry < rightEntry ? -1 : 1;
+      }
+      if (leftEntry != null && rightEntry == null) return -1;
+      if (leftEntry == null && rightEntry != null) return 1;
+
+      const leftOrder = nonNegativeSafeInteger(left.progression.sort_order);
+      const rightOrder = nonNegativeSafeInteger(right.progression.sort_order);
+      if (leftOrder != null && rightOrder != null && leftOrder !== rightOrder) {
+        return leftOrder < rightOrder ? -1 : 1;
+      }
+      if (leftOrder != null && rightOrder == null) return -1;
+      if (leftOrder == null && rightOrder != null) return 1;
+
+      const leftId = positiveSafeInteger(left.progression.id);
+      const rightId = positiveSafeInteger(right.progression.id);
+      if (leftId != null && rightId != null && leftId !== rightId) {
+        return leftId < rightId ? -1 : 1;
+      }
+      return left.index - right.index;
+    });
+
+  let progressions = 0;
+  let progressionsSkipped = 0;
+  let progressionSceneLinks = 0;
+  let progressionSceneLinksSkipped = 0;
+  for (const { progression } of orderedProgressions) {
+    const sourceEntry = positiveSafeInteger(progression.entry_id);
+    const sourceOrder = nonNegativeSafeInteger(progression.sort_order);
+    const sourceScene = progression.scene_id == null
+      ? null
+      : positiveSafeInteger(progression.scene_id);
+    if (sourceEntry == null || sourceOrder == null ||
+        typeof progression.text !== "string" ||
+        (progression.scene_id != null && sourceScene == null)) {
+      progressionsSkipped += 1;
+      continue;
+    }
+    const destinationEntry = destinationEntryBySourceId.get(sourceEntry);
+    if (destinationEntry == null) {
+      progressionsSkipped += 1;
+      continue;
+    }
+    // Explicitly never reuse a source scene id. A null lookup means the source
+    // title was absent, conflicting, missing, or non-unique in the new project.
+    const destinationScene = sourceScene == null
+      ? null
+      : (destinationSceneBySourceId.get(sourceScene) ?? null);
+    try {
+      await api.createProgression(projectId, {
+        entry_id: destinationEntry,
+        text: progression.text, // blank is valid in the core contract
+        scene_id: destinationScene,
+      });
+      progressions += 1;
+      if (sourceScene != null) {
+        if (destinationScene != null) progressionSceneLinks += 1;
+        else progressionSceneLinksSkipped += 1;
+      }
+    } catch {
+      progressionsSkipped += 1;
+    }
   }
 
   const idMap = new Map<string, number>();
@@ -371,8 +667,12 @@ export async function importProjectBundle(api: ApiClient, bundle: ProjectBundle)
     }
   }
 
-  // ── Comments: DEFERRED (see the function doc) — carry only the count.
-  const comments = Array.isArray(project.comments) ? project.comments.length : 0;
+  // The core creates comment threads atomically with their replies while it still
+  // has the authoritative block→scene/field/offset mapping.
+  const comments = nonNegativeSafeInteger(res.comments_created) ?? 0;
+  const commentsSkipped = nonNegativeSafeInteger(res.comments_skipped) ?? 0;
+  const commentReplies = nonNegativeSafeInteger(res.comment_replies_created) ?? 0;
+  const commentRepliesSkipped = nonNegativeSafeInteger(res.comment_replies_skipped) ?? 0;
 
   return {
     projectId,
@@ -383,11 +683,20 @@ export async function importProjectBundle(api: ApiClient, bundle: ProjectBundle)
     settingsSkipped,
     entries,
     entriesSkipped,
+    relations,
+    relationsSkipped,
+    progressions,
+    progressionsSkipped,
+    progressionSceneLinks,
+    progressionSceneLinksSkipped,
     outlineNodes,
     outlineSkipped,
     outlineReparented,
     outlineDuplicateIds,
     comments,
+    commentsSkipped,
+    commentReplies,
+    commentRepliesSkipped,
     links,
     linksSkipped,
   };

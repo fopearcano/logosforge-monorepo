@@ -32,6 +32,8 @@ def import_whiteboard(
     from logosforge import whiteboard_import
     result = whiteboard_import.import_whiteboard_document(db, body.model_dump())
     broker.publish("project_data_changed", project_id=result["project_id"])
+    if result.get("comments_created"):
+        broker.publish("comments_changed", project_id=result["project_id"])
     return schemas.WhiteboardImportResultDTO(**result)
 
 

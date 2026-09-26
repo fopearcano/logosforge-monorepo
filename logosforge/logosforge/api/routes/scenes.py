@@ -166,6 +166,7 @@ def delete_scene(
         raise not_found(f"Scene {scene_id} not found")
     db.delete_scene(scene_id)
     broker.publish("scenes_changed", project_id=project.id)
+    broker.publish("comments_changed", project_id=project.id)
     return {"ok": True, "deleted": scene_id}
 
 

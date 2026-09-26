@@ -1,4 +1,5 @@
 import { ROUTES } from '../dist/routes.js';
+import { KNOWN_EVENTS } from '../dist/events.js';
 import { readFileSync } from 'node:fs';
 
 const actual = ROUTES.plotBlock(42, 'A Plot / Main');
@@ -8,7 +9,26 @@ if (actual !== expected) {
   throw new Error(`plotBlock route mismatch: expected ${expected}, got ${actual}`);
 }
 
-console.log('Contract route tests: 1 passed, 0 failed');
+const commentRoutes = [
+  ROUTES.comments(42),
+  ROUTES.comment(42, 7),
+  ROUTES.commentReplies(42, 7),
+  ROUTES.commentReply(42, 7, 9),
+];
+const expectedCommentRoutes = [
+  '/api/projects/42/comments',
+  '/api/projects/42/comments/7',
+  '/api/projects/42/comments/7/replies',
+  '/api/projects/42/comments/7/replies/9',
+];
+if (JSON.stringify(commentRoutes) !== JSON.stringify(expectedCommentRoutes)) {
+  throw new Error(`comment route mismatch: expected ${expectedCommentRoutes}, got ${commentRoutes}`);
+}
+if (!KNOWN_EVENTS.includes('comments_changed')) {
+  throw new Error('comments_changed is missing from the known project events');
+}
+
+console.log('Contract route/event tests: 3 passed, 0 failed');
 
 const pythonSchemas = readFileSync('../logosforge/logosforge/api/schemas.py', 'utf8');
 const typescriptSchemas = readFileSync('src/types.ts', 'utf8');

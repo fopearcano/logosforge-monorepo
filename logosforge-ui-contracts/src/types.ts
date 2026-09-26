@@ -56,10 +56,38 @@ export interface WhiteboardImportBlockDTO {
   sp?: string | null;
   marks?: Array<{ type: string; from: number; to: number }> | null;
 }
+export interface WhiteboardImportCommentAnchorDTO {
+  block_index: number;
+  block_id?: string | null;
+  from_offset: number;
+  to_offset: number;
+  end_block_index?: number | null;
+  end_block_id?: string | null;
+  prefix?: string;
+  suffix?: string;
+}
+export interface WhiteboardImportCommentReplyDTO {
+  id: string;
+  body?: string;
+  author?: string;
+  created_at: string;
+}
+export interface WhiteboardImportCommentDTO {
+  id: string;
+  anchor: WhiteboardImportCommentAnchorDTO;
+  quote: string;
+  body?: string;
+  resolved?: boolean;
+  replies?: WhiteboardImportCommentReplyDTO[];
+  created_at: string;
+  updated_at: string;
+}
 export interface WhiteboardImportDTO {
   title?: string;
   mode?: string;            // novel | screenplay | graphic_novel | stage_script
   blocks: WhiteboardImportBlockDTO[];
+  /** Optional Whiteboard threads. The core maps block anchors while segmenting. */
+  comments?: WhiteboardImportCommentDTO[];
 }
 export interface WhiteboardImportResultDTO {
   project_id: number;
@@ -69,6 +97,10 @@ export interface WhiteboardImportResultDTO {
   scene_titles: string[];
   // block index (0-based) → the id of the scene that block landed in (-1 = none).
   scene_ids_by_block: number[];
+  comments_created: number;
+  comments_skipped: number;
+  comment_replies_created: number;
+  comment_replies_skipped: number;
 }
 
 /** A raw, unformatted manuscript file (.txt/.md/.docx) to import into a new
@@ -591,6 +623,71 @@ export interface NoteUpdateDTO {
   content?: string;
   tags?: string[];
   pinned?: boolean;
+}
+
+// Inline comments -----------------------------------------------------------
+export type InlineCommentField = "content" | "title";
+
+/** UTF-16 offsets into the named scene fields (matching JS/ProseMirror). */
+export interface InlineCommentAnchorDTO {
+  start_scene_id: number;
+  start_field: InlineCommentField;
+  from_offset: number;
+  end_scene_id: number;
+  end_field: InlineCommentField;
+  to_offset: number;
+  prefix: string;
+  suffix: string;
+}
+export interface CommentReplyDTO {
+  id: number;
+  /** Whiteboard/import provenance; empty for a native Pro reply. */
+  source_id: string;
+  body: string;
+  author: string;
+  sort_order: number;
+  created_at: string;
+}
+export interface CommentReplyCreateDTO {
+  source_id?: string;
+  body?: string;
+  author?: string;
+  sort_order?: number;
+  created_at?: string;
+  /** Optional optimistic-concurrency token used by guarded external writers. */
+  expected_revision?: string;
+}
+export interface InlineCommentDTO {
+  id: number;
+  /** Whiteboard/import provenance; empty for a native Pro comment. */
+  source_id: string;
+  anchor: InlineCommentAnchorDTO;
+  quote: string;
+  body: string;
+  resolved: boolean;
+  replies: CommentReplyDTO[];
+  created_at: string;
+  updated_at: string;
+  /** Content-addressed revision of the root plus its ordered replies. */
+  revision: string;
+}
+export interface InlineCommentCreateDTO {
+  source_id?: string;
+  anchor: InlineCommentAnchorDTO;
+  quote: string;
+  body?: string;
+  resolved?: boolean;
+  replies?: CommentReplyCreateDTO[];
+  created_at?: string;
+  updated_at?: string;
+}
+export interface InlineCommentUpdateDTO {
+  anchor?: InlineCommentAnchorDTO;
+  quote?: string;
+  body?: string;
+  resolved?: boolean;
+  /** Optional optimistic-concurrency token used by guarded external writers. */
+  expected_revision?: string;
 }
 
 // ── Characters (manuscript cast + the stable PSYKE bible link) ──────────────

@@ -22,6 +22,19 @@ const panelBox: CSSProperties = {
 const btn: CSSProperties = { fontSize: 9, letterSpacing: ".06em", border: "1px solid var(--line2)", background: "transparent", color: "var(--txt2)", padding: "4px 9px", cursor: "pointer", font: "inherit" };
 const inp: CSSProperties = { background: "var(--tint)", border: "1px solid var(--line2)", outline: "none", color: "var(--txt)", fontFamily: "inherit", fontSize: 12, padding: "6px 9px" };
 
+// Selecting a newly imported project intentionally remounts StudioProvider so
+// every project-scoped panel drops its old state. Carry the one-shot import
+// report across that boundary instead of setting state on the unmounted panel.
+let pendingImportNotice: { projectId: number; message: string } | null = null;
+
+function stageImportNotice(projectId: number, message: string) {
+  pendingImportNotice = { projectId, message };
+}
+
+function discardImportNotice(projectId: number) {
+  if (pendingImportNotice?.projectId === projectId) pendingImportNotice = null;
+}
+
 export function ProjectsPanel(props: PanelProps) {
   const { api, projectId, writingMode, platform } = useStudio();
   const projects = useProjects();
@@ -40,6 +53,13 @@ export function ProjectsPanel(props: PanelProps) {
   const [showManuscript, setShowManuscript] = useState(false);
   const [mMode, setMMode] = useState<string>(String(writingMode ?? "novel"));
   const [mStrategy, setMStrategy] = useState<string>("smart");
+
+  useEffect(() => {
+    if (projectId == null || pendingImportNotice?.projectId !== projectId) return;
+    const message = pendingImportNotice.message;
+    pendingImportNotice = null;
+    setNote(message);
+  }, [projectId]);
 
   const list: ProjectDTO[] = [...(projects.data ?? [])].sort((a, b) => a.id - b.id);
   const sync = () => { projects.refetch(); refreshProjects(); };
@@ -125,14 +145,19 @@ export function ProjectsPanel(props: PanelProps) {
       try { doc = JSON.parse(res.content); } catch { setErr("That file isn't valid JSON."); setBusy(false); return; }
       if (!Array.isArray(doc.blocks)) { setErr("That JSON isn't a Whiteboard document (no blocks)."); setBusy(false); return; }
       const r = await prepareProjectHandoff(() => api.importWhiteboard({ title: String(doc.title ?? ""), mode: String(doc.mode ?? "novel"), blocks: doc.blocks as never }));
-      sync(); await selectProject(r.project_id);
-      setNote(`Imported “${r.title}” — ${r.scenes_created} scene${r.scenes_created === 1 ? "" : "s"} (${r.mode}).`);
+      const message = `Imported “${r.title}” — ${r.scenes_created} scene${r.scenes_created === 1 ? "" : "s"} (${r.mode}).`;
+      stageImportNotice(r.project_id, message);
+      sync();
+      if (!await selectProject(r.project_id)) {
+        discardImportNotice(r.project_id);
+        throw new Error(`Imported “${r.title}”, but couldn't open the new project.`);
+      }
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   };
 
-  // Whiteboard → Pro: import a whole single-project bundle (.lfbundle) — manuscript
-  // (blocks → scenes via the same converter) AND the PSYKE story bible — into one
-  // new project. Outline + comments ride along in the bundle for a later phase.
+  // Whiteboard → Pro: import one complete project bundle — manuscript,
+  // document settings, comments, PSYKE entries/relationships/progressions,
+  // and outline.
   const importBundle = async () => {
     if (busy) return;
     setBusy(true); setErr(null); setNote(null);
@@ -143,27 +168,40 @@ export function ProjectsPanel(props: PanelProps) {
       try { bundle = parseProjectBundle(res.content); }
       catch (e) { setErr(e instanceof Error ? e.message : String(e)); setBusy(false); return; }
       const r = await prepareProjectHandoff(() => importProjectBundle(api, bundle));
-      sync(); await selectProject(r.projectId);
       const parts = [
         `${r.scenes} scene${r.scenes === 1 ? "" : "s"}`,
         `${r.entries} bible entr${r.entries === 1 ? "y" : "ies"}`,
         `${r.outlineNodes} outline node${r.outlineNodes === 1 ? "" : "s"}`,
       ];
+      if (r.relations > 0) parts.push(`${r.relations} bible relationship${r.relations === 1 ? "" : "s"}`);
+      if (r.progressions > 0) parts.push(`${r.progressions} progression beat${r.progressions === 1 ? "" : "s"}`);
+      if (r.comments > 0) parts.push(`${r.comments} comment thread${r.comments === 1 ? "" : "s"}`);
+      if (r.commentReplies > 0) parts.push(`${r.commentReplies} comment repl${r.commentReplies === 1 ? "y" : "ies"}`);
       if (r.settingsImported) parts.push("Whiteboard document settings preserved");
       if (r.links > 0) parts.push(`${r.links} section link${r.links === 1 ? "" : "s"}`);   // Phase 3
-      // Comments are carried by the bundle but Pro has no inline-comments target
-      // yet — say so plainly rather than dropping them silently (Phase 2 decision).
-      // Likewise report any outline→scene links that couldn't be resolved.
+      if (r.progressionSceneLinks > 0) parts.push(`${r.progressionSceneLinks} progression scene link${r.progressionSceneLinks === 1 ? "" : "s"}`);
+      // Report anything that could not be mapped or created instead of silently
+      // dropping it. Likewise report outline→scene links that could not resolve.
       const deferredBits: string[] = [];
-      if (r.comments > 0) deferredBits.push(`${r.comments} comment${r.comments === 1 ? "" : "s"} not migrated (Pro has no inline comments yet)`);
+      if (r.commentsSkipped > 0) deferredBits.push(`${r.commentsSkipped} comment thread${r.commentsSkipped === 1 ? "" : "s"} skipped (invalid or unmappable anchor)`);
+      if (r.commentRepliesSkipped > 0) deferredBits.push(`${r.commentRepliesSkipped} comment repl${r.commentRepliesSkipped === 1 ? "y" : "ies"} skipped (invalid or parent thread unavailable)`);
       if (r.settingsSkipped) deferredBits.push("Whiteboard document settings couldn't be preserved");
       if (r.entriesSkipped > 0) deferredBits.push(`${r.entriesSkipped} bible entr${r.entriesSkipped === 1 ? "y" : "ies"} skipped (invalid, duplicate, or failed)`);
+      if (r.relationsSkipped > 0) deferredBits.push(`${r.relationsSkipped} bible relationship${r.relationsSkipped === 1 ? "" : "s"} skipped (invalid, unmapped, duplicate, or failed)`);
+      if (r.progressionsSkipped > 0) deferredBits.push(`${r.progressionsSkipped} progression beat${r.progressionsSkipped === 1 ? "" : "s"} skipped (invalid, unmapped, or failed)`);
+      if (r.progressionSceneLinksSkipped > 0) deferredBits.push(`${r.progressionSceneLinksSkipped} progression scene anchor${r.progressionSceneLinksSkipped === 1 ? " was" : "s were"} imported unlinked because no unique matching scene was available`);
       if (r.outlineSkipped > 0) deferredBits.push(`${r.outlineSkipped} outline node${r.outlineSkipped === 1 ? "" : "s"} skipped after an API failure`);
       if (r.outlineReparented > 0) deferredBits.push(`${r.outlineReparented} outline node${r.outlineReparented === 1 ? "" : "s"} moved to root because its parent was unavailable`);
       if (r.outlineDuplicateIds > 0) deferredBits.push(`${r.outlineDuplicateIds} duplicate outline ID${r.outlineDuplicateIds === 1 ? "" : "s"} made parent mapping ambiguous`);
       if (r.linksSkipped > 0) deferredBits.push(`${r.linksSkipped} section link${r.linksSkipped === 1 ? "" : "s"} couldn't be resolved`);
       const deferred = deferredBits.length ? ` ${deferredBits.join("; ")}.` : "";
-      setNote(`Imported “${r.title}” — ${parts.join(", ")} (${r.mode}).${deferred}`);
+      const message = `Imported “${r.title}” — ${parts.join(", ")} (${r.mode}).${deferred}`;
+      stageImportNotice(r.projectId, message);
+      sync();
+      if (!await selectProject(r.projectId)) {
+        discardImportNotice(r.projectId);
+        throw new Error(`Imported “${r.title}”, but couldn't open the new project.`);
+      }
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   };
   // Import an already-written, unformatted manuscript (.txt / .md / .docx): the
@@ -187,8 +225,14 @@ export function ProjectsPanel(props: PanelProps) {
         title: filename.replace(/\.[^.]+$/, ""),
         mode: mMode, strategy: mStrategy, filename, content_base64: b64,
       }));
-      sync(); await selectProject(r.project_id); setShowManuscript(false);
-      setNote(`Imported “${r.title}” — ${r.scenes_created} scene${r.scenes_created === 1 ? "" : "s"} (${r.mode}). Tip: run Extract to auto-build the story bible.`);
+      const message = `Imported “${r.title}” — ${r.scenes_created} scene${r.scenes_created === 1 ? "" : "s"} (${r.mode}). Tip: run Extract to auto-build the story bible.`;
+      stageImportNotice(r.project_id, message);
+      sync();
+      if (!await selectProject(r.project_id)) {
+        discardImportNotice(r.project_id);
+        throw new Error(`Imported “${r.title}”, but couldn't open the new project.`);
+      }
+      setShowManuscript(false);
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   };
 

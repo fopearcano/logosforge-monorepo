@@ -29,6 +29,8 @@ from logosforge.models.models import (
     ChatMessage,
     ChatSummary,
     Character,
+    Comment,
+    CommentReply,
     GraphicNovelContinuityAppearance,
     GraphicNovelContinuityItem,
     GraphicNovelIssue,
@@ -96,6 +98,8 @@ from logosforge.models.models import (
 __all__ = [
     "Project",
     "Character",
+    "Comment",
+    "CommentReply",
     "Place",
     "Note",
     "NotePsykeLink",

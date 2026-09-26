@@ -3,6 +3,7 @@
 from logosforge.api.routes import (
     assistant,
     characters,
+    comments,
     connector,
     dashboard,
     events,
@@ -35,6 +36,7 @@ ALL_ROUTERS = [
     timeline.router,
     psyke.router,
     notes.router,
+    comments.router,
     characters.router,
     themes.router,
     dashboard.router,

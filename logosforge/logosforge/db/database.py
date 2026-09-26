@@ -8,6 +8,7 @@ UI code should only call the public methods below (e.g. create_character,
 get_all_places). All session management stays inside this module.
 """
 
+import hmac
 import os
 import shutil
 import sqlite3
@@ -15,6 +16,7 @@ import threading
 import time
 from contextlib import closing
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
 from typing import Optional
@@ -24,7 +26,7 @@ from sqlalchemy import event, text
 from sqlmodel import Session, SQLModel, create_engine, select
 
 
-DB_SCHEMA_VERSION = 2
+DB_SCHEMA_VERSION = 3
 SQLITE_BUSY_TIMEOUT_MS = 5000
 BACKUP_INSTALL_WAIT_SECONDS = 10.0
 
@@ -251,10 +253,13 @@ def _repair_character_psyke_foreign_key(conn) -> None:
 # column as-is) from an explicit ``None`` (clear a nullable column).
 _UNSET: object = object()
 
+from logosforge.comment_revision import comment_revision
 from logosforge.models import (
     ChatMessage,
     ChatSummary,
     Character,
+    Comment,
+    CommentReply,
     GraphicNovelContinuityAppearance,
     GraphicNovelContinuityItem,
     GraphicNovelIssue,
@@ -321,6 +326,15 @@ from logosforge.models import (
 )
 
 
+class CommentRevisionConflict(RuntimeError):
+    """Raised when a guarded comment mutation targets an older thread state."""
+
+    def __init__(self, expected: str, current: str) -> None:
+        super().__init__("comment revision does not match the current thread")
+        self.expected = expected
+        self.current = current
+
+
 # Inverse mapping for PSYKE typed relations. A "payoff" from A→B is stored as
 # a "supports_setup" on B→A so direction is preserved when traversing.
 _INVERSE_RELATION_TYPE: dict[str, str] = {
@@ -352,6 +366,7 @@ CONTINUITY_MEMORY_TYPES = (
 class Database:
     def __init__(self, path: Optional[str] = None) -> None:
         self._settings_lock = threading.RLock()
+        self._comment_write_lock = threading.RLock()
         self._scene_locks_guard = threading.RLock()
         self._scene_write_locks: dict[int, threading.RLock] = {}
         # ``check_same_thread=False`` lets FastAPI's threadpool use pooled
@@ -416,6 +431,12 @@ class Database:
         with self._scene_locks_guard:
             lock = self._scene_write_locks.setdefault(key, threading.RLock())
         with lock:
+            yield
+
+    @contextmanager
+    def comment_write_lock(self):
+        """Serialize comment transactions sharing an in-memory SQLite handle."""
+        with self._comment_write_lock:
             yield
 
     def _migrate(self) -> None:
@@ -1341,6 +1362,234 @@ class Database:
                 session.delete(note)
             session.commit()
 
+    # -- Inline comments -----------------------------------------------------
+
+    def get_comment_by_id(self, comment_id: int) -> Comment | None:
+        with Session(self._engine) as session:
+            return session.get(Comment, comment_id)
+
+    def get_all_comments(self, project_id: int) -> list[Comment]:
+        with Session(self._engine) as session:
+            stmt = (
+                select(Comment)
+                .where(Comment.project_id == project_id)
+                .order_by(Comment.created_at, Comment.id)
+            )
+            return list(session.exec(stmt).all())
+
+    def get_comment_replies(self, comment_id: int) -> list[CommentReply]:
+        with Session(self._engine) as session:
+            stmt = (
+                select(CommentReply)
+                .where(CommentReply.comment_id == comment_id)
+                .order_by(CommentReply.sort_order, CommentReply.id)
+            )
+            return list(session.exec(stmt).all())
+
+    def get_comment_reply_by_id(self, reply_id: int) -> CommentReply | None:
+        with Session(self._engine) as session:
+            return session.get(CommentReply, reply_id)
+
+    def create_comment_with_replies(
+        self,
+        project_id: int,
+        *,
+        source_id: str = "",
+        start_scene_id: int,
+        start_field: str,
+        from_offset: int,
+        end_scene_id: int,
+        end_field: str,
+        to_offset: int,
+        quote: str,
+        prefix: str = "",
+        suffix: str = "",
+        body: str = "",
+        resolved: bool = False,
+        replies: list[dict] | None = None,
+        created_at: datetime | None = None,
+        updated_at: datetime | None = None,
+    ) -> Comment:
+        """Create a root and all nested replies in one transaction."""
+        now = datetime.now(timezone.utc)
+        with Session(self._engine) as session:
+            comment = Comment(
+                project_id=project_id,
+                source_id=source_id,
+                start_scene_id=start_scene_id,
+                start_field=start_field,
+                from_offset=from_offset,
+                end_scene_id=end_scene_id,
+                end_field=end_field,
+                to_offset=to_offset,
+                quote=quote,
+                prefix=prefix,
+                suffix=suffix,
+                body=body,
+                resolved=resolved,
+                created_at=created_at or now,
+                updated_at=updated_at or created_at or now,
+            )
+            session.add(comment)
+            session.flush()
+            for index, data in enumerate(replies or []):
+                order = data.get("sort_order")
+                session.add(CommentReply(
+                    project_id=project_id,
+                    comment_id=comment.id,
+                    source_id=str(data.get("source_id") or ""),
+                    body=str(data.get("body") or ""),
+                    author=str(data.get("author") or "you"),
+                    sort_order=index if order is None else int(order),
+                    created_at=data.get("created_at") or now,
+                ))
+            session.commit()
+            session.refresh(comment)
+            return comment
+
+    def update_comment(
+        self,
+        comment_id: int,
+        *,
+        anchor: dict | None = None,
+        quote: object = _UNSET,
+        body: object = _UNSET,
+        resolved: object = _UNSET,
+        expected_revision: str | None = None,
+    ) -> Comment | None:
+        with self.comment_write_lock(), Session(self._engine) as session:
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                comment = session.get(Comment, comment_id)
+                if comment is None:
+                    session.rollback()
+                    return None
+                replies = list(session.exec(
+                    select(CommentReply)
+                    .where(CommentReply.comment_id == comment_id)
+                    .order_by(CommentReply.sort_order, CommentReply.id)
+                ).all())
+                if expected_revision is not None:
+                    current_revision = comment_revision(comment, replies)
+                    if not hmac.compare_digest(expected_revision, current_revision):
+                        raise CommentRevisionConflict(
+                            expected_revision, current_revision,
+                        )
+                if anchor is not None:
+                    comment.start_scene_id = int(anchor["start_scene_id"])
+                    comment.start_field = str(anchor["start_field"])
+                    comment.from_offset = int(anchor["from_offset"])
+                    comment.end_scene_id = int(anchor["end_scene_id"])
+                    comment.end_field = str(anchor["end_field"])
+                    comment.to_offset = int(anchor["to_offset"])
+                    comment.prefix = str(anchor.get("prefix") or "")
+                    comment.suffix = str(anchor.get("suffix") or "")
+                if quote is not _UNSET:
+                    comment.quote = str(quote or "")
+                if body is not _UNSET:
+                    comment.body = str(body or "")
+                if resolved is not _UNSET:
+                    comment.resolved = bool(resolved)
+                comment.updated_at = datetime.now(timezone.utc)
+                session.add(comment)
+                session.commit()
+                session.refresh(comment)
+                return comment
+            except Exception:
+                session.rollback()
+                raise
+
+    def delete_comment(self, comment_id: int) -> bool:
+        with self.comment_write_lock(), Session(self._engine) as session:
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                comment = session.get(Comment, comment_id)
+                if comment is None:
+                    session.rollback()
+                    return False
+                for reply in session.exec(
+                    select(CommentReply).where(CommentReply.comment_id == comment_id)
+                ).all():
+                    session.delete(reply)
+                session.flush()
+                session.delete(comment)
+                session.commit()
+                return True
+            except Exception:
+                session.rollback()
+                raise
+
+    def add_comment_reply(
+        self,
+        project_id: int,
+        comment_id: int,
+        *,
+        source_id: str = "",
+        body: str = "",
+        author: str = "you",
+        sort_order: int | None = None,
+        created_at: datetime | None = None,
+        expected_revision: str | None = None,
+    ) -> CommentReply:
+        with self.comment_write_lock(), Session(self._engine) as session:
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                comment = session.get(Comment, comment_id)
+                if comment is None or comment.project_id != project_id:
+                    raise ValueError("comment does not belong to project")
+                existing = list(session.exec(
+                    select(CommentReply)
+                    .where(CommentReply.comment_id == comment_id)
+                    .order_by(CommentReply.sort_order, CommentReply.id)
+                ).all())
+                if expected_revision is not None:
+                    current_revision = comment_revision(comment, existing)
+                    if not hmac.compare_digest(expected_revision, current_revision):
+                        raise CommentRevisionConflict(
+                            expected_revision, current_revision,
+                        )
+                if sort_order is None:
+                    sort_order = max(
+                        (reply.sort_order for reply in existing), default=-1,
+                    ) + 1
+                reply = CommentReply(
+                    project_id=project_id,
+                    comment_id=comment_id,
+                    source_id=source_id,
+                    body=body,
+                    author=author,
+                    sort_order=sort_order,
+                    created_at=created_at or datetime.now(timezone.utc),
+                )
+                session.add(reply)
+                comment.updated_at = datetime.now(timezone.utc)
+                session.add(comment)
+                session.commit()
+                session.refresh(reply)
+                return reply
+            except Exception:
+                session.rollback()
+                raise
+
+    def delete_comment_reply(self, reply_id: int) -> bool:
+        with self.comment_write_lock(), Session(self._engine) as session:
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                reply = session.get(CommentReply, reply_id)
+                if reply is None:
+                    session.rollback()
+                    return False
+                comment = session.get(Comment, reply.comment_id)
+                session.delete(reply)
+                if comment is not None:
+                    comment.updated_at = datetime.now(timezone.utc)
+                    session.add(comment)
+                session.commit()
+                return True
+            except Exception:
+                session.rollback()
+                raise
+
     # -- Note linking ----------------------------------------------------------
 
     def link_note_to_psyke(self, note_id: int, psyke_entry_id: int) -> None:
@@ -1857,6 +2106,25 @@ class Database:
                 )
             ).all():
                 session.delete(nsl)
+            # A range may begin or end in this scene. Inline-comment anchors are
+            # not meaningful once either edge disappears, so remove the whole
+            # thread (replies first for FK-safe ordering).
+            comments = list(session.exec(
+                select(Comment).where(
+                    (Comment.start_scene_id == scene_id)
+                    | (Comment.end_scene_id == scene_id)
+                )
+            ).all())
+            for comment in comments:
+                for reply in session.exec(
+                    select(CommentReply).where(
+                        CommentReply.comment_id == comment.id,
+                    )
+                ).all():
+                    session.delete(reply)
+            session.flush()
+            for comment in comments:
+                session.delete(comment)
             # Timeline links that reference this event (either direction) and any
             # Act/Chapter structure links from it — never leave orphan links.
             for tl in session.exec(

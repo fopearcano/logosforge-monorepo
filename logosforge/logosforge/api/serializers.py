@@ -10,6 +10,7 @@ import hashlib
 import json
 
 from logosforge.api import schemas
+from logosforge.comment_revision import comment_revision
 from logosforge.db import Database
 
 
@@ -322,21 +323,31 @@ def logos_result_to_dto(result, *, generative: bool = False) -> schemas.LogosRes
 
 
 def psyke_relations(db: Database, project_id: int) -> list[schemas.PsykeRelationDTO]:
-    entries = db.get_all_psyke_entries(project_id)
+    # The database stores every relation twice so traversal is cheap. Iterate
+    # canonical endpoint order and emit one stable DTO for each unordered pair.
+    # Directional types remain meaningful because the row from the lower id to
+    # the higher id carries either the requested type or its stored inverse.
+    entries = sorted(
+        db.get_all_psyke_entries(project_id), key=lambda entry: entry.id
+    )
     name_by_id = {e.id: e.name for e in entries}
     out: list[schemas.PsykeRelationDTO] = []
-    seen: set[tuple] = set()
+    seen: set[tuple[int, int]] = set()
     for e in entries:
-        for related, rtype in db.get_typed_related_psyke_entries(e.id):
+        related_entries = sorted(
+            db.get_typed_related_psyke_entries(e.id),
+            key=lambda item: item[0].id,
+        )
+        for related, rtype in related_entries:
             if related.id not in name_by_id:
                 continue
-            key = (min(e.id, related.id), max(e.id, related.id), rtype)
+            key = (min(e.id, related.id), max(e.id, related.id))
             if key in seen:
                 continue
             seen.add(key)
             out.append(
                 schemas.PsykeRelationDTO(
-                    id=f"{e.id}:{related.id}",
+                    id=f"{key[0]}:{key[1]}",
                     source_id=e.id,
                     target_id=related.id,
                     source=name_by_id.get(e.id, ""),
@@ -409,6 +420,46 @@ def note_to_dto(db: Database, note) -> schemas.NoteDTO:
         pinned=bool(note.pinned),
         psyke_links=psyke_links,
         scene_links=scene_links,
+    )
+
+
+def comment_to_dto(db: Database, comment) -> schemas.InlineCommentDTO:
+    reply_rows = [
+        reply
+        for reply in db.get_comment_replies(comment.id)
+        if reply.project_id == comment.project_id
+    ]
+    replies = [
+        schemas.CommentReplyDTO(
+            id=reply.id,
+            source_id=reply.source_id or "",
+            body=reply.body or "",
+            author=reply.author or "you",
+            sort_order=reply.sort_order or 0,
+            created_at=reply.created_at,
+        )
+        for reply in reply_rows
+    ]
+    return schemas.InlineCommentDTO(
+        id=comment.id,
+        source_id=comment.source_id or "",
+        anchor=schemas.InlineCommentAnchorDTO(
+            start_scene_id=comment.start_scene_id,
+            start_field=comment.start_field,
+            from_offset=comment.from_offset,
+            end_scene_id=comment.end_scene_id,
+            end_field=comment.end_field,
+            to_offset=comment.to_offset,
+            prefix=comment.prefix or "",
+            suffix=comment.suffix or "",
+        ),
+        quote=comment.quote or "",
+        body=comment.body or "",
+        resolved=bool(comment.resolved),
+        replies=replies,
+        created_at=comment.created_at,
+        updated_at=comment.updated_at,
+        revision=comment_revision(comment, reply_rows),
     )
 
 

@@ -12,7 +12,8 @@ identically:
 
     project_loaded, project_data_changed, scene_changed, scenes_changed,
     outline_changed, plot_changed, timeline_changed, psyke_changed,
-    notes_changed, characters_changed, dashboard_changed, assistant_action_completed
+    notes_changed, comments_changed, characters_changed, dashboard_changed,
+    assistant_action_completed
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ KNOWN_EVENTS = (
     "timeline_changed",
     "psyke_changed",
     "notes_changed",
+    "comments_changed",
     "characters_changed",
     "dashboard_changed",
     "assistant_action_completed",
