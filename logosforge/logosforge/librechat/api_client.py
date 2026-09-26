@@ -193,6 +193,18 @@ class LogosForgeApiClient:
         pid = int(project_id) if project_id is not None else self.require_project_id()
         return self.request("GET", f"{self._prefix}/projects/{pid}/notes")
 
+    def list_comments(self, project_id: int | None = None) -> list[dict]:
+        pid = int(project_id) if project_id is not None else self.require_project_id()
+        return self.request("GET", f"{self._prefix}/projects/{pid}/comments")
+
+    def get_comment(
+        self, comment_id: int, project_id: int | None = None,
+    ) -> dict:
+        pid = int(project_id) if project_id is not None else self.require_project_id()
+        return self.request(
+            "GET", f"{self._prefix}/projects/{pid}/comments/{int(comment_id)}",
+        )
+
     def poll_events(self, since: int = 0, project_id: int | None = None) -> dict:
         pid = int(project_id) if project_id is not None else self.require_project_id()
         return self.request(

@@ -107,6 +107,63 @@ class _FakeApiClient:
             },
             2: {},
         }
+        self.comments = {
+            1: [
+                {
+                    "id": 81,
+                    "source_id": "native-thread",
+                    "anchor": {
+                        "start_scene_id": 11,
+                        "start_field": "content",
+                        "from_offset": 0,
+                        "end_scene_id": 11,
+                        "end_field": "content",
+                        "to_offset": 6,
+                        "prefix": "",
+                        "suffix": ".",
+                    },
+                    "quote": "Before",
+                    "body": "Sharpen the opening image.",
+                    "resolved": False,
+                    "replies": [
+                        {
+                            "id": 91,
+                            "source_id": "",
+                            "body": "Keep the distant thunder.",
+                            "author": "writer",
+                            "sort_order": 0,
+                            "created_at": "2026-09-01T10:01:00Z",
+                        },
+                    ],
+                    "created_at": "2026-09-01T10:00:00Z",
+                    "updated_at": "2026-09-01T10:01:00Z",
+                    "revision": "a" * 64,
+                },
+                {
+                    "id": 82,
+                    "source_id": "resolved-thread",
+                    "anchor": {
+                        "start_scene_id": 11,
+                        "start_field": "title",
+                        "from_offset": 0,
+                        "end_scene_id": 11,
+                        "end_field": "title",
+                        "to_offset": 7,
+                        "prefix": "",
+                        "suffix": "",
+                    },
+                    "quote": "Opening",
+                    "body": "Resolved cadence note.",
+                    "resolved": True,
+                    "replies": [],
+                    "created_at": "2026-08-31T09:00:00Z",
+                    "updated_at": "2026-08-31T09:00:00Z",
+                    "revision": "b" * 64,
+                },
+            ],
+            2: [],
+        }
+        self._comment_revision_sequence = 12
         self.resources = {
             "/api/projects/1/psyke/entries/5": {
                 "id": 5,
@@ -196,6 +253,24 @@ class _FakeApiClient:
     def list_notes(self, project_id: int | None = None) -> list[dict]:
         return self.request("GET", self.project_path("notes", project_id))
 
+    def list_comments(self, project_id: int | None = None) -> list[dict]:
+        pid = int(project_id) if project_id is not None else self.require_project_id()
+        return copy.deepcopy(self.comments[pid])
+
+    def get_comment(
+        self, comment_id: int, project_id: int | None = None,
+    ) -> dict:
+        pid = int(project_id) if project_id is not None else self.require_project_id()
+        for comment in self.comments[pid]:
+            if comment["id"] == int(comment_id):
+                return copy.deepcopy(comment)
+        raise LogosForgeApiError(f"Comment {comment_id} not found")
+
+    def _next_comment_revision(self) -> str:
+        value = f"{self._comment_revision_sequence:064x}"
+        self._comment_revision_sequence += 1
+        return value
+
     def poll_events(self, since: int = 0, project_id: int | None = None) -> dict:
         return {"events": [], "cursor": since}
 
@@ -212,7 +287,46 @@ class _FakeApiClient:
         self.requests.append((method, path, stored_body))
 
         if method == "GET":
+            comment_prefix = "/api/projects/1/comments/"
+            if path.startswith(comment_prefix):
+                return self.get_comment(int(path.removeprefix(comment_prefix)), 1)
             return copy.deepcopy(self.resources[path])
+
+        comment_prefix = "/api/projects/1/comments/"
+        if path.startswith(comment_prefix):
+            suffix = path.removeprefix(comment_prefix)
+            if suffix.endswith("/replies") and method == "POST":
+                comment_id = int(suffix.removesuffix("/replies"))
+                comment = next(
+                    item for item in self.comments[1] if item["id"] == comment_id
+                )
+                assert body is not None
+                if body.get("expected_revision") != comment["revision"]:
+                    raise LogosForgeApiError("HTTP 409: comment_conflict")
+                comment["replies"].append({
+                    "id": 90 + len(comment["replies"]) + 1,
+                    "source_id": "",
+                    "body": body.get("body", ""),
+                    "author": body.get("author", "you"),
+                    "sort_order": len(comment["replies"]),
+                    "created_at": "2026-09-01T11:00:00Z",
+                })
+                comment["updated_at"] = "2026-09-01T11:00:00Z"
+                comment["revision"] = self._next_comment_revision()
+                return copy.deepcopy(comment)
+            if method == "PATCH":
+                comment_id = int(suffix)
+                comment = next(
+                    item for item in self.comments[1] if item["id"] == comment_id
+                )
+                assert body is not None
+                if body.get("expected_revision") != comment["revision"]:
+                    raise LogosForgeApiError("HTTP 409: comment_conflict")
+                if "resolved" in body:
+                    comment["resolved"] = bool(body["resolved"])
+                comment["updated_at"] = "2026-09-01T11:00:00Z"
+                comment["revision"] = self._next_comment_revision()
+                return copy.deepcopy(comment)
 
         scene_prefix = "/api/projects/1/scenes/"
         if method == "PATCH" and path.startswith(scene_prefix):
@@ -297,12 +411,160 @@ def test_snapshot_uses_canonical_cast_and_search_includes_scene_prose():
     assert snapshot["characters"] == [
         {"id": 91, "name": "Ada", "psyke_entry_id": 5},
     ]
+    assert snapshot["comment_counts"] == {
+        "total": 2,
+        "open": 1,
+        "resolved": 1,
+    }
+    assert snapshot["comments"][0]["id"] == 81
+    assert snapshot["comments"][0]["revision"] == "a" * 64
+    assert snapshot["comments"][0]["reply_count"] == 1
+    assert "replies" not in snapshot["comments"][0]
 
     search = gateway.search("Before")
-    assert len(search["matches"]) == 1
-    assert search["matches"][0]["kind"] == "scene"
-    assert search["matches"][0]["id"] == 11
-    assert "Before." in search["matches"][0]["excerpt"]
+    scene_match = next(
+        match for match in search["matches"] if match["kind"] == "scene"
+    )
+    assert scene_match["id"] == 11
+    assert "Before." in scene_match["excerpt"]
+
+    comment_search = gateway.search("distant thunder")
+    assert len(comment_search["matches"]) == 1
+    assert comment_search["matches"][0]["kind"] == "comment"
+    assert comment_search["matches"][0]["id"] == 81
+    assert comment_search["matches"][0]["revision"] == "a" * 64
+    assert comment_search["matches"][0]["resolved"] is False
+
+    resolved_search = gateway.search("Resolved cadence")
+    assert resolved_search["matches"][0]["id"] == 82
+    assert resolved_search["matches"][0]["resolved"] is True
+
+
+def test_comment_reads_are_complete_filtered_and_paged():
+    gateway, _ = _gateway()
+
+    all_threads = gateway.list_comments(limit=1)
+    assert all_threads["project_id"] == 1
+    assert all_threads["total"] == 2
+    assert all_threads["returned"] == 1
+    assert all_threads["has_more"] is True
+    assert all_threads["next_offset"] == 1
+    assert all_threads["comments"][0]["replies"][0]["body"] == (
+        "Keep the distant thunder."
+    )
+
+    open_threads = gateway.list_comments(False, limit=200, offset=0)
+    assert open_threads["total"] == 1
+    assert [comment["id"] for comment in open_threads["comments"]] == [81]
+    assert open_threads["has_more"] is False
+
+    with pytest.raises(GatewayError, match="between 1 and 200"):
+        gateway.list_comments(limit=0)
+    with pytest.raises(GatewayError, match="zero or greater"):
+        gateway.list_comments(offset=-1)
+
+
+def test_comment_proposals_are_exact_revision_bound_and_single_use():
+    gateway, fake = _gateway(allow_writes=True)
+    original = fake.comments[1][0]
+    original_revision = original["revision"]
+    original_reply_count = len(original["replies"])
+
+    reply_proposal = gateway.propose_comment_reply(
+        81, original_revision, "Try the image without dialogue.",
+    )
+    assert reply_proposal["state"] == "pending"
+    assert reply_proposal["request"] == {
+        "method": "POST",
+        "path": "/api/projects/1/comments/81/replies",
+        "body": {
+            "body": "Try the image without dialogue.",
+            "author": "MCP assistant",
+            "expected_revision": original_revision,
+        },
+    }
+    assert len(original["replies"]) == original_reply_count
+    assert not any(method == "POST" for method, _path, _body in fake.requests)
+
+    applied_reply = gateway.apply_proposal(reply_proposal["proposal_id"])
+    assert applied_reply["state"] == "applied"
+    assert fake.comments[1][0]["replies"][-1]["author"] == "MCP assistant"
+    assert fake.comments[1][0]["replies"][-1]["body"] == (
+        "Try the image without dialogue."
+    )
+    with pytest.raises(GatewayError, match="applied, not pending"):
+        gateway.apply_proposal(reply_proposal["proposal_id"])
+
+    current_revision = fake.comments[1][0]["revision"]
+    resolution = gateway.propose_comment_resolution(
+        81, current_revision, True,
+    )
+    assert resolution["request"]["body"] == {
+        "resolved": True,
+        "expected_revision": current_revision,
+    }
+    assert fake.comments[1][0]["resolved"] is False
+    gateway.apply_proposal(resolution["proposal_id"])
+    assert fake.comments[1][0]["resolved"] is True
+
+
+def test_comment_proposals_fail_closed_on_invalid_noop_or_stale_state():
+    gateway, fake = _gateway(allow_writes=True)
+    revision = fake.comments[1][0]["revision"]
+
+    with pytest.raises(GatewayError, match="must not be empty"):
+        gateway.propose_comment_reply(81, revision, "   ")
+    with pytest.raises(GatewayError, match="expected_revision"):
+        gateway.propose_comment_reply(81, "0" * 64, "Reply")
+    with pytest.raises(GatewayError, match="already open"):
+        gateway.propose_comment_resolution(81, revision, False)
+    with pytest.raises(LogosForgeApiError, match="not found"):
+        gateway.propose_comment_reply(999, revision, "Reply")
+
+    proposal = gateway.propose_comment_resolution(81, revision, True)
+    # Another writer changes this exact thread after review but before apply.
+    fake.comments[1][0]["body"] = "Newer writer edit"
+    fake.comments[1][0]["revision"] = "c" * 64
+
+    with pytest.raises(GatewayError, match="will not be retried"):
+        gateway.apply_proposal(proposal["proposal_id"])
+    assert fake.comments[1][0]["resolved"] is False
+    failed = gateway.get_proposal(proposal["proposal_id"])
+    assert failed["state"] == "failed"
+    assert "comment_conflict" in failed["error"]
+
+
+def test_comment_tool_handlers_reject_unscoped_fields_and_invalid_pages():
+    from logosforge.librechat.mcp_server import call_tool
+
+    gateway, fake = _gateway()
+    listed = call_tool(
+        gateway,
+        "logosforge_list_comments",
+        {"include_resolved": False, "limit": 1, "offset": 0},
+    )
+    assert listed["ok"] is True
+    assert [item["id"] for item in listed["result"]["comments"]] == [81]
+
+    invalid_page = call_tool(
+        gateway, "logosforge_list_comments", {"limit": 0},
+    )
+    assert invalid_page == {
+        "ok": False,
+        "error": "'limit' must be between 1 and 200.",
+    }
+    unscoped_author = call_tool(
+        gateway,
+        "logosforge_propose_comment_reply",
+        {
+            "comment_id": 81,
+            "expected_revision": fake.comments[1][0]["revision"],
+            "body": "Reply",
+            "author": "Impersonated writer",
+        },
+    )
+    assert unscoped_author["ok"] is False
+    assert "Unexpected argument" in unscoped_author["error"]
 
 
 def test_scene_proposal_does_not_mutate_and_requires_current_revision():
@@ -459,7 +721,12 @@ def test_mcp_registry_has_unique_focused_tools_and_no_legacy_self_approval():
     from logosforge.librechat import mcp_server as server
 
     names = [spec.name for spec in server.TOOL_SPECS]
-    assert len(names) == len(set(names)) == 35
+    assert len(names) == len(set(names)) == 38
+    assert {
+        "logosforge_list_comments",
+        "logosforge_propose_comment_reply",
+        "logosforge_propose_comment_resolution",
+    } <= set(names)
     assert "logosforge_apply_confirmed_action" not in names
     apply = server.HANDLERS["logosforge_apply_proposal"]
     assert apply.input_schema == server._obj(
@@ -468,6 +735,12 @@ def test_mcp_registry_has_unique_focused_tools_and_no_legacy_self_approval():
     assert apply.read_only is False
     assert apply.destructive is True
     assert apply.idempotent is False
+    assert server.HANDLERS[
+        "logosforge_propose_comment_reply"
+    ].idempotent is False
+    assert server.HANDLERS[
+        "logosforge_propose_comment_resolution"
+    ].idempotent is False
 
 
 def test_mcp_config_defaults_to_loopback_and_rejects_unsafe_remote_urls():
@@ -516,9 +789,14 @@ def test_real_mcp_stdio_initializes_and_advertises_structured_tools():
 
     initialized, listed = asyncio.run(exercise())
     assert initialized.serverInfo.name == "logosforge"
-    assert initialized.serverInfo.version == "1.0.0"
+    assert initialized.serverInfo.version == "1.1.0"
     tools = {tool.name: tool for tool in listed.tools}
-    assert len(tools) == 35
+    assert len(tools) == 38
+    assert {
+        "logosforge_list_comments",
+        "logosforge_propose_comment_reply",
+        "logosforge_propose_comment_resolution",
+    } <= set(tools)
     assert tools["logosforge_get_scene"].outputSchema == {
         "type": "object",
         "properties": {

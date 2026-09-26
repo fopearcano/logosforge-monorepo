@@ -79,6 +79,11 @@ def _compact_body(body: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _preview(value: Any, limit: int) -> str:
+    text = str(value or "")
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
 @dataclass
 class Proposal:
     proposal_id: str
@@ -206,6 +211,37 @@ class LogosForgeMcpGateway:
     def list_notes(self) -> list[dict]:
         return self.client.list_notes(self._project_id())
 
+    def list_comments(
+        self,
+        include_resolved: bool = True,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        if isinstance(limit, bool) or not 1 <= int(limit) <= 200:
+            raise GatewayError("Comment limit must be between 1 and 200.")
+        if isinstance(offset, bool) or int(offset) < 0:
+            raise GatewayError("Comment offset must be zero or greater.")
+        pid = self._project_id()
+        comments = self.client.list_comments(pid)
+        if not include_resolved:
+            comments = [comment for comment in comments if not comment.get("resolved")]
+        total = len(comments)
+        start = int(offset)
+        page = comments[start:start + int(limit)]
+        next_offset = start + len(page)
+        return {
+            "project_id": pid,
+            "comments": page,
+            "include_resolved": bool(include_resolved),
+            "offset": start,
+            "limit": int(limit),
+            "returned": len(page),
+            "total": total,
+            "next_offset": next_offset if next_offset < total else None,
+            "has_more": next_offset < total,
+        }
+
     def poll_changes(self, since: int = 0) -> dict:
         return self.client.poll_events(since, self._project_id())
 
@@ -217,7 +253,13 @@ class LogosForgeMcpGateway:
 
         matches: list[dict[str, Any]] = []
 
-        def add(kind: str, item_id: Any, title: str, text: str) -> None:
+        def add(
+            kind: str,
+            item_id: Any,
+            title: str,
+            text: str,
+            metadata: dict[str, Any] | None = None,
+        ) -> None:
             haystack = text.casefold()
             offset = haystack.find(needle)
             if offset < 0 or len(matches) >= 100:
@@ -225,12 +267,15 @@ class LogosForgeMcpGateway:
             start = max(0, offset - 100)
             end = min(len(text), offset + len(query) + 140)
             excerpt = text[start:end].replace("\n", " ").strip()
-            matches.append({
+            match = {
                 "kind": kind,
                 "id": item_id,
                 "title": title,
                 "excerpt": ("…" if start else "") + excerpt + ("…" if end < len(text) else ""),
-            })
+            }
+            if metadata:
+                match.update(metadata)
+            matches.append(match)
 
         scenes = self.client.list_scenes(pid)
         for scene in scenes:
@@ -258,6 +303,29 @@ class LogosForgeMcpGateway:
             ))
             add("psyke", entry.get("id"), str(entry.get("name", "")), text)
 
+        comments = self.client.list_comments(pid)
+        for comment in comments:
+            replies = comment.get("replies", [])
+            text = "\n".join((
+                str(comment.get("quote", "")),
+                str(comment.get("body", "")),
+                "\n".join(
+                    f"{reply.get('author', '')}: {reply.get('body', '')}"
+                    for reply in replies
+                    if isinstance(reply, dict)
+                ),
+            ))
+            add(
+                "comment",
+                comment.get("id"),
+                f"Comment {comment.get('id')}: {_preview(comment.get('quote'), 80)}",
+                text,
+                {
+                    "revision": comment.get("revision", ""),
+                    "resolved": bool(comment.get("resolved")),
+                },
+            )
+
         return {"query": query, "matches": matches, "limit": 100}
 
     def live_context(self, action: str) -> dict:
@@ -273,6 +341,8 @@ class LogosForgeMcpGateway:
         pid = self._project_id()
         events = self.client.poll_events(0, pid)
         notes = self.client.list_notes(pid)
+        comments = self.client.list_comments(pid)
+        comment_limit = 100
         return {
             "project": self.client.get_project(pid),
             "scenes": self.list_scenes(include_content=False),
@@ -291,6 +361,27 @@ class LogosForgeMcpGateway:
                 }
                 for note in notes
             ],
+            "comment_counts": {
+                "total": len(comments),
+                "open": sum(1 for comment in comments if not comment.get("resolved")),
+                "resolved": sum(1 for comment in comments if comment.get("resolved")),
+            },
+            "comments": [
+                {
+                    "id": comment.get("id"),
+                    "revision": comment.get("revision", ""),
+                    "anchor": comment.get("anchor", {}),
+                    "quote_preview": _preview(comment.get("quote"), 240),
+                    "body_preview": _preview(comment.get("body"), 500),
+                    "body_length": len(str(comment.get("body", "") or "")),
+                    "resolved": bool(comment.get("resolved")),
+                    "reply_count": len(comment.get("replies", [])),
+                    "created_at": comment.get("created_at"),
+                    "updated_at": comment.get("updated_at"),
+                }
+                for comment in comments[:comment_limit]
+            ],
+            "comments_truncated": max(0, len(comments) - comment_limit),
             "event_cursor": events.get("cursor", 0),
         }
 
@@ -598,6 +689,94 @@ class LogosForgeMcpGateway:
             operation="patch_note", method="PATCH",
             path=self.client.project_path(f"notes/{int(note_id)}", pid), body=patch,
             summary=f"Patch note {note_id}.", project_id=pid, guard_path=notes_path,
+        )
+
+    def _comment_proposal_context(
+        self, comment_id: int, expected_revision: str,
+    ) -> tuple[int, dict[str, Any]]:
+        pid = self._project_id()
+        if (
+            not isinstance(expected_revision, str)
+            or len(expected_revision) != 64
+            or any(char not in "0123456789abcdef" for char in expected_revision)
+        ):
+            raise GatewayError(
+                "expected_revision must be the exact 64-character revision "
+                "returned by logosforge_list_comments or logosforge_search."
+            )
+        current = self.client.get_comment(int(comment_id), pid)
+        if current.get("revision") != expected_revision:
+            raise GatewayError(
+                "expected_revision does not match the current comment thread. "
+                "Read the thread again and create a fresh proposal."
+            )
+        return pid, current
+
+    def propose_comment_reply(
+        self, comment_id: int, expected_revision: str, body: str,
+    ) -> dict[str, Any]:
+        if not isinstance(body, str) or not body.strip():
+            raise GatewayError("A comment reply must not be empty.")
+        if len(body) > 20_000:
+            raise GatewayError("A comment reply may contain at most 20000 characters.")
+        pid, current = self._comment_proposal_context(
+            comment_id, expected_revision,
+        )
+        return self.propose_request(
+            operation="reply_to_comment",
+            method="POST",
+            path=self.client.project_path(
+                f"comments/{int(comment_id)}/replies", pid,
+            ),
+            body={
+                "body": body,
+                "author": "MCP assistant",
+                "expected_revision": expected_revision,
+            },
+            summary=f"Reply to comment {comment_id} as MCP assistant.",
+            project_id=pid,
+            review={
+                "comment_id": int(comment_id),
+                "expected_revision": expected_revision,
+                "quote": _preview(current.get("quote"), 500),
+                "root_body": _preview(current.get("body"), 1_000),
+                "reply_count_before": len(current.get("replies", [])),
+                "proposed_author": "MCP assistant",
+                "proposed_reply": body,
+            },
+        )
+
+    def propose_comment_resolution(
+        self, comment_id: int, expected_revision: str, resolved: bool,
+    ) -> dict[str, Any]:
+        if not isinstance(resolved, bool):
+            raise GatewayError("resolved must be a boolean.")
+        pid, current = self._comment_proposal_context(
+            comment_id, expected_revision,
+        )
+        before = bool(current.get("resolved"))
+        if before == resolved:
+            state = "resolved" if resolved else "open"
+            raise GatewayError(f"Comment {comment_id} is already {state}.")
+        return self.propose_request(
+            operation="set_comment_resolution",
+            method="PATCH",
+            path=self.client.project_path(f"comments/{int(comment_id)}", pid),
+            body={
+                "resolved": resolved,
+                "expected_revision": expected_revision,
+            },
+            summary=(
+                f"{'Resolve' if resolved else 'Reopen'} comment {comment_id}."
+            ),
+            project_id=pid,
+            review={
+                "comment_id": int(comment_id),
+                "expected_revision": expected_revision,
+                "quote": _preview(current.get("quote"), 500),
+                "before": {"resolved": before},
+                "after": {"resolved": resolved},
+            },
         )
 
     def propose_import_manuscript(
