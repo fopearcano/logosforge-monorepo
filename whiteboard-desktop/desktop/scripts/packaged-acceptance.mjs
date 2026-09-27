@@ -1500,18 +1500,47 @@ function proProjectSelect(page) {
 
 async function waitProReady(session) {
   const { page } = session;
-  const projects = await waitVisible(proScreen(page, 'Projects'), 'Pro Projects screen', STARTUP_TIMEOUT_MS);
+  const projectsButton = await waitVisible(
+    page.locator('aside.rail nav').getByRole('button', { name: 'Projects', exact: true }),
+    'Pro Projects navigator',
+    STARTUP_TIMEOUT_MS,
+  );
   await waitLocalServiceConnected(session, 'Pro bundled core');
+  await waitFor(
+    () => projectsButton.isEnabled(),
+    'Pro workspace layout hydration',
+    STARTUP_TIMEOUT_MS,
+  );
+  await projectsButton.click();
+  const projects = await waitVisible(proScreen(page, 'Projects'), 'Pro Projects screen', STARTUP_TIMEOUT_MS);
   record('ui', 'Pro bundled core connected');
   return projects;
 }
 
 async function selectProPanel(page, name, screenName) {
-  await page.locator('aside.rail nav').getByRole('button', { name, exact: true }).click();
+  const button = page.locator('aside.rail nav').getByRole('button', { name, exact: true });
+  await waitFor(
+    async () => (await button.isVisible()) && (await button.isEnabled()),
+    `enabled Pro ${name} navigator`,
+    STARTUP_TIMEOUT_MS,
+  );
+  await button.click();
   return waitVisible(proScreen(page, screenName), `Pro ${screenName} screen`);
 }
 
 async function collapseProAiDock(page) {
+  const collapseRight = page.getByRole('button', { name: 'Collapse right dock', exact: true });
+  if (await collapseRight.isVisible().catch(() => false)) {
+    await collapseRight.click();
+    await waitVisible(
+      page.getByRole('button', { name: 'Expand right dock', exact: true }),
+      'collapsed Pro right dock strip',
+    );
+    return;
+  }
+
+  // Compatibility with the former standalone AI dock while older packaged
+  // binaries remain useful for local acceptance runs.
   const collapse = page.getByRole('button', { name: 'Collapse AI dock', exact: true });
   if (!(await collapse.isVisible().catch(() => false))) return;
   await collapse.click();
@@ -1819,7 +1848,11 @@ async function importAndVerifyInPro(session, bundlePath, bundle, bodyMarker) {
   assert.equal(await projectSelect.inputValue() !== '', true, 'Pro imported project has no selected id');
   const projectId = Number(await projectSelect.inputValue());
   assert.ok(Number.isSafeInteger(projectId) && projectId > 0, 'Pro imported project id is invalid');
-  const importReport = projects.locator('div').filter({
+  // Project selection hydrates that project's own dock layout. Re-open Projects
+  // there so its staged one-shot import report crosses the provider/layout
+  // remount and remains visible to the writer.
+  const importedProjects = await selectProPanel(page, 'Projects', 'Projects');
+  const importReport = importedProjects.locator('div').filter({
     hasText: new RegExp(`^✓ Imported “${PROJECT_TITLE}”`),
   }).last();
   await waitText(importReport, '2 bible entries', 'Pro import report bible-entry count');
@@ -1875,9 +1908,19 @@ async function configureProAiAndChat(page) {
 
   const billy = page.locator('[data-screen-label="Billy Assistant"]');
   if (!(await billy.isVisible().catch(() => false))) {
-    const openBilly = page.getByRole('button', { name: 'Open Billy', exact: true });
-    if (await openBilly.isVisible().catch(() => false)) await openBilly.click();
-    else await page.locator('aside.ai-dock .ai-tabs button[title="Billy"]').click();
+    const expandRight = page.getByRole('button', { name: 'Expand right dock', exact: true });
+    if (await expandRight.isVisible().catch(() => false)) {
+      await expandRight.click();
+      await waitVisible(
+        page.getByRole('button', { name: 'Collapse right dock', exact: true }),
+        'expanded Pro right dock',
+      );
+    }
+    if (!(await billy.isVisible().catch(() => false))) {
+      const openBilly = page.getByRole('button', { name: 'Open Billy', exact: true });
+      if (await openBilly.isVisible().catch(() => false)) await openBilly.click();
+      else await page.locator('aside.ai-dock .ai-tabs button[title="Billy"]').click();
+    }
   }
   await waitVisible(billy, 'Pro Billy Assistant');
   await billy.getByLabel('Message Billy', { exact: true }).fill('Give me one concrete prose beat for this chapter.');
