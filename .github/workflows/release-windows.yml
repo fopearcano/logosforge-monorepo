@@ -1018,7 +1018,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "${{ needs.metadata.outputs.source_sha }}"
-          for path in logosforge/pyproject.toml logosforge-ui-contracts/package.json pro-shared-ui/package.json pro-desktop/package.json pro-desktop/core/logosforge-core.spec pro-desktop/core/logosforge-mcp.spec; do
+          for path in logosforge/pyproject.toml logosforge-ui-contracts/package.json pro-shared-ui/package.json pro-desktop/package.json pro-desktop/core/logosforge-core.spec pro-desktop/core/logosforge-mcp.spec whiteboard-desktop/scripts/check-macos-deployment-targets.py; do
             test -e "$path" || { echo "::error::Missing required monorepo path: $path"; exit 1; }
           done
 
@@ -1165,66 +1165,13 @@ jobs:
             exit 1
           fi
           app_dir="$1"
-          APP_DIR="$app_dir" ./build-venv/bin/python - <<'PY'
-          import os, re, subprocess
-          from pathlib import Path
-
-          def deployment_targets(text):
-              current_command = None
-              targets = []
-              for line in text.splitlines():
-                  stripped = line.strip()
-                  if stripped.startswith("Load command "):
-                      current_command = None
-                  elif stripped.startswith("cmd "):
-                      current_command = stripped.split(maxsplit=1)[1]
-                  elif current_command == "LC_BUILD_VERSION" and stripped.startswith("minos "):
-                      targets.append(stripped.split(maxsplit=1)[1])
-                  elif current_command == "LC_VERSION_MIN_MACOSX" and stripped.startswith("version "):
-                      targets.append(stripped.split(maxsplit=1)[1])
-              return targets
-
-          # A linker tool version in LC_BUILD_VERSION is not a macOS floor.
-          parser_fixture = """
-          Load command 1
-                cmd LC_BUILD_VERSION
-              cmdsize 32
-               minos 12.0
-                 sdk 15.0
-               ntools 1
-                 tool LD
-              version 820.1
-          Load command 2
-                cmd LC_VERSION_MIN_MACOSX
-              cmdsize 16
-             version 11.6
-                 sdk 13.3
-          """
-          assert deployment_targets(parser_fixture) == ["12.0", "11.6"]
-
-          app = Path(os.environ["APP_DIR"])
-          checked = 0
-          target_count = 0
-          too_new = []
-          for path in app.rglob("*"):
-              if not path.is_file() or path.is_symlink(): continue
-              kind = subprocess.run(["file", "-b", str(path)], text=True, capture_output=True).stdout
-              if "Mach-O" not in kind: continue
-              checked += 1
-              output = subprocess.run(["otool", "-l", str(path)], text=True, capture_output=True, check=True).stdout
-              for version in deployment_targets(output):
-                  match = re.match(r"^(\d+)(?:\.(\d+))?(?:\.(\d+))?$", version)
-                  if match is None: raise SystemExit(f"::error::Unparseable deployment target {version!r} in {path}")
-                  target_count += 1
-                  target = tuple(int(part or 0) for part in match.groups())
-                  if target > (12, 0, 0): too_new.append((str(path), version))
-          if checked == 0: raise SystemExit("::error::No Mach-O binaries found in packaged app.")
-          if target_count == 0: raise SystemExit("::error::No Mach-O deployment targets could be verified.")
-          if too_new:
-              for path, version in too_new: print(f"::error::{path} requires macOS {version}")
-              raise SystemExit("Packaged native code exceeds the declared macOS 12.0 floor.")
-          print(f"Mach-O deployment-target scan OK ({checked} files, {target_count} targets, all <= macOS 12.0)")
-          PY
+          ./build-venv/bin/python \
+            whiteboard-desktop/scripts/check-macos-deployment-targets.py \
+            --self-test
+          ./build-venv/bin/python \
+            whiteboard-desktop/scripts/check-macos-deployment-targets.py \
+            "$app_dir" \
+            --maximum 12.0.0
 
       - name: Mount, inspect, and launch-smoke DMG
         run: |

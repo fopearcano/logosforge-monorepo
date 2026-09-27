@@ -101,6 +101,11 @@ check('Monterey job pins and verifies the macOS 12 deployment floor',
   macJob.includes('MACOSX_DEPLOYMENT_TARGET: "12.0"') &&
   macJob.includes('test "$minimum_version" = "12.0.0"') &&
   macJob.includes('Expected packaged Electron 43.x'));
+check('Monterey job uses the direct tested Mach-O parser instead of otool',
+  (macJob.match(/whiteboard-desktop\/scripts\/check-macos-deployment-targets\.py/g) || []).length === 3 &&
+  macJob.includes('--self-test') &&
+  macJob.includes('--maximum 12.0.0') &&
+  !macJob.includes('otool'));
 
 check('Windows bundled core uses .exe', bundledCoreExecutableName('win32') === 'logosforge-core.exe');
 check('macOS bundled core has no extension', bundledCoreExecutableName('darwin') === 'logosforge-core');
