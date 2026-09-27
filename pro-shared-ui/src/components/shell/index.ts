@@ -6,6 +6,8 @@
  * handoffs (T02 manuscript, T03 spatial, T06 project-OS) are implemented.
  */
 export * from "./WorkspaceShell";
+export * from "./DockWorkspace";
+export * from "./workspaceInteraction";
 export * from "./PanelShell";
 export * from "./Navigator";
 export * from "./Chrome";

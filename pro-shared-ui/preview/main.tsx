@@ -5,6 +5,7 @@ import { ErrorBoundaryHarness } from "./ErrorBoundaryHarness";
 import { RuntimeFaultHarness } from "./RuntimeFaultHarness";
 import { LifecycleHarness } from "./LifecycleHarness";
 import { LargeManuscriptHarness } from "./LargeManuscriptHarness";
+import { WorkspaceDockHarness } from "./WorkspaceDockHarness";
 
 const query = new URLSearchParams(window.location.search);
 const content = query.has("modal-harness")
@@ -17,6 +18,8 @@ const content = query.has("modal-harness")
         ? <LifecycleHarness />
         : query.has("large-manuscript-harness")
           ? <LargeManuscriptHarness />
+          : query.has("workspace-dock-harness")
+            ? <WorkspaceDockHarness />
     : <App />;
 
 createRoot(document.getElementById("root")!).render(content);

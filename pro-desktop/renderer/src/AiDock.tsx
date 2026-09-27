@@ -37,6 +37,7 @@ export function AiDock({
   onOpenChange,
   onTabChange,
   onWidthChange,
+  embedded = false,
 }: {
   open: boolean;
   tab: string;
@@ -44,6 +45,8 @@ export function AiDock({
   onOpenChange: (o: boolean) => void;
   onTabChange: (t: string) => void;
   onWidthChange: (w: number) => void;
+  /** The real workspace owns dock size/collapse when embedded in a dock tab. */
+  embedded?: boolean;
 }) {
   const dragging = useRef(false);
 
@@ -93,8 +96,8 @@ export function AiDock({
 
   const current = AI_TOOLS.find((t) => t.key === tab) ?? AI_TOOLS[0]!;
   return (
-    <aside className="ai-dock" style={{ width }}>
-      <div className="ai-resize" role="separator" aria-label="Resize AI dock" aria-orientation="vertical" aria-valuemin={MIN_W} aria-valuemax={MAX_W} aria-valuenow={width} tabIndex={0} onKeyDown={onResizeKey} onPointerDown={startDrag} onPointerMove={onDragMove} onPointerUp={endDrag} onPointerCancel={endDrag} onLostPointerCapture={endDrag} title="Drag to resize; use Left/Right arrows from the keyboard" />
+    <aside className={`ai-dock${embedded ? ' ai-dock-embedded' : ''}`} style={{ width: embedded ? '100%' : width }}>
+      {!embedded && <div className="ai-resize" role="separator" aria-label="Resize AI dock" aria-orientation="vertical" aria-valuemin={MIN_W} aria-valuemax={MAX_W} aria-valuenow={width} tabIndex={0} onKeyDown={onResizeKey} onPointerDown={startDrag} onPointerMove={onDragMove} onPointerUp={endDrag} onPointerCancel={endDrag} onLostPointerCapture={endDrag} title="Drag to resize; use Left/Right arrows from the keyboard" />}
       <div className="ai-tabs">
         {AI_TOOLS.map((t) => (
           <button type="button" key={t.key} className={tab === t.key ? 'on' : ''} aria-pressed={tab === t.key} onClick={() => onTabChange(t.key)} title={t.label}>
@@ -102,7 +105,7 @@ export function AiDock({
           </button>
         ))}
         <div style={{ flex: 1 }} />
-        <button type="button" className="ai-collapse" onClick={() => onOpenChange(false)} title="Collapse the AI dock" aria-label="Collapse AI dock">›</button>
+        {!embedded && <button type="button" className="ai-collapse" onClick={() => onOpenChange(false)} title="Collapse the AI dock" aria-label="Collapse AI dock">›</button>}
       </div>
       {/* keep every tool mounted so Billy's chat / job state survives tab switches */}
       <div className="ai-body">

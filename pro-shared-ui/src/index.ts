@@ -20,4 +20,5 @@ export * from "./adapters/StudioProvider";
 export * from "./hooks";
 export * from "./theme/tokens";
 export * from "./theme/accent";
+export * from "./workspace";
 export * from "./components";

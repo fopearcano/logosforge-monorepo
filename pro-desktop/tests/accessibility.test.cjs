@@ -55,10 +55,10 @@ for (const marker of ['<ModalPortal>', 'useModalDialog(', 'role="dialog"', 'aria
 }
 
 const app = fs.readFileSync(path.join(root, 'App.tsx'), 'utf8');
-for (const marker of ['<PanelErrorBoundary name="Studio workspace"', 'name={`${current.label} panel`}']) {
+for (const marker of ['<PanelErrorBoundary name="Studio workspace"', 'name={`${panel.label} panel`}']) {
   if (!app.includes(marker)) failures.push(`App render containment missing ${marker}`);
 }
-for (const marker of ['CommentsPanel,', "{ label: 'Comments', node: <CommentsPanel /> }"]) {
+for (const marker of ['CommentsPanel,', "{ id: 'comments', label: 'Comments', node: <CommentsPanel /> }"]) {
   if (!app.includes(marker)) failures.push(`Comments navigation missing ${marker}`);
 }
 if (!dock.includes('<PanelErrorBoundary name={`${t.label} AI`}')) {
@@ -66,6 +66,28 @@ if (!dock.includes('<PanelErrorBoundary name={`${t.label} AI`}')) {
 }
 for (const marker of ['useRuntimeFaultReporter()', '<RuntimeFaultBanner', 'dismissRuntimeFault']) {
   if (!app.includes(marker)) failures.push(`Global runtime error reporting missing ${marker}`);
+}
+
+const dockWorkspace = fs.readFileSync(
+  path.join(process.cwd(), '..', 'pro-shared-ui', 'src', 'components', 'shell', 'DockWorkspace.tsx'),
+  'utf8',
+);
+for (const marker of [
+  'role="tablist"',
+  'role="tab"',
+  'aria-selected={active}',
+  'role="tabpanel"',
+  'role="separator"',
+  'aria-valuemin',
+  'aria-valuetext',
+  'onPointerCancel',
+  'onLostPointerCapture',
+  'aria-label={`Move ${panel.label}',
+  'data-dock-drop-region',
+  'MIN_CENTER_WIDTH_PX',
+  'MIN_CENTER_HEIGHT_PX',
+]) {
+  if (!dockWorkspace.includes(marker)) failures.push(`Dock workspace accessibility missing ${marker}`);
 }
 
 console.log(`Desktop accessibility checks: ${files.length} files · ${buttons} buttons`);

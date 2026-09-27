@@ -38,6 +38,50 @@ const CSS = `
 .lf-shell .lf-opp:hover{background:rgba(98,217,154,.12);}
 .lf-shell .lf-row:hover{background:var(--tint2);}
 .lf-shell .lf-row2:hover{background:var(--tint2);}
+/* Real Studio dock workspace. The panel layer uses display:contents so every
+   opened panel keeps one stable DOM/React parent while its grid coordinates move. */
+.lf-dock-workspace{position:relative;display:grid;flex:1;min-width:0;min-height:0;overflow:hidden;background:var(--base);}
+.lf-dock-header{display:flex;align-items:stretch;min-width:0;min-height:0;border-bottom:1px solid var(--line2);background:var(--panel);z-index:4;}
+.lf-dock-header-center{grid-column:1;grid-row:1;}
+.lf-dock-header-right{grid-column:3;grid-row:1;border-left:1px solid var(--line2);}
+.lf-dock-header-bottom{grid-column:1 / 4;grid-row:4;border-top:1px solid var(--line2);}
+.lf-dock-tabs{display:flex;align-items:stretch;min-width:0;overflow-x:auto;scrollbar-width:thin;}
+.lf-dock-tab-group{display:flex;align-items:stretch;flex:none;border-right:1px solid var(--line2);}
+.lf-dock-tab,.lf-dock-tab-action,.lf-dock-header-actions button{border:0;background:transparent;color:var(--txt2);font:inherit;font-size:9px;letter-spacing:.08em;cursor:pointer;}
+.lf-dock-tab{padding:0 9px;border-bottom:2px solid transparent;text-transform:uppercase;}
+.lf-dock-tab[aria-selected="true"]{color:var(--accent);border-bottom-color:var(--accent);background:var(--tint2);}
+.lf-dock-tab-action{width:24px;padding:0;color:var(--txt3);}
+.lf-dock-tab-action:hover,.lf-dock-header-actions button:hover{color:var(--strong);background:var(--tint2);}
+.lf-dock-tab:disabled,.lf-dock-tab-action:disabled,.lf-dock-header-actions button:disabled{cursor:wait;opacity:.55;}
+.lf-dock-header-actions{display:flex;align-items:stretch;margin-left:auto;flex:none;border-left:1px solid var(--line2);}
+.lf-dock-header-actions button{padding:0 10px;}
+.lf-dock-panel-layer{display:contents;}
+.lf-dock-panel{position:relative;min-width:0;min-height:0;overflow:auto;padding:12px;background:var(--base);}
+.lf-dock-panel-right{border-left:1px solid var(--line2);}
+.lf-dock-panel-bottom{border-top:1px solid var(--line2);}
+.lf-dock-panel-flush{padding:0;overflow:hidden;}
+.lf-dock-panel[hidden]{display:none!important;}
+.lf-dock-resizer{z-index:5;touch-action:none;display:flex;align-items:center;justify-content:center;background:transparent;}
+.lf-dock-resizer::after{content:"";display:block;border-radius:3px;background:var(--line-cy);transition:background .12s,box-shadow .12s;}
+.lf-dock-resizer:hover::after,.lf-dock-resizer:focus-visible::after{background:var(--accent);box-shadow:0 0 8px color-mix(in srgb,var(--accent) 55%,transparent);}
+.lf-dock-resizer-right{grid-column:2;grid-row:1 / 3;cursor:col-resize;}
+.lf-dock-resizer-right::after{width:3px;height:42px;}
+.lf-dock-resizer-bottom{grid-column:1 / 4;grid-row:3;cursor:row-resize;}
+.lf-dock-resizer-bottom::after{width:42px;height:3px;}
+.lf-dock-collapsed{z-index:4;border:0;background:var(--panel2);color:var(--accent);font:inherit;font-size:9px;letter-spacing:.12em;cursor:pointer;}
+.lf-dock-collapsed-right{grid-column:3;grid-row:1 / 3;writing-mode:vertical-rl;border-left:1px solid var(--line2);}
+.lf-dock-collapsed-bottom{grid-column:1 / 4;grid-row:4;border-top:1px solid var(--line2);}
+.lf-dock-collapsed:hover{background:var(--tint2);color:var(--strong);}
+.lf-workspace-navigator{position:relative;display:flex;flex:none;min-width:0;min-height:0;border-right:1px solid var(--line2);background:var(--panel2);}
+.lf-workspace-navigator-content{display:flex;flex:1;min-width:0;min-height:0;overflow:hidden;}
+.lf-workspace-navigator-collapse{position:absolute;right:8px;top:4px;z-index:7;width:24px;height:24px;border:1px solid var(--line2);background:var(--panel);color:var(--txt2);font:inherit;cursor:pointer;}
+.lf-workspace-navigator-collapse:hover{color:var(--accent);border-color:var(--line-cy);}
+.lf-workspace-navigator-resizer{position:absolute;right:-5px;top:0;bottom:0;width:9px;z-index:6;display:flex;align-items:center;justify-content:center;cursor:col-resize;touch-action:none;}
+.lf-workspace-navigator-resizer::after{content:"";width:3px;height:42px;border-radius:3px;background:var(--line-cy);}
+.lf-workspace-navigator-resizer:hover::after,.lf-workspace-navigator-resizer:focus-visible::after{background:var(--accent);box-shadow:0 0 8px color-mix(in srgb,var(--accent) 55%,transparent);}
+.lf-workspace-navigator-collapsed{width:34px;flex:none;display:flex;border-right:1px solid var(--line2);background:var(--panel2);}
+.lf-workspace-navigator-collapsed button{width:100%;border:0;background:transparent;color:var(--accent);font:inherit;font-size:9px;letter-spacing:.12em;writing-mode:vertical-rl;cursor:pointer;}
+.lf-workspace-navigator-collapsed button:hover{background:var(--tint2);color:var(--strong);}
 @media (prefers-reduced-motion:reduce){
   .lf-shell *, .lf-shell *::before, .lf-shell *::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important;}
 }

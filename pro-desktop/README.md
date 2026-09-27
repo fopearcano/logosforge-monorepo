@@ -120,6 +120,18 @@ mode changes only while a project is an empty scaffold. The workspace is also
 remounted at the project boundary, so drafts, chat results and loading-state data
 from one project can never appear inside another.
 
+Each project also owns a versioned workspace layout. Center, right and bottom
+docks keep independently active tab stacks; panels can be moved by drag/drop or
+the keyboard-accessible move controls, resized, collapsed and restored. Focus is
+a non-destructive manuscript-only projection of the saved Cockpit arrangement.
+Layout writes use the same project handoff/close barrier as editor drafts and an
+atomic host-side file replacement. Each normal replacement retains the prior
+generation; shared UI validates primary and backup separately, repairs from a
+known-good backup without rotating corruption over it, and leaves newer-schema
+layouts untouched. Moving a panel changes its grid placement under one stable
+React parent, so editor and AI session state does not remount during workspace
+rearrangement.
+
 The shared package + contracts are aliased straight to source (vite + tsconfig
 `paths`), so there's no build/link step in dev and HMR works across the
 monorepo. Their own dependencies still need installing in a fresh checkout.
@@ -179,8 +191,10 @@ Codex configuration and the proposal/review/apply safety model.
 
 ## Status
 
-- **Workspace** is a single-panel switcher today. The dockable/draggable layout
-  (persisted via the `loadLayout`/`saveLayout` PlatformAdapter hooks) is next.
+- **Workspace** is a dockable, keyboard-accessible three-region shell with
+  per-project versioned persistence, Focus/Cockpit projections and safe reset.
+  The reserved left/floating model zones are recovered into the visible center
+  dock until their dedicated surfaces are implemented.
 - **Packaging** is configured for self-contained Windows installer/portable,
   macOS Intel DMG, and Linux x64 AppImage builds. Electron starts a per-process
   authenticated core and stores the SQLite database in the app's stable

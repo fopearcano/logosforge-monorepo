@@ -6,7 +6,7 @@ import { app, Menu, shell, type BrowserWindow, type MenuItemConstructorOptions }
  * to the same handlers the sidebar / command palette use (see App.tsx).
  *
  * Command grammar (kept trivial so the renderer dispatcher is a small switch):
- *   "new-project" | "palette" | "focus" | "ai-dock"
+ *   "new-project" | "palette" | "focus" | "ai-dock" | "reset-workspace"
  *   "nav:<Panel label>"   → select that left-nav panel (e.g. "nav:Manuscript")
  *   "ai:<Tool key>"       → open that AI companion (e.g. "ai:Billy")
  *   "theme:dark|light|warm"
@@ -60,6 +60,7 @@ export function buildAppMenu(getWin: () => BrowserWindow | null): Menu {
       submenu: [
         { label: 'Focus Mode', accelerator: 'CmdOrCtrl+Shift+F', click: () => send('focus') },
         { label: 'Toggle AI Dock', accelerator: 'CmdOrCtrl+J', click: () => send('ai-dock') },
+        { label: 'Reset Workspace Layout', click: () => send('reset-workspace') },
         { type: 'separator' },
         {
           label: 'Appearance',

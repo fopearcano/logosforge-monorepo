@@ -17,9 +17,11 @@ export interface DesktopBridge {
   saveFile(p: { suggestedName?: string; content?: string; contentBase64?: string; mimeType?: string }): Promise<{ canceled: boolean; path?: string }>;
   openExternal(target: string): Promise<void>;
   loadLayout(projectId: number): Promise<unknown | null>;
-  saveLayout(projectId: number, layout: unknown): Promise<void>;
-  onSaveBeforeClose(cb: () => void): () => void;
-  sendCloseResult(saved: boolean): void;
+  loadLayoutBackup(projectId: number): Promise<unknown | null>;
+  saveLayout(projectId: number, layout: unknown, options?: { preserveBackup?: boolean }): Promise<void>;
+  onSaveBeforeClose(cb: (attemptId: number) => void): () => void;
+  onCloseCancelled(cb: () => void): () => void;
+  sendCloseResult(attemptId: number, saved: boolean): void;
   onMenuCommand(cb: (command: string) => void): () => void;
 }
 
@@ -39,5 +41,6 @@ export const platform: PlatformAdapter = {
   saveFile: (opts) => desktop!.saveFile(opts),
   openExternal: (target) => desktop!.openExternal(target),
   loadLayout: (projectId) => desktop!.loadLayout(projectId),
-  saveLayout: (projectId, layout) => desktop!.saveLayout(projectId, layout),
+  loadLayoutBackup: (projectId) => desktop!.loadLayoutBackup(projectId),
+  saveLayout: (projectId, layout, options) => desktop!.saveLayout(projectId, layout, options),
 };

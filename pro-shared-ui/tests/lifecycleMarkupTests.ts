@@ -21,6 +21,23 @@ requireMarkers("components/common/useRuntimeFaultReporter.ts", ["for (const time
 requireMarkers("adapters/httpApiClient.ts", ["if (timer) clearTimeout(timer)", "es.close()"]);
 requireMarkers("adapters/httpApiClient.ts", ["ApiRequestTimeoutError", "const timeoutOptions = { ...options }", "clientAbort.abort", "activeAbort?.abort", "getInflight.clear()", "cloneTransportValue", "streams.clear()", "dispose: () =>"]);
 requireMarkers("adapters/clientLifetime.ts", ["queueMicrotask", "leases.get(value) !== 0", "dispose(value)"]);
+requireMarkers("workspace/useWorkspaceLayout.ts", [
+  "loadGenerationRef",
+  "registerProjectFlusher(flushLayout)",
+  "dirtyRef.current = true",
+  "trackProjectWrite(write)",
+  "flushPromiseRef.current",
+  "ownerIsCurrent()",
+  "Keep dirty=true",
+  "saved !== null && saved !== undefined",
+  "clearTimer();",
+]);
+requireMarkers("components/shell/DockWorkspace.tsx", [
+  "new ResizeObserver(updateMetrics)",
+  "observer.disconnect()",
+  "focusAfterWorkspaceAction(",
+  'event.target.getAttribute("role") !== "tab"',
+]);
 const manuscript = requireMarkers("components/manuscript/ManuscriptEditor.tsx", [
   "new IntersectionObserver", "observer.disconnect()", "data-prose-static", "data-scene-prose", "touchWarmSceneIds", "contentVisibility",
   "beginCrossScenePointerSelection", "finishCrossScenePointerSelection", "proseDomPointFromViewport",

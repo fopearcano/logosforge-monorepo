@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 
 import type { CoreStatus } from './core-manager';
-import type { DialogFilter, OpenFileResult, SaveFileResult } from './file-manager';
+import type { DialogFilter, LayoutSaveOptions, OpenFileResult, SaveFileResult } from './file-manager';
 
 /**
  * The `window.logosforge` surface exposed to the renderer. Every method is FLAT
@@ -19,9 +19,11 @@ export interface LogosForgeDesktop {
   saveFile(payload: { suggestedName?: string; content?: string; contentBase64?: string; mimeType?: string }): Promise<SaveFileResult>;
   openExternal(target: string): Promise<void>;
   loadLayout(projectId: number): Promise<unknown | null>;
-  saveLayout(projectId: number, layout: unknown): Promise<void>;
-  onSaveBeforeClose(cb: () => void): () => void;
-  sendCloseResult(saved: boolean): void;
+  loadLayoutBackup(projectId: number): Promise<unknown | null>;
+  saveLayout(projectId: number, layout: unknown, options?: LayoutSaveOptions): Promise<void>;
+  onSaveBeforeClose(cb: (attemptId: number) => void): () => void;
+  onCloseCancelled(cb: () => void): () => void;
+  sendCloseResult(attemptId: number, saved: boolean): void;
 
   /** Menu → renderer commands (see electron/menu.ts for the grammar). */
   onMenuCommand(cb: (command: string) => void): () => void;
@@ -42,9 +44,15 @@ const api: LogosForgeDesktop = {
   saveFile: (payload) => ipcRenderer.invoke('file:save', payload),
   openExternal: (target) => ipcRenderer.invoke('shell:open-external', { target }),
   loadLayout: (projectId) => ipcRenderer.invoke('layout:load', { projectId }),
-  saveLayout: (projectId, layout) => ipcRenderer.invoke('layout:save', { projectId, layout }),
-  onSaveBeforeClose: (cb) => subscribe<void>('app:save-before-close', () => cb()),
-  sendCloseResult: (saved) => ipcRenderer.send('app:close-result', saved),
+  loadLayoutBackup: (projectId) => ipcRenderer.invoke('layout:load-backup', { projectId }),
+  saveLayout: (projectId, layout, options) => ipcRenderer.invoke('layout:save', {
+    projectId,
+    layout,
+    preserveBackup: options?.preserveBackup === true,
+  }),
+  onSaveBeforeClose: (cb) => subscribe<number>('app:save-before-close', cb),
+  onCloseCancelled: (cb) => subscribe<void>('app:close-cancelled', () => cb()),
+  sendCloseResult: (attemptId, saved) => ipcRenderer.send('app:close-result', attemptId, saved),
 
   onMenuCommand: (cb) => subscribe<string>('menu:command', cb),
 };

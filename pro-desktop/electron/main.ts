@@ -3,7 +3,7 @@ import * as path from 'node:path';
 
 import { CoreManager, type CoreStatus } from './core-manager';
 import { serveStatic, type StaticServer } from './static-server';
-import { openFile, saveFile, openExternal, loadLayout, saveLayout, type DialogFilter } from './file-manager';
+import { openFile, saveFile, openExternal, loadLayout, loadLayoutBackup, saveLayout, type DialogFilter } from './file-manager';
 import { buildAppMenu } from './menu';
 import { installMcpCompanion, mcpCompanionPath, runtimeDescriptorPath } from './mcp-runtime';
 import {
@@ -38,7 +38,8 @@ const core = new CoreManager({ production: isProd, bundledCorePath, dbPath, mcpR
 let allowClose = false;
 let isQuitting = false;
 let closeInProgress = false;
-let pendingCloseResult: ((saved: boolean) => void) | null = null;
+let nextCloseAttemptId = 1;
+let pendingCloseResult: { attemptId: number; finish: (saved: boolean) => void } | null = null;
 
 function requireMainRenderer(event: IpcMainInvokeEvent): void {
   const win = mainWindow;
@@ -52,17 +53,19 @@ function requestRendererFlush(): Promise<boolean> {
   if (!win || win.webContents.isDestroyed()) return Promise.resolve(true);
   if (win.webContents.isLoadingMainFrame()) return Promise.resolve(true);
   return new Promise((resolve) => {
+    const attemptId = nextCloseAttemptId;
+    nextCloseAttemptId += 1;
     let settled = false;
     const finish = (saved: boolean) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      pendingCloseResult = null;
+      if (pendingCloseResult?.attemptId === attemptId) pendingCloseResult = null;
       resolve(saved);
     };
     const timer = setTimeout(() => finish(false), 15_000);
-    pendingCloseResult = finish;
-    win.webContents.send('app:save-before-close');
+    pendingCloseResult = { attemptId, finish };
+    win.webContents.send('app:save-before-close', attemptId);
   });
 }
 
@@ -87,6 +90,7 @@ async function handleCloseRequest(): Promise<void> {
     else {
       closeInProgress = false;
       isQuitting = false;
+      if (!win.webContents.isDestroyed()) win.webContents.send('app:close-cancelled');
       return;
     }
   }
@@ -132,7 +136,7 @@ async function createWindow(): Promise<void> {
   });
 
   mainWindow.on('closed', () => {
-    pendingCloseResult?.(false);
+    pendingCloseResult?.finish(false);
     mainWindow = null;
   });
 }
@@ -162,14 +166,19 @@ function registerIpc(): void {
     requireMainRenderer(event);
     return loadLayout(p.projectId);
   });
-  ipcMain.handle('layout:save', (event, p: { projectId: number; layout: unknown }) => {
+  ipcMain.handle('layout:load-backup', (event, p: { projectId: number }) => {
     requireMainRenderer(event);
-    return saveLayout(p.projectId, p.layout);
+    return loadLayoutBackup(p.projectId);
   });
-  ipcMain.on('app:close-result', (event: IpcMainEvent, saved: boolean) => {
+  ipcMain.handle('layout:save', (event, p: { projectId: number; layout: unknown; preserveBackup?: boolean }) => {
+    requireMainRenderer(event);
+    return saveLayout(p.projectId, p.layout, { preserveBackup: p.preserveBackup === true });
+  });
+  ipcMain.on('app:close-result', (event: IpcMainEvent, attemptId: number, saved: boolean) => {
     const win = mainWindow;
     if (!win || event.sender !== win.webContents || event.senderFrame !== win.webContents.mainFrame) return;
-    pendingCloseResult?.(saved === true);
+    if (!Number.isSafeInteger(attemptId) || pendingCloseResult?.attemptId !== attemptId) return;
+    pendingCloseResult.finish(saved === true);
   });
 }
 

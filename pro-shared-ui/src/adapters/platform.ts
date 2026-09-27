@@ -36,7 +36,9 @@ export interface PlatformAdapter {
   navigate?(to: string): void;
   /** Persist + restore opaque per-project UI layout (docking). */
   loadLayout?(projectId: number): Promise<unknown | null>;
-  saveLayout?(projectId: number, layout: unknown): Promise<void>;
+  /** Optional prior generation, validated by shared UI before recovery. */
+  loadLayoutBackup?(projectId: number): Promise<unknown | null>;
+  saveLayout?(projectId: number, layout: unknown, options?: { preserveBackup?: boolean }): Promise<void>;
   /** True on Electron desktop (enables local-only features like Dexter's Room). */
   readonly isDesktop: boolean;
 }
