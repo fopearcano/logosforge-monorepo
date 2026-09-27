@@ -119,11 +119,28 @@ expectParseError(
   }),
   'This bundle contains an invalid inline comment reply.',
 );
+expectParseError(
+  'non-array Drafter pages rejected before project creation',
+  JSON.stringify({
+    format: BUNDLE_FORMAT,
+    project: { manuscript: { blocks: [] }, drafter: { pages: {} } },
+  }),
+  'This bundle has an invalid Drafter section.',
+);
+expectParseError(
+  'Drafter page without a block list rejected before project creation',
+  JSON.stringify({
+    format: BUNDLE_FORMAT,
+    project: { manuscript: { blocks: [] }, drafter: { pages: [{ id: 'draft-1' }] } },
+  }),
+  'This bundle contains an invalid Drafter page block list.',
+);
 
 const psykeCalls: Array<{ projectId: number; body: Record<string, unknown> }> = [];
 const relationCalls: Array<{ projectId: number; body: Record<string, unknown> }> = [];
 const progressionCalls: Array<{ projectId: number; body: Record<string, unknown> }> = [];
 const outlineCalls: Array<{ projectId: number; body: Record<string, unknown> }> = [];
+const noteCalls: Array<{ projectId: number; body: Record<string, unknown> }> = [];
 const settingsCalls: Array<Record<string, unknown>> = [];
 let nextOutlineId = 500;
 const api = {
@@ -203,6 +220,11 @@ const api = {
     nextOutlineId += 1;
     return { id: nextOutlineId, project_id: projectId, ...body };
   },
+  createNote: async (projectId: number, body: Record<string, unknown>) => {
+    noteCalls.push({ projectId, body });
+    if (body.title === 'Failed scratch') throw new Error('simulated note failure');
+    return { id: 900 + noteCalls.length, ...body, psyke_links: [], scene_links: [] };
+  },
 } as unknown as ApiClient;
 
 const bundle: ProjectBundle = {
@@ -218,6 +240,27 @@ const bundle: ProjectBundle = {
         { id: 'b1', type: 'paragraph', text: 'Opening alpha.' },
         { id: 'b2', type: 'heading', text: 'Chapter Two', level: 1 },
         { id: 'b3', type: 'paragraph', text: 'Closing beta.' },
+      ],
+    },
+    drafter: {
+      pages: [
+        {
+          id: 'draft-1',
+          title: 'Alternate opening',
+          blocks: [
+            { id: 'd1', type: 'heading', text: 'A different night', level: 2 },
+            { id: 'd2', type: 'paragraph', text: 'Mara waits at the seawall.' },
+          ],
+          created_at: '2026-09-20T10:00:00Z',
+          updated_at: '2026-09-20T11:00:00Z',
+        },
+        {
+          id: 'draft-2',
+          title: 'Failed scratch',
+          blocks: [{ id: 'd3', type: 'paragraph', text: 'Keep this in the archive.' }],
+          created_at: '2026-09-20T12:00:00Z',
+          updated_at: '2026-09-20T12:00:00Z',
+        },
       ],
     },
     psyke: {
@@ -381,7 +424,22 @@ check('document settings reported as preserved', result.settingsImported && !res
 check(
   'document settings merge without clobbering existing project settings',
   settingsCalls[0].existing === 'kept' &&
-    (settingsCalls[0].whiteboard_document_settings as Record<string, unknown>).narrativePerson === 'first',
+    (settingsCalls[0].whiteboard_document_settings as Record<string, unknown>).narrativePerson === 'first' &&
+    Array.isArray(settingsCalls[0].whiteboard_drafter_pages) &&
+    (settingsCalls[0].whiteboard_drafter_pages as unknown[]).length === 2,
+);
+check(
+  'Drafter pages become non-canonical Pro Notes with readable formatting',
+  noteCalls[0]?.projectId === 77 &&
+    noteCalls[0]?.body.title === 'Alternate opening' &&
+    noteCalls[0]?.body.content === '## A different night\n\nMara waits at the seawall.' &&
+    Array.isArray(noteCalls[0]?.body.tags) &&
+    (noteCalls[0]?.body.tags as string[]).includes('whiteboard-drafter'),
+);
+check(
+  'Drafter Note outcomes and exact archive preservation are reported',
+  result.drafterPages === 1 && result.drafterPagesSkipped === 1 &&
+    result.drafterArchivePreserved && !result.drafterArchiveSkipped,
 );
 check('PSYKE successes counted', result.entries === 3 && psykeCalls.length === 4);
 check('PSYKE invalid/duplicate/failed rows reported', result.entriesSkipped === 3);

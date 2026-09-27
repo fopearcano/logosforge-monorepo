@@ -156,8 +156,8 @@ export function ProjectsPanel(props: PanelProps) {
   };
 
   // Whiteboard → Pro: import one complete project bundle — manuscript,
-  // document settings, comments, PSYKE entries/relationships/progressions,
-  // and outline.
+  // document settings, comments, Drafter pages, PSYKE
+  // entries/relationships/progressions, and outline.
   const importBundle = async () => {
     if (busy) return;
     setBusy(true); setErr(null); setNote(null);
@@ -177,7 +177,9 @@ export function ProjectsPanel(props: PanelProps) {
       if (r.progressions > 0) parts.push(`${r.progressions} progression beat${r.progressions === 1 ? "" : "s"}`);
       if (r.comments > 0) parts.push(`${r.comments} comment thread${r.comments === 1 ? "" : "s"}`);
       if (r.commentReplies > 0) parts.push(`${r.commentReplies} comment repl${r.commentReplies === 1 ? "y" : "ies"}`);
+      if (r.drafterPages > 0) parts.push(`${r.drafterPages} Drafter page${r.drafterPages === 1 ? "" : "s"} as Notes`);
       if (r.settingsImported) parts.push("Whiteboard document settings preserved");
+      if (r.drafterArchivePreserved && r.drafterPages > 0) parts.push("structured Drafter archive preserved");
       if (r.links > 0) parts.push(`${r.links} section link${r.links === 1 ? "" : "s"}`);   // Phase 3
       if (r.progressionSceneLinks > 0) parts.push(`${r.progressionSceneLinks} progression scene link${r.progressionSceneLinks === 1 ? "" : "s"}`);
       // Report anything that could not be mapped or created instead of silently
@@ -185,6 +187,8 @@ export function ProjectsPanel(props: PanelProps) {
       const deferredBits: string[] = [];
       if (r.commentsSkipped > 0) deferredBits.push(`${r.commentsSkipped} comment thread${r.commentsSkipped === 1 ? "" : "s"} skipped (invalid or unmappable anchor)`);
       if (r.commentRepliesSkipped > 0) deferredBits.push(`${r.commentRepliesSkipped} comment repl${r.commentRepliesSkipped === 1 ? "y" : "ies"} skipped (invalid or parent thread unavailable)`);
+      if (r.drafterPagesSkipped > 0) deferredBits.push(`${r.drafterPagesSkipped} Drafter page${r.drafterPagesSkipped === 1 ? "" : "s"} couldn't be recreated as Notes`);
+      if (r.drafterArchiveSkipped) deferredBits.push("the exact structured Drafter archive couldn't be preserved in project settings");
       if (r.settingsSkipped) deferredBits.push("Whiteboard document settings couldn't be preserved");
       if (r.entriesSkipped > 0) deferredBits.push(`${r.entriesSkipped} bible entr${r.entriesSkipped === 1 ? "y" : "ies"} skipped (invalid, duplicate, or failed)`);
       if (r.relationsSkipped > 0) deferredBits.push(`${r.relationsSkipped} bible relationship${r.relationsSkipped === 1 ? "" : "s"} skipped (invalid, unmapped, duplicate, or failed)`);

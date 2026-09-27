@@ -67,6 +67,18 @@ export interface ProjectBundleOutlineNode {
   link?: { blockIndex: number; quote?: string; blockId?: string } | null;
 }
 
+/** A project-scoped Whiteboard Drafter page. Drafter text is deliberately
+ * non-canonical: it must become a Pro Note, never a manuscript scene. The
+ * original blocks are also retained in project settings so marks and
+ * screenplay element metadata survive the migration losslessly. */
+export interface ProjectBundleDrafterPage {
+  id?: string;
+  title?: string;
+  blocks?: WhiteboardImportBlockDTO[];
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface ProjectBundle {
   format?: string;
   version?: string;
@@ -83,6 +95,7 @@ export interface ProjectBundle {
     };
     outline?: ProjectBundleOutlineNode[];   // Phase 2 — imported
     comments?: WhiteboardImportCommentDTO[];
+    drafter?: { pages?: ProjectBundleDrafterPage[] };
   };
 }
 
@@ -109,6 +122,10 @@ export interface BundleImportResult {
   commentsSkipped: number;  // stale or otherwise unmappable comment threads
   commentReplies: number;   // replies created with their parent threads
   commentRepliesSkipped: number; // replies rejected while importing a thread
+  drafterPages: number;     // project-scoped scratch pages recreated as Pro Notes
+  drafterPagesSkipped: number; // invalid or failed Drafter-page Note creations
+  drafterArchivePreserved: boolean; // exact structured blocks retained in settings
+  drafterArchiveSkipped: boolean;
   links: number;            // outline→scene hard links reconstructed (Phase 3)
   linksSkipped: number;     // outline nodes that carried a link that couldn't be resolved
 }
@@ -234,7 +251,51 @@ export function parseProjectBundle(text: string): ProjectBundle {
       }
     }
   }
+  if (project.drafter != null) {
+    if (!isRecord(project.drafter) ||
+        (project.drafter.pages != null && !Array.isArray(project.drafter.pages))) {
+      throw new Error("This bundle has an invalid Drafter section.");
+    }
+    if (Array.isArray(project.drafter.pages)) {
+      for (const page of project.drafter.pages) {
+        if (!isRecord(page)) {
+          throw new Error("This bundle contains an invalid Drafter page.");
+        }
+        if (page.id != null && typeof page.id !== "string") {
+          throw new Error("This bundle contains an invalid Drafter page id.");
+        }
+        if (page.title != null && typeof page.title !== "string") {
+          throw new Error("This bundle contains an invalid Drafter page title.");
+        }
+        if (!Array.isArray(page.blocks) || page.blocks.some((block) => !isRecord(block))) {
+          throw new Error("This bundle contains an invalid Drafter page block list.");
+        }
+        if ((page.created_at != null && typeof page.created_at !== "string") ||
+            (page.updated_at != null && typeof page.updated_at !== "string")) {
+          throw new Error("This bundle contains an invalid Drafter page timestamp.");
+        }
+      }
+    }
+  }
   return parsed as ProjectBundle;
+}
+
+/** Produce a readable Note while the settings archive below retains the exact
+ * source block DTOs. This intentionally does not segment scratch text into
+ * scenes or make it canonical manuscript content. */
+function drafterNoteContent(page: ProjectBundleDrafterPage): string {
+  const blocks = Array.isArray(page.blocks) ? page.blocks : [];
+  return blocks.map((block) => {
+    const text = typeof block.text === "string" ? block.text : "";
+    if (block.type === "heading") {
+      const rawLevel = typeof block.level === "number" && Number.isFinite(block.level)
+        ? Math.trunc(block.level)
+        : 1;
+      const level = Math.max(1, Math.min(6, rawLevel));
+      return `${"#".repeat(level)} ${text}`.trimEnd();
+    }
+    return text;
+  }).join("\n\n");
 }
 
 /** A short human line preserving the Whiteboard outline metadata Pro's simpler
@@ -355,6 +416,9 @@ function resolveSceneLink(
 export async function importProjectBundle(api: ApiClient, bundle: ProjectBundle): Promise<BundleImportResult> {
   const project = bundle.project ?? {};
   const blocks = project.manuscript?.blocks ?? [];
+  const sourceDrafterPages = Array.isArray(project.drafter?.pages)
+    ? project.drafter!.pages
+    : [];
 
   const res = await api.importWhiteboard({
     title: project.title ?? "",
@@ -370,18 +434,54 @@ export async function importProjectBundle(api: ApiClient, bundle: ProjectBundle)
   const sourceSettings = isRecord(project.settings) ? project.settings : null;
   let settingsImported = false;
   let settingsSkipped = false;
-  if (sourceSettings && Object.keys(sourceSettings).length) {
+  let drafterArchivePreserved = sourceDrafterPages.length === 0;
+  let drafterArchiveSkipped = false;
+  if ((sourceSettings && Object.keys(sourceSettings).length) || sourceDrafterPages.length) {
     try {
       const current = await api.getSettings(projectId);
+      const migratedSettings: Record<string, unknown> = {
+        ...(isRecord(current.settings) ? current.settings : {}),
+      };
+      if (sourceSettings && Object.keys(sourceSettings).length) {
+        migratedSettings.whiteboard_document_settings = { ...sourceSettings };
+      }
+      if (sourceDrafterPages.length) {
+        // Keep the complete source representation in addition to the readable
+        // Notes created below. A future Pro Drafter surface can adopt it without
+        // reconstructing marks or screenplay metadata from plain text.
+        migratedSettings.whiteboard_drafter_pages = sourceDrafterPages.map((page) => ({
+          ...page,
+          blocks: (page.blocks ?? []).map((block) => ({ ...block })),
+        }));
+      }
       await api.patchSettings(projectId, {
-        settings: {
-          ...(isRecord(current.settings) ? current.settings : {}),
-          whiteboard_document_settings: { ...sourceSettings },
-        },
+        settings: migratedSettings,
       });
-      settingsImported = true;
+      settingsImported = !!(sourceSettings && Object.keys(sourceSettings).length);
+      drafterArchivePreserved = sourceDrafterPages.length > 0;
     } catch {
-      settingsSkipped = true;
+      settingsSkipped = !!(sourceSettings && Object.keys(sourceSettings).length);
+      drafterArchiveSkipped = sourceDrafterPages.length > 0;
+    }
+  }
+
+  let drafterPages = 0;
+  let drafterPagesSkipped = 0;
+  for (let index = 0; index < sourceDrafterPages.length; index += 1) {
+    const page = sourceDrafterPages[index]!;
+    const title = typeof page.title === "string" && page.title.trim()
+      ? page.title.trim()
+      : `Drafter page ${index + 1}`;
+    try {
+      await api.createNote(projectId, {
+        title,
+        content: drafterNoteContent(page),
+        tags: ["whiteboard-drafter"],
+        pinned: false,
+      });
+      drafterPages += 1;
+    } catch {
+      drafterPagesSkipped += 1;
     }
   }
 
@@ -697,6 +797,10 @@ export async function importProjectBundle(api: ApiClient, bundle: ProjectBundle)
     commentsSkipped,
     commentReplies,
     commentRepliesSkipped,
+    drafterPages,
+    drafterPagesSkipped,
+    drafterArchivePreserved,
+    drafterArchiveSkipped,
     links,
     linksSkipped,
   };
