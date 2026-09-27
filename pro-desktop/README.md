@@ -196,8 +196,9 @@ Codex configuration and the proposal/review/apply safety model.
   The reserved left/floating model zones are recovered into the visible center
   dock until their dedicated surfaces are implemented.
 - **Packaging** is configured for self-contained Windows installer/portable,
-  macOS Intel DMG, and Linux x64 AppImage builds. Electron starts a per-process
-  authenticated core and stores the SQLite database in the app's stable
+  macOS 12+ Intel DMG, and Linux x64 AppImage builds. The Monterey build uses
+  Electron 43, the final Electron line that supports macOS 12. Electron starts
+  a per-process authenticated core and stores the SQLite database in the app's stable
   user-data directory. The same packages install a stable,
   descriptor-authenticated MCP companion for local Codex orchestration.
 - The renderer uses bundled/local assets and runs under a restrictive CSP.

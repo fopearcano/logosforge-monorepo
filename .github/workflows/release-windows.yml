@@ -2,9 +2,11 @@ name: Release — LogosForge Pro (Native desktop)
 
 # Coordinated native release for LogosForge Pro. The historical filename is
 # retained so existing repository links keep working. Manual runs are build-only
-# by default: Windows and Linux are selected, while macOS is opt-in until the
-# self-hosted Intel macOS 13.5+ / Actions Runner 2.327.1+ host is available. A
-# v* tag selects all three platforms. One final job owns GitHub Release mutation,
+# by default: Windows and Linux are selected, while macOS is opt-in on the
+# self-hosted Intel macOS 12+ host. Monterey build-only runs avoid JavaScript
+# actions and preserve their verified candidate on that Mac. Publishing still
+# requires macOS 13.5+ / Actions Runner 2.327.1+ for artifact upload. A v* tag
+# selects all three platforms. One final job owns GitHub Release mutation,
 # avoiding platform races.
 # All current artifacts are unsigned.
 
@@ -23,7 +25,7 @@ on:
         type: boolean
         default: true
       build_macos:
-        description: "Build macOS Intel x64 (requires macOS 13.5+ and runner 2.327.1+)"
+        description: "Build macOS 12+ Intel x64 (candidate remains on Monterey host)"
         type: boolean
         default: false
       publish_release:
@@ -870,12 +872,17 @@ jobs:
     defaults:
       run:
         shell: bash
+        working-directory: pro-macos-source
     env:
       CI: "true"
+      MACOSX_DEPLOYMENT_TARGET: "12.0"
       PYTHONUTF8: "1"
 
     steps:
-      - name: Verify native Intel macOS 13.5+ release host and current runner
+      - name: Verify native Intel macOS 12+ release host
+        working-directory: .
+        env:
+          PUBLISH_RELEASE: ${{ needs.metadata.outputs.publish }}
         run: |
           set -euo pipefail
           test "$RUNNER_OS" = "macOS" && test "$RUNNER_ARCH" = "X64"
@@ -885,63 +892,127 @@ jobs:
           if [ "$translated" = "1" ]; then echo "::error::Pro Intel must run natively, not under Rosetta."; exit 1; fi
           host_version="$(sw_vers -productVersion)"
           host_major="${host_version%%.*}"
-          host_remainder="${host_version#*.}"
-          host_minor="${host_remainder%%.*}"
-          host_minor="${host_minor:-0}"
           case "$host_major" in ""|*[!0-9]*) echo "::error::Could not parse macOS version: $host_version"; exit 1 ;; esac
-          case "$host_minor" in ""|*[!0-9]*) echo "::error::Could not parse macOS version: $host_version"; exit 1 ;; esac
-          if [ "$host_major" -lt 13 ] || { [ "$host_major" -eq 13 ] && [ "$host_minor" -lt 5 ]; }; then
-            echo "::error::Node 24 actions require a macOS 13.5+ build host; runner reported $host_version."
+          if [ "$host_major" -lt 12 ]; then
+            echo "::error::Pro Intel requires macOS 12 or newer; runner reported $host_version."
             exit 1
           fi
 
-          runner_version_raw="${ACTIONS_RUNNER_VERSION:-}"
-          if [ -z "$runner_version_raw" ]; then
-            if [ -z "${RUNNER_WORKSPACE:-}" ]; then
-              echo "::error::RUNNER_WORKSPACE is unavailable; cannot verify Actions Runner >=2.327.1."
+          runner_version="not required for build-only"
+          if [ "$PUBLISH_RELEASE" = "true" ]; then
+            host_remainder="${host_version#*.}"
+            host_minor="${host_remainder%%.*}"
+            host_minor="${host_minor:-0}"
+            case "$host_minor" in ""|*[!0-9]*) echo "::error::Could not parse macOS version: $host_version"; exit 1 ;; esac
+            if [ "$host_major" -lt 13 ] || { [ "$host_major" -eq 13 ] && [ "$host_minor" -lt 5 ]; }; then
+              echo "::error::Publishing uses Node 24 artifact actions and requires macOS 13.5+; runner reported $host_version."
               exit 1
             fi
-            # Standard installs expose <runner-root>/_work here; tolerate the
-            # repository subdirectories some runner versions append.
-            fixture_workspace="/tmp/actions-runner/_work"
-            test "$(dirname "$fixture_workspace")/bin/Runner.Listener" = "/tmp/actions-runner/bin/Runner.Listener"
-            listener=""
-            runner_probe="$(cd "$RUNNER_WORKSPACE" && pwd -P)"
-            for _ in 0 1 2 3; do
-              if [ -x "$runner_probe/bin/Runner.Listener" ]; then
-                listener="$runner_probe/bin/Runner.Listener"
-                break
+
+            runner_version_raw="${ACTIONS_RUNNER_VERSION:-}"
+            if [ -z "$runner_version_raw" ]; then
+              if [ -z "${RUNNER_WORKSPACE:-}" ]; then
+                echo "::error::RUNNER_WORKSPACE is unavailable; cannot verify Actions Runner >=2.327.1."
+                exit 1
               fi
-              runner_probe="$(dirname "$runner_probe")"
-            done
-            if [ -z "$listener" ]; then
-              echo "::error::Cannot find Runner.Listener above $RUNNER_WORKSPACE to verify Actions Runner >=2.327.1."
+              listener=""
+              runner_probe="$(cd "$RUNNER_WORKSPACE" && pwd -P)"
+              for _ in 0 1 2 3; do
+                if [ -x "$runner_probe/bin/Runner.Listener" ]; then
+                  listener="$runner_probe/bin/Runner.Listener"
+                  break
+                fi
+                runner_probe="$(dirname "$runner_probe")"
+              done
+              if [ -z "$listener" ]; then
+                echo "::error::Cannot find Runner.Listener above $RUNNER_WORKSPACE to verify Actions Runner >=2.327.1."
+                exit 1
+              fi
+              runner_version_raw="$("$listener" --version 2>&1)"
+            fi
+            runner_version="$(printf '%s\n' "$runner_version_raw" | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | tail -n 1 || true)"
+            if [ -z "$runner_version" ]; then
+              echo "::error::Could not parse Actions Runner version from: $runner_version_raw"
               exit 1
             fi
-            runner_version_raw="$("$listener" --version 2>&1)"
-          fi
-          runner_version="$(printf '%s\n' "$runner_version_raw" | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | tail -n 1 || true)"
-          if [ -z "$runner_version" ]; then
-            echo "::error::Could not parse Actions Runner version from: $runner_version_raw"
-            exit 1
-          fi
-          runner_major="${runner_version%%.*}"
-          runner_remainder="${runner_version#*.}"
-          runner_minor="${runner_remainder%%.*}"
-          runner_patch="${runner_remainder#*.}"
-          if [ "$runner_major" -lt 2 ] || { [ "$runner_major" -eq 2 ] && [ "$runner_minor" -lt 327 ]; } || { [ "$runner_major" -eq 2 ] && [ "$runner_minor" -eq 327 ] && [ "$runner_patch" -lt 1 ]; }; then
-            echo "::error::Node 24 actions require Actions Runner >=2.327.1; runner reported $runner_version."
-            exit 1
+            runner_major="${runner_version%%.*}"
+            runner_remainder="${runner_version#*.}"
+            runner_minor="${runner_remainder%%.*}"
+            runner_patch="${runner_remainder#*.}"
+            if [ "$runner_major" -lt 2 ] || { [ "$runner_major" -eq 2 ] && [ "$runner_minor" -lt 327 ]; } || { [ "$runner_major" -eq 2 ] && [ "$runner_minor" -eq 327 ] && [ "$runner_patch" -lt 1 ]; }; then
+              echo "::error::Node 24 artifact actions require Actions Runner >=2.327.1; runner reported $runner_version."
+              exit 1
+            fi
           fi
           xcode-select -p >/dev/null
           echo "release host OK: macOS $host_version ($host_arch), Actions Runner $runner_version"
 
-      - name: Checkout verified source without credentials
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (Node 24)
-        with:
-          ref: ${{ needs.metadata.outputs.source_sha }}
-          fetch-depth: 0
-          persist-credentials: false
+      - name: Checkout verified source without JavaScript actions
+        working-directory: .
+        env:
+          SOURCE_SHA: ${{ needs.metadata.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          workspace="$(cd "${GITHUB_WORKSPACE:?}" && pwd -P)"
+          case "$workspace" in ""|"/") echo "::error::Unsafe runner workspace: $workspace"; exit 1 ;; esac
+          source_root="$workspace/pro-macos-source"
+          case "$source_root" in "$workspace"/pro-macos-source) ;; *) echo "::error::Unsafe source directory: $source_root"; exit 1 ;; esac
+          if [ -e "$source_root" ] || [ -L "$source_root" ]; then rm -rf -- "$source_root"; fi
+          mkdir -p -- "$source_root"
+          git -C "$source_root" init --quiet
+          git -C "$source_root" remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git -C "$source_root" fetch --force --prune origin \
+            '+refs/heads/*:refs/remotes/origin/*' \
+            '+refs/tags/*:refs/tags/*'
+          git -C "$source_root" checkout --detach --force "$SOURCE_SHA"
+          actual_sha="$(git -C "$source_root" rev-parse HEAD)"
+          test "$actual_sha" = "$SOURCE_SHA" || {
+            echo "::error::Checkout mismatch: expected $SOURCE_SHA, found $actual_sha."
+            exit 1
+          }
+
+      - name: Locate or bootstrap checksum-pinned Node.js 22
+        env:
+          NODE_ARCHIVE_SHA256: "8a677b0219178efd6eb0e475457c4afb452b521a92f6e67845a73bd85727f2a8"
+          NODE_VERSION: "22.23.3"
+        run: |
+          set -euo pipefail
+          valid_node=""
+          while IFS= read -r candidate; do
+            [ -x "$candidate" ] || continue
+            if "$candidate" -e '
+              const [major, minor] = process.versions.node.split(".").map(Number);
+              process.exit(process.arch === "x64" && major === 22 && minor >= 12 ? 0 : 1);
+            ' 2>/dev/null; then
+              valid_node="$candidate"
+              break
+            fi
+          done < <(
+            {
+              command -v node 2>/dev/null || true
+              find "${RUNNER_TOOL_CACHE:-/nonexistent}/node" -path '*/x64/bin/node' -type f 2>/dev/null || true
+              printf '%s\n' /usr/local/bin/node /opt/homebrew/bin/node
+            } | awk '!seen[$0]++'
+          )
+          if [ -z "$valid_node" ]; then
+            temp_root="$(cd "${RUNNER_TEMP:?}" && pwd -P)"
+            node_root="$(mktemp -d "$temp_root/logosforge-node.XXXXXX")"
+            archive="node-v${NODE_VERSION}-darwin-x64.tar.gz"
+            archive_path="$node_root/$archive"
+            curl --fail --location --show-error --silent \
+              "https://nodejs.org/download/release/v${NODE_VERSION}/${archive}" \
+              --output "$archive_path"
+            printf '%s  %s\n' "$NODE_ARCHIVE_SHA256" "$archive_path" | shasum -a 256 --check
+            tar -xzf "$archive_path" -C "$node_root"
+            valid_node="$node_root/node-v${NODE_VERSION}-darwin-x64/bin/node"
+          fi
+          node_bin="$(cd "$(dirname "$valid_node")" && pwd -P)"
+          "$node_bin/node" -e '
+            const [major, minor] = process.versions.node.split(".").map(Number);
+            if (process.arch !== "x64" || major !== 22 || minor < 12) process.exit(1);
+          '
+          echo "$node_bin" >> "$GITHUB_PATH"
+          echo "Using $($node_bin/node --version) from $node_bin."
 
       - name: Verify checkout and monorepo layout
         run: |
@@ -950,16 +1021,6 @@ jobs:
           for path in logosforge/pyproject.toml logosforge-ui-contracts/package.json pro-shared-ui/package.json pro-desktop/package.json pro-desktop/core/logosforge-core.spec pro-desktop/core/logosforge-mcp.spec; do
             test -e "$path" || { echo "::error::Missing required monorepo path: $path"; exit 1; }
           done
-
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0 (Node 24)
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: |
-            logosforge-ui-contracts/package-lock.json
-            pro-shared-ui/package-lock.json
-            pro-desktop/package-lock.json
 
       - name: Locate Python 3.11–3.13
         id: py
@@ -1087,7 +1148,7 @@ jobs:
           cd ../pro-desktop && npm ci && npm test && npm audit --audit-level=moderate
 
       - name: Package unsigned macOS Intel DMG
-        working-directory: pro-desktop
+        working-directory: pro-macos-source/pro-desktop
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: |
@@ -1128,7 +1189,7 @@ jobs:
           Load command 1
                 cmd LC_BUILD_VERSION
               cmdsize 32
-               minos 13.0
+               minos 12.0
                  sdk 15.0
                ntools 1
                  tool LD
@@ -1136,10 +1197,10 @@ jobs:
           Load command 2
                 cmd LC_VERSION_MIN_MACOSX
               cmdsize 16
-             version 12.6
+             version 11.6
                  sdk 13.3
           """
-          assert deployment_targets(parser_fixture) == ["13.0", "12.6"]
+          assert deployment_targets(parser_fixture) == ["12.0", "11.6"]
 
           app = Path(os.environ["APP_DIR"])
           checked = 0
@@ -1156,13 +1217,13 @@ jobs:
                   if match is None: raise SystemExit(f"::error::Unparseable deployment target {version!r} in {path}")
                   target_count += 1
                   target = tuple(int(part or 0) for part in match.groups())
-                  if target > (13, 0, 0): too_new.append((str(path), version))
+                  if target > (12, 0, 0): too_new.append((str(path), version))
           if checked == 0: raise SystemExit("::error::No Mach-O binaries found in packaged app.")
           if target_count == 0: raise SystemExit("::error::No Mach-O deployment targets could be verified.")
           if too_new:
               for path, version in too_new: print(f"::error::{path} requires macOS {version}")
-              raise SystemExit("Packaged native code exceeds the declared macOS 13.0 floor.")
-          print(f"Mach-O deployment-target scan OK ({checked} files, {target_count} targets, all <= macOS 13.0)")
+              raise SystemExit("Packaged native code exceeds the declared macOS 12.0 floor.")
+          print(f"Mach-O deployment-target scan OK ({checked} files, {target_count} targets, all <= macOS 12.0)")
           PY
 
       - name: Mount, inspect, and launch-smoke DMG
@@ -1194,9 +1255,14 @@ jobs:
           bundle_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")"
           test "$bundle_version" = "${{ needs.metadata.outputs.version }}" || { echo "::error::DMG version mismatch: $bundle_version"; exit 1; }
           minimum_version="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$plist")"
-          test "$minimum_version" = "13.0.0" || { echo "::error::DMG macOS floor mismatch: $minimum_version"; exit 1; }
+          test "$minimum_version" = "12.0.0" || { echo "::error::DMG macOS floor mismatch: $minimum_version"; exit 1; }
           microphone_reason="$(/usr/libexec/PlistBuddy -c 'Print :NSMicrophoneUsageDescription' "$plist")"
           test -n "$microphone_reason" || { echo "::error::DMG is missing its microphone usage description."; exit 1; }
+          packaged_electron_version="$(ELECTRON_RUN_AS_NODE=1 "$app_exe" -p 'process.versions.electron')"
+          case "$packaged_electron_version" in
+            43.*) ;;
+            *) echo "::error::Expected packaged Electron 43.x, found $packaged_electron_version."; exit 1 ;;
+          esac
 
           APP_EXE="$app_exe" \
           EXPECTED_CORE_VERSION="$(./build-venv/bin/python -c 'import logosforge; print(logosforge.__version__)')" \
@@ -1274,21 +1340,60 @@ jobs:
             shasum -a 256 pro-desktop/release/*.dmg
           } > "$provenance/SHA256SUMS-and-build.txt"
 
+      - name: Preserve non-publishing Monterey candidate on the Mac host
+        if: needs.metadata.outputs.publish != 'true'
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          workspace="$(cd "${GITHUB_WORKSPACE:?}" && pwd -P)"
+          case "$workspace" in ""|"/") echo "::error::Unsafe runner workspace: $workspace"; exit 1 ;; esac
+          source_dmg="pro-desktop/release/LogosForge Pro-${VERSION}-x64.dmg"
+          test -s "$source_dmg" || { echo "::error::Verified DMG is missing: $source_dmg"; exit 1; }
+          drop="$workspace/macos-build-drop/run-${GITHUB_RUN_ID}-attempt-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p -- "$drop/provenance"
+          cp -p -- "$source_dmg" "$drop/"
+          cp -p -- "$RUNNER_TEMP/logosforge-pro-macos-intel-x64-provenance/"* "$drop/provenance/"
+          shasum -a 256 "$drop/LogosForge Pro-${VERSION}-x64.dmg" > "$drop/SHA256SUMS.txt"
+          echo "::notice::Verified Monterey candidate preserved at $drop"
+          {
+            echo "### Monterey build-only candidate"
+            echo
+            echo "The verified Pro DMG remains on the self-hosted Mac at:"
+            echo
+            echo '```text'
+            echo "$drop"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload macOS artifact
+        if: needs.metadata.outputs.publish == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (Node 24)
         with:
           name: logosforge-pro-macos-intel-x64
-          path: pro-desktop/release/*.dmg
+          path: ${{ github.workspace }}/pro-macos-source/pro-desktop/release/*.dmg
           if-no-files-found: error
           retention-days: 14
 
       - name: Upload macOS provenance
+        if: needs.metadata.outputs.publish == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (Node 24)
         with:
           name: logosforge-pro-macos-intel-x64-provenance
           path: ${{ runner.temp }}/logosforge-pro-macos-intel-x64-provenance/*
           if-no-files-found: error
           retention-days: 30
+
+      - name: Clean isolated macOS checkout
+        if: always()
+        working-directory: .
+        run: |
+          set -euo pipefail
+          workspace="$(cd "${GITHUB_WORKSPACE:?}" && pwd -P)"
+          case "$workspace" in ""|"/") echo "::error::Unsafe runner workspace: $workspace"; exit 1 ;; esac
+          source_root="$workspace/pro-macos-source"
+          case "$source_root" in "$workspace"/pro-macos-source) ;; *) echo "::error::Unsafe source cleanup target: $source_root"; exit 1 ;; esac
+          if [ -e "$source_root" ] || [ -L "$source_root" ]; then rm -rf -- "$source_root"; fi
 
   publish:
     name: Publish verified native prerelease

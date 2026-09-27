@@ -13,6 +13,13 @@ const {
   validateNativeBinary,
 } = require('../scripts/verify-native-release.cjs');
 const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'));
+const releaseWorkflow = fs.readFileSync(
+  path.join(process.cwd(), '..', '.github', 'workflows', 'release-windows.yml'),
+  'utf8',
+);
+const macJobStart = releaseWorkflow.indexOf('\n  build_macos:');
+const macJobEnd = releaseWorkflow.indexOf('\n  publish:', macJobStart);
+const macJob = releaseWorkflow.slice(macJobStart, macJobEnd);
 
 let passed = 0;
 function check(label, condition) {
@@ -40,7 +47,7 @@ check('macOS builds only an Intel x64 DMG',
   pkg.build.mac.target.length === 1 &&
   JSON.stringify(target(pkg.build.mac, 'dmg')?.arch) === JSON.stringify(['x64']));
 check('macOS signing is explicitly disabled until credentials are supplied', pkg.build.mac.identity === null);
-check('macOS minimum matches Electron 44 support', pkg.build.mac.minimumSystemVersion === '13.0.0');
+check('macOS minimum matches Electron 43 Monterey support', pkg.build.mac.minimumSystemVersion === '12.0.0');
 check('macOS uses the checked-in high-resolution PNG icon', pkg.build.mac.icon === 'build/icon.png');
 const appIcon = fs.readFileSync(path.join(process.cwd(), pkg.build.mac.icon));
 check('shared macOS/Linux icon is a 1120px square PNG',
@@ -70,6 +77,30 @@ check('macOS release script enforces a native Intel host',
   pkg.scripts['dist:mac'].includes('verify-native-release.cjs darwin x64'));
 check('Linux release script enforces a native x64 host',
   pkg.scripts['dist:linux'].includes('verify-native-release.cjs linux x64'));
+check('macOS release job exists as a bounded workflow section',
+  macJobStart > 0 && macJobEnd > macJobStart);
+check('Monterey release job uses an isolated native Git checkout',
+  macJob.includes('working-directory: pro-macos-source') &&
+  macJob.includes('Checkout verified source without JavaScript actions') &&
+  !macJob.includes('uses: actions/checkout@'));
+check('Monterey release job bootstraps a checksum-pinned native Node 22',
+  macJob.includes('NODE_VERSION: "22.23.3"') &&
+  macJob.includes('NODE_ARCHIVE_SHA256:') &&
+  !macJob.includes('uses: actions/setup-node@'));
+check('Monterey build-only job preserves its verified DMG on the host',
+  macJob.includes("if: needs.metadata.outputs.publish != 'true'") &&
+  macJob.includes('macos-build-drop/run-${GITHUB_RUN_ID}-attempt-${GITHUB_RUN_ATTEMPT}'));
+check('Node 24 artifact actions run only on supported publishing hosts',
+  (macJob.match(/if: needs\.metadata\.outputs\.publish == 'true'/g) || []).length === 2 &&
+  (macJob.match(/uses: actions\/upload-artifact@/g) || []).length === 2 &&
+  macJob.includes('working-directory: pro-macos-source/pro-desktop') &&
+  macJob.includes('path: ${{ github.workspace }}/pro-macos-source/pro-desktop/release/*.dmg') &&
+  macJob.includes('requires macOS 13.5+') &&
+  macJob.includes('require Actions Runner >=2.327.1'));
+check('Monterey job pins and verifies the macOS 12 deployment floor',
+  macJob.includes('MACOSX_DEPLOYMENT_TARGET: "12.0"') &&
+  macJob.includes('test "$minimum_version" = "12.0.0"') &&
+  macJob.includes('Expected packaged Electron 43.x'));
 
 check('Windows bundled core uses .exe', bundledCoreExecutableName('win32') === 'logosforge-core.exe');
 check('macOS bundled core has no extension', bundledCoreExecutableName('darwin') === 'logosforge-core');
@@ -113,12 +144,12 @@ check('native preflight accepts ELF x86_64', validateNativeBinary(elf, 'linux', 
 check('native preflight accepts PE x86_64', validateNativeBinary(pe, 'win32', 'x64') === 'PE x86_64');
 rejects('native preflight rejects a Linux sidecar for macOS', () => validateNativeBinary(elf, 'darwin', 'x64'));
 rejects('native preflight rejects a macOS sidecar for Linux', () => validateNativeBinary(machO, 'linux', 'x64'));
-check('macOS host preflight accepts native macOS 13+',
-  validateDarwinHostFacts({ translated: '0', productVersion: '13.0' }) === undefined);
+check('macOS host preflight accepts native macOS 12+',
+  validateDarwinHostFacts({ translated: '0', productVersion: '12.7.6' }) === undefined);
 rejects('macOS host preflight rejects Rosetta', () =>
   validateDarwinHostFacts({ translated: '1', productVersion: '15.6' }));
-rejects('macOS host preflight rejects macOS 12', () =>
-  validateDarwinHostFacts({ translated: '0', productVersion: '12.7.6' }));
+rejects('macOS host preflight rejects macOS 11', () =>
+  validateDarwinHostFacts({ translated: '0', productVersion: '11.7.10' }));
 rejects('macOS host preflight rejects malformed OS versions', () =>
   validateDarwinHostFacts({ translated: '0', productVersion: 'unknown' }));
 const darwinFactCalls = [];

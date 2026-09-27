@@ -29,14 +29,16 @@ version in `whiteboard-desktop/desktop/package.json`. Do not reuse or move a
 published tag. For the version bump, release notes, validation, tag, manual
 workflow, and recovery procedures, follow
 **[whiteboard-desktop/RELEASING.md](whiteboard-desktop/RELEASING.md)**. The macOS
-jobs need a self-hosted Intel Mac runner labelled `self-hosted`, `macOS`, and
-`X64`, with Python 3.11+ installed. Whiteboard 0.1.14 supports macOS 12 through
-Electron 43 and a shell-only Monterey build job documented in its release guide;
-Pro requires macOS 13.5+ and Actions Runner 2.327.1+.
+  jobs need a self-hosted Intel Mac runner labelled `self-hosted`, `macOS`, and
+  `X64`, with Python 3.11+ installed. Whiteboard 0.1.14 supports macOS 12 through
+  Electron 43 and a shell-only Monterey build job documented in its release guide;
+  Pro build-only candidates now use the same Monterey-compatible pattern. Pro
+  publishing still requires macOS 13.5+ and Actions Runner 2.327.1+ for its
+  Node 24 artifact actions.
 
 ## Local development
 
-- **Prerequisite:** Node.js 22.12+ (Whiteboard Electron 43, Pro Electron 44,
+- **Prerequisite:** Node.js 22.12+ (Whiteboard and Pro Electron 43,
   Vite 8) and Python 3.11+.
 - **Core:** `pip install -e ./logosforge[export,mcp]`
 - **Whiteboard desktop:** `cd whiteboard-desktop/desktop && npm install && npm run dev` (spawns the wrapper backend from `whiteboard-desktop/backend/.venv`; run `pip install -r whiteboard-desktop/backend/requirements.txt` in that venv first).
@@ -50,8 +52,8 @@ Pro requires macOS 13.5+ and Actions Runner 2.327.1+.
 
 **Alpha.** Desktop builds are currently **unsigned** — Windows SmartScreen and
 macOS Gatekeeper will warn. Whiteboard and Pro have native Windows x64, macOS
-Intel, and Linux x64 release paths; Whiteboard supports macOS 12+, while Pro
-requires macOS 13+. Linux ships as a self-contained AppImage. macOS
+  Intel, and Linux x64 release paths; Whiteboard and Pro support macOS 12+.
+  Linux ships as a self-contained AppImage. macOS
 arm64/universal, signed/notarized builds, and Linux `.deb` packages remain later
 milestones. Native artifacts require target-system manual acceptance before
 publishing.

@@ -71,7 +71,7 @@ function validateDarwinHostFacts({ translated, productVersion }) {
   requireFormat(String(translated).trim() !== '1', 'Rosetta-translated builds are not native Intel x64 releases.');
   const versionMatch = /^(\d+)(?:\.|$)/.exec(String(productVersion).trim());
   requireFormat(versionMatch !== null, `Unrecognized macOS version: ${productVersion}`);
-  requireFormat(Number(versionMatch[1]) >= 13, `macOS 13+ is required; current host is ${productVersion}.`);
+  requireFormat(Number(versionMatch[1]) >= 12, `macOS 12+ is required; current host is ${productVersion}.`);
 }
 
 function verifyNativeRelease({

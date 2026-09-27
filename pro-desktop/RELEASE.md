@@ -13,7 +13,7 @@ The core and Electron package must be built on the same native OS and CPU
 architecture. PyInstaller does not cross-compile. Every `dist` release command
 verifies the native x64 frozen sidecar before invoking electron-builder; the
 platform-specific commands also pin their target OS. The macOS preflight rejects
-Rosetta-translated Node and hosts older than macOS 13.
+Rosetta-translated Node and hosts older than macOS 12.
 
 ## What the build produces
 
@@ -22,7 +22,7 @@ The platform release scripts write to `pro-desktop/release/`:
 - Windows: `LogosForge Pro-<version>-x64.exe` — NSIS installer (Start-menu + desktop
   shortcuts, user can choose the install dir).
 - Windows: `LogosForge Pro-<version>-x64-portable.exe` — single portable exe (no install).
-- macOS Intel: `LogosForge Pro-<version>-x64.dmg` — unsigned DMG for macOS 13+.
+- macOS Intel: `LogosForge Pro-<version>-x64.dmg` — unsigned DMG for macOS 12+.
 - Linux: `LogosForge Pro-<version>-x86_64.AppImage` — x64 AppImage
   (electron-builder renders its `${arch}` macro as `x86_64` for AppImage).
   Its internal executable is the shell-safe `logosforge-pro`, and its
@@ -41,17 +41,21 @@ invoking the matching npm release script. Build macOS on an available native
 Intel x64 runner and Linux on a native x64 runner; do not reuse a sidecar from
 another job or OS.
 
-The self-hosted Intel Mac used by GitHub Actions must run macOS 13.5 or newer
-and Actions Runner 2.327.1 or newer so the workflow's Node 24-based actions can
-start. This is a build-host requirement; the packaged app's declared consumer
-floor remains macOS 13.0.
+Build-only macOS runs support the self-hosted Intel Monterey runner without
+JavaScript actions: the job performs an isolated native Git checkout, bootstraps
+a checksum-pinned Node 22 when needed, and leaves the verified DMG plus
+provenance in `macos-build-drop/` on that host. Publishing still requires macOS
+13.5 or newer and Actions Runner 2.327.1 or newer for the Node 24 artifact
+actions. The packaged app's declared consumer floor is macOS 12.0.
 
 - `npm run dist:win` → Windows NSIS + portable.
 - `npm run dist:mac` → Intel x64 DMG (native macOS only).
 - `npm run dist:linux` → x64 AppImage (native Linux only).
 
 Keep native artifacts as CI downloads until they have been manually tested on
-their target systems. Create/push a release tag only after that validation.
+their target systems. A Monterey build-only candidate remains in the runner's
+`macos-build-drop/` directory instead. Create/push a release tag only after that
+validation.
 
 ```bash
 git tag v0.1.0 && git push origin v0.1.0
@@ -59,8 +63,9 @@ git tag v0.1.0 && git push origin v0.1.0
 
 The workflow assumes a **single monorepo checkout** containing `logosforge/`,
 `logosforge-ui-contracts/`, `pro-shared-ui/`, and `pro-desktop/` as sibling
-dirs (the current on-disk layout). If these become separate repos, replace the
-single `actions/checkout` with one checkout per repo into those sibling paths.
+dirs (the current on-disk layout). Hosted jobs use `actions/checkout`; the
+Monterey job makes an equivalent isolated native Git checkout without a
+JavaScript action.
 
 ## Local build
 
@@ -99,8 +104,8 @@ npm run dist:win   # NSIS + portable  ->  release/
 
 ### macOS Intel x64
 
-Run these commands on an Intel Mac. Electron 44 requires macOS 13 or newer to
-run the resulting app. The current DMG is intentionally unsigned and not
+Run these commands on an Intel Mac running macOS 12 or newer. Electron 43 is
+the final Electron line that supports Monterey. The current DMG is intentionally unsigned and not
 notarized. Dexter's Room triggers the standard macOS microphone permission
 prompt when voice capture is used.
 
@@ -157,7 +162,7 @@ npm run dist:linux # AppImage -> release/
   wrong-OS or non-x64 host, rejects missing/non-executable sidecars, and checks
   the native executable header (Mach-O x86_64, ELF x86_64, or PE x86_64). On
   macOS it also checks `sysctl.proc_translated` and `sw_vers` so Rosetta or a
-  pre-macOS-13 runner cannot produce the release.
+  pre-macOS-12 runner cannot produce the release.
 - **Linux application identity** — `linux.executableName` avoids characters
   inherited from the scoped npm package name, while top-level `desktopName`
   plus `linux.syncDesktopName` keeps the AppImage launcher, WM class, and
