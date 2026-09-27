@@ -11,20 +11,20 @@ const test = async (name: string, run: () => Promise<void>): Promise<void> => {
   }
 };
 
-const floor = { whiteboard: 7, outline: 4 };
+const floor = { whiteboard: 7, outline: 4, drafter: 6 };
 
 await test('successful delete commits the main fence', async () => {
   const events: string[] = [];
   await runDocumentDeleteTransaction({
     begin: async () => { events.push('begin'); return floor; },
     deleteBackend: async (received) => {
-      events.push(`delete:${received.whiteboard}:${received.outline}`);
+      events.push(`delete:${received.whiteboard}:${received.outline}:${received.drafter}`);
     },
     backendDocumentExists: async () => { throw new Error('unexpected reconcile'); },
     commit: () => events.push('commit'),
     cancel: () => events.push('cancel'),
   });
-  if (events.join(',') !== 'begin,delete:7:4,commit') {
+  if (events.join(',') !== 'begin,delete:7:4:6,commit') {
     throw new Error(`Unexpected transaction: ${events.join(',')}`);
   }
 });

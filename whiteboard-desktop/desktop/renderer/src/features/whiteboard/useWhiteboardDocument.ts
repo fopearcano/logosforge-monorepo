@@ -69,6 +69,13 @@ import {
   resumeOutlineWrites,
   waitForOutlineWrites,
 } from '../outline/pendingOutlineRecovery';
+import {
+  blockDrafterWrites,
+  discardRetainedDrafterSnapshot,
+  flushDrafterSnapshots,
+  resumeDrafterWrites,
+  waitForDrafterWrites,
+} from '../drafter/pendingDrafterRecovery';
 import { loadInitialDocumentOnce } from './documentBootstrap';
 import { saveWhiteboardConflictCopy } from './whiteboardConflictCopy';
 import {
@@ -541,11 +548,13 @@ export function useWhiteboardDocument({ baseUrl, ready, onSaved }: Options): Res
         // which an already-copied unload PUT could otherwise follow DELETE.
         blockWhiteboardWrites(id);
         blockOutlineWrites(id);
+        blockDrafterWrites(id);
         blockDocumentMutations(id);
         writesBlocked = true;
         await Promise.allSettled([
           waitForWhiteboardWrites(id),
           waitForOutlineWrites(id),
+          waitForDrafterWrites(id),
         ]);
         await waitForPendingDocWrites();
         const mainOwned = await deleteDocumentWithNativePersistenceFence(
@@ -583,6 +592,7 @@ export function useWhiteboardDocument({ baseUrl, ready, onSaved }: Options): Res
         clearDocumentResourceRevisions(id, deletingIncarnation);
         discardRetainedWhiteboardPatch(id);
         discardRetainedOutlineSnapshot(id);
+        discardRetainedDrafterSnapshot(id);
         discardDocumentMutations(id);
         writesBlocked = false;
         if (
@@ -605,6 +615,7 @@ export function useWhiteboardDocument({ baseUrl, ready, onSaved }: Options): Res
         if (writesBlocked && !backendDeleted) {
           resumeWhiteboardWrites(id);
           resumeOutlineWrites(id);
+          resumeDrafterWrites(id);
           resumeDocumentMutations(id);
           writesBlocked = false;
           // DELETE failed, so edits made during it still belong to this live
@@ -612,6 +623,7 @@ export function useWhiteboardDocument({ baseUrl, ready, onSaved }: Options): Res
           await Promise.allSettled([
             flushWhiteboardPatches(id),
             flushOutlineSnapshots(id),
+            flushDrafterSnapshots(id),
           ]);
         }
         if (seq !== switchSeq.current) return false;
@@ -626,10 +638,12 @@ export function useWhiteboardDocument({ baseUrl, ready, onSaved }: Options): Res
           if (backendDeleted) {
             discardRetainedWhiteboardPatch(id);
             discardRetainedOutlineSnapshot(id);
+            discardRetainedDrafterSnapshot(id);
             discardDocumentMutations(id);
           } else {
             resumeWhiteboardWrites(id);
             resumeOutlineWrites(id);
+            resumeDrafterWrites(id);
             resumeDocumentMutations(id);
           }
         }

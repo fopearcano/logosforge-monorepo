@@ -221,7 +221,7 @@ export async function waitForPendingDocWrites(): Promise<void> {
 }
 
 export async function flushPendingDocSaves(): Promise<void> {
-  // Wait for every store even if one fails: manuscript and outline are separate
+  // Wait for every store even if one fails: manuscript, outline, and Drafter are separate
   // writes, and abandoning the second one after the first rejection would make
   // a retry/switch race much harder to reason about.
   const errors: unknown[] = [];

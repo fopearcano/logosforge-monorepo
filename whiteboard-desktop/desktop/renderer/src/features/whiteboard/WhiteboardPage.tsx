@@ -19,9 +19,21 @@ import { useFolding } from '../editorTools/folding/useFolding';
 import { useEditorTools } from '../editorTools/useEditorTools';
 import { filesAvailable, onMenuFile } from '../files/fileApi';
 import { windowTitle } from '../files/fileState';
-import { EXPORT_FORMATS, IMPORT_FORMATS } from '../files/importExportFormats';
+import { EXPORT_FORMATS, IMPORT_FORMATS, parseImport } from '../files/importExportFormats';
 import { useFileActions } from '../files/useFileActions';
 import { useImportExport } from '../files/useImportExport';
+import { importOpen } from '../files/importExportApi';
+import { baseName } from '../files/fileSerialize';
+import { DrafterTabs } from '../drafter/DrafterTabs';
+import {
+  documentPrintRoute,
+  DRAFTER_MAX_PAGES,
+  reconcileWritingSurface,
+  writingSurfaceTabDomId,
+  writingSurfaceTabId,
+} from '../drafter/drafterModel';
+import type { DrafterPage, WritingSurface } from '../drafter/types';
+import { useDrafterPages } from '../drafter/useDrafterPages';
 import { setDocumentMenuApi } from '../../state/documentMenu';
 import { captureDocumentIdentity } from '../../state/currentDocument';
 import { LittleBoyProvider } from '../littleboy/LittleBoyProvider';
@@ -98,6 +110,8 @@ interface Props {
     blockIds: string[],
     docId: string | null,
   ) => void;
+  onWritingSurfaceChange?: (kind: 'manuscript' | 'draft') => void;
+  onRegisterManuscriptNavigator?: (navigate: ((blockIndex: number) => void) | null) => void;
 }
 
 export function WhiteboardPage({
@@ -110,6 +124,8 @@ export function WhiteboardPage({
   onTitleChange,
   locationPath,
   onEditorLocation,
+  onWritingSurfaceChange,
+  onRegisterManuscriptNavigator,
 }: Props) {
   const {
     doc,
@@ -128,6 +144,12 @@ export function WhiteboardPage({
     deleteDocument: deleteDoc,
     renameDocument,
   } = useWhiteboardDocument({ baseUrl, ready });
+  const drafter = useDrafterPages({
+    baseUrl,
+    ready,
+    documentId: doc?.id ?? null,
+    documentIncarnation: doc?.incarnation ?? null,
+  });
   const { modes, defaultMode } = useWritingModes({ baseUrl, ready });
   const [editor, setEditor] = useState<Editor | null>(null);
   const [element, setElement] = useState<FountainType | null>(null);
@@ -150,6 +172,14 @@ export function WhiteboardPage({
   const hideResolved = useResolvedHidden();
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
   const [recoveryNotices, setRecoveryNotices] = useState<RecoveryNotice[]>([]);
+  const [surfaceState, setSurfaceState] = useState<{
+    documentId: string | null;
+    surface: WritingSurface;
+  }>({ documentId: null, surface: { kind: 'manuscript' } });
+  const [newDraftOpen, setNewDraftOpen] = useState(false);
+  const [draftToRename, setDraftToRename] = useState<DrafterPage | null>(null);
+  const [draftToDelete, setDraftToDelete] = useState<DrafterPage | null>(null);
+  const [drafterFeedback, setDrafterFeedback] = useState<string | null>(null);
   const dismissNotification = useCallback((dismiss: () => void) => {
     dismiss();
     window.setTimeout(() => restoreFocusAfterNotificationDismiss(), 0);
@@ -185,6 +215,14 @@ export function WhiteboardPage({
   previewRef.current = preview;
 
   const mode = doc?.mode ?? defaultMode;
+  const requestedSurface = surfaceState.documentId === doc?.id
+    ? surfaceState.surface
+    : ({ kind: 'manuscript' } as WritingSurface);
+  const activeSurface = reconcileWritingSurface(requestedSurface, drafter.pages);
+  const activeDraft = activeSurface.kind === 'draft'
+    ? drafter.pages.find((page) => page.id === activeSurface.pageId) ?? null
+    : null;
+  const manuscriptActive = activeSurface.kind === 'manuscript';
   const isScreenplay = mode === 'screenplay';
   const showPreview = isScreenplay && preview;
   const editorInitialBlocks = useMemo<WhiteboardBlock[]>(() => {
@@ -207,6 +245,43 @@ export function WhiteboardPage({
     ),
     [documentSnapshotKey, doc?.id, liveBlocksDocId, liveBlocks, editorInitialBlocks],
   );
+  const draftMountBlocks = useMemo<WhiteboardBlock[]>(() => {
+    if (!activeDraft) return [];
+    const source = activeDraft.blocks.length
+      ? activeDraft.blocks
+      : [{ id: '', type: 'paragraph', text: '' }];
+    const ids = normalizeBlockIds(source.map((block) => block.id));
+    return source.map((block, index) => ({ ...block, id: ids[index] }));
+  }, [activeDraft]);
+  const activeEditorBlocks = manuscriptActive ? editorMountBlocks : draftMountBlocks;
+  const activeBlocks = manuscriptActive ? liveBlocks : draftMountBlocks;
+
+  // A document handoff always returns to its canonical manuscript. A deleted
+  // page also falls back synchronously through reconcileWritingSurface above;
+  // committing that fallback keeps the roving tab stop and shell state aligned.
+  useEffect(() => {
+    if (!doc) return;
+    if (
+      surfaceState.documentId !== doc.id
+      || writingSurfaceTabId(surfaceState.surface) !== writingSurfaceTabId(activeSurface)
+    ) {
+      setSurfaceState({ documentId: doc.id, surface: activeSurface });
+    }
+  }, [doc?.id, activeSurface, surfaceState]);
+
+  const onWritingSurfaceChangeRef = useRef(onWritingSurfaceChange);
+  onWritingSurfaceChangeRef.current = onWritingSurfaceChange;
+  useEffect(() => {
+    onWritingSurfaceChangeRef.current?.(activeSurface.kind);
+  }, [activeSurface.kind]);
+
+  const updateDraftBlocks = drafter.updatePageBlocks;
+  useEffect(() => {
+    if (!activeDraft || draftMountBlocks.length !== activeDraft.blocks.length) return;
+    if (activeDraft.blocks.some((block, index) => block.id !== draftMountBlocks[index]?.id)) {
+      updateDraftBlocks(activeDraft.id, draftMountBlocks);
+    }
+  }, [activeDraft, draftMountBlocks, updateDraftBlocks]);
 
   // Recovery happens inside whichever store first reads damaged state (document,
   // outline, or comments). Consume backend notices independently so a successful
@@ -367,14 +442,55 @@ export function WhiteboardPage({
       window.clearTimeout(timer);
     };
   }, [liveBlocks, liveBlocksDocId, commentsApi.comments, removeComment, saveStatus]);
-  // Scroll the editor to a block (mirrors the shell's scrollToBlock; relies on
-  // the `.wb-editor` direct-child-per-block invariant).
+  const activeSurfaceRef = useRef(activeSurface);
+  activeSurfaceRef.current = activeSurface;
+  const flushDrafter = drafter.flush;
+  const selectWritingSurface = useCallback(async (surface: WritingSurface) => {
+    if (!doc || isDocumentInteractionLocked()) return;
+    // The complete active-page snapshot is already retained synchronously; drain
+    // it before unmounting TipTap so switching never depends on editor lifetime.
+    await flushDrafter();
+    setPreview(false);
+    setActiveCommentId(null);
+    setSurfaceState({ documentId: doc.id, surface });
+  }, [doc?.id, flushDrafter]);
+
+  // The shell Outline always navigates the canonical manuscript. If a Drafter
+  // page is active, switch first and scroll only after the manuscript editor has
+  // mounted; direct global `.wb-editor` lookup would target the wrong surface.
+  const pendingManuscriptNavigationRef = useRef<number | null>(null);
   const scrollToBlock = useCallback((blockIndex: number) => {
-    const editorEl = document.querySelector('.wb-editor');
-    const child = editorEl?.children[blockIndex] as HTMLElement | undefined;
-    if (editorEl instanceof HTMLElement) editorEl.focus({ preventScroll: true });
+    if (!manuscriptActive || !editor || !editor.view.dom.isConnected) return false;
+    const editorEl = editor.view.dom;
+    const child = editorEl.children[blockIndex] as HTMLElement | undefined;
+    editor.commands.focus();
     child?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }, []);
+    return true;
+  }, [editor, manuscriptActive]);
+  const navigateManuscript = useCallback((blockIndex: number) => {
+    pendingManuscriptNavigationRef.current = blockIndex;
+    if (activeSurfaceRef.current.kind === 'manuscript') {
+      if (scrollToBlock(blockIndex)) pendingManuscriptNavigationRef.current = null;
+      return;
+    }
+    void selectWritingSurface({ kind: 'manuscript' });
+  }, [scrollToBlock, selectWritingSurface]);
+  useEffect(() => {
+    onRegisterManuscriptNavigator?.(navigateManuscript);
+    return () => onRegisterManuscriptNavigator?.(null);
+  }, [navigateManuscript, onRegisterManuscriptNavigator]);
+  useEffect(() => {
+    const blockIndex = pendingManuscriptNavigationRef.current;
+    if (!manuscriptActive || !editor || !editor.view.dom.isConnected || blockIndex === null) return;
+    const frame = window.requestAnimationFrame(() => {
+      if (
+        pendingManuscriptNavigationRef.current === blockIndex
+        && activeSurfaceRef.current.kind === 'manuscript'
+        && scrollToBlock(blockIndex)
+      ) pendingManuscriptNavigationRef.current = null;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [editor, manuscriptActive, scrollToBlock]);
 
   // Desktop file management (New/Open/Save/Save As) — backend autosave keeps the
   // session; these write user-chosen files. Loading a file replaces the editor
@@ -385,12 +501,38 @@ export function WhiteboardPage({
   // can be stale when modes match across a switch — read the ref instead).
   const docIdRef = useRef<string | null>(doc?.id ?? null);
   docIdRef.current = doc?.id ?? null;
+  const commitManuscriptBlocks = useCallback((blocks: WhiteboardBlock[]) => {
+    liveBlocksRef.current = blocks;
+    const receipt = onChangeBlocks(blocks);
+    const identity = captureDocumentIdentity();
+    liveBlocksPersistenceRef.current = {
+      documentId: identity.documentId,
+      incarnation: identity.incarnation,
+      generation: ++liveBlocksGenerationRef.current,
+      blocks,
+      durable: false,
+      receipt,
+    };
+    setLiveBlocks(blocks);
+    setLiveBlocksDocId(docIdRef.current);
+    onOutlineRef.current?.(deriveOutline(blocks, doc?.mode ?? 'novel'));
+  }, [onChangeBlocks, doc?.mode]);
   const loadBlocks = useCallback((blocks: WhiteboardBlock[]) => {
+    if (activeSurfaceRef.current.kind !== 'manuscript') {
+      // File Open / import-replace always target the canonical manuscript, even
+      // when invoked through the native menu while a scratch page is visible.
+      // Commit the main resource directly, then switch after the draft flushes;
+      // never point the external-file session at the scratch editor.
+      if (!docIdRef.current) return false;
+      commitManuscriptBlocks(blocks);
+      void selectWritingSurface({ kind: 'manuscript' });
+      return true;
+    }
     const activeEditor = editorRef.current;
     if (!activeEditor) return false;
     activeEditor.commands.setContent(blocksToDoc(blocks), { emitUpdate: true });
     return true;
-  }, []);
+  }, [commitManuscriptBlocks, selectWritingSurface]);
 
   // --- outline hard link: report the caret's manuscript block + the block texts,
   // so the Outline can show "you are here" and bind/re-anchor links. caretBlock
@@ -399,7 +541,7 @@ export function WhiteboardPage({
   useEffect(() => {
     // On doc switch the editor is torn down and remounted; drop the stale caret
     // so no breadcrumb flashes against the newly-loading document's outline.
-    if (!editor) {
+    if (!editor || !manuscriptActive) {
       setCaretBlock(null);
       return undefined;
     }
@@ -416,7 +558,7 @@ export function WhiteboardPage({
     return () => {
       editor.off('selectionUpdate', update);
     };
-  }, [editor]);
+  }, [editor, manuscriptActive]);
   const blockTexts = useMemo(() => liveBlocks.map((b) => b.text ?? ''), [liveBlocks]);
   const blockIds = useMemo(() => liveBlocks.map((b) => b.id), [liveBlocks]);
   // Stamp the published texts with the doc `liveBlocks` belong to (NOT doc.id — see
@@ -466,6 +608,17 @@ export function WhiteboardPage({
     [deleteDoc, doc?.id, fileDoc.filePath, fileDoc.confirmProceedPastUnsavedChanges, fileDoc.resetForDocument],
   );
 
+  const replaceDrafterPagesForRecovery = useCallback((pages: DrafterPage[]): boolean => {
+    if (!doc) return false;
+    // Recovery replaces the whole scratch collection. Leave the mounted draft
+    // editor in the same React transaction so it cannot later publish its stale
+    // pre-recovery blocks back over the restored snapshot.
+    setPreview(false);
+    setActiveCommentId(null);
+    setSurfaceState({ documentId: doc.id, surface: { kind: 'manuscript' } });
+    return drafter.replacePages(pages);
+  }, [doc?.id, drafter.replacePages]);
+
   // Import / Export (extends file management; never alters Open/Save semantics).
   const importExport = useImportExport({
     baseUrl,
@@ -475,8 +628,41 @@ export function WhiteboardPage({
     setMode,
     setTitle: renameDocument,
     markDirty: markFileDirty,
+    replaceDrafterPages: replaceDrafterPagesForRecovery,
     confirmProceedPastUnsavedChanges: fileDoc.confirmProceedPastUnsavedChanges,
   });
+
+  const openCreatedDraft = useCallback((page: DrafterPage | null) => {
+    if (!page) return;
+    void selectWritingSurface({ kind: 'draft', pageId: page.id });
+  }, [selectWritingSurface]);
+
+  const importDrafterPage = useCallback(() => {
+    void (async () => {
+      setDrafterFeedback(null);
+      try {
+        if (drafter.pages.length >= DRAFTER_MAX_PAGES) {
+          throw new Error(`Drafter supports at most ${DRAFTER_MAX_PAGES} pages.`);
+        }
+        const result = await importOpen([
+          { name: 'Writing pages', extensions: ['txt', 'md', 'markdown', 'fountain'] },
+          { name: 'All files', extensions: ['*'] },
+        ]);
+        if (result.canceled) return;
+        if (!result.ok) throw new Error(result.error || 'The page could not be imported.');
+        const fileName = baseName(result.fileName || result.filePath || 'Imported draft');
+        const title = fileName.replace(/\.(?:txt|md|markdown|fountain)$/i, '') || 'Imported draft';
+        const importFormat = /\.fountain$/i.test(fileName)
+          ? 'fountain'
+          : /\.(?:md|markdown)$/i.test(fileName) ? 'md' : 'txt';
+        const page = drafter.createPage(title, parseImport(importFormat, result.content ?? '').blocks);
+        if (!page) throw new Error('The page could not be added while the document is closing.');
+        openCreatedDraft(page);
+      } catch (importError) {
+        setDrafterFeedback(importError instanceof Error ? importError.message : String(importError));
+      }
+    })();
+  }, [drafter.createPage, drafter.pages.length, openCreatedDraft]);
 
   // Expose the document actions to the App-shell title menu (the dropdown under
   // the project name). Ref-backed so we register once but always call the latest.
@@ -484,15 +670,42 @@ export function WhiteboardPage({
   fileDocRef.current = fileDoc;
   const importExportRef = useRef(importExport);
   importExportRef.current = importExport;
-  // Export PDF: paginated print for screenplays, plain print for prose modes.
+  // Export PDF: screenplays always serialize canonical manuscript blocks. For
+  // prose, printing is DOM-based, so leave a Drafter tab and wait for the
+  // manuscript editor to mount before opening the system print dialog.
+  const pendingManuscriptPrintRef = useRef<string | null>(null);
   const printRef = useRef<() => void>(() => window.print());
   printRef.current = () => {
-    if ((doc?.mode ?? defaultMode) === 'screenplay') {
+    const route = documentPrintRoute(doc?.mode ?? defaultMode, activeSurfaceRef.current);
+    if (route === 'screenplay-data') {
       printScreenplayPdf(toFountainBlocks(liveBlocksRef.current));
-    } else {
+    } else if (route === 'active-manuscript') {
       window.print();
+    } else if (doc) {
+      pendingManuscriptPrintRef.current = doc.id;
+      void selectWritingSurface({ kind: 'manuscript' });
     }
   };
+  useEffect(() => {
+    const pendingDocumentId = pendingManuscriptPrintRef.current;
+    if (!pendingDocumentId) return undefined;
+    if (!doc || doc.id !== pendingDocumentId) {
+      pendingManuscriptPrintRef.current = null;
+      return undefined;
+    }
+    if (!manuscriptActive || !editor || !editor.view.dom.isConnected) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      if (
+        pendingManuscriptPrintRef.current === pendingDocumentId
+        && activeSurfaceRef.current.kind === 'manuscript'
+        && editor.view.dom.isConnected
+      ) {
+        pendingManuscriptPrintRef.current = null;
+        window.print();
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [doc?.id, editor, manuscriptActive]);
   useEffect(() => {
     setDocumentMenuApi({
       documents: docList,
@@ -527,24 +740,19 @@ export function WhiteboardPage({
     (blocks: WhiteboardBlock[]) => {
       // React state commits later; the file-save getter must see this exact edit
       // in the same turn in which its synchronous content revision advances.
-      liveBlocksRef.current = blocks;
-      const receipt = onChangeBlocks(blocks);
-      const identity = captureDocumentIdentity();
-      liveBlocksPersistenceRef.current = {
-        documentId: identity.documentId,
-        incarnation: identity.incarnation,
-        generation: ++liveBlocksGenerationRef.current,
-        blocks,
-        durable: false,
-        receipt,
-      };
+      commitManuscriptBlocks(blocks);
       markFileDirty();
-      setLiveBlocks(blocks);
-      setLiveBlocksDocId(docIdRef.current); // these blocks belong to the live doc
-      onOutlineRef.current?.(deriveOutline(blocks, doc?.mode ?? 'novel'));
     },
-    [onChangeBlocks, doc?.mode, markFileDirty],
+    [commitManuscriptBlocks, markFileDirty],
   );
+
+  const handleDraftBlocks = useCallback((blocks: WhiteboardBlock[]) => {
+    const surface = activeSurfaceRef.current;
+    if (surface.kind !== 'draft') return;
+    // Drafter owns a separate revisioned resource. Do not mark the manuscript's
+    // external file dirty, recompute its outline, or touch its comment anchors.
+    drafter.updatePageBlocks(surface.pageId, blocks);
+  }, [drafter.updatePageBlocks]);
 
   // The project name is the document title (documents auto-save to the app; there
   // is no separate on-disk file to name it after).
@@ -553,10 +761,17 @@ export function WhiteboardPage({
   // Reflect the project name + a transient "unsaved" marker (the backend autosave
   // in flight / failed) in BOTH the OS window title and the in-app title bar.
   useEffect(() => {
-    const unsaved = saveStatus === 'saving' || saveStatus === 'error' || saveStatus === 'conflict';
+    const unsaved = (
+      saveStatus === 'saving'
+      || saveStatus === 'error'
+      || saveStatus === 'conflict'
+      || drafter.saveStatus === 'saving'
+      || drafter.saveStatus === 'error'
+      || drafter.saveStatus === 'conflict'
+    );
     document.title = windowTitle(projectName, unsaved);
     onTitleChangeRef.current?.(projectName, unsaved);
-  }, [projectName, saveStatus]);
+  }, [projectName, saveStatus, drafter.saveStatus]);
 
   // Re-derive the outline whenever the document loads or the mode changes; reset
   // the live snapshot when a different document or an explicitly reloaded
@@ -601,6 +816,16 @@ export function WhiteboardPage({
     const onKey = (e: KeyboardEvent) => {
       if (isModalDialogOpen() || isDocumentInteractionLocked()) return;
       const mod = e.metaKey || e.ctrlKey;
+      if (mod && e.shiftKey && !e.altKey && e.code === 'KeyN') {
+        if (!doc || !drafter.available || drafter.loading) return;
+        e.preventDefault();
+        if (drafter.pages.length >= DRAFTER_MAX_PAGES) {
+          setDrafterFeedback(`Drafter supports at most ${DRAFTER_MAX_PAGES} pages.`);
+          return;
+        }
+        setNewDraftOpen(true);
+        return;
+      }
       if (mod && !e.altKey) {
         if (e.key === '=' || e.key === '+') {
           e.preventDefault();
@@ -647,13 +872,13 @@ export function WhiteboardPage({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [isScreenplay, applyScale, toggleTool]);
+  }, [isScreenplay, applyScale, toggleTool, doc, drafter.available, drafter.loading, drafter.pages.length]);
 
   // Exact page count from the SAME paginator the PDF export uses, so the on-screen
   // figure matches the printed script. Recomputes only on a content change (memo).
   const pageCount = useMemo(
-    () => (isScreenplay ? paginateScreenplay(toFountainBlocks(liveBlocks)).length : 0),
-    [isScreenplay, liveBlocks],
+    () => (isScreenplay ? paginateScreenplay(toFountainBlocks(activeBlocks)).length : 0),
+    [isScreenplay, activeBlocks],
   );
 
   const surfaceStyle = {
@@ -666,12 +891,18 @@ export function WhiteboardPage({
     ...(isScreenplay ? { 'data-screenplay': '', ...surfaceDataAttrs(settingsApi.settings) } : {}),
     ...editorToolsAttrs(editorTools),
   };
+  const activeEditorKey = doc
+    ? (manuscriptActive
+      ? `${doc.id}:manuscript:${doc.revision}:${doc.viewRevision ?? 0}`
+      : `${doc.id}:drafter:${activeDraft?.id ?? 'missing'}`)
+    : 'none';
+  const activeTabDomId = writingSurfaceTabDomId(activeSurface);
 
   return (
     <main className="whiteboard">
       <RenderErrorBoundary
         name="Writing workspace"
-        resetKey={`${doc?.id ?? 'none'}:${mode}`}
+        resetKey={`${doc?.id ?? 'none'}:${mode}:${writingSurfaceTabId(activeSurface)}`}
         className="wb-document-boundary"
       >
         <ConfirmDialog
@@ -712,6 +943,31 @@ export function WhiteboardPage({
         }}
         onCancel={() => setRenameOpen(false)}
       />
+      <PromptDialog
+        open={newDraftOpen}
+        title="New Drafter page"
+        initialValue={`Draft ${drafter.pages.length + 1}`}
+        placeholder="Page title"
+        confirmLabel="Create page"
+        onConfirm={(title) => {
+          const page = drafter.createPage(title);
+          setNewDraftOpen(false);
+          openCreatedDraft(page);
+        }}
+        onCancel={() => setNewDraftOpen(false)}
+      />
+      <PromptDialog
+        open={draftToRename !== null}
+        title="Rename Drafter page"
+        initialValue={draftToRename?.title ?? ''}
+        placeholder="Page title"
+        confirmLabel="Rename"
+        onConfirm={(title) => {
+          if (draftToRename) drafter.renamePage(draftToRename.id, title);
+          setDraftToRename(null);
+        }}
+        onCancel={() => setDraftToRename(null)}
+      />
       <ConfirmDialog
         open={docToDelete !== null}
         title="Delete document"
@@ -722,6 +978,21 @@ export function WhiteboardPage({
           setDocToDelete(null);
         }}
         onCancel={() => setDocToDelete(null)}
+      />
+      <ConfirmDialog
+        open={draftToDelete !== null}
+        title="Delete Drafter page"
+        message={`Delete “${draftToDelete?.title || 'Untitled draft'}”? This removes the page from this project and can’t be undone.`}
+        confirmLabel="Delete page"
+        onConfirm={() => {
+          const deleting = draftToDelete;
+          setDraftToDelete(null);
+          if (!deleting) return;
+          const wasActive = activeSurface.kind === 'draft' && activeSurface.pageId === deleting.id;
+          drafter.deletePage(deleting.id);
+          if (wasActive) void selectWritingSurface({ kind: 'manuscript' });
+        }}
+        onCancel={() => setDraftToDelete(null)}
       />
       <ConfirmDialog
         open={conflictReloadOpen}
@@ -799,12 +1070,13 @@ export function WhiteboardPage({
                 </button>
 
                 <div className="wb-menu-sep" role="separator" />
-                <div className="wb-menu-label">Import</div>
+                <div className="wb-menu-label">Import to Manuscript</div>
                 {IMPORT_FORMATS.map((f) => (
                   <button
                     key={f.id}
                     type="button"
                     className="wb-menu-item"
+                    disabled={!manuscriptActive}
                     onClick={() => {
                       importExport.runImport(f.id);
                       close();
@@ -815,7 +1087,7 @@ export function WhiteboardPage({
                 ))}
 
                 <div className="wb-menu-sep" role="separator" />
-                <div className="wb-menu-label">Export</div>
+                <div className="wb-menu-label">Export Manuscript</div>
                 {EXPORT_FORMATS.map((f) => (
                   <button
                     key={f.id}
@@ -851,15 +1123,30 @@ export function WhiteboardPage({
         </div>
         <div className="wb-statusline-right">
           {/* Backend autosave indicator — documents save automatically. */}
-          <span className={`wb-draft wb-draft-${saveStatus}`}>{DRAFT_LABEL[saveStatus]}</span>
+          {manuscriptActive && (
+            <span className={`wb-draft wb-draft-${saveStatus}`}>{DRAFT_LABEL[saveStatus]}</span>
+          )}
           <EditorSettingsPopover api={editorToolsApi} onReset={resetEditorView} />
         </div>
       </div>
 
+      <DrafterTabs
+        pages={drafter.pages}
+        active={activeSurface}
+        saveStatus={drafter.saveStatus}
+        disabled={!doc || !drafter.available || drafter.loading || isDocumentInteractionLocked()}
+        canCreate={drafter.pages.length < DRAFTER_MAX_PAGES}
+        onSelect={(surface) => { void selectWritingSurface(surface); }}
+        onCreate={() => setNewDraftOpen(true)}
+        onImport={importDrafterPage}
+        onRename={setDraftToRename}
+        onDelete={setDraftToDelete}
+      />
+
       {isScreenplay && (
         <ScreenplayToolbar
           editor={editor}
-          blocks={liveBlocks}
+          blocks={activeBlocks}
           settingsApi={settingsApi}
           preview={preview}
           onTogglePreview={() => setPreview((p) => !p)}
@@ -870,7 +1157,7 @@ export function WhiteboardPage({
       )}
       {!isScreenplay && <ProseToolbar editor={editor} scale={scale} onScale={applyScale} />}
 
-      {locationPath && locationPath.length > 0 && (
+      {manuscriptActive && locationPath && locationPath.length > 0 && (
         <div className="wb-location" aria-label="Current outline section">
           <span className="wb-location-pin" aria-hidden="true">
             ⚓
@@ -889,9 +1176,21 @@ export function WhiteboardPage({
           ))}
         </div>
       )}
+      {activeDraft && (
+        <div className="wb-location wb-location-drafter" aria-label="Current Drafter page">
+          <span className="wb-location-pin" aria-hidden="true">✎</span>
+          <span className="wb-location-crumb">Drafter</span>
+          <span className="wb-location-sep" aria-hidden="true">›</span>
+          <span className="wb-location-crumb is-last">{activeDraft.title}</span>
+        </div>
+      )}
 
       <div
-        className={`wb-surface${showPreview ? ' is-preview' : ''}`}
+        id="writing-panel-active"
+        className={`wb-surface${showPreview ? ' is-preview' : ''}${manuscriptActive ? '' : ' is-drafter'}`}
+        role="tabpanel"
+        aria-labelledby={activeTabDomId}
+        data-active-writing-surface="true"
         style={surfaceStyle}
         {...surfaceAttrs}
         onMouseDown={(e) => {
@@ -905,20 +1204,20 @@ export function WhiteboardPage({
         {doc ? (
           <>
             <WhiteboardEditor
-              key={`${doc.id}:${doc.revision}:${doc.viewRevision ?? 0}`}
-              initialBlocks={editorMountBlocks}
+              key={activeEditorKey}
+              initialBlocks={activeEditorBlocks}
               mode={doc.mode}
-              onChangeBlocks={handleBlocks}
+              onChangeBlocks={manuscriptActive ? handleBlocks : handleDraftBlocks}
               onEditorReady={setEditor}
               onElementChange={setElement}
               editorTools={editorTools}
               folds={folds}
               onToggleFold={toggleFold}
-              commentMarks={commentMarks}
-              activeCommentId={activeCommentId}
-              onCommentClick={setActiveCommentId}
+              commentMarks={manuscriptActive ? commentMarks : []}
+              activeCommentId={manuscriptActive ? activeCommentId : null}
+              onCommentClick={manuscriptActive ? setActiveCommentId : undefined}
             />
-            {showPreview && <PreviewView blocks={liveBlocks} settings={settingsApi.settings} />}
+            {showPreview && <PreviewView blocks={activeBlocks} settings={settingsApi.settings} />}
           </>
         ) : !ready ? (
           <p className="wb-hint">Waiting for backend…</p>
@@ -928,7 +1227,7 @@ export function WhiteboardPage({
           <p className="wb-hint wb-error">Couldn’t load document: {loadError}</p>
         ) : null}
       </div>
-      {!showPreview && <StoryMap items={outlineItems} onNavigate={scrollToBlock} />}
+      {manuscriptActive && !showPreview && <StoryMap items={outlineItems} onNavigate={scrollToBlock} />}
       {editor && doc && (
         <RenderErrorBoundary
           name="LittleBoy tools"
@@ -940,9 +1239,14 @@ export function WhiteboardPage({
             editor={editor}
             mode={doc.mode}
             baseUrl={baseUrl}
-            documentTitle={fileDoc.fileName}
+            documentTitle={projectName}
             screenplayElement={element}
             narrativeProfile={narrativeProfileContext(settingsApi.settings)}
+            projectBlocks={liveBlocks}
+            activeSurfaceKind={activeSurface.kind}
+            activeSurfaceTitle={activeDraft?.title}
+            drafterPageTitles={drafter.pages.map((page) => page.title)}
+            writingSurfaceId={writingSurfaceTabId(activeSurface)}
           />
         </RenderErrorBoundary>
       )}
@@ -960,7 +1264,7 @@ export function WhiteboardPage({
           />
         </RenderErrorBoundary>
       )}
-      {editor && doc && (
+      {editor && doc && manuscriptActive && (
         <RenderErrorBoundary
           name="Comments"
           resetKey={doc.id}
@@ -975,7 +1279,7 @@ export function WhiteboardPage({
         </RenderErrorBoundary>
       )}
 
-      {(importExport.feedback || (doc && loadError) || recoveryNotices[0] || commentsApi.error) && (
+      {(importExport.feedback || (doc && loadError) || recoveryNotices[0] || commentsApi.error || drafter.error || drafterFeedback) && (
         <div className="wb-toast-stack" role="region" aria-label="Notifications">
           {recoveryNotices[0] && (
             <div
@@ -1046,6 +1350,23 @@ export function WhiteboardPage({
                 onClick={() => dismissNotification(commentsApi.dismissError)}
                 title="Dismiss"
                 aria-label="Dismiss comment error"
+              >
+                ×
+              </button>
+            </div>
+          )}
+          {(drafter.error || drafterFeedback) && (
+            <div className="wb-toast wb-toast-error wb-toast-drafter-error" role="alert" aria-atomic="true">
+              <span className="wb-toast-message">{drafterFeedback || drafter.error}</span>
+              <button
+                type="button"
+                className="wb-toast-dismiss"
+                onClick={() => dismissNotification(() => {
+                  setDrafterFeedback(null);
+                  drafter.dismissError();
+                })}
+                title="Dismiss"
+                aria-label="Dismiss Drafter error"
               >
                 ×
               </button>

@@ -35,6 +35,18 @@
 | `Mod + S` | Save |
 | `Mod + Shift + S` | Save As… |
 
+## Drafter pages
+
+| Shortcut | Action |
+|----------|--------|
+| `Mod + Shift + N` | Create a project-owned Drafter page |
+| `←` / `→` | Move between Manuscript and Drafter tabs while a tab is focused |
+| `Home` / `End` | Move to the first / last writing tab |
+
+Drafter pages inherit the project writing mode, settings, PSYKE, and AI grounding,
+but remain outside the canonical manuscript. Importing a text, Markdown, or Fountain
+file creates an internal project copy; it does not keep a live link to the disk file.
+
 ## Writing & formatting  (inside the editor)
 | Shortcut | Action |
 |----------|--------|

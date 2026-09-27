@@ -16,14 +16,15 @@ interface Props {
 
 const BASICS: [string, string][] = [
   ['Documents', 'Your work auto-saves in isolated projects. Each document keeps its own manuscript, voice/format settings, outline, comments, and PSYKE.'],
+  ['Drafter', 'Use the tabs above the editor for project-owned scratch pages and isolated scene drafts. They share the project’s mode, PSYKE, and AI context but stay outside the canonical manuscript until you copy text across.'],
   ['Writing modes', 'The Mode dropdown reformats the current document: Novel, Screenplay, Graphic Novel, or Stage Play.'],
   ['Three surfaces', 'Editor (centre) to write, Outline (left) for structure, Story Map (bottom) for a visual overview.'],
   ['Outline', '+ Add ▾ inserts typed items or templates. A row’s ⋯ → Link to cursor position creates a stable manuscript anchor and live breadcrumb. Shift+Enter opens all item details.'],
   ['Narrative voice', 'Settings ⚙ → Narrative voice sets this document’s person, style, register, and slang guidance for Billy and Logos.'],
   ['PSYKE', 'Your per-project story bible — characters, places, objects, lore, themes. Isolated per document.'],
-  ['Comments', 'Highlight text, then click Comment to leave a threaded note pinned to that passage.'],
+  ['Comments', 'On the Manuscript tab, highlight text and click Comment to leave a threaded note pinned to that passage.'],
   ['AI — Billy & Logos', 'Billy is a chat assistant; Logos works inline. Point them at your provider in Settings ⚙.'],
-  ['Export & backup', 'Export Project (.lfbundle) saves manuscript, document settings, outline, comments, and PSYKE. Incomplete exports are blocked.'],
+  ['Export & backup', 'Export Project (.lfbundle) saves manuscript, Drafter pages, document settings, outline, comments, and PSYKE. Incomplete exports are blocked.'],
 ];
 
 interface Group {
@@ -48,6 +49,8 @@ const GROUPS: Group[] = [
     title: 'Documents & editing',
     rows: [
       ['New Document', 'Ctrl+N'],
+      ['New Drafter page', 'Ctrl+Shift+N'],
+      ['Move across writing tabs', '← / →'],
       ['Undo / Redo', 'Ctrl+Z / Ctrl+Shift+Z'],
       ['Zoom in / out / reset', 'Ctrl+= / Ctrl+- / Ctrl+0'],
     ],

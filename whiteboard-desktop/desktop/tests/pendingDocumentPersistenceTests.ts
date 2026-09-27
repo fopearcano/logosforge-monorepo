@@ -57,6 +57,13 @@ const write = (
   sessionId: 'renderer_session_1',
   payload,
 });
+const drafterWrite = (
+  revision: number,
+  pages: Array<Record<string, unknown>>,
+): PendingDocumentWrite => ({
+  ...write(revision, { pages }),
+  kind: 'drafter',
+});
 
 await test('payloads above Chromium keepalive quota are accepted intact', () => {
   const manuscript = 'x'.repeat(256 * 1024);
@@ -73,6 +80,19 @@ await test('payloads above Chromium keepalive quota are accepted intact', () => 
   });
   if (((outline.payload.items as Array<{ summary: string }>)[0]?.summary.length) !== manuscript.length) {
     throw new Error('Large outline was truncated');
+  }
+  const drafter = validatePendingDocumentWrite({
+    ...write(1),
+    kind: 'drafter',
+    payload: {
+      pages: [{ id: 'large', title: 'Scene scratch', blocks: [{ text: manuscript }] }],
+    },
+  });
+  const drafterText = (
+    drafter.payload.pages as Array<{ blocks: Array<{ text: string }> }>
+  )[0]?.blocks[0]?.text;
+  if (drafterText?.length !== manuscript.length) {
+    throw new Error('Large Drafter page was truncated');
   }
 });
 
@@ -109,6 +129,25 @@ await test('endpoint and authorization are derived only from backend status', ()
   if (orderedRequest.headers['X-LogosForge-Persistence-Order'] !== '17') {
     throw new Error('Main-process persistence order was omitted');
   }
+  const drafterRequest = buildPendingDocumentHttpRequest({
+    ...write(2),
+    kind: 'drafter',
+    payload: { pages: [] },
+  }, {
+    state: 'connected',
+    baseUrl: 'http://127.0.0.1:9123/ignored/path',
+    authToken: 'main-secret',
+  });
+  if (drafterRequest.url !== 'http://127.0.0.1:9123/api/drafter/pages?doc=42') {
+    throw new Error(`Unexpected Drafter endpoint ${drafterRequest.url}`);
+  }
+  if (drafterRequest.headers['If-Match'] !== resourceEtag(
+    'drafter',
+    '0123456789abcdef0123456789abcdef',
+    resourceRevision(1),
+  )) {
+    throw new Error('Drafter resource revision precondition was omitted');
+  }
 });
 
 await test('invalid ids, kinds, and shapes are rejected synchronously', () => {
@@ -119,6 +158,7 @@ await test('invalid ids, kinds, and shapes are rejected synchronously', () => {
     { ...write(1), resourceRevision: 'not-a-revision' },
     { ...write(1), sessionId: 's'.repeat(111) },
     { ...write(1), payload: { url: 'https://example.com' } },
+    { ...write(1), kind: 'drafter', payload: { items: [] } },
   ];
   for (const value of invalid) {
     let rejected = false;
@@ -433,7 +473,7 @@ await test('two-phase delete fences queued writes and commits without retrying t
   releaseFirst();
   const [, , floor] = await Promise.all([first, queued, begun]);
   if (attempts !== 1) throw new Error('A queued write crossed the DELETE fence');
-  if (floor.whiteboard !== 2 || floor.outline !== 0) {
+  if (floor.whiteboard !== 2 || floor.outline !== 0 || floor.drafter !== 0) {
     throw new Error(`DELETE did not expose issued dispatch floors: ${JSON.stringify(floor)}`);
   }
   persistence.commitDocumentDelete('42', write(1).incarnation);
@@ -630,6 +670,70 @@ await test('disk journal survives a whole-process restart with exact receipt sem
     throw new Error(
       `Restart watermarks regressed: calls=${restartedWriterCalls}, order=${restartedDispatch}, id=${later?.conflictId}`,
     );
+  }
+});
+
+await test('Drafter full-collection recovery survives restart without manuscript merging', async () => {
+  const root = makeTempRoot();
+  const conflictWriter = async (
+    pending: PendingDocumentWrite,
+  ): Promise<PendingDocumentWriteSuccess> => {
+    throw new PendingDocumentRevisionConflictError(
+      'changed elsewhere',
+      resourceRevision(9),
+      resourceEtag(pending.kind, pending.incarnation, resourceRevision(9)),
+    );
+  };
+  const first = new PendingDocumentPersistence(
+    conflictWriter,
+    10_000,
+    new FilePendingDocumentRecoveryJournal(root),
+  );
+  await first.enqueue(drafterWrite(1, [{
+    id: 'draft-a',
+    title: 'First collection',
+    blocks: [{ id: 'a', type: 'paragraph', text: 'first' }],
+  }])).catch(() => {});
+  const original = first.listConflicts()[0];
+  if (!original || original.kind !== 'drafter') {
+    throw new Error('Drafter recovery was not journaled');
+  }
+
+  const restarted = new PendingDocumentPersistence(
+    conflictWriter,
+    10_000,
+    new FilePendingDocumentRecoveryJournal(root),
+  );
+  const restored = restarted.listConflicts()[0];
+  const latestPages = [{
+    id: 'draft-b',
+    title: 'Replacement collection',
+    blocks: [{ id: 'b', type: 'paragraph', text: 'replacement' }],
+  }];
+  if (!restored || restored.write.kind !== 'drafter') {
+    throw new Error('Drafter recovery was not restored after restart');
+  }
+  const retained = restarted.retainConflict({
+    recovery: restored,
+    write: drafterWrite(2, latestPages),
+  });
+  if (!retained.ok || !retained.recovery) {
+    throw new Error('Drafter recovery could not be refreshed');
+  }
+
+  const finalProcess = new PendingDocumentPersistence(
+    conflictWriter,
+    10_000,
+    new FilePendingDocumentRecoveryJournal(root),
+  );
+  const newest = finalProcess.listConflicts()[0];
+  const persistedPages = newest?.write.payload.pages as Array<{ id?: string }> | undefined;
+  if (
+    newest?.version !== retained.recovery.version
+    || persistedPages?.length !== 1
+    || persistedPages[0]?.id !== 'draft-b'
+  ) {
+    throw new Error('Drafter recovery did not retain the exact replacement collection');
   }
 });
 

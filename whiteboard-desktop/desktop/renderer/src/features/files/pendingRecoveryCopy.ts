@@ -28,7 +28,11 @@ export function pendingDocumentRecoveryEnvelope(
         ? canonicalizeOutlineConflictItems(payload.items as OutlineNode[], exportedAt)
         : payload.items,
     }
-    : canonicalizeWhiteboardRecoveryPayload(payload);
+    : recovery.kind === 'whiteboard'
+      ? canonicalizeWhiteboardRecoveryPayload(payload)
+      // Drafter is a full-collection payload. Preserve every page field and
+      // block exactly; manuscript canonicalization would silently reshape it.
+      : { ...payload };
   return {
     format: 'logosforge-pending-document-recovery',
     version: 1,

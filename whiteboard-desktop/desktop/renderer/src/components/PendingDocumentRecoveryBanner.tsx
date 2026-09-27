@@ -123,7 +123,11 @@ export function PendingDocumentRecoveryBanner() {
           RECOVERY REQUIRED
         </strong>
         <span style={{ flex: 1, minWidth: 0, fontSize: 11.5, lineHeight: 1.4 }}>
-          {recovery.kind === 'whiteboard' ? 'Manuscript' : 'Outline'} draft for document{' '}
+          {recovery.kind === 'whiteboard'
+            ? 'Manuscript'
+            : recovery.kind === 'outline'
+              ? 'Outline'
+              : 'Drafter'} draft for document{' '}
           {recovery.documentId} is protected from overwrite. {recovery.error.message}
           {recoveries.length > 1 ? ` (${recoveries.length} recoveries pending.)` : ''}
           {targetsActiveDocument

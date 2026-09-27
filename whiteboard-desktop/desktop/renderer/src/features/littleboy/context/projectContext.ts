@@ -19,6 +19,7 @@ import { clamp } from './selectionContext';
 export const OUTLINE_MAX = 30;
 export const CAST_MAX = 30;
 export const PROJECT_MAX = 900; // stays well under the core's caps (chat 6000, inline ~600)
+export const DRAFTER_INDEX_MAX = 12;
 
 /** A short drafted-structure + cast digest, or '' when empty.
  *
@@ -56,4 +57,29 @@ export function prependProjectContext(project: string, nearby: string | undefine
   const n = (nearby ?? '').trim();
   if (p && n) return `${p}\n\n${n}`;
   return p || n;
+}
+
+/**
+ * Label editor text that lives outside the canonical manuscript. The backend
+ * still adds this document's manual Outline + PSYKE; this note prevents the
+ * model from mistaking exploratory Drafter prose for committed manuscript.
+ */
+export function buildWritingSurfaceContext(
+  kind: 'manuscript' | 'draft',
+  title: string | undefined,
+  drafterPageTitles: readonly string[] = [],
+): string {
+  if (kind !== 'draft') return '';
+  const safeTitle = title?.trim() || 'Untitled draft';
+  const shown = drafterPageTitles
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .slice(0, DRAFTER_INDEX_MAX);
+  const more = Math.max(0, drafterPageTitles.length - shown.length);
+  const index = shown.length
+    ? `\nProject Drafter pages: ${shown.join(', ')}${more ? ` (+${more} more)` : ''}`
+    : '';
+  return `Active Drafter page: ${safeTitle}\n`
+    + 'Treat the active editor text as provisional working material outside the canonical manuscript.'
+    + index;
 }

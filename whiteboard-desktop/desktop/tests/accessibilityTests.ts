@@ -333,6 +333,36 @@ requireMarkers('Outline app-lifetime save coordinator', sourceText('features/out
   'registerUnloadFlush',
   'OutlineSnapshotTransport',
 ]);
+requireMarkers('Drafter app-lifetime save coordinator', sourceText('features/drafter/pendingDrafterRecovery.ts'), [
+  'flushDrafterSnapshots',
+  'registerDocFlusher',
+  'registerDocDiscarder',
+  'registerUnloadFlush',
+  'DrafterSnapshotTransport',
+]);
+requireMarkers('Drafter tab keyboard contract', sourceText('features/drafter/DrafterTabs.tsx'), [
+  'role="tablist"',
+  'role="tab"',
+  'aria-selected=',
+  'aria-controls="writing-panel-active"',
+  'tabIndex=',
+  'onKeyDown=',
+  'nextTabIndex(',
+]);
+requireMarkers('Drafter manuscript isolation', sourceText('features/whiteboard/WhiteboardPage.tsx'), [
+  'onChangeBlocks={manuscriptActive ? handleBlocks : handleDraftBlocks}',
+  'commentMarks={manuscriptActive ? commentMarks : []}',
+  'manuscriptActive && !showPreview && <StoryMap',
+  'File Open / import-replace always target the canonical manuscript',
+  'commitManuscriptBlocks(blocks)',
+  'projectBlocks={liveBlocks}',
+  'activeSurfaceKind={activeSurface.kind}',
+  'data-active-writing-surface="true"',
+]);
+requireMarkers('Drafter provisional AI context', sourceText('features/littleboy/context/projectContext.ts'), [
+  'Active Drafter page:',
+  'provisional working material outside the canonical manuscript',
+]);
 requireMarkers('Explicit document save routes', sourceText('features/whiteboard/whiteboardApi.ts'), [
   'updateWhiteboardForDocument',
   'encodeURIComponent(documentId)',

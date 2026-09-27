@@ -199,17 +199,20 @@ On a clean or isolated test account for each platform:
 2. Confirm the status reaches `Connected` and shows API v1.0.0 with core
    0.9.0-alpha.
 3. Confirm the stable per-user MCP companion and private descriptor exist while
-   the GUI is running. From a local MCP client, discover exactly the 24
+   the GUI is running. From a local MCP client, discover exactly the 28
    `logosforge_whiteboard_` read/proposal tools, verify capabilities report
-   version 1.4.0 with writes disabled by default, and complete authenticated
-   document, comment, and PSYKE entry/relationship/progression reads, including
-   the comment revision and shared aggregate PSYKE revision. After quitting
+   version 1.5.0 with writes disabled by default, and complete authenticated
+   document, Drafter page, comment, and PSYKE entry/relationship/progression
+   reads, including the independent Drafter/comment revisions and shared
+   aggregate PSYKE revision. After quitting
    Whiteboard, confirm a new MCP connection is rejected rather than using stale
    runtime state.
 4. Create and edit a document, quit, reopen, and verify persistence.
-5. Exercise a loopback/local AI provider, PDF or text export, and `.lfbundle`
-   export. Inspect that the bundle carries PSYKE `elements`, `relations`, and
-   `progressions`, then import it in LogosForge Pro. Pro recreates the entries,
+5. Exercise a loopback/local AI provider from both Manuscript and Drafter, PDF
+   or text export, and `.lfbundle` export. Confirm publication exports remain
+   manuscript-only and inspect that the bundle carries `drafter.pages` plus
+   PSYKE `elements`, `relations`, and `progressions`, then import it in
+   LogosForge Pro. Pro recreates Drafter pages as tagged Notes and the entries,
    restores relationships and ordered progression beats through entry-ID
    remapping, and restores a progression's scene anchor only when its scene
    title has one unique match in the imported manuscript. Missing or ambiguous

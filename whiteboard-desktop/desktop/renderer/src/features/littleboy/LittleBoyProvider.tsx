@@ -22,10 +22,15 @@ import {
   registerLittleBoyToggles,
 } from '../../state/littleBoyControl';
 import { docToBlocks } from '../whiteboard/WhiteboardEditor';
+import type { WhiteboardBlock } from '../whiteboard/types';
 import { BillyFloatingChat } from './billy/BillyFloatingChat';
 import { useBillyChat } from './billy/useBillyChat';
 import { collectEditorContext } from './context/collectEditorContext';
-import { buildProjectContext, prependProjectContext } from './context/projectContext';
+import {
+  buildProjectContext,
+  buildWritingSurfaceContext,
+  prependProjectContext,
+} from './context/projectContext';
 import { LogosInlineBox } from './logos/LogosInlineBox';
 import type { EditorContext } from './littleboyTypes';
 
@@ -36,6 +41,19 @@ interface Props {
   documentTitle?: string;
   screenplayElement?: string | null;
   narrativeProfile?: string;
+  /** Canonical manuscript blocks, even when `editor` is a Drafter page. */
+  projectBlocks?: WhiteboardBlock[];
+  activeSurfaceKind?: 'manuscript' | 'draft';
+  activeSurfaceTitle?: string;
+  drafterPageTitles?: string[];
+  /** Stable id for the editor surface that owns any open inline Logos session. */
+  writingSurfaceId?: string;
+}
+
+interface LogosSession {
+  context: EditorContext;
+  editor: Editor;
+  writingSurfaceId: string;
 }
 
 function defaultBillyPos(): { x: number; y: number } {
@@ -43,20 +61,59 @@ function defaultBillyPos(): { x: number; y: number } {
   return { x, y: 84 };
 }
 
-export function LittleBoyProvider({ editor, mode, baseUrl, documentTitle, screenplayElement, narrativeProfile = '' }: Props) {
+export function LittleBoyProvider({
+  editor,
+  mode,
+  baseUrl,
+  documentTitle,
+  screenplayElement,
+  narrativeProfile = '',
+  projectBlocks,
+  activeSurfaceKind = 'manuscript',
+  activeSurfaceTitle,
+  drafterPageTitles = [],
+  writingSurfaceId = activeSurfaceKind,
+}: Props) {
   const billy = useBillyChat({ baseUrl });
 
   const [billyOpen, setBillyOpen] = useState(false);
   const [billyPos, setBillyPos] = useState<{ x: number; y: number } | null>(null);
-  const [logosContext, setLogosContext] = useState<EditorContext | null>(null);
+  const [logosSession, setLogosSession] = useState<LogosSession | null>(null);
+  // A surface switch can replace the TipTap editor without remounting this
+  // provider (Billy deliberately keeps its conversation). Never render or
+  // apply a Logos result unless both the editor and surface still match the
+  // selection that was captured when the inline session opened.
+  const logosOpen = Boolean(
+    logosSession
+    && logosSession.editor === editor
+    && logosSession.writingSurfaceId === writingSurfaceId,
+  );
 
   // Live refs so the capture-phase key handler subscribes once but sees current values.
-  const ctxRef = useRef({ mode, documentTitle, screenplayElement, narrativeProfile });
-  ctxRef.current = { mode, documentTitle, screenplayElement, narrativeProfile };
+  const ctxRef = useRef({
+    mode,
+    documentTitle,
+    screenplayElement,
+    narrativeProfile,
+    projectBlocks,
+    activeSurfaceKind,
+    activeSurfaceTitle,
+    drafterPageTitles,
+  });
+  ctxRef.current = {
+    mode,
+    documentTitle,
+    screenplayElement,
+    narrativeProfile,
+    projectBlocks,
+    activeSurfaceKind,
+    activeSurfaceTitle,
+    drafterPageTitles,
+  };
   const billyOpenRef = useRef(billyOpen);
   billyOpenRef.current = billyOpen;
-  const logosOpenRef = useRef(logosContext !== null);
-  logosOpenRef.current = logosContext !== null;
+  const logosOpenRef = useRef(logosOpen);
+  logosOpenRef.current = logosOpen;
 
   const openBilly = useCallback(() => {
     setBillyPos((p) => p ?? defaultBillyPos());
@@ -73,10 +130,33 @@ export function LittleBoyProvider({ editor, mode, baseUrl, documentTitle, screen
     });
     // Prepend drafted manuscript structure + cast. The backend adds the
     // separate writer-authored manual Outline and core PSYKE context.
-    const project = prependProjectContext(c.narrativeProfile, buildProjectContext(docToBlocks(editor.getJSON()), c.mode));
-    setLogosContext({ ...ctx, nearby: prependProjectContext(project, ctx.nearby) });
-  }, [editor]);
-  const closeLogos = useCallback(() => setLogosContext(null), []);
+    const canonicalBlocks = c.projectBlocks ?? docToBlocks(editor.getJSON());
+    const manuscript = prependProjectContext(
+      c.narrativeProfile,
+      buildProjectContext(canonicalBlocks, c.mode),
+    );
+    const surface = buildWritingSurfaceContext(
+      c.activeSurfaceKind,
+      c.activeSurfaceTitle,
+      c.drafterPageTitles,
+    );
+    const project = prependProjectContext(manuscript, surface);
+    setLogosSession({
+      context: { ...ctx, nearby: prependProjectContext(project, ctx.nearby) },
+      editor,
+      writingSurfaceId,
+    });
+  }, [editor, writingSurfaceId]);
+  const closeLogos = useCallback(() => setLogosSession(null), []);
+
+  useEffect(() => {
+    setLogosSession((current) => (
+      current
+      && (current.editor !== editor || current.writingSurfaceId !== writingSurfaceId)
+        ? null
+        : current
+    ));
+  }, [editor, writingSurfaceId]);
 
   // Shortcuts + ESC, in the capture phase (beats editor keymap + app ESC).
   useEffect(() => {
@@ -131,8 +211,8 @@ export function LittleBoyProvider({ editor, mode, baseUrl, documentTitle, screen
 
   // Publish open state so the title-bar buttons can show active/inactive.
   useEffect(() => {
-    publishLittleBoyOpenState({ billyOpen, logosOpen: logosContext !== null });
-  }, [billyOpen, logosContext]);
+    publishLittleBoyOpenState({ billyOpen, logosOpen });
+  }, [billyOpen, logosOpen]);
 
   const onBillySend = useCallback(
     (text: string) => {
@@ -144,7 +224,17 @@ export function LittleBoyProvider({ editor, mode, baseUrl, documentTitle, screen
       });
       // Ground Billy in drafted manuscript structure + cast, not just nearby
       // text. The backend adds manual Outline + core PSYKE grounding.
-      const project = prependProjectContext(c.narrativeProfile, buildProjectContext(docToBlocks(editor.getJSON()), c.mode));
+      const canonicalBlocks = c.projectBlocks ?? docToBlocks(editor.getJSON());
+      const manuscript = prependProjectContext(
+        c.narrativeProfile,
+        buildProjectContext(canonicalBlocks, c.mode),
+      );
+      const surface = buildWritingSurfaceContext(
+        c.activeSurfaceKind,
+        c.activeSurfaceTitle,
+        c.drafterPageTitles,
+      );
+      const project = prependProjectContext(manuscript, surface);
       billy.send(text, {
         selected_text: ctx.selection || undefined,
         nearby_context: prependProjectContext(project, ctx.nearby) || undefined,
@@ -168,8 +258,13 @@ export function LittleBoyProvider({ editor, mode, baseUrl, documentTitle, screen
           onPositionChange={setBillyPos}
         />
       )}
-      {logosContext && (
-        <LogosInlineBox editor={editor} context={logosContext} baseUrl={baseUrl} onClose={closeLogos} />
+      {logosOpen && logosSession && (
+        <LogosInlineBox
+          editor={logosSession.editor}
+          context={logosSession.context}
+          baseUrl={baseUrl}
+          onClose={closeLogos}
+        />
       )}
     </>
   );

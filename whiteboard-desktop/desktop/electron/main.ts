@@ -200,7 +200,7 @@ async function backendRequestWithDeadline<T>(
 async function deleteBackendDocument(
   documentId: string,
   incarnation: string,
-  floor: { whiteboard: number; outline: number },
+  floor: { whiteboard: number; outline: number; drafter: number },
 ): Promise<void> {
   await backendRequestWithDeadline(
     `/api/documents/${encodeURIComponent(documentId)}`,
@@ -210,6 +210,7 @@ async function deleteBackendDocument(
         'X-LogosForge-Document-Incarnation': incarnation,
         'X-LogosForge-Whiteboard-Order-Floor': String(floor.whiteboard),
         'X-LogosForge-Outline-Order-Floor': String(floor.outline),
+        'X-LogosForge-Drafter-Order-Floor': String(floor.drafter),
       },
     },
     'Document delete',

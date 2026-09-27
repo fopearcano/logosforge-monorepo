@@ -43,8 +43,9 @@ backend; only the venv (now has `logosforge`) and the wrapped routes differ.
 | `/api/psyke/search`, `/elements`, `/relations`, `/progressions` | ✅ | wraps project-scoped core PSYKE routes; all reads publish one aggregate revision and MCP writes use conditional create/patch |
 | `/api/littleboy/billy/chat`, `/logos/inline` | ✅ | prompt orchestration → core Assistant/Logos; manual Whiteboard outline added to AI grounding |
 | `/api/settings/ai`, `/test` | ✅ | global provider settings passthrough + actionable connection test |
-| `/api/whiteboard`, `/api/outline/items`, `/api/comments` | ✅ | per-document atomic JSON with fsync, transaction-wide locks, two rotating backups, quarantine + recovery; manuscript, outline, and comment collaboration writes support conditional resource revisions |
-| `/api/export/project` | ✅ | complete-or-failed `.lfbundle` (manuscript + document settings + outline + comments + PSYKE entries, relations, and progressions) |
+| `/api/whiteboard`, `/api/outline/items`, `/api/drafter/pages`, `/api/comments` | ✅ | per-document atomic JSON with fsync, transaction-wide locks, two rotating backups, quarantine + recovery; manuscript, outline, Drafter pages, and comment collaboration writes support conditional resource revisions |
+| `/api/drafter/page-index`, `/api/drafter/pages/{page_id}`, `/api/drafter/search` | ✅ | bounded Drafter metadata, resumable single-page reads, server-side search, and conditional page create/patch without collection round trips |
+| `/api/export/project` | ✅ | complete-or-failed `.lfbundle` (manuscript + document settings + outline + Drafter pages + comments + PSYKE entries, relations, and progressions) |
 | `/api/recovery/notices` | ✅ | one-shot notices when a local state backup was restored |
 
 ## Verification
@@ -58,20 +59,23 @@ backend; only the venv (now has `logosforge`) and the wrapped routes differ.
 
 # Complete project-bundle export
 .venv/Scripts/python tests/test_export.py
+
+# Drafter storage, revisions, recovery, ordering, and lifecycle cleanup
+.venv/Scripts/python -m pytest tests/test_drafter_resource_revisions.py -q
 ```
 
 All tests use temporary data/DB state; the AI test uses loopback mock OpenAI
 and Anthropic servers and never needs or reads a real API key. Recovery tests
 exercise backup rotation, quarantine, fail-closed autosave, and complete export.
 
-## Conditional manuscript, outline, comment, and PSYKE writes
+## Conditional manuscript, outline, Drafter, comment, and PSYKE writes
 
-Manuscripts and manual outlines each own an independent opaque 32-hex
+Manuscripts, manual outlines, and project-owned Drafter pages each own an independent opaque 32-hex
 `revision`. Their GET responses include that value in the JSON body and publish
 a strong ETag with this exact shape:
 
 ```text
-"lfwb:<whiteboard|outline|comments|psyke>:<document-incarnation>:<revision>"
+"lfwb:<whiteboard|outline|drafter|comments|psyke>:<document-incarnation>:<revision>"
 ```
 
 An explicit-document `PUT` (`?doc=<id>`) must echo the document incarnation in
@@ -101,6 +105,32 @@ current revision still belongs to the latest ordered lineage; an ordinary API
 write or recovery forces delayed writes through the conditional revision check.
 `ETag` is CORS-exposed for the browser-development client.
 
+The full `GET`/`PUT /api/drafter/pages` collection remains the desktop editor's
+snapshot API. Bounded clients use `GET /api/drafter/page-index` for metadata,
+`GET /api/drafter/pages/{page_id}` for at most 200 block excerpts and 500,000
+text characters per response, and resume a split block with the returned
+`next_offset` plus `next_text_offset`. A partial block omits inline marks and
+reports `marks_omitted`; a complete block includes them. `GET
+/api/drafter/search` accepts a query of at most 500 characters, returns at most
+100 short title/block hits, and still reports the exact `total_matches` after
+the server-side scan.
+
+`POST /api/drafter/pages` creates one complete page and `PATCH
+/api/drafter/pages/{page_id}` replaces only the supplied title and/or complete
+block list. Both always require `If-Match` and
+`X-LogosForge-Mutation-Id`; explicit-document calls also require the current
+document-incarnation header. Their response contains only the affected page's
+metadata plus collection revision/page count, so a title-only mutation never
+returns a large block list. Page ids are 1–128 safe ASCII characters, titles
+are nonblank and at most 240 characters, and timestamps are timezone-qualified
+ISO-8601 values of at most 64 characters. A page may contain 20,000 blocks,
+20,000 inline marks, 1,000,000 serialized mark-metadata characters, and block
+ids/types/screenplay types are capped at 128/64/64 characters. A collection may
+contain 256 pages, 100,000 blocks, 32,000,000 block-text characters, 100,000
+inline marks, and 8,000,000 serialized mark-metadata characters. Its compact
+UTF-8 `{"pages": ...}` snapshot may not exceed 96 MiB, leaving headroom below
+the desktop crash journal's 128 MiB transport ceiling.
+
 `GET /api/psyke/search`, `/api/psyke/relations`, and
 `/api/psyke/progressions` return one shared opaque revision for the complete
 PSYKE story bible and publish the same strong ETag, even when `q` filters the
@@ -120,7 +150,9 @@ story bible before writing. An exact retry returns the saved successful DTO and
 revision without another core write; reusing the mutation id for a different
 request returns HTTP 409 with `mutation_id_conflict`.
 
-Project-bundle export reads all three core-owned PSYKE collections and aborts
+Project-bundle export includes every project-owned Drafter page in the additive
+`project.drafter.pages` section, preserving its stable id, title, block list,
+and timestamps. It also reads all three core-owned PSYKE collections and aborts
 the whole request if any transport or DTO check fails. Bundle version 1.0 now
 uses additive `project.psyke.relations` and `project.psyke.progressions` arrays
 alongside the existing frontend-shaped `project.psyke.elements`; no graph or arc
@@ -152,11 +184,12 @@ provider-backed mention behavior.
 ## MCP companion
 
 Whiteboard ships a separate stdio server named `logosforge-whiteboard`.
-Contract version `1.4.0` exposes 24 tools with the stable
-`logosforge_whiteboard_` prefix. Eleven bounded read tools cover documents,
-manuscripts, outlines, revisioned comments, PSYKE entries, relationships,
-progressions, and search. Nine proposal builders capture an exact manuscript
-patch, full-outline replacement, PSYKE entry creation/patch, relationship
+Contract version `1.5.0` exposes 28 tools with the stable
+`logosforge_whiteboard_` prefix. Thirteen bounded read tools cover documents,
+manuscripts, provisional Drafter pages, outlines, revisioned comments, PSYKE
+entries, relationships, progressions, and search. Eleven proposal builders
+capture an exact manuscript patch, Drafter page creation/patch, full-outline
+replacement, PSYKE entry creation/patch, relationship
 creation, progression creation/patch, comment reply, or comment
 resolution/reopening against the resource's current revision; four lifecycle
 tools list, inspect, discard, or apply those in-memory proposals. Apply is
@@ -165,8 +198,9 @@ disabled unless
 original document-incarnation header, strong `If-Match`, and mutation id, and
 consumes the proposal before network I/O. Proposal reviews include bounded
 head/tail change samples plus an exact request body that can be paged by byte
-offset and verified with its SHA-256 digest before apply. Manuscript replacements
-enforce the renderer's block and inline-mark contract, while full outline
+offset and verified with its SHA-256 digest before apply. Manuscript and
+Drafter block replacements enforce the renderer's block and inline-mark
+contract while remaining separate resources; full outline
 replacements enforce its node, parent, cycle, depth, and canonical-order
 invariants. PSYKE proposals enforce bounded entry, relation, and progression
 schemas and return bounded before/after review fields. Comment proposals can

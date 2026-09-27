@@ -30,6 +30,11 @@ import {
   restoreOutlineConflict,
 } from '../features/outline/pendingOutlineRecovery';
 import {
+  claimDrafterConflict,
+  discardDrafterConflictRecovery,
+  restoreDrafterConflict,
+} from '../features/drafter/pendingDrafterRecovery';
+import {
   coordinateRecoveryAbandonment,
   reconcilePendingDocumentRecoveries,
   samePendingDocumentConflict,
@@ -116,7 +121,11 @@ function request(
 }
 
 function endpoint(baseUrl: string, kind: PendingDocumentWrite['kind'], documentId: string): string {
-  const route = kind === 'whiteboard' ? '/api/whiteboard' : '/api/outline/items';
+  const route = kind === 'whiteboard'
+    ? '/api/whiteboard'
+    : kind === 'outline'
+      ? '/api/outline/items'
+      : '/api/drafter/pages';
   return `${baseUrl}${route}?doc=${encodeURIComponent(documentId)}`;
 }
 
@@ -313,6 +322,7 @@ function hydratePendingDocumentConflicts(
     const error = recoveryError(recovery);
     if (recovery.kind === 'whiteboard') restoreWhiteboardConflict(recovery, error);
     else if (recovery.kind === 'outline') restoreOutlineConflict(recovery, error);
+    else restoreDrafterConflict(recovery, error);
   }
 }
 
@@ -379,7 +389,9 @@ export async function abandonPendingDocumentRecoveryAndReload(
   return coordinateRecoveryAbandonment({
     discardTarget: () => recovery.kind === 'whiteboard'
       ? discardWhiteboardConflictRecovery(recovery)
-      : discardOutlineConflictRecovery(recovery),
+      : recovery.kind === 'outline'
+        ? discardOutlineConflictRecovery(recovery)
+        : discardDrafterConflictRecovery(recovery),
     flushOtherState,
     requestCoordinatedReload: async () => {
       recoveryReloadExemption = recovery;
@@ -398,9 +410,12 @@ export async function abandonPendingDocumentRecoveryAndReload(
       if (recovery.kind === 'whiteboard') {
         restoreWhiteboardConflict(recovery, error);
         claimWhiteboardConflict(recovery.documentId, recovery.incarnation);
-      } else {
+      } else if (recovery.kind === 'outline') {
         restoreOutlineConflict(recovery, error);
         claimOutlineConflict(recovery.documentId, recovery.incarnation);
+      } else {
+        restoreDrafterConflict(recovery, error);
+        claimDrafterConflict(recovery.documentId, recovery.incarnation);
       }
       // The captured complete snapshot is already safe locally. A separate
       // uncertain main write must not make rollback depend on drain success.
@@ -414,7 +429,9 @@ export async function discardPendingDocumentRecovery(
 ): Promise<boolean> {
   const discarded = recovery.kind === 'whiteboard'
     ? discardWhiteboardConflictRecovery(recovery)
-    : discardOutlineConflictRecovery(recovery);
+    : recovery.kind === 'outline'
+      ? discardOutlineConflictRecovery(recovery)
+      : discardDrafterConflictRecovery(recovery);
   if (!discarded) {
     await recoverPendingDocumentPersistence();
     return false;

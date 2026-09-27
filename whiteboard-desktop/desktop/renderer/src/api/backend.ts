@@ -19,7 +19,7 @@ export interface BackendStatus {
 }
 
 export interface PendingDocumentWrite {
-  kind: 'whiteboard' | 'outline';
+  kind: 'whiteboard' | 'outline' | 'drafter';
   documentId: string;
   incarnation: string;
   resourceRevision: string;
@@ -68,6 +68,7 @@ export type PendingDocumentWriteResult = {
 export interface PendingDocumentDeleteFloor {
   whiteboard: number;
   outline: number;
+  drafter: number;
 }
 
 export interface LogosForgeBridge {

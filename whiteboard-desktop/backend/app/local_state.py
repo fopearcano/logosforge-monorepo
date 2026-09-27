@@ -1,13 +1,14 @@
-"""Desktop-only board state — per-document Whiteboard blocks + manual outliner.
+"""Desktop-only state — Whiteboard blocks, Drafter pages, and manual outliner.
 
 These are NOT core domain: the core has no whiteboard block-doc table, and the
 manual outliner's node shape is owned by the frontend (stored opaquely). So they
 live locally as atomic-JSON stores under the user data dir (``~/.logosforge``,
 override ``LOGOSFORGE_DATA_DIR``). Each document is one file keyed by its id (the
-core project id, stringified) — blocks under ``whiteboards/{id}.json`` and the
-outliner under ``outlines/{id}.json``. PSYKE lives in the core, isolated by giving
-each document its own core project. The one piece that IS core data — the
-whiteboard's writing ``mode`` — is normalized against the core
+core project id, stringified) — blocks under ``whiteboards/{id}.json``, Drafter
+scratch pages under ``drafter/{id}.json``, and the outliner under
+``outlines/{id}.json``. PSYKE lives in the core, isolated by giving each document
+its own core project. The one piece that IS core data — the whiteboard's writing
+``mode`` — is normalized against the core
 ``logosforge.writing_modes`` (single source of truth), never a duplicated catalog.
 """
 from __future__ import annotations
@@ -17,13 +18,14 @@ import hmac
 import json
 import logging
 import os
+import re
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional, TypeVar
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from logosforge import writing_modes as wm
 
@@ -363,6 +365,7 @@ class WhiteboardUpdate(BaseModel):
 
 _WB_DIRNAME = "whiteboards"
 _OL_DIRNAME = "outlines"
+_DRAFTER_DIRNAME = "drafter"
 _COMMENTS_DIRNAME = "comments"
 _PSYKE_REVISIONS_DIRNAME = "psyke-revisions"
 _LEGACY_WB = "whiteboard.json"
@@ -643,6 +646,406 @@ class OutlineItemsStore:
             )
             _atomic_write_text(self._path(doc_id), doc.model_dump_json(indent=2))
             return self._public(doc)
+
+    def delete(self, doc_id: str) -> None:
+        _delete_state_files(self._path(doc_id))
+
+    def list_document_ids(self) -> set[str]:
+        if not self._dir.exists():
+            return set()
+        return {path.stem for path in self._dir.glob("*.json")}
+
+
+# -- Drafter scratch pages ---------------------------------------------------
+
+_DRAFTER_PAGE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_DRAFTER_MAX_PAGES = 256
+_DRAFTER_MAX_BLOCKS_PER_PAGE = 20_000
+_DRAFTER_MAX_BLOCKS_TOTAL = 100_000
+_DRAFTER_MAX_TEXT_CHARS_TOTAL = 32_000_000
+_DRAFTER_MAX_MARKS_PER_PAGE = 20_000
+_DRAFTER_MAX_MARK_METADATA_CHARS_PER_PAGE = 1_000_000
+_DRAFTER_MAX_MARKS_TOTAL = 100_000
+_DRAFTER_MAX_MARK_METADATA_CHARS_TOTAL = 8_000_000
+# Electron's crash journal accepts at most 128 MiB. Keep the complete Drafter
+# snapshot comfortably below that transport ceiling so every backend-valid
+# collection can still be autosaved and rescued by the desktop wrapper.
+_DRAFTER_MAX_SERIALIZED_BYTES_TOTAL = 96 * 1024 * 1024
+_DRAFTER_MAX_BLOCK_ID_CHARS = 128
+_DRAFTER_MAX_BLOCK_TYPE_CHARS = 64
+_DRAFTER_MAX_BLOCK_SP_CHARS = 64
+
+
+class DrafterPageNotFound(LookupError):
+    """A requested scratch-page id is not present in the current collection."""
+
+
+class DrafterPageAlreadyExists(RuntimeError):
+    """A create attempted to reuse a live scratch-page id."""
+
+
+def _validate_drafter_blocks(blocks: list[WhiteboardBlock]) -> None:
+    if len(blocks) > _DRAFTER_MAX_BLOCKS_PER_PAGE:
+        raise ValueError("drafter page contains too many blocks")
+    if sum(len(block.text) for block in blocks) > _DRAFTER_MAX_TEXT_CHARS_TOTAL:
+        raise ValueError("drafter page text exceeds the safety limit")
+    for block in blocks:
+        if not block.id or len(block.id) > _DRAFTER_MAX_BLOCK_ID_CHARS:
+            raise ValueError("drafter block id must contain 1-128 characters")
+        if not block.type or len(block.type) > _DRAFTER_MAX_BLOCK_TYPE_CHARS:
+            raise ValueError("drafter block type must contain 1-64 characters")
+        if block.sp is not None and len(block.sp) > _DRAFTER_MAX_BLOCK_SP_CHARS:
+            raise ValueError("drafter block screenplay type is too long")
+    marks = [mark for block in blocks for mark in (block.marks or [])]
+    if len(marks) > _DRAFTER_MAX_MARKS_PER_PAGE:
+        raise ValueError("drafter page contains too many inline marks")
+    mark_characters = sum(
+        len(json.dumps(
+            mark,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+            allow_nan=False,
+        ))
+        for mark in marks
+    )
+    if mark_characters > _DRAFTER_MAX_MARK_METADATA_CHARS_PER_PAGE:
+        raise ValueError("drafter page inline-mark metadata exceeds the safety limit")
+
+
+class DrafterPage(BaseModel):
+    """One project-owned scratch page displayed beside the main manuscript."""
+
+    id: str
+    title: str = Field(min_length=1, max_length=240)
+    blocks: list[WhiteboardBlock] = Field(default_factory=list)
+    created_at: str
+    updated_at: str
+
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, value: str) -> str:
+        if _DRAFTER_PAGE_ID_RE.fullmatch(value) is None:
+            raise ValueError("drafter page id must be 1-128 safe ASCII characters")
+        return value
+
+    @field_validator("title")
+    @classmethod
+    def validate_title(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("drafter page title must not be blank")
+        return value
+
+    @field_validator("created_at", "updated_at")
+    @classmethod
+    def validate_timestamp(cls, value: str) -> str:
+        if len(value) > 64:
+            raise ValueError("drafter page timestamp is too long")
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("drafter page timestamp must be ISO-8601") from exc
+        if parsed.tzinfo is None:
+            raise ValueError("drafter page timestamp must include a timezone")
+        return value
+
+    @model_validator(mode="after")
+    def validate_size(self) -> "DrafterPage":
+        _validate_drafter_blocks(self.blocks)
+        return self
+
+
+class DrafterPagesDocument(BaseModel):
+    pages: list[DrafterPage] = Field(default_factory=list)
+    revision: str = ""
+
+    @model_validator(mode="after")
+    def validate_collection(self) -> "DrafterPagesDocument":
+        if len(self.pages) > _DRAFTER_MAX_PAGES:
+            raise ValueError("drafter contains too many pages")
+        ids = [page.id for page in self.pages]
+        if len(ids) != len(set(ids)):
+            raise ValueError("drafter page ids must be unique")
+        if sum(len(page.blocks) for page in self.pages) > _DRAFTER_MAX_BLOCKS_TOTAL:
+            raise ValueError("drafter contains too many blocks")
+        if (
+            sum(len(block.text) for page in self.pages for block in page.blocks)
+            > _DRAFTER_MAX_TEXT_CHARS_TOTAL
+        ):
+            raise ValueError("drafter text exceeds the safety limit")
+        mark_count = sum(
+            len(block.marks or [])
+            for page in self.pages
+            for block in page.blocks
+        )
+        if mark_count > _DRAFTER_MAX_MARKS_TOTAL:
+            raise ValueError("drafter contains too many inline marks")
+        mark_characters = sum(
+            len(json.dumps(
+                mark,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+                allow_nan=False,
+            ))
+            for page in self.pages
+            for block in page.blocks
+            for mark in (block.marks or [])
+        )
+        if mark_characters > _DRAFTER_MAX_MARK_METADATA_CHARS_TOTAL:
+            raise ValueError("drafter inline-mark metadata exceeds the safety limit")
+        serialized = json.dumps(
+            {"pages": [page.model_dump(mode="json") for page in self.pages]},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        if len(serialized) > _DRAFTER_MAX_SERIALIZED_BYTES_TOTAL:
+            raise ValueError("drafter snapshot exceeds the desktop transport safety limit")
+        return self
+
+
+class DrafterPagePatch(BaseModel):
+    """Bounded page-level mutation; omitted blocks are never round-tripped."""
+
+    title: Optional[str] = Field(default=None, min_length=1, max_length=240)
+    blocks: Optional[list[WhiteboardBlock]] = None
+
+    @field_validator("title")
+    @classmethod
+    def validate_title(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("drafter page title must not be blank")
+        return value
+
+    @model_validator(mode="after")
+    def validate_patch(self) -> "DrafterPagePatch":
+        if self.title is None and self.blocks is None:
+            raise ValueError("drafter page patch must include title or blocks")
+        if self.blocks is not None:
+            _validate_drafter_blocks(self.blocks)
+        return self
+
+
+class DrafterPageSummary(BaseModel):
+    id: str
+    title: str
+    created_at: str
+    updated_at: str
+    block_count: int
+    character_count: int
+
+
+class DrafterPageMutationResult(BaseModel):
+    page: DrafterPageSummary
+    revision: str
+    page_count: int
+
+
+def drafter_page_summary(page: DrafterPage) -> DrafterPageSummary:
+    return DrafterPageSummary(
+        id=page.id,
+        title=page.title,
+        created_at=page.created_at,
+        updated_at=page.updated_at,
+        block_count=len(page.blocks),
+        character_count=sum(len(block.text) for block in page.blocks),
+    )
+
+
+class _StoredDrafterPagesDocument(DrafterPagesDocument):
+    """On-disk Drafter envelope; retry metadata is not exposed by the API."""
+
+    last_mutation_id: str = ""
+    last_mutation_fingerprint: str = ""
+
+
+class DrafterPagesStore:
+    """Per-document Drafter pages under ``<data_dir>/drafter/{doc_id}.json``."""
+
+    def __init__(self, root: Path | None = None) -> None:
+        self._dir = (root or _data_dir()) / _DRAFTER_DIRNAME
+
+    def _path(self, doc_id: str) -> Path:
+        return self._dir / f"{doc_id}.json"
+
+    @staticmethod
+    def _parse(text: str) -> _StoredDrafterPagesDocument:
+        data = json.loads(text)
+        if not isinstance(data, dict) or not isinstance(data.get("pages"), list):
+            raise ValueError("drafter state must be an object containing a pages list")
+        return _StoredDrafterPagesDocument.model_validate(data)
+
+    @staticmethod
+    def _public(doc: _StoredDrafterPagesDocument) -> DrafterPagesDocument:
+        return DrafterPagesDocument.model_validate(doc.model_dump())
+
+    def _load(
+        self,
+        doc_id: str,
+        *,
+        persist_missing: bool = True,
+    ) -> _StoredDrafterPagesDocument:
+        path = self._path(doc_id)
+
+        def prepare_recovery(
+            recovered: _StoredDrafterPagesDocument,
+        ) -> tuple[_StoredDrafterPagesDocument, bytes]:
+            rotated = recovered.model_copy(update={
+                "revision": _new_revision(),
+                "last_mutation_id": "",
+                "last_mutation_fingerprint": "",
+            })
+            return rotated, rotated.model_dump_json(indent=2).encode("utf-8")
+
+        doc, recovered = _read_with_recovery(
+            path,
+            self._parse,
+            label=f"Drafter pages for document {doc_id}",
+            prepare_recovery=prepare_recovery,
+        )
+        if doc is None:
+            doc = _StoredDrafterPagesDocument(pages=[], revision=_new_revision())
+            if persist_missing:
+                _atomic_write_text(path, doc.model_dump_json(indent=2))
+            return doc
+        if recovered:
+            assert _valid_revision(doc.revision)
+        elif not _valid_revision(doc.revision):
+            doc = doc.model_copy(update={"revision": _new_revision()})
+            _atomic_write_text(path, doc.model_dump_json(indent=2))
+        return doc
+
+    def get_document(self, doc_id: str) -> DrafterPagesDocument:
+        with _STATE_LOCK:
+            return self._public(self._load(doc_id))
+
+    def replace_document(
+        self,
+        doc_id: str,
+        pages: list[DrafterPage],
+        *,
+        expected_revision: str | None = None,
+        mutation_id: str | None = None,
+    ) -> DrafterPagesDocument:
+        with _STATE_LOCK:
+            # Validate the complete incoming collection before touching disk.
+            payload = DrafterPagesDocument(pages=list(pages), revision="")
+            cur = self._load(doc_id, persist_missing=expected_revision is not None)
+            fingerprint = _mutation_fingerprint("drafter", payload, expected_revision)
+            if mutation_id and cur.last_mutation_id == mutation_id:
+                if cur.last_mutation_fingerprint != fingerprint:
+                    raise MutationIdConflict(mutation_id)
+                return self._public(cur)
+            if expected_revision is not None and not hmac.compare_digest(
+                expected_revision, cur.revision
+            ):
+                raise ResourceRevisionConflict(expected_revision, cur.revision)
+            doc = _StoredDrafterPagesDocument(
+                pages=list(payload.pages),
+                revision=_new_revision(),
+                last_mutation_id=mutation_id or "",
+                last_mutation_fingerprint=fingerprint if mutation_id else "",
+            )
+            _atomic_write_text(self._path(doc_id), doc.model_dump_json(indent=2))
+            return self._public(doc)
+
+    @staticmethod
+    def _mutation_result(
+        doc: _StoredDrafterPagesDocument,
+        page_id: str,
+    ) -> DrafterPageMutationResult:
+        page = next((candidate for candidate in doc.pages if candidate.id == page_id), None)
+        if page is None:
+            raise DrafterPageNotFound(page_id)
+        return DrafterPageMutationResult(
+            page=drafter_page_summary(page),
+            revision=doc.revision,
+            page_count=len(doc.pages),
+        )
+
+    def create_page(
+        self,
+        doc_id: str,
+        page: DrafterPage,
+        *,
+        expected_revision: str | None = None,
+        mutation_id: str | None = None,
+    ) -> DrafterPageMutationResult:
+        with _STATE_LOCK:
+            cur = self._load(doc_id, persist_missing=expected_revision is not None)
+            fingerprint = _mutation_fingerprint(
+                f"drafter-page-create:{page.id}", page, expected_revision
+            )
+            if mutation_id and cur.last_mutation_id == mutation_id:
+                if cur.last_mutation_fingerprint != fingerprint:
+                    raise MutationIdConflict(mutation_id)
+                return self._mutation_result(cur, page.id)
+            if expected_revision is not None and not hmac.compare_digest(
+                expected_revision, cur.revision
+            ):
+                raise ResourceRevisionConflict(expected_revision, cur.revision)
+            if any(candidate.id == page.id for candidate in cur.pages):
+                raise DrafterPageAlreadyExists(page.id)
+            pages = [*cur.pages, page]
+            # Revalidate aggregate page/block/text caps before the atomic write.
+            validated = DrafterPagesDocument(pages=pages)
+            doc = _StoredDrafterPagesDocument(
+                pages=validated.pages,
+                revision=_new_revision(),
+                last_mutation_id=mutation_id or "",
+                last_mutation_fingerprint=fingerprint if mutation_id else "",
+            )
+            _atomic_write_text(self._path(doc_id), doc.model_dump_json(indent=2))
+            return self._mutation_result(doc, page.id)
+
+    def patch_page(
+        self,
+        doc_id: str,
+        page_id: str,
+        patch: DrafterPagePatch,
+        *,
+        expected_revision: str | None = None,
+        mutation_id: str | None = None,
+    ) -> DrafterPageMutationResult:
+        with _STATE_LOCK:
+            cur = self._load(doc_id, persist_missing=expected_revision is not None)
+            fingerprint = _mutation_fingerprint(
+                f"drafter-page-patch:{page_id}", patch, expected_revision
+            )
+            if mutation_id and cur.last_mutation_id == mutation_id:
+                if cur.last_mutation_fingerprint != fingerprint:
+                    raise MutationIdConflict(mutation_id)
+                return self._mutation_result(cur, page_id)
+            if expected_revision is not None and not hmac.compare_digest(
+                expected_revision, cur.revision
+            ):
+                raise ResourceRevisionConflict(expected_revision, cur.revision)
+            index = next(
+                (index for index, page in enumerate(cur.pages) if page.id == page_id),
+                None,
+            )
+            if index is None:
+                raise DrafterPageNotFound(page_id)
+            current_page = cur.pages[index]
+            updated_page = current_page.model_copy(update={
+                "title": current_page.title if patch.title is None else patch.title,
+                "blocks": current_page.blocks if patch.blocks is None else patch.blocks,
+                "updated_at": _now(),
+            })
+            # model_copy does not re-run validators in Pydantic v2.
+            updated_page = DrafterPage.model_validate(updated_page.model_dump())
+            pages = list(cur.pages)
+            pages[index] = updated_page
+            validated = DrafterPagesDocument(pages=pages)
+            doc = _StoredDrafterPagesDocument(
+                pages=validated.pages,
+                revision=_new_revision(),
+                last_mutation_id=mutation_id or "",
+                last_mutation_fingerprint=fingerprint if mutation_id else "",
+            )
+            _atomic_write_text(self._path(doc_id), doc.model_dump_json(indent=2))
+            return self._mutation_result(doc, page_id)
 
     def delete(self, doc_id: str) -> None:
         _delete_state_files(self._path(doc_id))
@@ -1183,5 +1586,6 @@ def migrate_legacy(default_doc_id: str) -> None:
 
 whiteboard_store = WhiteboardStore()
 outline_items_store = OutlineItemsStore()
+drafter_pages_store = DrafterPagesStore()
 comments_store = CommentsStore()
 psyke_revision_store = PsykeRevisionStore()

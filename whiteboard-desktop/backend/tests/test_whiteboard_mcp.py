@@ -103,6 +103,25 @@ class FakeClient:
         }
         self.outline = {1: [{"id": "o1", "title": "Mara arrives"}], 2: []}
         self.outline_revision = {1: "1" * 32, 2: "2" * 32}
+        self.drafter = {
+            1: [
+                {
+                    "id": "draft-1",
+                    "title": "Alternate opening",
+                    "blocks": [
+                        {
+                            "id": "d1",
+                            "type": "paragraph",
+                            "text": "Mara waits beneath an unlit lantern.",
+                        }
+                    ],
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                    "updated_at": "2026-01-01T00:00:00+00:00",
+                }
+            ],
+            2: [],
+        }
+        self.drafter_revision = {1: "e" * 32, 2: "f" * 32}
         self.comments = {
             1: [
                 _comment_dto("c1", "lantern", "Track this image"),
@@ -163,6 +182,133 @@ class FakeClient:
         return {
             "items": list(self.outline[document_id]),
             "revision": self.outline_revision[document_id],
+        }
+
+    @staticmethod
+    def _drafter_page_summary(page):
+        return {
+            "id": page["id"],
+            "title": page["title"],
+            "created_at": page["created_at"],
+            "updated_at": page["updated_at"],
+            "block_count": len(page["blocks"]),
+            "character_count": sum(len(block["text"]) for block in page["blocks"]),
+        }
+
+    def get_drafter_page_index(self, document_id):
+        pages = [
+            self._drafter_page_summary(page)
+            for page in self.drafter[document_id]
+        ]
+        return {
+            "pages": json.loads(json.dumps(pages)),
+            "revision": self.drafter_revision[document_id],
+            "page_count": len(pages),
+        }
+
+    def get_drafter_page(
+        self,
+        document_id,
+        page_id,
+        *,
+        offset,
+        limit,
+        max_characters,
+        text_offset=0,
+    ):
+        page = next(item for item in self.drafter[document_id] if item["id"] == page_id)
+        excerpts = []
+        block_index = offset
+        remaining = max_characters
+        first_text_offset = text_offset
+        next_offset = None
+        next_text_offset = None
+        while block_index < len(page["blocks"]) and len(excerpts) < limit and remaining > 0:
+            source = page["blocks"][block_index]
+            start = first_text_offset if block_index == offset else 0
+            take = min(len(source["text"]) - start, remaining)
+            end = start + take
+            whole = start == 0 and end == len(source["text"])
+            block = json.loads(json.dumps(source))
+            block["text"] = source["text"][start:end]
+            if not whole and block.get("marks"):
+                block["marks"] = None
+            excerpts.append(
+                {
+                    "block_index": block_index,
+                    "text_offset": start,
+                    "total_text_characters": len(source["text"]),
+                    "complete": whole,
+                    "marks_omitted": bool(source.get("marks")) and not whole,
+                    "block": block,
+                }
+            )
+            remaining -= take
+            if end < len(source["text"]):
+                next_offset = block_index
+                next_text_offset = end
+                break
+            block_index += 1
+            first_text_offset = 0
+        if next_offset is None and block_index < len(page["blocks"]):
+            next_offset = block_index
+            next_text_offset = 0
+        return {
+            "page": self._drafter_page_summary(page),
+            "blocks": excerpts,
+            "pagination": {
+                "offset": offset,
+                "text_offset": text_offset,
+                "returned_blocks": len(excerpts),
+                "total_blocks": len(page["blocks"]),
+                "next_offset": next_offset,
+                "next_text_offset": next_text_offset,
+                "max_characters": max_characters,
+                "truncated": next_offset is not None,
+            },
+            "revision": self.drafter_revision[document_id],
+            "page_count": len(self.drafter[document_id]),
+        }
+
+    def search_drafter(self, document_id, query, *, limit, snippet_characters):
+        needle = query.casefold()
+        results = []
+        total = 0
+        for page in self.drafter[document_id]:
+            if needle in page["title"].casefold():
+                total += 1
+                if len(results) < limit:
+                    results.append(
+                        {
+                            "page_id": page["id"],
+                            "page_title": page["title"],
+                            "match_scope": "title",
+                            "block_id": None,
+                            "block_index": None,
+                            "snippet": page["title"][:snippet_characters],
+                        }
+                    )
+            for block_index, block in enumerate(page["blocks"]):
+                if needle not in block["text"].casefold():
+                    continue
+                total += 1
+                if len(results) < limit:
+                    results.append(
+                        {
+                            "page_id": page["id"],
+                            "page_title": page["title"],
+                            "match_scope": "block",
+                            "block_id": block["id"],
+                            "block_index": block_index,
+                            "snippet": block["text"][:snippet_characters],
+                        }
+                    )
+        return {
+            "results": results,
+            "total_matches": total,
+            "truncated": total > len(results),
+            "revision": self.drafter_revision[document_id],
+            "page_count": len(self.drafter[document_id]),
         }
 
     def get_comments(self, document_id):
@@ -545,6 +691,76 @@ class FakeClient:
         self.outline_revision[document_id] = "6" * 32
         return self.get_outline(document_id)
 
+    def create_drafter_page(
+        self,
+        document_id,
+        *,
+        incarnation,
+        expected_revision,
+        mutation_id,
+        page,
+    ):
+        document = self.get_document(document_id)
+        if (
+            document["incarnation"] != incarnation
+            or self.drafter_revision[document_id] != expected_revision
+        ):
+            raise WhiteboardApiError("revision_conflict: drafter changed")
+        self.write_calls.append(
+            {
+                "operation": "create_drafter_page",
+                "document_id": document_id,
+                "incarnation": incarnation,
+                "expected_revision": expected_revision,
+                "mutation_id": mutation_id,
+                "page": json.loads(json.dumps(page)),
+            }
+        )
+        self.drafter[document_id].append(json.loads(json.dumps(page)))
+        self.drafter_revision[document_id] = "9" * 32
+        return {
+            "page": self._drafter_page_summary(page),
+            "revision": self.drafter_revision[document_id],
+            "page_count": len(self.drafter[document_id]),
+        }
+
+    def patch_drafter_page(
+        self,
+        document_id,
+        page_id,
+        *,
+        incarnation,
+        expected_revision,
+        mutation_id,
+        patch,
+    ):
+        document = self.get_document(document_id)
+        if (
+            document["incarnation"] != incarnation
+            or self.drafter_revision[document_id] != expected_revision
+        ):
+            raise WhiteboardApiError("revision_conflict: drafter changed")
+        self.write_calls.append(
+            {
+                "operation": "patch_drafter_page",
+                "document_id": document_id,
+                "page_id": page_id,
+                "incarnation": incarnation,
+                "expected_revision": expected_revision,
+                "mutation_id": mutation_id,
+                "patch": json.loads(json.dumps(patch)),
+            }
+        )
+        page = next(item for item in self.drafter[document_id] if item["id"] == page_id)
+        page.update(json.loads(json.dumps(patch)))
+        page["updated_at"] = "2026-01-04T00:00:00+00:00"
+        self.drafter_revision[document_id] = "8" * 32
+        return {
+            "page": self._drafter_page_summary(page),
+            "revision": self.drafter_revision[document_id],
+            "page_count": len(self.drafter[document_id]),
+        }
+
 
 def _gateway(*, allow_writes: bool = False) -> WhiteboardMcpGateway:
     return WhiteboardMcpGateway(  # type: ignore[arg-type]
@@ -638,10 +854,11 @@ def _outline_node(
 
 def test_registry_is_separate_focused_and_has_one_apply_boundary() -> None:
     names = [spec.name for spec in TOOL_SPECS]
-    assert len(names) == len(set(names)) == 24
+    assert len(names) == len(set(names)) == 28
     assert set(names) == set(HANDLERS)
     assert all(name.startswith(TOOL_PREFIX) for name in names)
-    assert all(not any(word in name for word in ("write", "create", "update", "delete")) for name in names)
+    assert all(not any(word in name for word in ("write", "update", "delete")) for name in names)
+    assert all("create" not in name or "_propose_" in name for name in names)
     apply = HANDLERS["logosforge_whiteboard_apply_proposal"]
     assert apply.read_only is False
     assert apply.destructive is True
@@ -649,6 +866,8 @@ def test_registry_is_separate_focused_and_has_one_apply_boundary() -> None:
     assert HANDLERS["logosforge_whiteboard_discard_proposal"].read_only is False
     assert HANDLERS["logosforge_whiteboard_propose_manuscript_patch"].idempotent is False
     assert HANDLERS["logosforge_whiteboard_propose_outline_replace"].idempotent is False
+    assert HANDLERS["logosforge_whiteboard_propose_drafter_page_create"].idempotent is False
+    assert HANDLERS["logosforge_whiteboard_propose_drafter_page_patch"].idempotent is False
     assert HANDLERS["logosforge_whiteboard_propose_comment_reply"].idempotent is False
     assert HANDLERS["logosforge_whiteboard_propose_comment_resolution"].idempotent is False
     assert HANDLERS["logosforge_whiteboard_propose_psyke_entry"].idempotent is False
@@ -665,7 +884,7 @@ def test_registry_is_separate_focused_and_has_one_apply_boundary() -> None:
         }
     )
     assert SERVER_NAME == "logosforge-whiteboard"
-    assert SERVER_VERSION == "1.4.0"
+    assert SERVER_VERSION == "1.5.0"
 
 
 def test_document_selection_is_process_local_and_reads_native_summary() -> None:
@@ -723,6 +942,147 @@ def test_outline_carries_revision_without_changing_items_or_pagination() -> None
     assert outline["revision"] == "1" * 32
     assert outline["items"] == [{"id": "o1", "title": "Mara arrives"}]
     assert outline["page"]["total"] == 1
+
+
+def test_drafter_reads_are_bounded_revisioned_and_explicitly_provisional() -> None:
+    gateway = _gateway()
+    pages = call_tool(
+        gateway,
+        "logosforge_whiteboard_get_drafter_pages",
+        {"document_id": 1, "offset": 0, "limit": 1},
+    )["result"]
+    assert pages["revision"] == "e" * 32
+    assert pages["provisional"] is True
+    assert pages["pages"] == [
+        {
+            "id": "draft-1",
+            "title": "Alternate opening",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "block_count": 1,
+            "character_count": 36,
+            "provisional": True,
+        }
+    ]
+
+    page = call_tool(
+        gateway,
+        "logosforge_whiteboard_get_drafter_page",
+        {
+            "document_id": 1,
+            "page_id": "draft-1",
+            "offset": 0,
+            "limit": 1,
+            "max_characters": 1_000,
+        },
+    )["result"]
+    assert page["revision"] == "e" * 32
+    assert page["drafter_page"]["provisional"] is True
+    assert page["drafter_page"]["blocks"][0]["id"] == "d1"
+    assert page["page"]["total"] == 1
+
+    search = call_tool(
+        gateway,
+        "logosforge_whiteboard_search",
+        {"document_id": 1, "query": "unlit", "scope": "drafter", "limit": 10},
+    )["result"]
+    assert search["total_matches"] == 1
+    assert search["matches"][0]["scope"] == "drafter"
+    assert search["matches"][0]["provisional"] is True
+
+
+def test_drafter_page_partial_block_continuation_preserves_progress_metadata() -> None:
+    client = FakeClient()
+    client.drafter[1][0]["blocks"] = [
+        {
+            "id": "long-draft",
+            "type": "paragraph",
+            "text": "x" * 1_500,
+            "marks": [{"type": "bold", "from": 0, "to": 1}],
+        }
+    ]
+    gateway = WhiteboardMcpGateway(client)  # type: ignore[arg-type]
+    first = call_tool(
+        gateway,
+        "logosforge_whiteboard_get_drafter_page",
+        {
+            "document_id": 1,
+            "page_id": "draft-1",
+            "offset": 0,
+            "text_offset": 0,
+            "limit": 1,
+            "max_characters": 1_000,
+        },
+    )["result"]
+    assert len(first["drafter_page"]["blocks"][0]["text"]) == 1_000
+    assert first["page"]["next_offset"] == 0
+    assert first["page"]["next_text_offset"] == 1_000
+    assert first["page"]["excerpts"][0] | {
+        "block_index": 0,
+        "text_offset": 0,
+        "total_text_characters": 1_500,
+        "complete": False,
+        "marks_omitted": True,
+    } == first["page"]["excerpts"][0]
+
+    resumed = call_tool(
+        gateway,
+        "logosforge_whiteboard_get_drafter_page",
+        {
+            "document_id": 1,
+            "page_id": "draft-1",
+            "offset": first["page"]["next_offset"],
+            "text_offset": first["page"]["next_text_offset"],
+            "limit": 1,
+            "max_characters": 1_000,
+        },
+    )["result"]
+    assert len(resumed["drafter_page"]["blocks"][0]["text"]) == 500
+    assert resumed["page"]["next_offset"] is None
+    assert resumed["page"]["next_text_offset"] is None
+    assert resumed["page"]["excerpts"][0]["text_offset"] == 1_000
+
+
+def test_drafter_proposals_preflight_page_marks_and_collection_totals() -> None:
+    too_many_marks = call_tool(
+        _gateway(),
+        "logosforge_whiteboard_propose_drafter_page_create",
+        {
+            "document_id": 1,
+            "expected_revision": "e" * 32,
+            "title": "Too many marks",
+            "blocks": [
+                {
+                    "id": "marked",
+                    "type": "paragraph",
+                    "text": "x",
+                    "marks": [
+                        {"type": "bold", "from": 0, "to": 1}
+                        for _ in range(20_001)
+                    ],
+                }
+            ],
+        },
+    )
+    assert too_many_marks["ok"] is False
+    assert "at most 20000 inline marks" in too_many_marks["error"]
+
+    client = FakeClient()
+    original_index = client.get_drafter_page_index(1)
+    original_index["pages"][0]["block_count"] = 100_000
+    client.get_drafter_page_index = lambda _document_id: original_index  # type: ignore[method-assign]
+    too_many_blocks = call_tool(
+        WhiteboardMcpGateway(client),  # type: ignore[arg-type]
+        "logosforge_whiteboard_propose_drafter_page_create",
+        {
+            "document_id": 1,
+            "expected_revision": "e" * 32,
+            "title": "One block too far",
+            "blocks": [{"id": "overflow", "type": "paragraph", "text": "x"}],
+        },
+    )
+    assert too_many_blocks["ok"] is False
+    assert "collection limit of 100000 blocks" in too_many_blocks["error"]
 
 
 def test_large_page_items_are_clipped_with_progress_safe_pagination() -> None:
@@ -1266,6 +1626,84 @@ def test_outline_replacement_proposal_is_revision_bound_and_single_use() -> None
         "item_count": 2,
     }
     assert gateway.client.write_calls[0]["items"] == items  # type: ignore[attr-defined]
+
+
+def test_drafter_create_and_patch_proposals_never_mutate_the_manuscript() -> None:
+    gateway = _gateway(allow_writes=True)
+    manuscript_before = json.loads(json.dumps(gateway.client.blocks[1]))  # type: ignore[attr-defined]
+    create = call_tool(
+        gateway,
+        "logosforge_whiteboard_propose_drafter_page_create",
+        {
+            "document_id": 1,
+            "expected_revision": "e" * 32,
+            "title": "Dockside exchange",
+            "blocks": [
+                {
+                    "id": "dock-1",
+                    "type": "paragraph",
+                    "text": "Mara tests the scene away from the manuscript.",
+                }
+            ],
+        },
+    )["result"]
+    assert create["operation"] == "create_drafter_page"
+    assert create["review"]["provisional"] is True
+    assert create["request"]["method"] == "POST"
+    assert create["request"]["path"] == "/api/drafter/pages?doc=1"
+    assert create["review"]["page"]["blocks"]["text_characters"] == 46
+    assert (
+        create["review"]["proposed_block_changes"]["preview"][0]["after"]["text"]
+        == "Mara tests the scene away from the manuscript."
+    )
+    assert "canonical manuscript is not changed" in create["summary"]
+    assert gateway.client.blocks[1] == manuscript_before  # type: ignore[attr-defined]
+
+    created = call_tool(
+        gateway,
+        "logosforge_whiteboard_apply_proposal",
+        {"proposal_id": create["proposal_id"]},
+    )["result"]
+    created_page_id = created["result"]["page_id"]
+    assert created["result"] | {
+        "resource": "drafter",
+        "operation": "create",
+        "document_id": 1,
+        "revision": "9" * 32,
+        "title": "Dockside exchange",
+        "block_count": 1,
+        "page_count": 2,
+        "provisional": True,
+    } == created["result"]
+    assert gateway.client.blocks[1] == manuscript_before  # type: ignore[attr-defined]
+
+    patch = call_tool(
+        gateway,
+        "logosforge_whiteboard_propose_drafter_page_patch",
+        {
+            "document_id": 1,
+            "page_id": created_page_id,
+            "expected_revision": "9" * 32,
+            "patch": {"title": "Dockside exchange — revised"},
+        },
+    )["result"]
+    assert patch["operation"] == "patch_drafter_page"
+    assert patch["review"]["changed_fields"] == ["title"]
+    assert patch["request"]["method"] == "PATCH"
+    assert patch["request"]["path"] == f"/api/drafter/pages/{created_page_id}?doc=1"
+    patched = call_tool(
+        gateway,
+        "logosforge_whiteboard_apply_proposal",
+        {"proposal_id": patch["proposal_id"]},
+    )["result"]
+    assert patched["result"]["operation"] == "patch"
+    assert patched["result"]["page_id"] == created_page_id
+    assert patched["result"]["title"] == "Dockside exchange — revised"
+    assert gateway.client.blocks[1] == manuscript_before  # type: ignore[attr-defined]
+    assert [call["operation"] for call in gateway.client.write_calls] == [  # type: ignore[attr-defined]
+        "create_drafter_page",
+        "patch_drafter_page",
+    ]
 
 
 def test_comment_reply_and_resolution_proposals_are_revision_bound_and_single_use() -> None:
@@ -2302,6 +2740,213 @@ def test_api_client_manuscript_write_is_exact_conditional_put(monkeypatch) -> No
     assert seen["timeout"] == 7.0
 
 
+def test_api_client_drafter_reads_use_bounded_index_page_and_search_routes(
+    monkeypatch,
+) -> None:
+    seen = []
+    summary = {
+        "id": "draft-1",
+        "title": "Alternate opening",
+        "created_at": "2026-09-25T00:00:00+00:00",
+        "updated_at": "2026-09-25T00:01:00+00:00",
+        "block_count": 1,
+        "character_count": 11,
+    }
+    block = {
+        "id": "d1",
+        "type": "paragraph",
+        "text": "Draft text.",
+        "level": None,
+        "sp": None,
+        "marks": None,
+    }
+
+    class Response:
+        def __init__(self, value):
+            self.value = value
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _size):
+            return json.dumps(self.value).encode("utf-8")
+
+    def urlopen(request, timeout):
+        seen.append((request.get_method(), request.full_url, timeout))
+        if "/page-index?" in request.full_url:
+            return Response(
+                {"pages": [summary], "revision": "e" * 32, "page_count": 1}
+            )
+        if "/search?" in request.full_url:
+            return Response(
+                {
+                    "results": [
+                        {
+                            "page_id": "draft-1",
+                            "page_title": "Alternate opening",
+                            "match_scope": "block",
+                            "block_id": "d1",
+                            "block_index": 0,
+                            "snippet": "Draft text.",
+                        }
+                    ],
+                    "total_matches": 1,
+                    "truncated": False,
+                    "revision": "e" * 32,
+                    "page_count": 1,
+                }
+            )
+        return Response(
+            {
+                "page": summary,
+                "blocks": [
+                    {
+                        "block_index": 0,
+                        "text_offset": 0,
+                        "total_text_characters": 11,
+                        "complete": True,
+                        "marks_omitted": False,
+                        "block": block,
+                    }
+                ],
+                "pagination": {
+                    "offset": 0,
+                    "text_offset": 0,
+                    "returned_blocks": 1,
+                    "total_blocks": 1,
+                    "next_offset": None,
+                    "next_text_offset": None,
+                    "max_characters": 1_000,
+                    "truncated": False,
+                },
+                "revision": "e" * 32,
+                "page_count": 1,
+            }
+        )
+
+    monkeypatch.setattr("app.whiteboard_mcp.client.urllib.request.urlopen", urlopen)
+    client = WhiteboardApiClient("http://127.0.0.1:8777", "s" * 32, 7)
+    assert client.get_drafter_page_index(1)["pages"] == [summary]
+    assert client.get_drafter_page(
+        1,
+        "draft-1",
+        offset=0,
+        limit=1,
+        max_characters=1_000,
+        text_offset=0,
+    )["blocks"][0]["block"] == block
+    assert client.search_drafter(
+        1, "Draft", limit=10, snippet_characters=240
+    )["total_matches"] == 1
+    assert seen == [
+        ("GET", "http://127.0.0.1:8777/api/drafter/page-index?doc=1", 7.0),
+        (
+            "GET",
+            "http://127.0.0.1:8777/api/drafter/pages/draft-1"
+            "?doc=1&offset=0&limit=1&max_characters=1000&text_offset=0",
+            7.0,
+        ),
+        (
+            "GET",
+            "http://127.0.0.1:8777/api/drafter/search"
+            "?doc=1&q=Draft&limit=10&snippet_characters=240",
+            7.0,
+        ),
+    ]
+
+
+def test_api_client_drafter_writes_are_exact_conditional_page_mutations(
+    monkeypatch,
+) -> None:
+    seen = []
+    page = {
+        "id": "draft-1",
+        "title": "Alternate opening",
+        "blocks": [
+            {"id": "d1", "type": "paragraph", "text": "Draft text."}
+        ],
+        "created_at": "2026-09-25T00:00:00+00:00",
+        "updated_at": "2026-09-25T00:01:00+00:00",
+    }
+    summary = {
+        "id": "draft-1",
+        "title": "Alternate opening",
+        "created_at": "2026-09-25T00:00:00+00:00",
+        "updated_at": "2026-09-25T00:01:00+00:00",
+        "block_count": 1,
+        "character_count": 11,
+    }
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _size):
+            return json.dumps(
+                {"page": summary, "revision": "9" * 32, "page_count": 1}
+            ).encode("utf-8")
+
+    def urlopen(request, timeout):
+        seen.append(
+            {
+                "method": request.get_method(),
+                "url": request.full_url,
+                "headers": {
+                    key.lower(): value for key, value in request.header_items()
+                },
+                "body": json.loads(request.data.decode("utf-8")),
+                "timeout": timeout,
+            }
+        )
+        return Response()
+
+    monkeypatch.setattr("app.whiteboard_mcp.client.urllib.request.urlopen", urlopen)
+    client = WhiteboardApiClient("http://127.0.0.1:8777", "s" * 32, 7)
+    result = client.create_drafter_page(
+        1,
+        incarnation="a" * 32,
+        expected_revision="e" * 32,
+        mutation_id="lfwbp_safe-id",
+        page=page,
+    )
+    assert result == {"page": summary, "revision": "9" * 32, "page_count": 1}
+    assert seen[0]["method"] == "POST"
+    assert seen[0]["url"] == "http://127.0.0.1:8777/api/drafter/pages?doc=1"
+    assert seen[0]["headers"]["authorization"] == f"Bearer {'s' * 32}"
+    assert seen[0]["headers"]["if-match"] == (
+        f'"lfwb:drafter:{"a" * 32}:{"e" * 32}"'
+    )
+    assert seen[0]["headers"]["x-logosforge-document-incarnation"] == "a" * 32
+    assert seen[0]["headers"]["x-logosforge-mutation-id"] == "lfwbp_safe-id"
+    assert seen[0]["headers"]["content-type"] == "application/json"
+    assert seen[0]["body"] == page
+    assert seen[0]["timeout"] == 7.0
+
+    patch = {"title": "Revised opening"}
+    result = client.patch_drafter_page(
+        1,
+        "draft-1",
+        incarnation="a" * 32,
+        expected_revision="e" * 32,
+        mutation_id="lfwbp_patch-id",
+        patch=patch,
+    )
+    assert result["revision"] == "9" * 32
+    assert seen[1]["method"] == "PATCH"
+    assert seen[1]["url"] == "http://127.0.0.1:8777/api/drafter/pages/draft-1?doc=1"
+    assert seen[1]["headers"]["if-match"] == (
+        f'"lfwb:drafter:{"a" * 32}:{"e" * 32}"'
+    )
+    assert seen[1]["headers"]["x-logosforge-mutation-id"] == "lfwbp_patch-id"
+    assert seen[1]["body"] == patch
+
+
 def test_api_client_comment_reply_is_exact_conditional_post_and_validates_etag(
     monkeypatch,
 ) -> None:
@@ -3299,8 +3944,8 @@ def test_real_mcp_stdio_initializes_and_completes_authenticated_read(tmp_path: P
         thread.join(timeout=5)
 
     assert initialized.serverInfo.name == "logosforge-whiteboard"
-    assert initialized.serverInfo.version == "1.4.0"
-    assert len(listed.tools) == 24
+    assert initialized.serverInfo.version == "1.5.0"
+    assert len(listed.tools) == 28
     by_name = {tool.name: tool for tool in listed.tools}
     apply = by_name["logosforge_whiteboard_apply_proposal"].annotations
     assert apply.readOnlyHint is False
@@ -3313,6 +3958,8 @@ def test_real_mcp_stdio_initializes_and_completes_authenticated_read(tmp_path: P
     for proposal_name in (
         "logosforge_whiteboard_propose_manuscript_patch",
         "logosforge_whiteboard_propose_outline_replace",
+        "logosforge_whiteboard_propose_drafter_page_create",
+        "logosforge_whiteboard_propose_drafter_page_patch",
         "logosforge_whiteboard_propose_comment_reply",
         "logosforge_whiteboard_propose_comment_resolution",
         "logosforge_whiteboard_propose_psyke_entry",

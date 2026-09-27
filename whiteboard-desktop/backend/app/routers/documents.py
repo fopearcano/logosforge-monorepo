@@ -1,9 +1,9 @@
 """Document library — list / create / delete whiteboard documents.
 
 A whiteboard 'document' is one core project (for its ISOLATED PSYKE bible) plus a
-local blocks file + outline file keyed by that project id. These routes manage the
-SET of documents; the per-document blocks/outline/psyke are served by the scoped
-routes via the ``?doc=<id>`` query param.
+local blocks, Drafter-page, and outline files keyed by that project id. These
+routes manage the SET of documents; the per-document resources and PSYKE are
+served by scoped routes via the ``?doc=<id>`` query param.
 """
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ from app.local_state import (
     LocalStateError,
     WhiteboardCreate,
     comments_store,
+    drafter_pages_store,
     outline_items_store,
     psyke_revision_store,
     whiteboard_store,
@@ -47,6 +48,7 @@ def _local_document_ids() -> set[str]:
     return set().union(
         whiteboard_store.list_document_ids(),
         outline_items_store.list_document_ids(),
+        drafter_pages_store.list_document_ids(),
         comments_store.list_document_ids(),
         psyke_revision_store.list_document_ids(),
     )
@@ -62,6 +64,7 @@ def _cleanup_local_document_state(doc_id: str) -> list[str]:
     for label, store in (
         ("manuscript", whiteboard_store),
         ("outline", outline_items_store),
+        ("Drafter pages", drafter_pages_store),
         ("comments", comments_store),
         ("PSYKE revision metadata", psyke_revision_store),
     ):
@@ -239,7 +242,8 @@ async def create_document(
 @router.delete("/api/documents/{doc_id}")
 async def delete_document(request: Request, doc_id: int) -> dict:
     """Delete a document: its core project (cascades the PSYKE bible) + its local
-    blocks and outline files. Tolerant of an already-deleted core project."""
+    blocks, Drafter-page, and outline files. Tolerant of an already-deleted core
+    project."""
     core = request.app.state.core
     document_id = str(doc_id)
     async with locked_document_lifecycle(document_id):

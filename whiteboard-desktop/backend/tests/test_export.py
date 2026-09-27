@@ -47,7 +47,14 @@ def check(label: str, cond: bool) -> None:
 
 # -- 1. pure assembler -------------------------------------------------------
 def test_build_bundle_pure() -> None:
-    from app.local_state import Comment, CommentAnchor, CommentsDocument, WhiteboardBlock, WhiteboardDocument
+    from app.local_state import (
+        Comment,
+        CommentAnchor,
+        CommentsDocument,
+        DrafterPage,
+        WhiteboardBlock,
+        WhiteboardDocument,
+    )
     from app.routers.export import BUNDLE_FORMAT, build_project_bundle
 
     wb = WhiteboardDocument(
@@ -85,6 +92,18 @@ def test_build_bundle_pure() -> None:
         "scene_title": "",
         "sort_order": 1,
     }]
+    drafter_pages = [DrafterPage(
+        id="draft-one",
+        title="Alternate arrival",
+        blocks=[WhiteboardBlock(
+            id="draft-block",
+            type="paragraph",
+            text="Mara reaches the harbour before dawn.",
+            marks=[{"type": "italic", "from": 0, "to": 4}],
+        )],
+        created_at="2026-01-01T00:00:00Z",
+        updated_at="2026-01-02T00:00:00Z",
+    )]
 
     b = build_project_bundle(
         "7",
@@ -95,6 +114,7 @@ def test_build_bundle_pure() -> None:
         "2026-01-01T00:00:00Z",
         psyke_relations=relations,
         psyke_progressions=progressions,
+        drafter_pages=drafter_pages,
     )
 
     check("format tag", b["format"] == BUNDLE_FORMAT)
@@ -106,6 +126,13 @@ def test_build_bundle_pure() -> None:
     check("all blocks carried", len(blocks) == 2 and blocks[0]["type"] == "heading" and blocks[0]["level"] == 1)
     check("None fields dropped from blocks", "level" not in blocks[1])  # paragraph has no level
     check("outline carried", b["project"]["outline"] == outline)
+    draft = b["project"]["drafter"]["pages"]
+    check(
+        "drafter pages carried losslessly",
+        len(draft) == 1
+        and draft[0]["id"] == "draft-one"
+        and draft[0]["blocks"][0]["marks"][0]["type"] == "italic",
+    )
     cm = b["project"]["comments"]
     check(
         "comment carried with stable anchor",
@@ -145,6 +172,17 @@ def test_export_route_integration() -> None:
         client.put("/api/outline/items", json={"items": [
             {"id": "o1", "parentId": None, "type": "act", "title": "Act I", "order": 0},
         ]})
+        client.put("/api/drafter/pages", json={"pages": [{
+            "id": "draft-one",
+            "title": "Alternate arrival",
+            "blocks": [{
+                "id": "draft-block",
+                "type": "paragraph",
+                "text": "Mara reaches the harbour before dawn.",
+            }],
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-02T00:00:00Z",
+        }]})
         client.post("/api/comments", json={
             "anchor": {
                 "block_index": 1, "block_id": "b1", "from_offset": 0, "to_offset": 2,
@@ -191,6 +229,14 @@ def test_export_route_integration() -> None:
         check("route: blocks present", len(proj.get("manuscript", {}).get("blocks", [])) == 2)
         check("route: settings present", proj.get("settings", {}).get("narrativePerson") == "third-limited")
         check("route: outline present", len(proj.get("outline", [])) == 1)
+        drafter_pages = proj.get("drafter", {}).get("pages", [])
+        check(
+            "route: drafter page present",
+            len(drafter_pages) == 1
+            and drafter_pages[0].get("id") == "draft-one"
+            and drafter_pages[0].get("blocks", [{}])[0].get("text")
+            == "Mara reaches the harbour before dawn.",
+        )
         comments = proj.get("comments", [])
         check(
             "route: stable comment anchor present",

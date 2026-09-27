@@ -17,6 +17,7 @@ import {
   OUTLINE_TYPES,
   type OutlineNode,
 } from '../outline/outlineModel';
+import type { DrafterPage } from '../drafter/types';
 import type { DocumentSettings } from '../whiteboard/documentSettings';
 import type { WhiteboardBlock } from '../whiteboard/types';
 import { blocksToText, textToBlocks } from './fileSerialize';
@@ -34,7 +35,7 @@ export type RecoveryImportFormat =
 
 export interface RecoveryImportDescriptor {
   format: RecoveryImportFormat;
-  scope: 'whiteboard' | 'outline';
+  scope: 'whiteboard' | 'outline' | 'drafter';
   documentId: string;
   /** Missing only on legacy outline conflict copies exported before identity binding. */
   incarnation: string | null;
@@ -117,6 +118,8 @@ export class ImportError extends Error {}
 
 export interface ImportResult {
   blocks: WhiteboardBlock[];
+  /** Present only for a complete Drafter recovery snapshot. */
+  drafterPages?: DrafterPage[];
   mode?: string;
   settings?: Partial<DocumentSettings>;
   outline?: OutlineNode[];
@@ -247,6 +250,19 @@ const ISO_TIMESTAMP_RE =
 export const MAX_LOGOSFORGE_BYTES = (2 * 128 * 1024 * 1024) + (1024 * 1024);
 const MAX_BLOCKS = 250_000;
 const MAX_MARKS_PER_BLOCK = 100_000;
+const DRAFTER_PAGE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const DRAFTER_MAX_PAGES = 256;
+const DRAFTER_MAX_BLOCKS_PER_PAGE = 20_000;
+const DRAFTER_MAX_BLOCKS_TOTAL = 100_000;
+const DRAFTER_MAX_TEXT_CHARS_TOTAL = 32_000_000;
+const DRAFTER_MAX_MARKS_PER_PAGE = 20_000;
+const DRAFTER_MAX_MARKS_TOTAL = 100_000;
+const DRAFTER_MAX_MARK_METADATA_CHARS_PER_PAGE = 1_000_000;
+const DRAFTER_MAX_MARK_METADATA_CHARS_TOTAL = 8_000_000;
+const DRAFTER_MAX_SERIALIZED_BYTES_TOTAL = 96 * 1024 * 1024;
+const DRAFTER_MAX_BLOCK_ID_CHARS = 128;
+const DRAFTER_MAX_BLOCK_TYPE_CHARS = 64;
+const DRAFTER_MAX_BLOCK_SP_CHARS = 64;
 const MAX_OUTLINE_ITEMS = 100_000;
 const MAX_OUTLINE_DEPTH = 512;
 const STABLE_ID_RE = /^[^\s\u0000-\u001f\u007f]{1,256}$/;
@@ -378,6 +394,130 @@ function parseBlocks(value: unknown, label: string): WhiteboardBlock[] {
     }
     return parsed;
   });
+}
+
+/** Strictly parse the complete, project-scoped Drafter snapshot stored in a
+ * pending-write recovery copy. The limits mirror the backend collection model
+ * and its desktop crash-journal transport ceiling. */
+function parseDrafterPages(value: unknown, label: string): DrafterPage[] {
+  if (!Array.isArray(value)) invalidRecovery(`${label} must be an array.`);
+  if (value.length > DRAFTER_MAX_PAGES) invalidRecovery(`${label} contains too many pages.`);
+
+  const pageIds = new Set<string>();
+  let blockCount = 0;
+  let textCharacters = 0;
+  let markCount = 0;
+  let markMetadataCharacters = 0;
+
+  const pages = value.map((raw, pageIndex): DrafterPage => {
+    const pageLabel = `${label}[${pageIndex}]`;
+    const page = recoveryRecord(raw, pageLabel);
+    hasOnlyKeys(page, ['id', 'title', 'blocks', 'created_at', 'updated_at'], pageLabel);
+
+    const id = recoveryString(page.id, `${pageLabel}.id`);
+    if (!DRAFTER_PAGE_ID_RE.test(id)) {
+      invalidRecovery(`${pageLabel}.id is not a valid Drafter page id.`);
+    }
+    if (pageIds.has(id)) invalidRecovery(`${label} contains duplicate page id "${id}".`);
+    pageIds.add(id);
+
+    const title = recoveryString(page.title, `${pageLabel}.title`);
+    if (!title.trim() || title.length > 240) {
+      invalidRecovery(`${pageLabel}.title is not valid.`);
+    }
+
+    const parsePageTimestamp = (candidate: unknown, timestampLabel: string): string => {
+      const timestamp = recoveryString(candidate, timestampLabel);
+      if (timestamp.length > 64) invalidRecovery(`${timestampLabel} is too long.`);
+      return recoveryTimestamp(timestamp, timestampLabel);
+    };
+    const createdAt = parsePageTimestamp(page.created_at, `${pageLabel}.created_at`);
+    const updatedAt = parsePageTimestamp(page.updated_at, `${pageLabel}.updated_at`);
+
+    if (!Array.isArray(page.blocks)) invalidRecovery(`${pageLabel}.blocks must be an array.`);
+    if (page.blocks.length > DRAFTER_MAX_BLOCKS_PER_PAGE) {
+      invalidRecovery(`${pageLabel}.blocks contains too many blocks.`);
+    }
+    const blocks = parseBlocks(page.blocks, `${pageLabel}.blocks`);
+    blockCount += blocks.length;
+
+    let pageTextCharacters = 0;
+    let pageMarkCount = 0;
+    let pageMarkMetadataCharacters = 0;
+    for (const [blockIndex, block] of blocks.entries()) {
+      const blockLabel = `${pageLabel}.blocks[${blockIndex}]`;
+      if (!block.id || block.id.length > DRAFTER_MAX_BLOCK_ID_CHARS) {
+        invalidRecovery(`${blockLabel}.id must contain 1-${DRAFTER_MAX_BLOCK_ID_CHARS} characters.`);
+      }
+      if (!block.type || block.type.length > DRAFTER_MAX_BLOCK_TYPE_CHARS) {
+        invalidRecovery(`${blockLabel}.type must contain 1-${DRAFTER_MAX_BLOCK_TYPE_CHARS} characters.`);
+      }
+      if (block.sp !== undefined && block.sp !== null && block.sp.length > DRAFTER_MAX_BLOCK_SP_CHARS) {
+        invalidRecovery(`${blockLabel}.sp is too long.`);
+      }
+      pageTextCharacters += block.text.length;
+      const marks = block.marks ?? [];
+      pageMarkCount += marks.length;
+      pageMarkMetadataCharacters += marks.reduce(
+        (sum, mark) => sum + JSON.stringify(mark).length,
+        0,
+      );
+    }
+    if (pageTextCharacters > DRAFTER_MAX_TEXT_CHARS_TOTAL) {
+      invalidRecovery(`${pageLabel}.blocks text exceeds the safety limit.`);
+    }
+    if (pageMarkCount > DRAFTER_MAX_MARKS_PER_PAGE) {
+      invalidRecovery(`${pageLabel}.blocks contains too many inline marks.`);
+    }
+    if (pageMarkMetadataCharacters > DRAFTER_MAX_MARK_METADATA_CHARS_PER_PAGE) {
+      invalidRecovery(`${pageLabel}.blocks inline-mark metadata exceeds the safety limit.`);
+    }
+    textCharacters += pageTextCharacters;
+    markCount += pageMarkCount;
+    markMetadataCharacters += pageMarkMetadataCharacters;
+
+    return {
+      id,
+      title,
+      blocks,
+      created_at: createdAt,
+      updated_at: updatedAt,
+    };
+  });
+
+  if (blockCount > DRAFTER_MAX_BLOCKS_TOTAL) invalidRecovery(`${label} contains too many blocks.`);
+  if (textCharacters > DRAFTER_MAX_TEXT_CHARS_TOTAL) invalidRecovery(`${label} text exceeds the safety limit.`);
+  if (markCount > DRAFTER_MAX_MARKS_TOTAL) invalidRecovery(`${label} contains too many inline marks.`);
+  if (markMetadataCharacters > DRAFTER_MAX_MARK_METADATA_CHARS_TOTAL) {
+    invalidRecovery(`${label} inline-mark metadata exceeds the safety limit.`);
+  }
+
+  // Pydantic's model_dump includes null defaults for the optional block fields;
+  // include those here so this byte check cannot accept a snapshot the backend
+  // would expand beyond Electron's 128 MiB pending-write journal ceiling.
+  const transportSnapshot = {
+    pages: pages.map((page) => ({
+      id: page.id,
+      title: page.title,
+      blocks: page.blocks.map((block) => ({
+        id: block.id,
+        type: block.type,
+        text: block.text,
+        level: block.level ?? null,
+        sp: block.sp ?? null,
+        marks: block.marks ?? null,
+      })),
+      created_at: page.created_at,
+      updated_at: page.updated_at,
+    })),
+  };
+  if (
+    new TextEncoder().encode(JSON.stringify(transportSnapshot)).byteLength
+    > DRAFTER_MAX_SERIALIZED_BYTES_TOTAL
+  ) {
+    invalidRecovery(`${label} exceeds the desktop transport safety limit.`);
+  }
+  return pages;
 }
 
 const SETTINGS_ENUMS: Record<string, readonly unknown[]> = {
@@ -678,7 +818,11 @@ function parsePendingRecovery(root: Record<string, unknown>): ImportResult {
   if (!Number.isSafeInteger(recovery.version) || Number(recovery.version) < 1) {
     invalidRecovery('recovery.version is not valid.');
   }
-  if (recovery.kind !== 'whiteboard' && recovery.kind !== 'outline') {
+  if (
+    recovery.kind !== 'whiteboard'
+    && recovery.kind !== 'outline'
+    && recovery.kind !== 'drafter'
+  ) {
     invalidRecovery('recovery.kind is not valid.');
   }
   const kind = recovery.kind;
@@ -747,6 +891,17 @@ function parsePendingRecovery(root: Record<string, unknown>): ImportResult {
     return {
       blocks: [],
       outline: parseOutline(payload.items, 'recovery.write.payload.items', exportedAt),
+      recovery: descriptor,
+    };
+  }
+  if (kind === 'drafter') {
+    hasOnlyKeys(payload, ['pages'], 'recovery.write.payload');
+    if (Object.keys(payload).length !== 1) {
+      invalidRecovery('Drafter recovery payload must contain only pages.');
+    }
+    return {
+      blocks: [],
+      drafterPages: parseDrafterPages(payload.pages, 'recovery.write.payload.pages'),
       recovery: descriptor,
     };
   }

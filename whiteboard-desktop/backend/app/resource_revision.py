@@ -8,12 +8,12 @@ from typing import Literal
 from fastapi import HTTPException, Request, status
 
 
-ResourceKind = Literal["whiteboard", "outline", "psyke", "comments"]
+ResourceKind = Literal["whiteboard", "outline", "drafter", "psyke", "comments"]
 IF_MATCH_HEADER = "If-Match"
 MUTATION_ID_HEADER = "X-LogosForge-Mutation-Id"
 
 _TAG_RE = re.compile(
-    r'^"lfwb:(whiteboard|outline|psyke|comments):([0-9a-f]{32}):([0-9a-f]{32})"$'
+    r'^"lfwb:(whiteboard|outline|drafter|psyke|comments):([0-9a-f]{32}):([0-9a-f]{32})"$'
 )
 _MUTATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 

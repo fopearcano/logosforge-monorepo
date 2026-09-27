@@ -26,6 +26,7 @@ from app.local_state import (
     LocalStateError,
     WhiteboardCreate,
     comments_store,
+    drafter_pages_store,
     outline_items_store,
     psyke_revision_store,
     whiteboard_store,
@@ -113,6 +114,7 @@ def _clear_allocated_document_state(document_id: str) -> list[str]:
     for label, store in (
         ("manuscript", whiteboard_store),
         ("outline", outline_items_store),
+        ("Drafter pages", drafter_pages_store),
         ("comments", comments_store),
         ("PSYKE revision metadata", psyke_revision_store),
     ):

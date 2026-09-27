@@ -30,6 +30,7 @@ import {
   retainPendingDocumentConflict,
 } from '../../api/pendingDocumentPersistence';
 import { responseError } from '../../api/responseError';
+import type { DrafterPage } from '../drafter/types';
 import { createPsykeElementForDocument } from '../psyke/psykeApi';
 import type { PsykeElementType } from '../psyke/types';
 import { emitOutlineRefresh } from '../outline/outlineApi';
@@ -88,6 +89,8 @@ interface Options {
   setMode: (mode: string) => Promise<boolean>;
   setTitle: (title: string) => Promise<boolean>;
   markDirty: () => void;
+  /** Installs and queues one complete Drafter collection snapshot. */
+  replaceDrafterPages: (pages: DrafterPage[]) => boolean;
   confirmProceedPastUnsavedChanges: (reason: string) => Promise<boolean>;
 }
 
@@ -196,10 +199,16 @@ export function useImportExport(opts: Options): ImportExportApi {
       mismatchWarning = false,
     ): Promise<boolean> => {
       recoveryConfirmationResolver.current?.(false);
-      const scope = recovery.scope === 'whiteboard' ? 'manuscript recovery' : 'outline recovery';
+      const scope = recovery.scope === 'whiteboard'
+        ? 'manuscript recovery'
+        : recovery.scope === 'outline'
+          ? 'outline recovery'
+          : 'Drafter recovery';
       const replacement = recovery.scope === 'whiteboard'
-        ? 'This replaces the manuscript, title, writing mode, and document settings. The outline is not changed.'
-        : 'This replaces the entire outline. The manuscript, title, writing mode, and document settings are not changed.';
+        ? 'This replaces the manuscript, title, writing mode, and document settings. The outline and Drafter pages are not changed.'
+        : recovery.scope === 'outline'
+          ? 'This replaces the entire outline. The manuscript, Drafter pages, title, writing mode, and document settings are not changed.'
+          : 'This replaces all Drafter scratch pages. The manuscript, outline, title, writing mode, document settings, and PSYKE knowledge are not changed.';
       if (mismatchWarning) {
         const sourceIdentity = recovery.incarnation
           ? `document ${recovery.documentId}, incarnation ${recovery.incarnation.slice(0, 12)}…`
@@ -223,13 +232,17 @@ export function useImportExport(opts: Options): ImportExportApi {
       setRecoveryConfirmation({
         title: recovery.scope === 'whiteboard'
           ? 'Restore manuscript recovery?'
-          : 'Restore outline recovery?',
+          : recovery.scope === 'outline'
+            ? 'Restore outline recovery?'
+            : 'Restore Drafter recovery?',
         message:
           `${sourceName ? `“${sourceName}”` : 'This file'} is a ${scope} ${provenance}. ${replacement} `
           + 'Pending changes will be saved first, and nothing is overwritten unless you confirm.',
         confirmLabel: recovery.scope === 'whiteboard'
           ? 'Restore manuscript'
-          : 'Restore outline',
+          : recovery.scope === 'outline'
+            ? 'Restore outline'
+            : 'Restore Drafter pages',
       });
       return new Promise<boolean>((resolve) => {
         recoveryConfirmationResolver.current = resolve;
@@ -286,6 +299,17 @@ export function useImportExport(opts: Options): ImportExportApi {
     }, documentId);
   }, []);
 
+  const restoreDrafter = useCallback(async (documentId: string, pages: DrafterPage[]) => {
+    if (documentId !== getCurrentDocId()) {
+      throw new Error('The active document changed before Drafter recovery could be restored.');
+    }
+    if (!optsRef.current.replaceDrafterPages(pages)) {
+      throw new Error(
+        'The Drafter workspace is not ready. Nothing was restored; try again after it loads.',
+      );
+    }
+  }, []);
+
   const restorePsyke = useCallback(async (documentId: string, elements: unknown[]): Promise<number> => {
     let failed = 0;
     for (const raw of elements) {
@@ -326,7 +350,7 @@ export function useImportExport(opts: Options): ImportExportApi {
             ? { ...parsed, blocks: withStableIds(parsed.blocks) }
             : parsed,
           targetDocumentId,
-          { ...o, restoreOutline },
+          { ...o, restoreOutline, restoreDrafter },
         );
         return warnings;
       }
@@ -367,7 +391,7 @@ export function useImportExport(opts: Options): ImportExportApi {
       o.markDirty();
       return warnings;
     },
-    [restoreOutline, restorePsyke],
+    [restoreDrafter, restoreOutline, restorePsyke],
   );
 
   // --- import flow -----------------------------------------------------------
@@ -467,7 +491,11 @@ export function useImportExport(opts: Options): ImportExportApi {
           finishImport();
         }
         const summary = parsed.recovery
-          ? `Restored ${parsed.recovery.scope === 'whiteboard' ? 'manuscript' : 'outline'} recovery from ${res.fileName ?? 'file'}.`
+          ? `Restored ${parsed.recovery.scope === 'whiteboard'
+            ? 'manuscript'
+            : parsed.recovery.scope === 'outline'
+              ? 'outline'
+              : 'Drafter'} recovery from ${res.fileName ?? 'file'}.`
           : `Imported ${res.fileName ?? 'file'} (${applyMode === 'replace' ? 'replaced' : 'appended'}).`;
         if (warnings.length) {
           say('error', `${summary} Could not restore: ${warnings.join(', ')}.`);

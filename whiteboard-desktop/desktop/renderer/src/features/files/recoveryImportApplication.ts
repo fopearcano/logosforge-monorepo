@@ -1,3 +1,4 @@
+import type { DrafterPage } from '../drafter/types';
 import type { OutlineNode } from '../outline/outlineModel';
 import type { DocumentSettings } from '../whiteboard/documentSettings';
 import type { WhiteboardBlock } from '../whiteboard/types';
@@ -47,6 +48,7 @@ export interface RecoveryImportActions {
   setTitle: (title: string) => Promise<boolean>;
   markDirty: () => void;
   restoreOutline: (documentId: string, outline: OutlineNode[]) => Promise<void>;
+  restoreDrafter: (documentId: string, pages: DrafterPage[]) => Promise<void>;
 }
 
 /** Apply only recovery content to a caller-captured target. Provenance fields are
@@ -59,6 +61,10 @@ export async function applyRecoveryImport(
 ): Promise<void> {
   if (parsed.recovery?.scope === 'outline') {
     await actions.restoreOutline(targetDocumentId, parsed.outline ?? []);
+    return;
+  }
+  if (parsed.recovery?.scope === 'drafter') {
+    await actions.restoreDrafter(targetDocumentId, parsed.drafterPages ?? []);
     return;
   }
   if (parsed.recovery?.scope !== 'whiteboard') {

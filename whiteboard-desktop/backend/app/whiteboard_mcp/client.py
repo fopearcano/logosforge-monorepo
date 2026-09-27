@@ -21,6 +21,7 @@ _COMMENT_STABLE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _COMMENTS_ETAG_RE = re.compile(
     r'^"lfwb:comments:([0-9a-f]{32}):([0-9a-f]{32})"$'
 )
+_DRAFTER_PAGE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _PSYKE_ID_RE = re.compile(r"^[1-9][0-9]*$")
 _PSYKE_TYPES = {"character", "place", "object", "lore", "theme", "other"}
 MAX_COMMENTS = 20_000
@@ -42,6 +43,12 @@ MAX_PSYKE_TIMESTAMP_CHARACTERS = 100
 MAX_PSYKE_RELATION_TYPE_CHARACTERS = 1_000
 MAX_PSYKE_SCENE_TITLE_CHARACTERS = 1_000
 MAX_PSYKE_INTEGER_ID = 9_007_199_254_740_991
+MAX_DRAFTER_PAGES = 256
+MAX_DRAFTER_BLOCKS_PER_PAGE = 20_000
+MAX_DRAFTER_BLOCKS_TOTAL = 100_000
+MAX_DRAFTER_TEXT_CHARACTERS_TOTAL = 32_000_000
+MAX_DRAFTER_MARKS_PER_PAGE = 20_000
+MAX_DRAFTER_MARK_METADATA_CHARACTERS_PER_PAGE = 1_000_000
 
 
 class WhiteboardApiError(RuntimeError):
@@ -53,6 +60,42 @@ class OutlineRead(TypedDict):
 
     items: list[dict[str, Any]]
     revision: str
+
+
+class DrafterRead(TypedDict):
+    """Validated project-scoped scratch-page index."""
+
+    pages: list[dict[str, Any]]
+    revision: str
+    page_count: int
+
+
+class DrafterPageRead(TypedDict):
+    """Validated bounded excerpts from one project-scoped scratch page."""
+
+    page: dict[str, Any]
+    blocks: list[dict[str, Any]]
+    pagination: dict[str, Any]
+    revision: str
+    page_count: int
+
+
+class DrafterSearchRead(TypedDict):
+    """Validated bounded backend search over provisional scratch pages."""
+
+    results: list[dict[str, Any]]
+    total_matches: int
+    truncated: bool
+    revision: str
+    page_count: int
+
+
+class DrafterMutationResult(TypedDict):
+    """Validated receipt for one conditional scratch-page mutation."""
+
+    page: dict[str, Any]
+    revision: str
+    page_count: int
 
 
 class PsykeRead(TypedDict):
@@ -270,6 +313,428 @@ class WhiteboardApiClient:
         return self._validated_outline(value)
 
     @staticmethod
+    def _valid_bounded_integer(
+        value: Any,
+        *,
+        minimum: int = 0,
+        maximum: int,
+    ) -> bool:
+        return (
+            not isinstance(value, bool)
+            and isinstance(value, int)
+            and minimum <= value <= maximum
+        )
+
+    @staticmethod
+    def _validated_drafter_summary(value: Any) -> dict[str, Any]:
+        if not isinstance(value, dict) or set(value) != {
+            "id",
+            "title",
+            "created_at",
+            "updated_at",
+            "block_count",
+            "character_count",
+        }:
+            raise WhiteboardApiError("The Whiteboard Drafter response has an invalid page summary.")
+        page_id = value.get("id")
+        title = value.get("title")
+        if (
+            not isinstance(page_id, str)
+            or _DRAFTER_PAGE_ID_RE.fullmatch(page_id) is None
+            or not isinstance(title, str)
+            or not title.strip()
+            or len(title) > 240
+            or any(
+                not isinstance(value.get(key), str)
+                or not value[key]
+                or len(value[key]) > 64
+                for key in ("created_at", "updated_at")
+            )
+            or not WhiteboardApiClient._valid_bounded_integer(
+                value.get("block_count"), maximum=MAX_DRAFTER_BLOCKS_PER_PAGE
+            )
+            or not WhiteboardApiClient._valid_bounded_integer(
+                value.get("character_count"),
+                maximum=MAX_DRAFTER_TEXT_CHARACTERS_TOTAL,
+            )
+        ):
+            raise WhiteboardApiError("The Whiteboard Drafter response has an invalid page summary.")
+        return value
+
+    def get_drafter_page_index(self, document_id: int) -> DrafterRead:
+        value = self._get("/api/drafter/page-index", self._document_query(document_id))
+        return self._validated_drafter_index(value)
+
+    @staticmethod
+    def _validated_drafter_index(value: Any) -> DrafterRead:
+        if not isinstance(value, dict) or set(value) != {
+            "pages", "revision", "page_count"
+        }:
+            raise WhiteboardApiError("The Whiteboard Drafter index has an invalid shape.")
+        pages = value.get("pages")
+        revision = value.get("revision")
+        page_count = value.get("page_count")
+        if (
+            not isinstance(pages, list)
+            or len(pages) > MAX_DRAFTER_PAGES
+            or not _valid_revision(revision)
+            or not WhiteboardApiClient._valid_bounded_integer(
+                page_count, maximum=MAX_DRAFTER_PAGES
+            )
+            or page_count != len(pages)
+        ):
+            raise WhiteboardApiError("The Whiteboard Drafter index has an invalid shape.")
+        validated = [WhiteboardApiClient._validated_drafter_summary(page) for page in pages]
+        page_ids = [page["id"] for page in validated]
+        if (
+            len(page_ids) != len(set(page_ids))
+            or sum(page["block_count"] for page in validated)
+            > MAX_DRAFTER_BLOCKS_TOTAL
+            or sum(page["character_count"] for page in validated)
+            > MAX_DRAFTER_TEXT_CHARACTERS_TOTAL
+        ):
+            raise WhiteboardApiError("The Whiteboard Drafter index has invalid totals or ids.")
+        return {"pages": validated, "revision": revision, "page_count": page_count}
+
+    @staticmethod
+    def _drafter_page_path(page_id: str) -> str:
+        if not isinstance(page_id, str) or _DRAFTER_PAGE_ID_RE.fullmatch(page_id) is None:
+            raise WhiteboardApiError("The Whiteboard Drafter page id is invalid.")
+        return "/api/drafter/pages/" + urllib.parse.quote(page_id, safe="")
+
+    def get_drafter_page(
+        self,
+        document_id: int,
+        page_id: str,
+        *,
+        offset: int,
+        limit: int,
+        max_characters: int,
+        text_offset: int = 0,
+    ) -> DrafterPageRead:
+        if (
+            not self._valid_bounded_integer(offset, maximum=MAX_DRAFTER_BLOCKS_PER_PAGE)
+            or not self._valid_bounded_integer(limit, minimum=1, maximum=200)
+            or not self._valid_bounded_integer(
+                max_characters, minimum=1, maximum=500_000
+            )
+            or not self._valid_bounded_integer(
+                text_offset, maximum=MAX_DRAFTER_TEXT_CHARACTERS_TOTAL
+            )
+        ):
+            raise WhiteboardApiError("The Whiteboard Drafter page range is invalid.")
+        value = self._get(
+            self._drafter_page_path(page_id),
+            {
+                **self._document_query(document_id),
+                "offset": offset,
+                "limit": limit,
+                "max_characters": max_characters,
+                "text_offset": text_offset,
+            },
+        )
+        return self._validated_drafter_page(value)
+
+    @staticmethod
+    def _validated_drafter_block(value: Any) -> dict[str, Any]:
+        if not isinstance(value, dict) or set(value) != {
+            "id", "type", "text", "level", "sp", "marks"
+        }:
+            raise WhiteboardApiError("The Whiteboard Drafter response has an invalid block.")
+        if (
+            not isinstance(value.get("id"), str)
+            or not value["id"]
+            or len(value["id"]) > 128
+            or not isinstance(value.get("type"), str)
+            or not value["type"]
+            or len(value["type"]) > 64
+            or not isinstance(value.get("text"), str)
+            or (
+                value.get("level") is not None
+                and (
+                    isinstance(value.get("level"), bool)
+                    or not isinstance(value.get("level"), int)
+                )
+            )
+            or (
+                value.get("sp") is not None
+                and (
+                    not isinstance(value.get("sp"), str)
+                    or len(value["sp"]) > 64
+                )
+            )
+            or (
+                value.get("marks") is not None
+                and (
+                    not isinstance(value.get("marks"), list)
+                    or len(value["marks"]) > MAX_DRAFTER_MARKS_PER_PAGE
+                    or any(not isinstance(mark, dict) for mark in value["marks"])
+                )
+            )
+        ):
+            raise WhiteboardApiError("The Whiteboard Drafter response has an invalid block.")
+        return value
+
+    @staticmethod
+    def _validated_drafter_page(value: Any) -> DrafterPageRead:
+        if not isinstance(value, dict) or set(value) != {
+            "page", "blocks", "pagination", "revision", "page_count"
+        }:
+            raise WhiteboardApiError("The Whiteboard Drafter page has an invalid shape.")
+        page = WhiteboardApiClient._validated_drafter_summary(value.get("page"))
+        blocks = value.get("blocks")
+        pagination = value.get("pagination")
+        revision = value.get("revision")
+        page_count = value.get("page_count")
+        if (
+            not isinstance(blocks, list)
+            or len(blocks) > 200
+            or not isinstance(pagination, dict)
+            or set(pagination) != {
+                "offset",
+                "text_offset",
+                "returned_blocks",
+                "total_blocks",
+                "next_offset",
+                "next_text_offset",
+                "max_characters",
+                "truncated",
+            }
+            or not _valid_revision(revision)
+            or not WhiteboardApiClient._valid_bounded_integer(
+                page_count, minimum=1, maximum=MAX_DRAFTER_PAGES
+            )
+        ):
+            raise WhiteboardApiError("The Whiteboard Drafter page has an invalid shape.")
+        bounded_pagination_fields = {
+            "offset": MAX_DRAFTER_BLOCKS_PER_PAGE,
+            "text_offset": MAX_DRAFTER_TEXT_CHARACTERS_TOTAL,
+            "returned_blocks": 200,
+            "total_blocks": MAX_DRAFTER_BLOCKS_PER_PAGE,
+            "max_characters": 500_000,
+        }
+        if any(
+            not WhiteboardApiClient._valid_bounded_integer(
+                pagination.get(key),
+                minimum=1 if key == "max_characters" else 0,
+                maximum=maximum,
+            )
+            for key, maximum in bounded_pagination_fields.items()
+        ) or not isinstance(pagination.get("truncated"), bool):
+            raise WhiteboardApiError("The Whiteboard Drafter page has invalid pagination.")
+        next_offset = pagination.get("next_offset")
+        next_text_offset = pagination.get("next_text_offset")
+        if (
+            (next_offset is None) != (next_text_offset is None)
+            or (
+                next_offset is not None
+                and (
+                    not WhiteboardApiClient._valid_bounded_integer(
+                        next_offset, maximum=MAX_DRAFTER_BLOCKS_PER_PAGE
+                    )
+                    or not WhiteboardApiClient._valid_bounded_integer(
+                        next_text_offset,
+                        maximum=MAX_DRAFTER_TEXT_CHARACTERS_TOTAL,
+                    )
+                )
+            )
+            or pagination["returned_blocks"] != len(blocks)
+            or pagination["total_blocks"] != page["block_count"]
+            or pagination["truncated"] != (next_offset is not None)
+        ):
+            raise WhiteboardApiError("The Whiteboard Drafter page has invalid pagination.")
+        validated_blocks: list[dict[str, Any]] = []
+        text_characters = 0
+        mark_count = 0
+        mark_metadata_characters = 0
+        for excerpt in blocks:
+            if not isinstance(excerpt, dict) or set(excerpt) != {
+                "block_index",
+                "text_offset",
+                "total_text_characters",
+                "complete",
+                "marks_omitted",
+                "block",
+            }:
+                raise WhiteboardApiError("The Whiteboard Drafter page has an invalid excerpt.")
+            if (
+                not WhiteboardApiClient._valid_bounded_integer(
+                    excerpt.get("block_index"), maximum=MAX_DRAFTER_BLOCKS_PER_PAGE
+                )
+                or not WhiteboardApiClient._valid_bounded_integer(
+                    excerpt.get("text_offset"),
+                    maximum=MAX_DRAFTER_TEXT_CHARACTERS_TOTAL,
+                )
+                or not WhiteboardApiClient._valid_bounded_integer(
+                    excerpt.get("total_text_characters"),
+                    maximum=MAX_DRAFTER_TEXT_CHARACTERS_TOTAL,
+                )
+                or not isinstance(excerpt.get("complete"), bool)
+                or not isinstance(excerpt.get("marks_omitted"), bool)
+            ):
+                raise WhiteboardApiError("The Whiteboard Drafter page has an invalid excerpt.")
+            block = WhiteboardApiClient._validated_drafter_block(excerpt.get("block"))
+            excerpt_offset = excerpt["text_offset"]
+            excerpt_end = excerpt_offset + len(block["text"])
+            expected_complete = (
+                excerpt_offset == 0
+                and excerpt_end == excerpt["total_text_characters"]
+            )
+            if (
+                excerpt_end > excerpt["total_text_characters"]
+                or excerpt["complete"] != expected_complete
+                or (not excerpt["complete"] and block["marks"] is not None)
+                or (excerpt["complete"] and excerpt["marks_omitted"])
+            ):
+                raise WhiteboardApiError(
+                    "The Whiteboard Drafter page has an invalid excerpt."
+                )
+            marks = block.get("marks") or []
+            mark_count += len(marks)
+            try:
+                mark_metadata_characters += sum(
+                    len(
+                        json.dumps(
+                            mark,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                            sort_keys=True,
+                            allow_nan=False,
+                        )
+                    )
+                    for mark in marks
+                )
+            except (TypeError, ValueError, OverflowError, UnicodeError):
+                raise WhiteboardApiError(
+                    "The Whiteboard Drafter page has invalid mark metadata."
+                ) from None
+            text_characters += len(block["text"])
+            validated_blocks.append({**excerpt, "block": block})
+        if (
+            text_characters > pagination["max_characters"]
+            or mark_count > MAX_DRAFTER_MARKS_PER_PAGE
+            or mark_metadata_characters
+            > MAX_DRAFTER_MARK_METADATA_CHARACTERS_PER_PAGE
+        ):
+            raise WhiteboardApiError("The Whiteboard Drafter page exceeds its character limit.")
+        return {
+            "page": page,
+            "blocks": validated_blocks,
+            "pagination": pagination,
+            "revision": revision,
+            "page_count": page_count,
+        }
+
+    def search_drafter(
+        self,
+        document_id: int,
+        query: str,
+        *,
+        limit: int,
+        snippet_characters: int,
+    ) -> DrafterSearchRead:
+        if (
+            not isinstance(query, str)
+            or not query.strip()
+            or len(query) > 500
+            or not self._valid_bounded_integer(limit, minimum=1, maximum=100)
+            or not self._valid_bounded_integer(
+                snippet_characters, minimum=40, maximum=500
+            )
+        ):
+            raise WhiteboardApiError("The Whiteboard Drafter search is invalid.")
+        value = self._get(
+            "/api/drafter/search",
+            {
+                **self._document_query(document_id),
+                "q": query,
+                "limit": limit,
+                "snippet_characters": snippet_characters,
+            },
+        )
+        return self._validated_drafter_search(value, maximum_results=limit)
+
+    @staticmethod
+    def _validated_drafter_search(
+        value: Any, *, maximum_results: int
+    ) -> DrafterSearchRead:
+        if not isinstance(value, dict) or set(value) != {
+            "results", "total_matches", "truncated", "revision", "page_count"
+        }:
+            raise WhiteboardApiError("The Whiteboard Drafter search has an invalid shape.")
+        results = value.get("results")
+        total = value.get("total_matches")
+        truncated = value.get("truncated")
+        revision = value.get("revision")
+        page_count = value.get("page_count")
+        if (
+            not isinstance(results, list)
+            or len(results) > maximum_results
+            or not WhiteboardApiClient._valid_bounded_integer(
+                total, maximum=MAX_DRAFTER_BLOCKS_TOTAL + MAX_DRAFTER_PAGES
+            )
+            or total < len(results)
+            or not isinstance(truncated, bool)
+            or truncated != (total > len(results))
+            or not _valid_revision(revision)
+            or not WhiteboardApiClient._valid_bounded_integer(
+                page_count, maximum=MAX_DRAFTER_PAGES
+            )
+        ):
+            raise WhiteboardApiError("The Whiteboard Drafter search has an invalid shape.")
+        validated: list[dict[str, Any]] = []
+        for result in results:
+            if not isinstance(result, dict) or set(result) != {
+                "page_id", "page_title", "match_scope", "block_id", "block_index", "snippet"
+            }:
+                raise WhiteboardApiError("The Whiteboard Drafter search has an invalid result.")
+            if (
+                not isinstance(result.get("page_id"), str)
+                or _DRAFTER_PAGE_ID_RE.fullmatch(result["page_id"]) is None
+                or not isinstance(result.get("page_title"), str)
+                or len(result["page_title"]) > 240
+                or result.get("match_scope") not in {"title", "block"}
+                or not isinstance(result.get("snippet"), str)
+                or len(result["snippet"]) > 500
+                or (
+                    result.get("block_id") is not None
+                    and not isinstance(result.get("block_id"), str)
+                )
+                or (
+                    result.get("block_index") is not None
+                    and not WhiteboardApiClient._valid_bounded_integer(
+                        result.get("block_index"),
+                        maximum=MAX_DRAFTER_BLOCKS_PER_PAGE,
+                    )
+                )
+                or (
+                    result.get("match_scope") == "title"
+                    and (
+                        result.get("block_id") is not None
+                        or result.get("block_index") is not None
+                    )
+                )
+                or (
+                    result.get("match_scope") == "block"
+                    and (
+                        not isinstance(result.get("block_id"), str)
+                        or not result["block_id"]
+                        or len(result["block_id"]) > 128
+                        or result.get("block_index") is None
+                    )
+                )
+            ):
+                raise WhiteboardApiError("The Whiteboard Drafter search has an invalid result.")
+            validated.append(result)
+        return {
+            "results": validated,
+            "total_matches": total,
+            "truncated": truncated,
+            "revision": revision,
+            "page_count": page_count,
+        }
+
+    @staticmethod
     def _validated_outline(value: Any) -> OutlineRead:
         items = value.get("items") if isinstance(value, dict) else None
         revision = value.get("revision") if isinstance(value, dict) else None
@@ -288,7 +753,7 @@ class WhiteboardApiClient:
         expected_revision: str,
         mutation_id: str,
     ) -> dict[str, str]:
-        if kind not in {"whiteboard", "outline", "comments", "psyke"}:
+        if kind not in {"whiteboard", "outline", "drafter", "comments", "psyke"}:
             raise WhiteboardApiError("The Whiteboard resource kind is invalid.")
         if not _valid_revision(incarnation) or not _valid_revision(expected_revision):
             raise WhiteboardApiError("The Whiteboard write precondition is invalid.")
@@ -339,6 +804,65 @@ class WhiteboardApiClient:
             ),
         )
         return self._validated_outline(value)
+
+    def create_drafter_page(
+        self,
+        document_id: int,
+        *,
+        incarnation: str,
+        expected_revision: str,
+        mutation_id: str,
+        page: dict[str, Any],
+    ) -> DrafterMutationResult:
+        value = self._request_json(
+            "POST",
+            "/api/drafter/pages",
+            self._document_query(document_id),
+            body=page,
+            extra_headers=self._conditional_headers(
+                "drafter", incarnation, expected_revision, mutation_id
+            ),
+        )
+        return self._validated_drafter_mutation(value)
+
+    def patch_drafter_page(
+        self,
+        document_id: int,
+        page_id: str,
+        *,
+        incarnation: str,
+        expected_revision: str,
+        mutation_id: str,
+        patch: dict[str, Any],
+    ) -> DrafterMutationResult:
+        value = self._request_json(
+            "PATCH",
+            self._drafter_page_path(page_id),
+            self._document_query(document_id),
+            body=patch,
+            extra_headers=self._conditional_headers(
+                "drafter", incarnation, expected_revision, mutation_id
+            ),
+        )
+        return self._validated_drafter_mutation(value)
+
+    @staticmethod
+    def _validated_drafter_mutation(value: Any) -> DrafterMutationResult:
+        if not isinstance(value, dict) or set(value) != {
+            "page", "revision", "page_count"
+        }:
+            raise WhiteboardApiError("The Whiteboard Drafter mutation has an invalid shape.")
+        page = WhiteboardApiClient._validated_drafter_summary(value.get("page"))
+        revision = value.get("revision")
+        page_count = value.get("page_count")
+        if (
+            not _valid_revision(revision)
+            or not WhiteboardApiClient._valid_bounded_integer(
+                page_count, minimum=1, maximum=MAX_DRAFTER_PAGES
+            )
+        ):
+            raise WhiteboardApiError("The Whiteboard Drafter mutation has an invalid shape.")
+        return {"page": page, "revision": revision, "page_count": page_count}
 
     @staticmethod
     def _bounded_utf8_string(

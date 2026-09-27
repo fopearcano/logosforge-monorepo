@@ -25,7 +25,7 @@ import mcp
 from mcp.client.stdio import stdio_client
 
 EXPECTED_SERVER_NAME = "logosforge-whiteboard"
-EXPECTED_SERVER_VERSION = "1.4.0"
+EXPECTED_SERVER_VERSION = "1.5.0"
 EXPECTED_TOOL_NAMES = frozenset(
     {
         "logosforge_whiteboard_get_capabilities",
@@ -34,6 +34,8 @@ EXPECTED_TOOL_NAMES = frozenset(
         "logosforge_whiteboard_get_current_document",
         "logosforge_whiteboard_get_document_snapshot",
         "logosforge_whiteboard_get_outline",
+        "logosforge_whiteboard_get_drafter_pages",
+        "logosforge_whiteboard_get_drafter_page",
         "logosforge_whiteboard_get_comments",
         "logosforge_whiteboard_get_psyke",
         "logosforge_whiteboard_get_psyke_relations",
@@ -41,6 +43,8 @@ EXPECTED_TOOL_NAMES = frozenset(
         "logosforge_whiteboard_search",
         "logosforge_whiteboard_propose_manuscript_patch",
         "logosforge_whiteboard_propose_outline_replace",
+        "logosforge_whiteboard_propose_drafter_page_create",
+        "logosforge_whiteboard_propose_drafter_page_patch",
         "logosforge_whiteboard_propose_comment_reply",
         "logosforge_whiteboard_propose_comment_resolution",
         "logosforge_whiteboard_propose_psyke_entry",
@@ -200,6 +204,123 @@ async def _propose_and_apply(session, name: str, arguments: dict, label: str) ->
     if applied.get("state") != "applied" or not isinstance(receipt, dict):
         raise RuntimeError(f"Frozen Whiteboard MCP {label} apply was invalid")
     return receipt
+
+
+async def _exercise_drafter_round_trip(session, document_id: int) -> None:
+    snapshot_args = {
+        "document_id": document_id,
+        "offset": 0,
+        "limit": 200,
+        "max_characters": 100_000,
+    }
+    manuscript_before = (
+        await _tool_result(
+            session,
+            "logosforge_whiteboard_get_document_snapshot",
+            snapshot_args,
+            "Drafter manuscript baseline",
+        )
+    )["document"]
+    index = await _tool_result(
+        session,
+        "logosforge_whiteboard_get_drafter_pages",
+        {"document_id": document_id, "offset": 0, "limit": 256},
+        "Drafter index read",
+    )
+    revision = index.get("revision")
+    if not isinstance(revision, str):
+        raise RuntimeError("Frozen Whiteboard MCP Drafter index had no revision")
+
+    token = secrets.token_hex(6)
+    title = f"Frozen MCP Drafter {token}"
+    text = f"Disposable provisional passage {token}."
+    created = await _propose_and_apply(
+        session,
+        "logosforge_whiteboard_propose_drafter_page_create",
+        {
+            "document_id": document_id,
+            "expected_revision": revision,
+            "title": title,
+            "blocks": [
+                {"id": f"draft-block-{token}", "type": "paragraph", "text": text}
+            ],
+        },
+        "Drafter page create",
+    )
+    page_id = created.get("page_id")
+    if (
+        created.get("resource") != "drafter"
+        or created.get("operation") != "create"
+        or not isinstance(page_id, str)
+        or not isinstance(created.get("revision"), str)
+    ):
+        raise RuntimeError("Frozen Whiteboard MCP Drafter create receipt was invalid")
+
+    page = await _tool_result(
+        session,
+        "logosforge_whiteboard_get_drafter_page",
+        {
+            "document_id": document_id,
+            "page_id": page_id,
+            "offset": 0,
+            "text_offset": 0,
+            "limit": 100,
+            "max_characters": 100_000,
+        },
+        "Drafter page read",
+    )
+    blocks = page.get("drafter_page", {}).get("blocks")
+    if (
+        page.get("revision") != created["revision"]
+        or not isinstance(blocks, list)
+        or not blocks
+        or blocks[0].get("text") != text
+    ):
+        raise RuntimeError("Frozen Whiteboard MCP Drafter page verification failed")
+
+    search = await _tool_result(
+        session,
+        "logosforge_whiteboard_search",
+        {"document_id": document_id, "query": token, "scope": "drafter", "limit": 10},
+        "Drafter search",
+    )
+    if not any(
+        isinstance(match, dict)
+        and match.get("scope") == "drafter"
+        and str(match.get("id", "")).startswith(page_id)
+        for match in search.get("matches", [])
+    ):
+        raise RuntimeError("Frozen Whiteboard MCP Drafter search missed the new page")
+
+    patched_title = title + " revised"
+    patched = await _propose_and_apply(
+        session,
+        "logosforge_whiteboard_propose_drafter_page_patch",
+        {
+            "document_id": document_id,
+            "page_id": page_id,
+            "expected_revision": created["revision"],
+            "patch": {"title": patched_title},
+        },
+        "Drafter page patch",
+    )
+    if (
+        patched.get("operation") != "patch"
+        or patched.get("page_id") != page_id
+        or patched.get("title") != patched_title
+    ):
+        raise RuntimeError("Frozen Whiteboard MCP Drafter patch receipt was invalid")
+
+    manuscript_after = (
+        await _tool_result(
+            session,
+            "logosforge_whiteboard_get_document_snapshot",
+            snapshot_args,
+            "Drafter manuscript isolation check",
+        )
+    )["document"]
+    if manuscript_after != manuscript_before:
+        raise RuntimeError("Frozen Whiteboard MCP Drafter mutation changed the manuscript")
 
 
 async def _exercise_psyke_graph_progression(
@@ -415,6 +536,8 @@ async def _exercise_mcp(
             elif tool.name in {
                 "logosforge_whiteboard_propose_manuscript_patch",
                 "logosforge_whiteboard_propose_outline_replace",
+                "logosforge_whiteboard_propose_drafter_page_create",
+                "logosforge_whiteboard_propose_drafter_page_patch",
                 "logosforge_whiteboard_propose_comment_reply",
                 "logosforge_whiteboard_propose_comment_resolution",
                 "logosforge_whiteboard_propose_psyke_entry",
@@ -633,6 +756,8 @@ async def _exercise_mcp(
             or receipt.get("title") != title
         ):
             raise RuntimeError("Whiteboard MCP enabled proposal apply failed")
+
+        await _exercise_drafter_round_trip(session, document_id)
 
         psyke = await session.call_tool(
             "logosforge_whiteboard_get_psyke",
@@ -1159,10 +1284,11 @@ def smoke(backend_executable: Path, mcp_executable: Path) -> None:
                     process.wait(timeout=10)
 
     print(
-        "Frozen Whiteboard MCP initialized, advertised 24 read/proposal tools, "
+        "Frozen Whiteboard MCP initialized, advertised 28 read/proposal tools, "
         "kept writes disabled by default, and completed a disposable enabled "
         "manuscript, PSYKE entry/relationship/progression, and comment collaboration "
-        "proposal/apply round trip."
+        "Drafter page create/read/search/patch isolation, and proposal/apply "
+        "round trips."
     )
 
 

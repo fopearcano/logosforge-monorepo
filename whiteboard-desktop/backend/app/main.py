@@ -31,6 +31,7 @@ from app.local_state import (
 )
 from app.routers import (
     comments,
+    drafter,
     documents,
     export,
     littleboy,
@@ -163,6 +164,7 @@ app.include_router(documents.router)
 app.include_router(psyke.router)
 app.include_router(whiteboard.router)
 app.include_router(outline.router)
+app.include_router(drafter.router)
 app.include_router(littleboy.router)
 app.include_router(comments.router)
 app.include_router(settings.router)

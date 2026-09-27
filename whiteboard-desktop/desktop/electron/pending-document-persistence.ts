@@ -1,4 +1,4 @@
-export type PendingDocumentKind = 'whiteboard' | 'outline';
+export type PendingDocumentKind = 'whiteboard' | 'outline' | 'drafter';
 
 export interface PendingDocumentWrite {
   kind: PendingDocumentKind;
@@ -84,6 +84,7 @@ export interface PendingDocumentConflictUpdateResult {
 export interface PendingDocumentDeleteFloor {
   whiteboard: number;
   outline: number;
+  drafter: number;
 }
 
 export interface PersistenceBackendStatus {
@@ -187,7 +188,7 @@ export function resourceEtag(
 export function validatePendingDocumentWrite(value: unknown): PendingDocumentWrite {
   if (!isRecord(value)) throw new Error('Invalid pending-document payload.');
   const { kind, documentId, incarnation, resourceRevision, revision, sessionId, payload } = value;
-  if (kind !== 'whiteboard' && kind !== 'outline') {
+  if (kind !== 'whiteboard' && kind !== 'outline' && kind !== 'drafter') {
     throw new Error('Invalid pending-document kind.');
   }
   const validatedDocumentId = validatePendingDocumentId(documentId);
@@ -221,8 +222,14 @@ export function validatePendingDocumentWrite(value: unknown): PendingDocumentWri
     if ('settings' in payload && !isRecord(payload.settings)) {
       throw new Error('Invalid whiteboard settings.');
     }
-  } else if (keys.length !== 1 || keys[0] !== 'items' || !Array.isArray(payload.items)) {
+  } else if (kind === 'outline' && (
+    keys.length !== 1 || keys[0] !== 'items' || !Array.isArray(payload.items)
+  )) {
     throw new Error('Invalid outline update shape.');
+  } else if (kind === 'drafter' && (
+    keys.length !== 1 || keys[0] !== 'pages' || !Array.isArray(payload.pages)
+  )) {
+    throw new Error('Invalid drafter update shape.');
   }
 
   let serialized: string;
@@ -246,7 +253,7 @@ export function validatePendingDocumentWrite(value: unknown): PendingDocumentWri
   };
 }
 
-/** Construct only the two fixed loopback-backend routes; the renderer supplies no URL or auth. */
+/** Construct only fixed loopback-backend routes; the renderer supplies no URL or auth. */
 export function buildPendingDocumentHttpRequest(
   write: PendingDocumentWrite,
   status: PersistenceBackendStatus,
@@ -256,7 +263,11 @@ export function buildPendingDocumentHttpRequest(
   if (status.state !== 'connected' || !status.baseUrl || !status.authToken) {
     throw new Error('The Whiteboard backend is not connected.');
   }
-  const route = write.kind === 'whiteboard' ? '/api/whiteboard' : '/api/outline/items';
+  const route = write.kind === 'whiteboard'
+    ? '/api/whiteboard'
+    : write.kind === 'outline'
+      ? '/api/outline/items'
+      : '/api/drafter/pages';
   const url = new URL(route, status.baseUrl);
   url.searchParams.set('doc', write.documentId);
   return {
@@ -318,7 +329,10 @@ export function validatePendingDocumentRecoveryJournalSnapshot(
   const dispatchIdentities = new Set<string>();
   const dispatchWatermarks = new Map<string, number>();
   const dispatchSequences = value.dispatchSequences.map((item) => {
-    if (!isRecord(item) || (item.kind !== 'whiteboard' && item.kind !== 'outline')) {
+    if (
+      !isRecord(item)
+      || (item.kind !== 'whiteboard' && item.kind !== 'outline' && item.kind !== 'drafter')
+    ) {
       throw new Error('Invalid pending-document recovery dispatch watermark.');
     }
     const documentId = validatePendingDocumentId(item.documentId);
@@ -362,7 +376,11 @@ export function validatePendingDocumentRecoveryJournalSnapshot(
     if (!Number.isSafeInteger(receipt.version) || (receipt.version as number) < 1) {
       throw new Error('Invalid pending-document recovery conflict version.');
     }
-    if (receipt.kind !== 'whiteboard' && receipt.kind !== 'outline') {
+    if (
+      receipt.kind !== 'whiteboard'
+      && receipt.kind !== 'outline'
+      && receipt.kind !== 'drafter'
+    ) {
       throw new Error('Invalid pending-document recovery kind.');
     }
     const kind = receipt.kind;
@@ -782,7 +800,7 @@ export class PendingDocumentPersistence {
     if (!Number.isSafeInteger(version) || (version as number) < 1) {
       throw new Error('Invalid pending-document conflict version.');
     }
-    if (kind !== 'whiteboard' && kind !== 'outline') {
+    if (kind !== 'whiteboard' && kind !== 'outline' && kind !== 'drafter') {
       throw new Error('Invalid pending-document conflict kind.');
     }
     return {
@@ -919,8 +937,8 @@ export class PendingDocumentPersistence {
             this.deferredLatest.delete(serialKey);
             throw this.recordRecoverableConflict(retained, error);
           } else {
-            // The newest unload snapshot is cumulative for both supported
-            // resources. Keep it until the uncertain older operation recovers.
+            // The newest renderer snapshot is cumulative for its resource.
+            // Keep it until the uncertain older operation recovers.
             this.deferredLatest.set(serialKey, operation);
           }
           throw error;
@@ -970,6 +988,7 @@ export class PendingDocumentPersistence {
     const serialKeys = [
       `whiteboard:${documentId}:${incarnation}`,
       `outline:${documentId}:${incarnation}`,
+      `drafter:${documentId}:${incarnation}`,
     ];
     // Renderer-side queues are blocked before this call. Looping closes the
     // small IPC-delivery window for a snapshot that main had already received.
@@ -983,6 +1002,7 @@ export class PendingDocumentPersistence {
     return {
       whiteboard: this.nextDispatchSequence.get(`whiteboard:${documentId}`) ?? 0,
       outline: this.nextDispatchSequence.get(`outline:${documentId}`) ?? 0,
+      drafter: this.nextDispatchSequence.get(`drafter:${documentId}`) ?? 0,
     };
   }
 
@@ -994,6 +1014,7 @@ export class PendingDocumentPersistence {
     const serialKeys = [
       `whiteboard:${documentId}:${incarnation}`,
       `outline:${documentId}:${incarnation}`,
+      `drafter:${documentId}:${incarnation}`,
     ];
     const nextConflicts = new Map(this.conflictedLatest);
     let removesRecovery = false;
@@ -1016,6 +1037,7 @@ export class PendingDocumentPersistence {
       if (
         key.startsWith(`whiteboard:${documentId}:${incarnation}:`)
         || key.startsWith(`outline:${documentId}:${incarnation}:`)
+        || key.startsWith(`drafter:${documentId}:${incarnation}:`)
       ) {
         // SQLite may reuse the highest deleted integer id. A delayed message
         // from the old session is suppressed; a higher revision or new session

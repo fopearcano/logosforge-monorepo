@@ -208,12 +208,14 @@ button { font: inherit; color: inherit; cursor: pointer; }
 /* hide top panel: collapse the titlebar */
 .app.is-top-hidden .titlebar { height: 0; padding: 0; overflow: hidden; border-bottom-color: transparent; }
 .app.is-top-hidden .wb-statusline,
+.app.is-top-hidden .drafter-tabs-row,
 .app.is-top-hidden .wb-toolbar { opacity: 0; pointer-events: none; height: 0; overflow: hidden; border: 0; }
 
 /* focus mode: fade non-essential chrome */
 .app.is-focus .outline-panel,
 .app.is-focus .statusbar,
 .app.is-focus .wb-statusline,
+.app.is-focus .drafter-tabs-row,
 .app.is-focus .wb-toolbar { opacity: 0; pointer-events: none; transition: opacity var(--dur-slow) var(--ease); }
 .app.is-focus .workarea { transition: all var(--dur-slow) var(--ease); }
 
@@ -543,6 +545,49 @@ body.is-col-resizing * { cursor: col-resize !important; }
 
 .wb-draft { font: 500 9.5px/1 var(--font-mono); letter-spacing: .04em; color: var(--muted); }
 .wb-draft-saving { color: var(--muted); } .wb-draft-saved { color: var(--ok); } .wb-draft-error, .wb-draft-conflict { color: var(--error); }
+
+/* Drafter: project-owned scratch pages that share the manuscript's mode/PSYKE. */
+.drafter-tabs-row {
+  flex: none; min-width: 0; height: 35px; display: flex; align-items: stretch; gap: 4px;
+  padding: 0 10px; border-bottom: 1px solid var(--border-soft);
+  background: color-mix(in oklab, var(--panel) 42%, var(--paper));
+}
+.drafter-tabs {
+  min-width: 0; flex: 1; display: flex; align-items: stretch; gap: 2px;
+  overflow-x: auto; overflow-y: hidden; scrollbar-width: thin;
+}
+.drafter-tab {
+  flex: none; max-width: 220px; border: 0; border-bottom: 2px solid transparent;
+  padding: 0 11px; background: transparent; color: var(--paper-muted);
+  font: 500 10px/1 var(--font-ui); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.drafter-tab:hover { color: var(--text); background: var(--hover); }
+.drafter-tab.is-active { color: var(--text); border-bottom-color: var(--accent); background: var(--paper); }
+.drafter-tab:disabled { opacity: .5; }
+.drafter-add, .drafter-manage {
+  flex: none; align-self: center; min-width: 28px; height: 25px; border: 1px solid var(--border);
+  border-radius: var(--r-sm); background: transparent; color: var(--paper-muted);
+  font: 600 10px/1 var(--font-ui); padding: 0 8px;
+}
+.drafter-add { font-size: 15px; padding: 0; }
+.drafter-add:hover, .drafter-manage:hover { color: var(--text); border-color: var(--accent); background: var(--hover); }
+.drafter-save {
+  flex: none; align-self: center; min-width: 74px; text-align: right;
+  font: 500 9px/1 var(--font-mono); letter-spacing: .035em; color: var(--paper-muted);
+}
+.drafter-save-saved { color: var(--ok); }
+.drafter-save-error, .drafter-save-conflict { color: var(--error); }
+.drafter-menu { width: min(420px, 72vw); max-height: min(440px, 68vh); }
+.drafter-menu-page { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 3px; }
+.drafter-menu-open { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drafter-menu-action {
+  border: 0; border-radius: var(--r-sm); padding: 5px 7px; background: transparent;
+  color: var(--paper-muted); font: 500 9px/1 var(--font-ui);
+}
+.drafter-menu-action:hover { color: var(--text); background: var(--hover); }
+.drafter-menu-action.is-danger:hover { color: var(--error); }
+.wb-location-drafter { background: color-mix(in oklab, var(--accent-soft) 38%, var(--paper)); }
+.wb-surface.is-drafter { background: color-mix(in oklab, var(--paper) 96%, var(--accent-soft)); }
 
 .wb-filestate { display: inline-flex; align-items: center; gap: 5px; font: 500 9.5px/1 var(--font-mono); letter-spacing: .04em; color: var(--paper-muted); }
 .wb-filestate.is-dirty { color: #a9742a; }
@@ -1265,7 +1310,7 @@ body.is-col-resizing * { cursor: col-resize !important; }
   @page { size: letter; margin: 1in 1in 1in 1.5in; }
 
   /* hide everything that isn't the document itself */
-  .titlebar, .outline-panel, .wb-outline-boundary, .wb-toolbar, .wb-location, .wb-statusline, .wb-storymap,
+  .titlebar, .outline-panel, .wb-outline-boundary, .wb-toolbar, .wb-location, .wb-statusline, .drafter-tabs-row, .wb-storymap,
   .statusbar, .wb-popover, .psyke-window, .littleboy-box, .wb-tool,
   .comments-window, .comment-popover, .comment-add-fab,
   .wb-hint, .sp-titlepage-edit, .wb-toast-stack, .wb-toast,

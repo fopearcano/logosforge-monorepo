@@ -1,9 +1,9 @@
 """Project bundle export — GET /api/export/project?doc=<id>.
 
 Assembles ONE self-contained ``.lfbundle`` JSON for a single document/project:
-manuscript blocks + the manual outline + comments + the PSYKE story bible. This
-is the Whiteboard side of the Whiteboard -> Pro migration (and doubles as a
-portable single-project backup/transfer format).
+manuscript blocks + Drafter scratch pages + the manual outline + comments + the
+PSYKE story bible. This is the Whiteboard side of the Whiteboard -> Pro
+migration (and doubles as a portable single-project backup/transfer format).
 
 Read-only: it never mutates any store, and it only READS the core API (PSYKE),
 so it respects the core's ownership rules — no core change is required.
@@ -20,8 +20,10 @@ from app.core_client import core_error_message
 from app.document_lifecycle import locked_document_request
 from app.local_state import (
     CommentsDocument,
+    DrafterPage,
     WhiteboardDocument,
     comments_store,
+    drafter_pages_store,
     outline_items_store,
     whiteboard_store,
 )
@@ -44,13 +46,15 @@ def build_project_bundle(
     *,
     psyke_relations: list[dict[str, Any]] | None = None,
     psyke_progressions: list[dict[str, Any]] | None = None,
+    drafter_pages: list[DrafterPage] | None = None,
 ) -> dict[str, Any]:
     """Assemble the bundle dict from already-fetched pieces. Pure + testable.
 
     Each subsystem is carried in the SAME shape the app's own GET returns, so the
-    bundle is a faithful, lossless snapshot: manuscript blocks (verbatim), the
-    opaque outline node list, comments (with their block-index anchors), and the
-    PSYKE entries in the frontend shape (``entry_type``/``description``/…),
+    bundle is a faithful, lossless snapshot: manuscript blocks (verbatim),
+    Drafter pages, the opaque outline node list, comments (with their block-index
+    anchors), and the PSYKE entries in the frontend shape
+    (``entry_type``/``description``/…),
     plus the core's canonical relation and progression DTOs.  The latter are
     additive fields in bundle version 1.0, whose readers are required to be
     forward-compatible with additional PSYKE sections.
@@ -68,6 +72,9 @@ def build_project_bundle(
             "manuscript": {"blocks": [b.model_dump(exclude_none=True) for b in wb.blocks]},
             "outline": list(outline_items),
             "comments": [c.model_dump() for c in comments.comments],
+            "drafter": {
+                "pages": [page.model_dump() for page in (drafter_pages or [])],
+            },
             "psyke": {
                 "elements": list(psyke_elements),
                 "relations": list(psyke_relations or []),
@@ -234,6 +241,7 @@ async def export_project(request: Request, doc: int | None = Query(None)) -> dic
         wb = whiteboard_store.get(locked.document_id)
         outline_items = outline_items_store.get(locked.document_id)
         comments = comments_store.get(locked.document_id)
+        drafter_pages = drafter_pages_store.get_document(locked.document_id).pages
         psyke_elements = await _list_psyke(core, locked.project_id)
         psyke_relations = await _list_psyke_relations(core, locked.project_id)
         psyke_progressions = await _list_psyke_progressions(
@@ -249,4 +257,5 @@ async def export_project(request: Request, doc: int | None = Query(None)) -> dic
             exported_at,
             psyke_relations=psyke_relations,
             psyke_progressions=psyke_progressions,
+            drafter_pages=drafter_pages,
         )

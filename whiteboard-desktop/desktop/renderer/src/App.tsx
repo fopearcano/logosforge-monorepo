@@ -40,13 +40,6 @@ import { ThemeSelector } from './styles/themes/ThemeSelector';
 import { useTheme } from './styles/themes/useTheme';
 import logoUrl from './assets/logo.png';
 
-function scrollToBlock(index: number) {
-  const surface = document.querySelector('.wb-editor');
-  const child = surface?.children[index] as HTMLElement | undefined;
-  if (surface instanceof HTMLElement) surface.focus({ preventScroll: true });
-  child?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-}
-
 function currentSelectionText(): string {
   return window.getSelection()?.toString().trim() ?? '';
 }
@@ -100,6 +93,14 @@ export function App() {
   const [editorBlockIds, setEditorBlockIds] = useState<string[]>([]);
   const [editorBlockTextsDocId, setEditorBlockTextsDocId] = useState<string | null>(null);
   const [activePath, setActivePath] = useState<string[]>([]);
+  const [writingSurfaceKind, setWritingSurfaceKind] = useState<'manuscript' | 'draft'>('manuscript');
+  const manuscriptNavigatorRef = useRef<(blockIndex: number) => void>(() => {});
+  const scrollToBlock = useCallback((blockIndex: number) => {
+    manuscriptNavigatorRef.current(blockIndex);
+  }, []);
+  const registerManuscriptNavigator = useCallback((navigate: ((blockIndex: number) => void) | null) => {
+    manuscriptNavigatorRef.current = navigate ?? (() => {});
+  }, []);
   // Draggable outline↔manuscript divider width (persisted).
   const [outlineWidth, setOutlineWidth] = useState<number>(loadOutlineWidth);
   const persistOutlineWidth = useCallback((w: number) => {
@@ -199,6 +200,11 @@ export function App() {
     [nudgeOutlineWidth, setOutlineWidthPersist],
   );
   const commentsPanelOpen = useCommentsPanelOpen();
+  const manuscriptActiveRef = useRef(true);
+  manuscriptActiveRef.current = writingSurfaceKind === 'manuscript';
+  useEffect(() => {
+    if (writingSurfaceKind === 'draft' && commentsPanelOpen) toggleCommentsPanel();
+  }, [writingSurfaceKind, commentsPanelOpen]);
   // Live open-state of the LittleBoy agents (Billy chat + Logos), published by
   // LittleBoyProvider — drives the title-bar toggle buttons' active state.
   const littleBoy = useSyncExternalStore(subscribeLittleBoyOpenState, getLittleBoyOpenState);
@@ -315,7 +321,7 @@ export function App() {
         else if (action === 'toggleStoryMap') a.toggleStoryMap();
         else if (action === 'focusMode') a.toggleFocus();
         else if (action === 'toggleTheme') a.cycleTheme();
-        else if (action === 'toggleComments') toggleCommentsPanel();
+        else if (action === 'toggleComments' && manuscriptActiveRef.current) toggleCommentsPanel();
       }),
     [],
   );
@@ -365,7 +371,7 @@ export function App() {
         a.toggleFocus();
       } else if (e.code === 'KeyC') {
         e.preventDefault();
-        toggleCommentsPanel();
+        if (manuscriptActiveRef.current) toggleCommentsPanel();
       }
     };
     window.addEventListener('keydown', onKey);
@@ -520,9 +526,12 @@ export function App() {
           <button
             type="button"
             className={`psyke-toggle${commentsPanelOpen ? ' is-active' : ''}`}
-            onClick={toggleCommentsPanel}
+            onClick={() => { if (manuscriptActiveRef.current) toggleCommentsPanel(); }}
             aria-pressed={commentsPanelOpen}
-            title="Toggle Comments (Ctrl/Cmd+Shift+C)"
+            disabled={writingSurfaceKind !== 'manuscript'}
+            title={writingSurfaceKind === 'manuscript'
+              ? 'Toggle Comments (Ctrl/Cmd+Shift+C)'
+              : 'Comments belong to the Manuscript'}
           >
             Comments
           </button>
@@ -586,6 +595,8 @@ export function App() {
             setEditorBlockIds(blockIds);
             setEditorBlockTextsDocId(docId);
           }}
+          onWritingSurfaceChange={setWritingSurfaceKind}
+          onRegisterManuscriptNavigator={registerManuscriptNavigator}
         />
       </div>
       {psykeOpen && (

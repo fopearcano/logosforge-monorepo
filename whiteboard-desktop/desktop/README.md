@@ -11,6 +11,9 @@ Whiteboard is alpha software. Its current core is **0.9.0-alpha**.
 
 - Multiple isolated, autosaving documents with guarded close, reload, switch,
   delete, external-file save, and recovery paths.
+- Project-owned Drafter tabs for isolated scene and alternate drafting. They
+  share the parent project's writing mode, PSYKE, and AI grounding while
+  remaining a separately revisioned, non-canonical resource.
 - Four writing modes: Novel, Screenplay (Fountain editing and paginated preview),
   Graphic Novel, and Stage Play.
 - A rich TipTap prose editor with formatting, focus mode, themes, zoom, line
@@ -18,13 +21,13 @@ Whiteboard is alpha software. Its current core is **0.9.0-alpha**.
 - A persisted manual Outline with typed tree nodes, templates, drag/drop,
   filtering, stable manuscript links, a derived **From Document** navigator, and
   Story Map.
-- Per-document PSYKE story-bible entries and anchored comment threads.
+- Per-document PSYKE story-bible entries and manuscript-anchored comment threads.
 - Billy chat and Logos inline assistance through configurable local or cloud AI
   providers. AI is optional; no provider is contacted until the user configures
   one.
 - Import from text, Markdown, Fountain, Final Draft, and `.logosforge`; export to
   text, Markdown, Fountain, HTML, JSON, `.logosforge`, comment reports, PDF, and
-  complete `.lfbundle` project snapshots. `.lfbundle` import/restoration is
+  complete `.lfbundle` project snapshots, including Drafter pages. `.lfbundle` import/restoration is
   currently handled by LogosForge Pro, not Whiteboard.
 - Windows x64 installer and portable builds, macOS 12+ Intel DMG, and Linux x64
   AppImage release targets.
@@ -63,7 +66,7 @@ nonce, so the app neither trusts nor terminates an unrelated listener. The
 renderer receives no Node.js integration: `contextIsolation`, sandboxing, frame
 validation, narrow IPC methods, and explicit file-path grants remain enabled.
 
-Manuscript and outline persistence is conflict-safe per document and resource.
+Manuscript, Drafter, and outline persistence is conflict-safe per document and resource.
 Each successful read or write returns an opaque durable revision plus a strong
 `ETag`; explicit-document writes send that validator with `If-Match`. The main
 process also assigns stable mutation IDs so an uncertain response can be retried
@@ -79,14 +82,16 @@ Whiteboard ledger entries carry the complete local manuscript/title/mode/setting
 snapshot, not only the last field patch. The document conflict UI and the
 app-lifetime recovery banner can export complete JSON rescue copies, then require
 confirmation before discarding or reloading the saved version. **Import
-LogosForge…** recognizes manuscript, outline, and app-lifetime recovery JSON;
+LogosForge…** recognizes manuscript, outline, Drafter, and app-lifetime recovery JSON;
 it validates their bounded structure and identity metadata, asks for an explicit
 restore confirmation (including an additional target warning when importing
 into a different document generation), and applies their content only to the
 captured active document. Imported files never acknowledge or retarget a live
 recovery receipt. A reload is rejected if another local edit arrives while the
-server copy is being fetched. The MCP companion remains read-only while this
-foundation is validated; write tools will require the same preconditions.
+server copy is being fetched. The MCP companion exposes bounded Drafter
+reads/search plus reviewed, revision-bound Drafter create/patch proposals through
+the same opt-in apply gate as its other focused writes; it never merges scratch
+prose into manuscript canon.
 
 User data defaults to `~/.logosforge` (`%USERPROFILE%\.logosforge` on Windows).
 Set `LOGOSFORGE_DATA_DIR` and `LOGOSFORGE_DB_PATH` to isolate a development or

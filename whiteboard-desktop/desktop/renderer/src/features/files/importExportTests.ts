@@ -4,6 +4,7 @@
  */
 
 import type { WhiteboardBlock, WhiteboardDocument } from '../whiteboard/types';
+import type { DrafterPage } from '../drafter/types';
 import type { PendingDocumentConflictRecovery } from '../../api/backend';
 import {
   ImportError,
@@ -282,6 +283,18 @@ const recoveryOutline = [{
   createdAt: recoveryIso,
   updatedAt: recoveryIso,
 }];
+const recoveryDrafterPages: DrafterPage[] = [{
+  id: 'dockside-scene',
+  title: 'Dockside scene sketch',
+  blocks: [{
+    id: 'draft-block-1',
+    type: 'paragraph',
+    text: 'Mara tests the dockside exchange away from canon.',
+    marks: [{ type: 'italic', from: 0, to: 4 }],
+  }],
+  created_at: recoveryIso,
+  updated_at: recoveryIso,
+}];
 const recoveredDocument = {
   id: '41',
   incarnation: sourceIncarnation,
@@ -314,7 +327,7 @@ const outlineConflict = outlineConflictEnvelope(
   recoveryOutline,
   recoveryIso,
 );
-const pendingRecovery = (kind: 'whiteboard' | 'outline') => ({
+const pendingRecovery = (kind: 'whiteboard' | 'outline' | 'drafter') => ({
   format: PENDING_DOCUMENT_RECOVERY_FORMAT,
   version: 1,
   exported_at: recoveryIso,
@@ -338,7 +351,9 @@ const pendingRecovery = (kind: 'whiteboard' | 'outline') => ({
           blocks: recoveryBlocks,
           settings: sampleSettings,
         }
-        : { items: recoveryOutline },
+        : kind === 'outline'
+          ? { items: recoveryOutline }
+          : { pages: recoveryDrafterPages },
     },
     error: {
       code: 'revision_conflict',
@@ -367,10 +382,27 @@ const pendingRecovery = (kind: 'whiteboard' | 'outline') => ({
 {
   const parsedWhiteboard = parseLogosforge(JSON.stringify(pendingRecovery('whiteboard')));
   const parsedOutline = parseLogosforge(JSON.stringify(pendingRecovery('outline')));
+  const parsedDrafter = parseLogosforge(JSON.stringify(pendingRecovery('drafter')));
   check('pending whiteboard recovery detected', parsedWhiteboard.recovery?.scope === 'whiteboard');
   check('pending whiteboard recovery full fidelity', parsedWhiteboard.title === 'Recovered title' && parsedWhiteboard.blocks[0]?.id === 'recovered-block');
   check('pending outline recovery detected', parsedOutline.recovery?.scope === 'outline');
   check('pending outline recovery leaves blocks empty', parsedOutline.blocks.length === 0 && parsedOutline.outline?.length === 1);
+  check('pending Drafter recovery detected', parsedDrafter.recovery?.scope === 'drafter');
+  check(
+    'pending Drafter recovery preserves the exact page snapshot',
+    parsedDrafter.blocks.length === 0
+      && JSON.stringify(parsedDrafter.drafterPages) === JSON.stringify(recoveryDrafterPages),
+  );
+}
+{
+  const recovery = pendingRecovery('drafter').recovery as unknown as PendingDocumentConflictRecovery;
+  const portable = pendingDocumentRecoveryEnvelope(recovery, recoveryIso);
+  const parsed = parseLogosforge(JSON.stringify(portable));
+  check(
+    'saved Drafter recovery copy round-trips through Import LogosForge',
+    parsed.recovery?.scope === 'drafter'
+      && JSON.stringify(parsed.drafterPages) === JSON.stringify(recoveryDrafterPages),
+  );
 }
 {
   const value = pendingRecovery('outline');
@@ -639,9 +671,32 @@ await asyncTest('outline recovery applies only outline', async () => {
     restoreOutline: async (documentId, items) => {
       outlineTarget = `${documentId}:${items[0]?.title}`;
     },
+    restoreDrafter: async () => { manuscriptTouched = true; },
   });
   if (manuscriptTouched || outlineTarget !== '99:Recovered chapter') {
     throw new Error('outline restore touched manuscript state or wrong target');
+  }
+});
+await asyncTest('Drafter recovery applies only the complete Drafter snapshot', async () => {
+  const parsed = parseLogosforge(JSON.stringify(pendingRecovery('drafter')));
+  let drafterTarget = '';
+  let unrelatedTouched = false;
+  await applyRecoveryImport(parsed, '99', {
+    applySettings: () => { unrelatedTouched = true; },
+    loadBlocks: () => { unrelatedTouched = true; return true; },
+    setMode: async () => { unrelatedTouched = true; return true; },
+    setTitle: async () => { unrelatedTouched = true; return true; },
+    markDirty: () => { unrelatedTouched = true; },
+    restoreOutline: async () => { unrelatedTouched = true; },
+    restoreDrafter: async (documentId, pages) => {
+      drafterTarget = `${documentId}:${pages[0]?.title}:${pages[0]?.blocks[0]?.text}`;
+    },
+  });
+  if (
+    unrelatedTouched
+    || drafterTarget !== '99:Dockside scene sketch:Mara tests the dockside exchange away from canon.'
+  ) {
+    throw new Error('Drafter restore touched another resource or targeted the wrong project');
   }
 });
 await asyncTest('whiteboard recovery applies complete content only to active target actions', async () => {
@@ -654,6 +709,7 @@ await asyncTest('whiteboard recovery applies complete content only to active tar
     setTitle: async (title) => { applied.title = title; return true; },
     markDirty: () => { applied.dirty = true; },
     restoreOutline: async () => { throw new Error('outline unexpectedly restored'); },
+    restoreDrafter: async () => { throw new Error('Drafter unexpectedly restored'); },
   });
   if (
     applied.title !== recoveredDocument.title
@@ -675,6 +731,7 @@ await asyncTest('unmounted editor aborts before any manuscript recovery mutation
       setTitle: async () => { mutations.push('title'); return true; },
       markDirty: () => { mutations.push('dirty'); },
       restoreOutline: async () => { mutations.push('outline'); },
+      restoreDrafter: async () => { mutations.push('drafter'); },
     });
   } catch {
     rejected = true;
@@ -751,6 +808,59 @@ throws('pending recovery write identity mismatch rejected', () => {
   return parseLogosforge(JSON.stringify({
     ...value,
     recovery: { ...value.recovery, write: { ...value.recovery.write, documentId: '99' } },
+  }));
+});
+throws('Drafter recovery payload extra field rejected', () => {
+  const value = pendingRecovery('drafter');
+  const payload = value.recovery.write.payload as Record<string, unknown>;
+  return parseLogosforge(JSON.stringify({
+    ...value,
+    recovery: {
+      ...value.recovery,
+      write: { ...value.recovery.write, payload: { ...payload, manuscript: [] } },
+    },
+  }));
+});
+throws('Drafter recovery duplicate page ids rejected', () => {
+  const value = pendingRecovery('drafter');
+  return parseLogosforge(JSON.stringify({
+    ...value,
+    recovery: {
+      ...value.recovery,
+      write: {
+        ...value.recovery.write,
+        payload: { pages: [...recoveryDrafterPages, ...recoveryDrafterPages] },
+      },
+    },
+  }));
+});
+throws('Drafter recovery page limit enforced', () => {
+  const value = pendingRecovery('drafter');
+  const pages = Array.from({ length: 257 }, (_, index) => ({
+    ...recoveryDrafterPages[0],
+    id: `page-${index}`,
+  }));
+  return parseLogosforge(JSON.stringify({
+    ...value,
+    recovery: {
+      ...value.recovery,
+      write: { ...value.recovery.write, payload: { pages } },
+    },
+  }));
+});
+throws('Drafter recovery timestamps require a timezone', () => {
+  const value = pendingRecovery('drafter');
+  return parseLogosforge(JSON.stringify({
+    ...value,
+    recovery: {
+      ...value.recovery,
+      write: {
+        ...value.recovery.write,
+        payload: {
+          pages: [{ ...recoveryDrafterPages[0], updated_at: '2026-09-25T12:00:00' }],
+        },
+      },
+    },
   }));
 });
 throws('pending recovery extra error key rejected', () => {

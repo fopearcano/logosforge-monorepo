@@ -1,5 +1,5 @@
 const WORKSPACE_FOCUS_FALLBACK = [
-  '.wb-editor',
+  '[data-active-writing-surface="true"] .wb-editor',
   'button[aria-label="File menu"]',
   'button[aria-label="Quick Start and hotkeys"]',
 ].join(', ');

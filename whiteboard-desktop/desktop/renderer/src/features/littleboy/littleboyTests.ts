@@ -17,7 +17,12 @@ import {
   applyModeFor,
   isTransformAction,
 } from './logos/logosTypes';
-import { buildProjectContext, prependProjectContext, PROJECT_MAX } from './context/projectContext';
+import {
+  buildProjectContext,
+  buildWritingSurfaceContext,
+  prependProjectContext,
+  PROJECT_MAX,
+} from './context/projectContext';
 import { parseBillyMessage, stripActionBlocks } from './billy/billyText';
 import type { WhiteboardBlock } from '../whiteboard/types';
 import { DEFAULT_SETTINGS, narrativeProfileContext } from '../whiteboard/documentSettings';
@@ -113,6 +118,18 @@ const wbDoc = (texts: string[]): WhiteboardBlock[] =>
   const bigPc = buildProjectContext(wbDoc(big), 'screenplay');
   check('project context stays within PROJECT_MAX', bigPc.length <= PROJECT_MAX);
 check('over-long cast/outline shows a "+N more" cap', /\(\+\d+ more\)/.test(bigPc));
+}
+
+{
+  const draft = buildWritingSurfaceContext(
+    'draft',
+    'Bridge confrontation',
+    ['Bridge confrontation', 'Alternative ending'],
+  );
+  check('draft context names the active page', /Active Drafter page: Bridge confrontation/.test(draft));
+  check('draft context labels prose provisional', /provisional working material/.test(draft));
+  check('draft context includes the project page index', /Alternative ending/.test(draft));
+  check('manuscript context adds no draft label', buildWritingSurfaceContext('manuscript', undefined, []) === '');
 }
 
 // Narrative voice defaults are explicit AI grounding, but empty defaults add no noise.

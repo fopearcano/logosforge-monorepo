@@ -58,7 +58,7 @@ Everything runs **locally** — the app bundles its own writing engine. No accou
 Whiteboard is **database-backed**, like a project workspace — not a file-per-document editor. This is the single most important thing to understand:
 
 - **Everything auto-saves.** As you type, edits are written to the app's local store within a second. The **"Draft saved"** note near the top-right is your save indicator. There is no "Save" button because you never need one.
-- **Your work persists across sessions and switches.** Close the app, reopen it, and Whiteboard reloads each document's manuscript, narrative/format settings, outline, comments, and PSYKE data. Each local JSON save also retains two previous generations for recovery.
+- **Your work persists across sessions and switches.** Close the app, reopen it, and Whiteboard reloads each document's manuscript, Drafter pages, narrative/format settings, outline, comments, and PSYKE data. Each local JSON save also retains two previous generations for recovery.
 - **Files are for sharing, not storing.** *Import* brings text in; *Export* sends a copy out. Neither is where your work "lives" — the app is.
 
 See [Data location & backup](#15-data-location--backup) for where the store sits on disk and how to back it up.
@@ -67,18 +67,18 @@ See [Data location & backup](#15-data-location--backup) for where the store sits
 
 ## 3. Documents
 
-Each **document** is an independent project with its own manuscript, narrative voice/format settings, outline, comments, and PSYKE bible. Manage them from the **File** menu (top-left):
+Each **document** is an independent project with its own manuscript, Drafter pages, narrative voice/format settings, outline, comments, and PSYKE bible. Manage them from the **File** menu (top-left):
 
 | Action | What it does |
 |---|---|
 | **New Document** | Creates a fresh, blank project and switches to it. Your previous document is untouched. (`Ctrl+N`) |
 | **Open Document** | Lists every document — click one to switch. The current one is marked ✓; each has a **×** to delete. |
 | **Rename current document…** | Opens a small dialog to rename the active document. |
-| **Delete** | The **×** next to a document removes it *and* its outline, comments, and story bible — this can't be undone, so it asks first. |
+| **Delete** | The **×** next to a document removes it *and* its Drafter pages, outline, comments, and story bible — this can't be undone, so it asks first. |
 
 The **project name at the top** is also a quick document switcher (click it for the list). Both places are just two doors to the same library.
 
-Whiteboard drains manuscript, document-settings, outline, comment, PSYKE, title, and mode writes before changing projects. If the current document is associated with an external file, Whiteboard offers to save that file before switching and then clears the association, so saving the next document can never overwrite the previous document's file.
+Whiteboard drains manuscript, Drafter, document-settings, outline, comment, PSYKE, title, and mode writes before changing projects. If the current document is associated with an external file, Whiteboard offers to save that file before switching and then clears the association, so saving the next document can never overwrite the previous document's file.
 
 Two projects are fully isolated: a character named "Mara" created in Project A never appears in Project B.
 
@@ -106,6 +106,17 @@ The centre pane is your writing surface. It formats as you type, so what you see
 **Screenplay:** A true inline Fountain editor. `Tab` runs autocomplete and cycles the element type (scene heading → action → character → dialogue…). Emphasis markers wrap with `Ctrl+B/I/U`. Add a **note** with `Ctrl+Alt+N` (`[[ … ]]`) or send text to the **boneyard/omit** with `Ctrl+Alt+O`. Centre a line with `Ctrl+\`. Turn on **Preview** (`Ctrl+Shift+E`) for an accurate, paginated read with a title page; `Esc` exits.
 
 **View controls:** Zoom the page with `Ctrl+=` / `Ctrl+-`, reset with `Ctrl+0`.
+
+### Drafter pages
+
+The tabs above the editor contain one permanent **Manuscript** tab plus any project-owned **Drafter** pages. Drafter is for isolated scenes, alternate versions, notes, or exploratory prose that should not yet change the canonical manuscript.
+
+- Create a page with **+** or `Ctrl+Shift+N`; rename or delete it from the **Drafter** menu.
+- **Drafter → Import file as page…** copies a Text, Markdown, or Fountain file into a new internal page. It does not keep a live link to the source file.
+- Pages inherit the document's writing mode and editor settings. Copy and paste into the Manuscript whenever material is ready.
+- Billy and Logos use the active page selection and nearby prose while retaining the same project's canonical manuscript digest, manual Outline, narrative profile, and PSYKE. The AI context explicitly labels Drafter prose as provisional.
+- Comments, manuscript breadcrumbs, Story Map, manuscript file import, and ordinary publication exports remain attached to the **Manuscript** tab. Clicking an Outline or Story Map destination returns there automatically.
+- Drafter has an independent revision and crash-recovery journal. A conflict cannot overwrite the manuscript or another saved Drafter version.
 
 **Nerd Mode (optional editor aids, all off by default):**
 
@@ -168,7 +179,7 @@ Comments are inline notes pinned to a span of text — for revision passes, edit
 - **Resolve:** mark a comment resolved once it's handled; resolved comments can be hidden.
 - **Panel:** toggle the comments side panel with `Ctrl+Shift+C`.
 
-New comments combine a stable manuscript-block ID with quoted text and surrounding context, so highlights follow the intended passage through inserted blocks, duplicate wording, and edits. Legacy comments keep working through their text selectors; a comment is cleaned up only when its passage is genuinely gone.
+Comments are available on the **Manuscript** tab. New comments combine a stable manuscript-block ID with quoted text and surrounding context, so highlights follow the intended passage through inserted blocks, duplicate wording, and edits. Legacy comments keep working through their text selectors; a comment is cleaned up only when its passage is genuinely gone.
 
 ---
 
@@ -178,6 +189,8 @@ The AI is **optional** and **bring-your-own-endpoint** — nothing is sent anywh
 
 - **Billy** — a hovering **chat** assistant for open-ended help. Toggle with `Ctrl+Shift+B`.
 - **Logos** — works **inline and in context** (on your current selection / section) for surgical suggestions. Toggle with `Ctrl+Shift+L` (or `Ctrl+K`).
+
+On a Drafter page, both assistants see that page's active selection and nearby text, but the same project's manuscript, Outline, narrative profile, and PSYKE remain their grounding. Drafter content is labelled provisional so it is not mistaken for canonical story text.
 
 **Configure it** in **Settings ⚙** (top-right):
 
@@ -192,7 +205,7 @@ For fully offline AI, run a local server (LM Studio or Ollama) and point the Bas
 
 ## 11. Import
 
-**File → Import** brings external text into the **current** document. On import you choose **Replace** (swap the document) or **Append** (add to the end).
+**File → Import to Manuscript** brings external text into the canonical manuscript. On import you choose **Replace** (swap the manuscript) or **Append** (add to the end). To make a separate working page instead, choose **Drafter → Import file as page…** for Text, Markdown, or Fountain.
 
 | Format | Notes |
 |---|---|
@@ -214,7 +227,7 @@ see [Moving a project to LogosForge Pro](#16-moving-a-project-to-logosforge-pro)
 
 | Format | Contains |
 |---|---|
-| **Export Project** (`.lfbundle`) | A complete portable snapshot — manuscript, narrative/format settings, outline, comments, and PSYKE — for archiving or importing into LogosForge Pro. Whiteboard cannot import it yet. |
+| **Export Project** (`.lfbundle`) | A complete portable snapshot — manuscript, Drafter pages, narrative/format settings, outline, comments, and PSYKE — for archiving or importing into LogosForge Pro. Whiteboard cannot import it yet. |
 | Text / Markdown / Fountain | The manuscript as text. |
 | HTML | A styled, self-contained web page of the manuscript. |
 | JSON | Title, mode, and raw blocks. |
@@ -222,7 +235,7 @@ see [Moving a project to LogosForge Pro](#16-moving-a-project-to-logosforge-pro)
 | Comments | A Markdown report of all comments, grouped open/resolved. |
 | PDF | The print path — a paginated script for screenplays, plain print otherwise. |
 
-For a true "save everything" snapshot, use **Export Project (.lfbundle)** — it's the only single file that captures document settings, outline, comments, *and* characters alongside the prose. Whiteboard aborts this export if any component cannot be read; it never reports success for a bundle that silently dropped PSYKE or damaged local state. To restore the bundle as a working project, import it into **LogosForge Pro**. To restore Whiteboard itself, restore the `~/.logosforge` data folder instead.
+For a true "save everything" snapshot, use **Export Project (.lfbundle)** — it's the only single file that captures Drafter pages, document settings, outline, comments, *and* characters alongside the prose. Whiteboard aborts this export if any component cannot be read; it never reports success for a bundle that silently dropped Drafter, PSYKE, or damaged local state. Pro imports Drafter pages as tagged Notes and preserves their structured source blocks in project settings. To restore Whiteboard itself, restore the `~/.logosforge` data folder instead.
 
 ---
 
@@ -251,6 +264,8 @@ For a true "save everything" snapshot, use **Export Project (.lfbundle)** — it
 | Action | Keys |
 |---|---|
 | New Document | `Ctrl+N` |
+| New Drafter page | `Ctrl+Shift+N` |
+| Move across focused writing tabs | `←` / `→` *(Home / End for first / last)* |
 | Undo / Redo | `Ctrl+Z` / `Ctrl+Shift+Z` |
 | Zoom in / out / reset | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` |
 
@@ -301,6 +316,7 @@ Everything you write lives under one folder in your home directory:
 ```
 ~/.logosforge/
 ├── whiteboards/<id>.json     manuscript (blocks) — one file per document
+├── drafter/<id>.json         project-owned scratch pages
 ├── outlines/<id>.json        the manual outline — one file per document
 ├── comments/<id>.json        inline comments — one file per document
 └── whiteboard.db             SQLite: projects + PSYKE story bibles
@@ -310,12 +326,19 @@ Everything you write lives under one folder in your home directory:
 
 **To back up, move, or restore your Whiteboard workspace:** copy the whole `~/.logosforge` folder while Whiteboard is closed. **To archive a single project for migration to Pro:** use **File → Export → Export Project (.lfbundle)**. Whiteboard does not currently import `.lfbundle` files itself.
 
-For manuscript, outline, and comment JSON, Whiteboard keeps the two preceding
+For manuscript, Drafter, outline, and comment JSON, Whiteboard keeps the two preceding
 versions beside the current file as `.bak` and `.bak.1`. If the current copy is
 unreadable, the newest valid backup is restored automatically, the damaged bytes
 are preserved as `.corrupt-<timestamp>`, and a recovery notice appears in the app.
 If no backup validates, loading and autosave stop with an error rather than
 replacing the project with an empty document.
+
+If a conflict or startup recovery banner offers **Save copy**, the exported
+LogosForge JSON is also restorable through **File → Import to Manuscript →
+LogosForge**. Whiteboard recognizes manuscript, Outline, and Drafter recovery
+copies, validates them, identifies their source project, and asks before
+replacing only that resource. Restoring Drafter replaces the project's scratch
+pages without changing its manuscript, Outline, settings, or PSYKE knowledge.
 
 ---
 
@@ -326,9 +349,10 @@ Whiteboard and Pro are separate apps. To graduate a project to Pro:
 1. In Whiteboard: **File → Export → Export Project (.lfbundle)**.
 2. In Pro: import that `.lfbundle`.
 
-Pro converts the manuscript blocks to scenes, imports the document settings,
-PSYKE entries, relationships, progression beats, outline, and outline links, and
-preserves Whiteboard-only settings in the imported project's settings store.
+Pro converts the manuscript blocks to scenes; imports Drafter pages as tagged
+Notes; imports the document settings, PSYKE entries, relationships, progression
+beats, outline, and outline links; and preserves the exact structured Drafter
+blocks plus other Whiteboard-only settings in the imported project's settings store.
 Progression scene anchors are remapped only when their title uniquely matches an
 imported scene; unresolved anchors keep their progression beat unlinked and are reported.
 Whiteboard comment threads are also recreated in Pro when their text span can be

@@ -18,6 +18,7 @@ _ORDER_HEADER = "X-LogosForge-Persistence-Order"
 _DELETE_FLOOR_HEADERS = {
     "whiteboard": "X-LogosForge-Whiteboard-Order-Floor",
     "outline": "X-LogosForge-Outline-Order-Floor",
+    "drafter": "X-LogosForge-Drafter-Order-Floor",
 }
 _LOCK = threading.RLock()
 _HIGHEST: dict[tuple[str, str], int] = {}

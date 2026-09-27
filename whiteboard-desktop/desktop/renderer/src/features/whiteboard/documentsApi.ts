@@ -84,7 +84,7 @@ export async function deleteDocument(
   baseUrl: string = DEFAULT_BASE_URL,
   id: string,
   incarnation: string,
-  floor: PendingDocumentDeleteFloor = { whiteboard: 0, outline: 0 },
+  floor: PendingDocumentDeleteFloor = { whiteboard: 0, outline: 0, drafter: 0 },
 ): Promise<void> {
   await withDocumentRequestDeadline('Document delete', async (signal) => {
     const res = await backendFetch(`${baseUrl}/api/documents/${encodeURIComponent(id)}`, {
@@ -92,6 +92,7 @@ export async function deleteDocument(
       headers: withDocumentIncarnation(incarnation, {
         'X-LogosForge-Whiteboard-Order-Floor': String(floor.whiteboard),
         'X-LogosForge-Outline-Order-Floor': String(floor.outline),
+        'X-LogosForge-Drafter-Order-Floor': String(floor.drafter),
       }),
       signal,
     });

@@ -96,30 +96,33 @@ test('a late GET cannot downgrade a revision advanced by PUT', () => {
   }
 });
 
-test('independent manuscript and outline validators do not conflict', () => {
+test('independent manuscript, outline, and Drafter validators do not conflict', () => {
   resetResourceRevisionsForTests();
   installResourceRevision('whiteboard', '7', incarnation, r1);
   installResourceRevision('outline', '7', incarnation, r2);
+  installResourceRevision('drafter', '7', incarnation, r3);
   if (
     requireResourceRevision('whiteboard', '7', incarnation) !== r1
     || requireResourceRevision('outline', '7', incarnation) !== r2
+    || requireResourceRevision('drafter', '7', incarnation) !== r3
   ) throw new Error('Resource revisions were conflated');
 });
 
-test('deleting one incarnation clears both resource validators', () => {
+test('deleting one incarnation clears all resource validators', () => {
   resetResourceRevisionsForTests();
   installResourceRevision('whiteboard', '7', incarnation, r1);
   installResourceRevision('outline', '7', incarnation, r2);
+  installResourceRevision('drafter', '7', incarnation, r3);
   clearDocumentResourceRevisions('7', incarnation);
   let missing = 0;
-  for (const kind of ['whiteboard', 'outline'] as const) {
+  for (const kind of ['whiteboard', 'outline', 'drafter'] as const) {
     try {
       requireResourceRevision(kind, '7', incarnation);
     } catch {
       missing += 1;
     }
   }
-  if (missing !== 2) throw new Error('Deleted validators remained available');
+  if (missing !== 3) throw new Error('Deleted validators remained available');
 });
 
 function whiteboardResponse(revision: string, title: string): Response {

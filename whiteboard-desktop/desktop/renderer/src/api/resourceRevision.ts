@@ -1,4 +1,4 @@
-export type VersionedDocumentResource = 'whiteboard' | 'outline';
+export type VersionedDocumentResource = 'whiteboard' | 'outline' | 'drafter';
 
 export interface ResourceRevisionRead {
   epoch: number;

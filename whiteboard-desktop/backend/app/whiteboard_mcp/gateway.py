@@ -20,13 +20,13 @@ import time
 import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from .client import MAX_REQUEST_BYTES, WhiteboardApiClient, WhiteboardApiError
 
 LOGGER = logging.getLogger(__name__)
-MCP_SERVER_VERSION = "1.4.0"
+MCP_SERVER_VERSION = "1.5.0"
 MAX_PAGE_SIZE = 500
 MAX_SNAPSHOT_BLOCKS = 200
 MAX_SNAPSHOT_CHARACTERS = 250_000
@@ -55,6 +55,12 @@ MAX_COMMENT_BODY_CHARACTERS = 100_000
 MAX_COMMENT_REVIEW_FIELD_BYTES = 8 * 1024
 MAX_OUTLINE_DEPTH = 512
 MAX_MARKS_PER_BLOCK = 100_000
+MAX_DRAFTER_PAGES = 256
+MAX_DRAFTER_TITLE_CHARACTERS = 240
+MAX_DRAFTER_BLOCKS_TOTAL = 100_000
+MAX_DRAFTER_TEXT_CHARACTERS_TOTAL = 32_000_000
+MAX_DRAFTER_MARKS_PER_PAGE = 20_000
+MAX_DRAFTER_MARK_METADATA_CHARACTERS_PER_PAGE = 1_000_000
 _FINAL_RESULT_METADATA_RESERVE = 2 * 1024
 _TRUNCATION_MARKER = "…"
 _WRITING_MODES = {"novel", "screenplay", "graphic_novel", "stage_script"}
@@ -79,6 +85,7 @@ _OUTLINE_COLORS = {"none", "red", "orange", "yellow", "green", "blue", "purple",
 _PSYKE_TYPES = {"character", "place", "object", "lore", "theme", "other"}
 _COMMENT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _COMMENT_AI_MENTION_RE = re.compile(r"@(billy|logos)\b", re.IGNORECASE)
+_DRAFTER_PAGE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _OUTLINE_REQUIRED_FIELDS = {
     "id",
     "parentId",
@@ -402,6 +409,27 @@ def _collection_review(values: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _drafter_index_review(values: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize nested Drafter content from bounded page-index metadata."""
+    identifiers = [_text(value.get("id")) for value in values]
+    return {
+        "count": len(values),
+        "block_count": sum(
+            value.get("block_count", 0)
+            for value in values
+            if isinstance(value.get("block_count"), int)
+        ),
+        "text_characters": sum(
+            value.get("character_count", 0)
+            for value in values
+            if isinstance(value.get("character_count"), int)
+        ),
+        "sha256": _digest(values),
+        "first_ids": identifiers[:5],
+        "last_ids": identifiers[-5:] if len(identifiers) > 5 else [],
+    }
+
+
 def _manuscript_review(document: dict[str, Any]) -> dict[str, Any]:
     blocks = document.get("blocks")
     if not isinstance(blocks, list) or any(
@@ -712,6 +740,26 @@ def _compact_proposal_body(operation: str, body: dict[str, Any]) -> dict[str, An
         return {
             "items": _outline_collection_review(items if isinstance(items, list) else [])
         }
+    if operation == "create_drafter_page":
+        compact = {
+            key: copy.deepcopy(value)
+            for key, value in body.items()
+            if key != "blocks"
+        }
+        blocks = body.get("blocks")
+        compact["blocks"] = _collection_review(
+            blocks if isinstance(blocks, list) else []
+        )
+        return compact
+    if operation == "patch_drafter_page":
+        compact = {}
+        for key, value in body.items():
+            compact[key] = (
+                _collection_review(value)
+                if key == "blocks" and isinstance(value, list)
+                else copy.deepcopy(value)
+            )
+        return compact
     return {"bytes": len(_canonical_json(body)), "sha256": _digest(body)}
 
 
@@ -813,11 +861,13 @@ class WhiteboardMcpGateway:
             "features": [
                 "document_selection",
                 "bounded_manuscript_snapshot",
+                "bounded_drafter_pages",
                 "outline",
                 "comments",
                 "psyke",
                 "bounded_search",
                 "manuscript_patch_proposals",
+                "drafter_page_proposals",
                 "outline_replacement_proposals",
                 "comment_collaboration_proposals",
                 "psyke_entry_proposals",
@@ -839,6 +889,16 @@ class WhiteboardMcpGateway:
                 "maximum_proposal_body_page_bytes": MAX_PROPOSAL_BODY_PAGE_BYTES,
                 "maximum_inline_marks_per_block": MAX_MARKS_PER_BLOCK,
                 "maximum_outline_depth": MAX_OUTLINE_DEPTH,
+                "maximum_drafter_pages": MAX_DRAFTER_PAGES,
+                "maximum_drafter_title_characters": MAX_DRAFTER_TITLE_CHARACTERS,
+                "maximum_drafter_blocks_total": MAX_DRAFTER_BLOCKS_TOTAL,
+                "maximum_drafter_text_characters_total": (
+                    MAX_DRAFTER_TEXT_CHARACTERS_TOTAL
+                ),
+                "maximum_drafter_marks_per_page": MAX_DRAFTER_MARKS_PER_PAGE,
+                "maximum_drafter_mark_metadata_characters_per_page": (
+                    MAX_DRAFTER_MARK_METADATA_CHARACTERS_PER_PAGE
+                ),
                 "maximum_comment_body_characters": MAX_COMMENT_BODY_CHARACTERS,
                 "maximum_comment_review_field_bytes": MAX_COMMENT_REVIEW_FIELD_BYTES,
                 "maximum_psyke_relation_type_characters": MAX_PSYKE_RELATION_TYPE_CHARACTERS,
@@ -991,6 +1051,97 @@ class WhiteboardMcpGateway:
             "page": page,
         }
 
+    def drafter_pages(
+        self, document_id: int | None, offset: int, limit: int
+    ) -> dict[str, Any]:
+        """List bounded page metadata without confusing scratch text with canon."""
+        resolved = self._document_id(document_id)
+        drafter = self.client.get_drafter_page_index(resolved)
+        metadata = [
+            {
+                **copy.deepcopy(page),
+                "provisional": True,
+            }
+            for page in drafter["pages"]
+        ]
+        values, page_info = _page(metadata, offset, limit)
+        return {
+            "document_id": resolved,
+            "revision": drafter["revision"],
+            "page_count": drafter["page_count"],
+            "pages": values,
+            "page": page_info,
+            "provisional": True,
+        }
+
+    def drafter_page(
+        self,
+        document_id: int | None,
+        page_id: str,
+        offset: int,
+        limit: int,
+        max_characters: int,
+        text_offset: int = 0,
+    ) -> dict[str, Any]:
+        """Read bounded blocks from one explicitly provisional Drafter page."""
+        resolved = self._document_id(document_id)
+        stable_page_id = self._validate_drafter_page_id(page_id)
+        drafter = self.client.get_drafter_page(
+            resolved,
+            stable_page_id,
+            offset=offset,
+            limit=limit,
+            max_characters=max_characters,
+            text_offset=text_offset,
+        )
+        selected_page = drafter["page"]
+        excerpts = drafter["blocks"]
+        blocks = [copy.deepcopy(excerpt["block"]) for excerpt in excerpts]
+        pagination = drafter["pagination"]
+        excerpt_metadata = [
+            {key: copy.deepcopy(value) for key, value in excerpt.items() if key != "block"}
+            for excerpt in excerpts
+        ]
+        returned_characters = sum(
+            len(_text(block.get("text"))) for block in blocks
+        )
+        page_info = {
+            "offset": pagination["offset"],
+            "text_offset": pagination["text_offset"],
+            "limit": limit,
+            "returned": pagination["returned_blocks"],
+            "total": pagination["total_blocks"],
+            "next_offset": pagination["next_offset"],
+            "next_text_offset": pagination["next_text_offset"],
+            "characters": returned_characters,
+            "max_characters": pagination["max_characters"],
+            "character_limited": (
+                pagination["truncated"]
+                and (
+                    returned_characters >= pagination["max_characters"]
+                    or any(not excerpt["complete"] for excerpt in excerpts)
+                )
+            ),
+            "truncated": pagination["truncated"],
+            "excerpts": excerpt_metadata,
+        }
+        return {
+            "document_id": resolved,
+            "revision": drafter["revision"],
+            "page_count": drafter["page_count"],
+            "drafter_page": {
+                "id": selected_page["id"],
+                "title": selected_page["title"],
+                "created_at": selected_page["created_at"],
+                "updated_at": selected_page["updated_at"],
+                "block_count": selected_page["block_count"],
+                "character_count": selected_page["character_count"],
+                "blocks": blocks,
+                "provisional": True,
+            },
+            "page": page_info,
+        }
+
     def comments(
         self,
         document_id: int | None,
@@ -1106,14 +1257,15 @@ class WhiteboardMcpGateway:
                 return
             total += 1
             if len(matches) < limit:
-                matches.append(
-                    {
-                        "scope": kind,
-                        "id": _short_search_field(item_id, MAX_SEARCH_ID),
-                        "title": _short_search_field(title, MAX_SEARCH_TITLE),
-                        "snippet": _snippet(haystack, needle),
-                    }
-                )
+                match = {
+                    "scope": kind,
+                    "id": _short_search_field(item_id, MAX_SEARCH_ID),
+                    "title": _short_search_field(title, MAX_SEARCH_TITLE),
+                    "snippet": _snippet(haystack, needle),
+                }
+                if kind == "drafter":
+                    match["provisional"] = True
+                matches.append(match)
 
         if scope in {"all", "manuscript"}:
             document = self.client.get_document(resolved)
@@ -1126,6 +1278,36 @@ class WhiteboardMcpGateway:
                         f"Block {index + 1} ({_text(block.get('type')) or 'paragraph'})",
                         _text(block.get("text")),
                     )
+
+        if scope in {"all", "drafter"}:
+            drafter_search = self.client.search_drafter(
+                resolved,
+                query.strip(),
+                limit=limit,
+                snippet_characters=MAX_SEARCH_SNIPPET,
+            )
+            total += drafter_search["total_matches"]
+            for result in drafter_search["results"]:
+                if len(matches) >= limit:
+                    break
+                page_id = result["page_id"]
+                block_index = result.get("block_index")
+                block_id = result.get("block_id")
+                if result["match_scope"] == "title":
+                    item_id = page_id
+                    title = result["page_title"]
+                else:
+                    item_id = f"{page_id}:{block_id if block_id is not None else block_index}"
+                    title = f"{result['page_title']} · block {(block_index or 0) + 1}"
+                matches.append(
+                    {
+                        "scope": "drafter",
+                        "id": _short_search_field(item_id, MAX_SEARCH_ID),
+                        "title": _short_search_field(title, MAX_SEARCH_TITLE),
+                        "snippet": result["snippet"],
+                        "provisional": True,
+                    }
+                )
 
         if scope in {"all", "outline"}:
             for index, item in enumerate(self.client.get_outline(resolved)["items"]):
@@ -1190,6 +1372,76 @@ class WhiteboardMcpGateway:
                 "only letters, digits, period, underscore, colon, or hyphen."
             )
         return comment_id
+
+    @staticmethod
+    def _validate_drafter_page_id(page_id: Any) -> str:
+        if not isinstance(page_id, str) or _DRAFTER_PAGE_ID_RE.fullmatch(page_id) is None:
+            raise GatewayError(
+                "page_id must be a stable 1-128 character identifier containing "
+                "only letters, digits, period, underscore, colon, or hyphen."
+            )
+        return page_id
+
+    @staticmethod
+    def _validate_drafter_title(title: Any) -> str:
+        if (
+            not isinstance(title, str)
+            or not title.strip()
+            or len(title) > MAX_DRAFTER_TITLE_CHARACTERS
+        ):
+            raise GatewayError(
+                "Drafter page title must be a non-blank string of at most "
+                f"{MAX_DRAFTER_TITLE_CHARACTERS} characters."
+            )
+        try:
+            title.encode("utf-8")
+        except UnicodeError:
+            raise GatewayError("Drafter page title must be valid UTF-8 text.") from None
+        return title
+
+    @classmethod
+    def _validate_drafter_blocks(cls, blocks: Any) -> list[dict[str, Any]]:
+        if not isinstance(blocks, list):
+            raise GatewayError("Drafter page blocks must be an array.")
+        # Drafter pages share the exact manuscript block contract. Reuse its
+        # strict validation without granting title or mode mutation authority.
+        stored = cls._validate_manuscript_patch({"blocks": blocks})["blocks"]
+        marks_count = 0
+        mark_metadata_characters = 0
+        for index, block in enumerate(stored):
+            if len(block["id"]) > 128:
+                raise GatewayError(
+                    f"Drafter block {index} id must contain at most 128 characters."
+                )
+            marks = block.get("marks") or []
+            marks_count += len(marks)
+            mark_metadata_characters += sum(
+                len(
+                    json.dumps(
+                        mark,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                        allow_nan=False,
+                    )
+                )
+                for mark in marks
+            )
+        if marks_count > MAX_DRAFTER_MARKS_PER_PAGE:
+            raise GatewayError(
+                "A Drafter page may contain at most "
+                f"{MAX_DRAFTER_MARKS_PER_PAGE} inline marks."
+            )
+        if (
+            mark_metadata_characters
+            > MAX_DRAFTER_MARK_METADATA_CHARACTERS_PER_PAGE
+        ):
+            raise GatewayError(
+                "A Drafter page may contain at most "
+                f"{MAX_DRAFTER_MARK_METADATA_CHARACTERS_PER_PAGE} characters "
+                "of inline-mark metadata."
+            )
+        return stored
 
     @staticmethod
     def _validate_comment_reply_body(body: Any) -> str:
@@ -1907,6 +2159,249 @@ class WhiteboardMcpGateway:
             },
         )
 
+    def propose_drafter_page_create(
+        self,
+        document_id: int | None,
+        expected_revision: str,
+        title: str,
+        blocks: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        resolved = self._document_id(document_id)
+        expected = self._validate_expected_revision(expected_revision)
+        identity_before = self.client.get_document(resolved)
+        current = self.client.get_drafter_page_index(resolved)
+        identity_after = self.client.get_document(resolved)
+        incarnation = identity_before.get("incarnation")
+        if not _valid_token(incarnation) or identity_after.get("incarnation") != incarnation:
+            raise GatewayError(
+                "The Whiteboard document identity changed while reading Drafter. "
+                "Read the document again before creating a proposal."
+            )
+        if current.get("revision") != expected:
+            raise GatewayError(
+                "expected_revision does not match the current Drafter collection. "
+                "Read fresh Drafter pages before creating a proposal."
+            )
+        current_pages = current["pages"]
+        if len(current_pages) >= MAX_DRAFTER_PAGES:
+            raise GatewayError(
+                f"Drafter already contains the maximum of {MAX_DRAFTER_PAGES} pages."
+            )
+        stored_title = self._validate_drafter_title(title)
+        stored_blocks = self._validate_drafter_blocks(blocks)
+        new_character_count = sum(
+            len(_text(block.get("text"))) for block in stored_blocks
+        )
+        if (
+            sum(page["block_count"] for page in current_pages) + len(stored_blocks)
+            > MAX_DRAFTER_BLOCKS_TOTAL
+        ):
+            raise GatewayError(
+                "The Drafter proposal would exceed the collection limit of "
+                f"{MAX_DRAFTER_BLOCKS_TOTAL} blocks."
+            )
+        if (
+            sum(page["character_count"] for page in current_pages)
+            + new_character_count
+            > MAX_DRAFTER_TEXT_CHARACTERS_TOTAL
+        ):
+            raise GatewayError(
+                "The Drafter proposal would exceed the collection limit of "
+                f"{MAX_DRAFTER_TEXT_CHARACTERS_TOTAL} text characters."
+            )
+        timestamp = datetime.now(timezone.utc).isoformat()
+        page_id = "draft_" + secrets.token_hex(16)
+        created_page = {
+            "id": page_id,
+            "title": stored_title,
+            "blocks": stored_blocks,
+            "created_at": timestamp,
+            "updated_at": timestamp,
+        }
+        created_summary = {
+            "id": page_id,
+            "title": stored_title,
+            "created_at": timestamp,
+            "updated_at": timestamp,
+            "block_count": len(stored_blocks),
+            "character_count": new_character_count,
+        }
+        proposed_index = [*copy.deepcopy(current_pages), created_summary]
+        return self._store_proposal(
+            operation="create_drafter_page",
+            method="POST",
+            path=f"/api/drafter/pages?doc={resolved}",
+            body=created_page,
+            summary=(
+                f"Create provisional Drafter page {stored_title!r} in Whiteboard "
+                f"document {resolved}; the canonical manuscript is not changed."
+            ),
+            document_id=resolved,
+            resource_kind="drafter",
+            incarnation=incarnation,
+            expected_revision=expected,
+            review={
+                "provisional": True,
+                "operation": "create",
+                "page": {
+                    "id": page_id,
+                    "title": stored_title,
+                    "block_count": len(stored_blocks),
+                    "character_count": new_character_count,
+                    "blocks": _collection_review(stored_blocks),
+                },
+                "before": _drafter_index_review(current_pages),
+                "after": _drafter_index_review(proposed_index),
+                "proposed_block_changes": _collection_change_review(
+                    [], stored_blocks
+                ),
+            },
+        )
+
+    def propose_drafter_page_patch(
+        self,
+        document_id: int | None,
+        page_id: str,
+        expected_revision: str,
+        patch: dict[str, Any],
+    ) -> dict[str, Any]:
+        resolved = self._document_id(document_id)
+        stable_page_id = self._validate_drafter_page_id(page_id)
+        expected = self._validate_expected_revision(expected_revision)
+        if not isinstance(patch, dict) or not patch:
+            raise GatewayError("A Drafter page patch must change title or blocks.")
+        unexpected = sorted(set(patch) - {"title", "blocks"})
+        if unexpected:
+            raise GatewayError(
+                f"Unsupported Drafter page patch field(s): {', '.join(unexpected)}."
+            )
+        stored_patch: dict[str, Any] = {}
+        if "title" in patch:
+            stored_patch["title"] = self._validate_drafter_title(patch["title"])
+        if "blocks" in patch:
+            stored_patch["blocks"] = self._validate_drafter_blocks(patch["blocks"])
+
+        identity_before = self.client.get_document(resolved)
+        current = self.client.get_drafter_page_index(resolved)
+        identity_after = self.client.get_document(resolved)
+        incarnation = identity_before.get("incarnation")
+        if not _valid_token(incarnation) or identity_after.get("incarnation") != incarnation:
+            raise GatewayError(
+                "The Whiteboard document identity changed while reading Drafter. "
+                "Read the document again before creating a proposal."
+            )
+        if current.get("revision") != expected:
+            raise GatewayError(
+                "expected_revision does not match the current Drafter collection. "
+                "Read fresh Drafter pages before creating a proposal."
+            )
+        current_pages = current["pages"]
+        page_index = next((
+            index
+            for index, page in enumerate(current_pages)
+            if page.get("id") == stable_page_id
+        ), None)
+        if page_index is None:
+            raise GatewayError(f"Drafter page {stable_page_id!r} was not found.")
+        before_page = current_pages[page_index]
+        if set(stored_patch) == {"title"} and before_page["title"] == stored_patch["title"]:
+            raise GatewayError("The Drafter page patch does not change the current page.")
+        replacement_blocks = stored_patch.get("blocks")
+        replacement_block_count = (
+            len(replacement_blocks)
+            if isinstance(replacement_blocks, list)
+            else before_page["block_count"]
+        )
+        replacement_character_count = (
+            sum(len(_text(block.get("text"))) for block in replacement_blocks)
+            if isinstance(replacement_blocks, list)
+            else before_page["character_count"]
+        )
+        collection_block_count = (
+            sum(page["block_count"] for page in current_pages)
+            - before_page["block_count"]
+            + replacement_block_count
+        )
+        if collection_block_count > MAX_DRAFTER_BLOCKS_TOTAL:
+            raise GatewayError(
+                "The Drafter proposal would exceed the collection limit of "
+                f"{MAX_DRAFTER_BLOCKS_TOTAL} blocks."
+            )
+        collection_character_count = (
+            sum(page["character_count"] for page in current_pages)
+            - before_page["character_count"]
+            + replacement_character_count
+        )
+        if collection_character_count > MAX_DRAFTER_TEXT_CHARACTERS_TOTAL:
+            raise GatewayError(
+                "The Drafter proposal would exceed the collection limit of "
+                f"{MAX_DRAFTER_TEXT_CHARACTERS_TOTAL} text characters."
+            )
+        after_page = {
+            **copy.deepcopy(before_page),
+            "title": stored_patch.get("title", before_page["title"]),
+            "updated_at": "server-generated-on-apply",
+            "block_count": replacement_block_count,
+            "character_count": replacement_character_count,
+        }
+        proposed_index = copy.deepcopy(current_pages)
+        proposed_index[page_index] = after_page
+        changed_fields = [
+            key for key in ("title", "blocks")
+            if key in stored_patch
+            and (key != "title" or before_page["title"] != stored_patch[key])
+        ]
+        return self._store_proposal(
+            operation="patch_drafter_page",
+            method="PATCH",
+            path=(
+                "/api/drafter/pages/"
+                + urllib.parse.quote(stable_page_id, safe="")
+                + f"?doc={resolved}"
+            ),
+            body=stored_patch,
+            summary=(
+                f"Patch provisional Drafter page {stable_page_id!r} fields "
+                f"{', '.join(changed_fields)} in Whiteboard document {resolved}; "
+                "the canonical manuscript is not changed."
+            ),
+            document_id=resolved,
+            resource_kind="drafter",
+            incarnation=incarnation,
+            expected_revision=expected,
+            review={
+                "provisional": True,
+                "operation": "patch",
+                "page_id": stable_page_id,
+                "changed_fields": changed_fields,
+                "before": {
+                    "title": before_page["title"],
+                    "blocks": {
+                        "count": before_page["block_count"],
+                        "text_characters": before_page["character_count"],
+                    },
+                },
+                "after": {
+                    "title": after_page["title"],
+                    "blocks": (
+                        _collection_review(replacement_blocks)
+                        if isinstance(replacement_blocks, list)
+                        else {
+                            "count": before_page["block_count"],
+                            "text_characters": before_page["character_count"],
+                        }
+                    ),
+                },
+                "before_index": _drafter_index_review(current_pages),
+                "after_index": _drafter_index_review(proposed_index),
+                "proposed_block_changes": (
+                    _collection_change_review([], replacement_blocks)
+                    if isinstance(replacement_blocks, list)
+                    else None
+                ),
+            },
+        )
+
     def _comment_proposal_context(
         self,
         document_id: int,
@@ -2466,6 +2961,48 @@ class WhiteboardMcpGateway:
                     "document_id": proposal.document_id,
                     "revision": updated_outline.get("revision"),
                     "item_count": len(updated_outline.get("items", [])),
+                }
+            elif proposal.operation in {"create_drafter_page", "patch_drafter_page"}:
+                if proposal.operation == "create_drafter_page":
+                    operation = "create"
+                    updated_drafter = self.client.create_drafter_page(
+                        proposal.document_id,
+                        incarnation=proposal.incarnation,
+                        expected_revision=proposal.expected_revision,
+                        mutation_id=proposal.mutation_id,
+                        page=proposal.body,
+                    )
+                else:
+                    operation = "patch"
+                    marker = "/api/drafter/pages/"
+                    if marker not in proposal.path or "?doc=" not in proposal.path:
+                        raise WhiteboardApiError(
+                            "The stored Drafter proposal has no target page."
+                        )
+                    page_id = self._validate_drafter_page_id(
+                        urllib.parse.unquote(
+                            proposal.path.split(marker, 1)[1].split("?doc=", 1)[0]
+                        )
+                    )
+                    updated_drafter = self.client.patch_drafter_page(
+                        proposal.document_id,
+                        page_id,
+                        incarnation=proposal.incarnation,
+                        expected_revision=proposal.expected_revision,
+                        mutation_id=proposal.mutation_id,
+                        patch=proposal.body,
+                    )
+                selected_page = updated_drafter["page"]
+                receipt = {
+                    "resource": "drafter",
+                    "operation": operation,
+                    "document_id": proposal.document_id,
+                    "revision": updated_drafter.get("revision"),
+                    "page_id": selected_page.get("id"),
+                    "title": selected_page.get("title"),
+                    "block_count": selected_page.get("block_count"),
+                    "page_count": updated_drafter.get("page_count"),
+                    "provisional": True,
                 }
             elif proposal.operation == "reply_to_comment":
                 marker = "/api/comments/"
