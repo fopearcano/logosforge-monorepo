@@ -199,6 +199,45 @@ check("Logos context keeps manual outline", "Locked Observatory" in logos_nearby
 check("Logos context keeps writer comments", "preserve the ferryman's secret" in logos_nearby)
 check("Logos context keeps cursor-nearest tail", "CURSOR PARAGRAPH AT THE END" in logos_nearby)
 
+drafter_logos_nearby = _logos_nearby_context(
+    42,
+    (
+        "Document so far (for reference) —\n"
+        + "CANONICAL MANUSCRIPT DIGEST " * 40
+        + "\n\nActive Drafter page: Bridge confrontation\n"
+        + "Treat the active editor text as provisional working material outside "
+        + "the canonical manuscript.\n"
+        + "Project Drafter pages: Bridge confrontation, Alternate arrival\n\n"
+        + "exploratory scene text " * 100
+        + "DRAFTER CURSOR PARAGRAPH AT THE END"
+    ),
+    "OPEN COMMENT: preserve the provisional ferryman clue " + "carefully " * 40,
+)
+check(
+    "long Drafter Logos context stays within core excerpt cap",
+    len(drafter_logos_nearby) <= LOGOS_NEARBY_MAX_CHARS,
+)
+check(
+    "long Drafter Logos context preserves active page identity",
+    "Active Drafter page: Bridge confrontation" in drafter_logos_nearby,
+)
+check(
+    "long Drafter Logos context preserves provisional noncanonical status",
+    "PROVISIONAL, NONCANONICAL" in drafter_logos_nearby,
+)
+check(
+    "long Drafter Logos context preserves canonical-manuscript distinction",
+    "separate from the canonical manuscript" in drafter_logos_nearby,
+)
+check(
+    "long Drafter Logos context keeps writer comments",
+    "preserve the provisional ferryman clue" in drafter_logos_nearby,
+)
+check(
+    "long Drafter Logos context keeps cursor-nearest tail",
+    "DRAFTER CURSOR PARAGRAPH AT THE END" in drafter_logos_nearby,
+)
+
 
 # -- real core route against a local mock OpenAI/Anthropic server ------------
 received: list[dict] = []

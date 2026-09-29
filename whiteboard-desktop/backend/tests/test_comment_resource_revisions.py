@@ -18,6 +18,8 @@ from app.local_state import (
     CommentReplyCreate,
     CommentsStore,
     CommentUpdate,
+    DrafterPage,
+    DrafterPagesStore,
     MutationIdConflict,
     ResourceRevisionConflict,
     WhiteboardCreate,
@@ -193,6 +195,142 @@ def _reply(
     return result, response
 
 
+def test_comment_anchor_scopes_legacy_and_drafter_pages(tmp_path: Path) -> None:
+    legacy = CommentAnchor(block_index=0, from_offset=0, to_offset=4)
+    assert legacy.surface == "manuscript"
+    assert legacy.drafter_page_id is None
+
+    drafter = CommentAnchor(
+        surface="drafter",
+        drafter_page_id="scene-draft:1",
+        block_index=0,
+        from_offset=0,
+        to_offset=4,
+    )
+    assert drafter.surface == "drafter"
+    assert drafter.drafter_page_id == "scene-draft:1"
+
+    store = CommentsStore(tmp_path)
+    store.create(
+        "17",
+        "draft-comment",
+        CommentCreate(anchor=drafter, quote="Rain", body="Try another beat"),
+    )
+    reloaded = CommentsStore(tmp_path).get("17").comments[0]
+    assert reloaded.anchor.surface == "drafter"
+    assert reloaded.anchor.drafter_page_id == "scene-draft:1"
+
+    with pytest.raises(ValueError, match="require a valid drafter page id"):
+        CommentAnchor(
+            surface="drafter",
+            block_index=0,
+            from_offset=0,
+            to_offset=4,
+        )
+    with pytest.raises(ValueError, match="require a valid drafter page id"):
+        CommentAnchor(
+            surface="drafter",
+            drafter_page_id="bad/page",
+            block_index=0,
+            from_offset=0,
+            to_offset=4,
+        )
+    with pytest.raises(ValueError, match="must not include a drafter page id"):
+        CommentAnchor(
+            drafter_page_id="scene-draft:1",
+            block_index=0,
+            from_offset=0,
+            to_offset=4,
+        )
+
+
+def test_comment_routes_require_an_existing_drafter_page(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_id = 940100
+    core, _whiteboards, comments, incarnation = _install(
+        tmp_path, monkeypatch, project_id
+    )
+    drafter = DrafterPagesStore(tmp_path)
+    monkeypatch.setattr(comments_router, "drafter_pages_store", drafter)
+
+    missing_anchor = CommentAnchor(
+        surface="drafter",
+        drafter_page_id="missing-page",
+        block_index=0,
+        from_offset=0,
+        to_offset=4,
+    )
+    with pytest.raises(HTTPException) as missing_create:
+        asyncio.run(
+            comments_router.create_comment(
+                _Request(core, _headers(incarnation)),
+                CommentCreate(
+                    anchor=missing_anchor,
+                    quote="Rain",
+                    body="Try another opening",
+                ),
+                project_id,
+                Response(),
+            )
+        )
+    assert missing_create.value.status_code == 422
+    assert missing_create.value.detail == {
+        "code": "drafter_page_not_found",
+        "message": "The Drafter page referenced by this comment does not exist.",
+        "page_id": "missing-page",
+    }
+    assert comments.get(str(project_id)).comments == []
+
+    drafter.replace_document(
+        str(project_id),
+        [
+            DrafterPage(
+                id="scene-draft:1",
+                title="Alternate opening",
+                blocks=[],
+                created_at="2026-01-01T00:00:00+00:00",
+                updated_at="2026-01-01T00:00:00+00:00",
+            )
+        ],
+    )
+    created = asyncio.run(
+        comments_router.create_comment(
+            _Request(core, _headers(incarnation)),
+            CommentCreate(
+                anchor=CommentAnchor(
+                    surface="drafter",
+                    drafter_page_id="scene-draft:1",
+                    block_index=0,
+                    from_offset=0,
+                    to_offset=4,
+                ),
+                quote="Rain",
+                body="Try another opening",
+            ),
+            project_id,
+            Response(),
+        )
+    )
+    revision_before_update = comments.get(str(project_id)).revision
+
+    with pytest.raises(HTTPException) as missing_update:
+        asyncio.run(
+            comments_router.update_comment(
+                _Request(core, _headers(incarnation)),
+                created.id,
+                CommentUpdate(anchor=missing_anchor),
+                project_id,
+                Response(),
+            )
+        )
+    assert missing_update.value.status_code == 422
+    after_update = comments.get(str(project_id))
+    assert after_update.revision == revision_before_update
+    assert after_update.comments[0].anchor.drafter_page_id == "scene-draft:1"
+
+
 def test_legacy_file_gets_one_stable_revision_and_empty_state_is_persisted(
     tmp_path: Path,
 ) -> None:
@@ -229,6 +367,8 @@ def test_legacy_file_gets_one_stable_revision_and_empty_state_is_persisted(
     assert _REVISION_RE.fullmatch(first.revision)
     assert second.revision == first.revision
     assert second.comments[0].body == "Keep this"
+    assert second.comments[0].anchor.surface == "manuscript"
+    assert second.comments[0].anchor.drafter_page_id is None
     stored = json.loads(path.read_text(encoding="utf-8"))
     assert stored["revision"] == first.revision
     assert stored["last_mutation_id"] == ""

@@ -3215,6 +3215,28 @@ def test_api_client_rejects_malformed_comment_dto(field, value) -> None:
         WhiteboardApiClient._validated_comment(comment)
 
 
+def test_api_client_validates_comment_writing_surface_identity() -> None:
+    legacy = _comment_dto("legacy", "lantern", "Canonical note")["anchor"]
+    assert WhiteboardApiClient._validated_comment_anchor(legacy) == legacy
+
+    drafter = {
+        **legacy,
+        "surface": "drafter",
+        "drafter_page_id": "scene-draft:1",
+    }
+    assert WhiteboardApiClient._validated_comment_anchor(drafter) == drafter
+
+    invalid = [
+        {**legacy, "surface": "drafter"},
+        {**legacy, "surface": "drafter", "drafter_page_id": "bad/page"},
+        {**legacy, "surface": "manuscript", "drafter_page_id": "scene-draft:1"},
+        {**legacy, "surface": "unknown"},
+    ]
+    for anchor in invalid:
+        with pytest.raises(WhiteboardApiError, match="comment response"):
+            WhiteboardApiClient._validated_comment_anchor(anchor)
+
+
 def test_api_client_get_comments_requires_revision_and_bounded_unique_dtos(
     monkeypatch,
 ) -> None:

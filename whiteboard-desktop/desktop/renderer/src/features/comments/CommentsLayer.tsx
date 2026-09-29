@@ -9,7 +9,7 @@ import { useEffect, useReducer, useRef, useState } from 'react';
 import type { Editor } from '@tiptap/react';
 
 import { isModalDialogOpen } from '../../components/useModalDialog';
-import { locate, selectionToDraft } from './commentsAnchor';
+import { commentsForSurface, locate, selectionToDraft } from './commentsAnchor';
 import { CommentPopover } from './CommentPopover';
 import {
   useCommentsPanelOpen,
@@ -20,12 +20,19 @@ import {
 import { CommentsWindow } from './CommentsWindow';
 import type { Comment } from './commentsApi';
 import type { CommentsApi } from './useComments';
+import type { WritingSurface } from '../drafter/types';
 
 interface Props {
   editor: Editor | null;
   api: CommentsApi;
   activeId: string | null;
   setActiveId: (id: string | null) => void;
+  surface: WritingSurface;
+  surfaceLabel: string;
+  /** Document incarnation + writing page; guards async create across handoffs. */
+  scopeIdentity: string;
+  /** Drafter pages must be durable before a comment can reference their id. */
+  beforeCreate?: () => Promise<boolean>;
 }
 
 /** Absolute ProseMirror position for a (blockIndex, charOffset) anchor. */
@@ -52,9 +59,21 @@ function resolvedLocation(editor: Editor, comment: Comment) {
   return locate(comment, texts, ids);
 }
 
-export function CommentsLayer({ editor, api, activeId, setActiveId }: Props) {
+export function CommentsLayer({
+  editor,
+  api,
+  activeId,
+  setActiveId,
+  surface,
+  surfaceLabel,
+  scopeIdentity,
+  beforeCreate,
+}: Props) {
   const panelOpen = useCommentsPanelOpen();
   const hideResolved = useResolvedHidden();
+  const surfaceComments = commentsForSurface(api.comments, surface);
+  const scopeIdentityRef = useRef(scopeIdentity);
+  scopeIdentityRef.current = scopeIdentity;
   const [selRect, setSelRect] = useState<{ top: number; left: number } | null>(null);
   const [, reflow] = useReducer((n: number) => n + 1, 0); // re-place the popover on scroll/resize
 
@@ -98,18 +117,20 @@ export function CommentsLayer({ editor, api, activeId, setActiveId }: Props) {
 
   const addFromSelection = async () => {
     if (!editor) return;
-    const draft = selectionToDraft(editor);
+    const draft = selectionToDraft(editor, surface);
     if (!draft) return;
     setSelRect(null);
+    if (beforeCreate && !(await beforeCreate())) return;
+    if (scopeIdentityRef.current !== scopeIdentity) return;
     const created = await api.add(draft);
-    if (created) {
+    if (created && scopeIdentityRef.current === scopeIdentity) {
       setCommentsPanelOpen(true);
       setActiveId(created.id);
     }
   };
 
   const jumpTo = (id: string) => {
-    const c = api.comments.find((x) => x.id === id);
+    const c = surfaceComments.find((x) => x.id === id);
     if (editor && c) {
       const location = resolvedLocation(editor, c);
       const pos = location ? absPos(editor, location.blockIndex, location.from) : null;
@@ -124,7 +145,7 @@ export function CommentsLayer({ editor, api, activeId, setActiveId }: Props) {
   const navRef = useRef<(dir: 1 | -1) => void>(() => {});
   navRef.current = (dir) => {
     if (!editor) return;
-    const list = api.comments
+    const list = surfaceComments
       .filter((c) => !c.resolved)
       .sort(
         (a, b) => {
@@ -156,7 +177,7 @@ export function CommentsLayer({ editor, api, activeId, setActiveId }: Props) {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  const active = api.comments.find((c) => c.id === activeId) ?? null;
+  const active = surfaceComments.find((c) => c.id === activeId) ?? null;
   let popoverPos: { top: number; left: number } | null = null;
   if (editor && active) {
     const location = resolvedLocation(editor, active);
@@ -206,12 +227,13 @@ export function CommentsLayer({ editor, api, activeId, setActiveId }: Props) {
 
       {panelOpen && (
         <CommentsWindow
-          comments={api.comments}
+          comments={surfaceComments}
+          surfaceLabel={surfaceLabel}
           hideResolved={hideResolved}
           onToggleHideResolved={toggleResolvedHidden}
           onSelect={jumpTo}
           onToggleResolved={(id) => {
-            const c = api.comments.find((x) => x.id === id);
+            const c = surfaceComments.find((x) => x.id === id);
             if (c) void api.edit(id, { resolved: !c.resolved });
           }}
           onDelete={(id) => {

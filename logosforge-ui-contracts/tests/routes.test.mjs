@@ -47,3 +47,20 @@ if (onlyPython.length || onlyTypescript.length) {
 }
 
 console.log(`DTO parity tests: ${pythonDtos.size} Python = ${typescriptDtos.size} TypeScript`);
+
+const pythonWhiteboardAnchor = pythonSchemas.match(
+  /class WhiteboardImportCommentAnchorDTO\(BaseModel\):([\s\S]*?)\n\nclass /,
+)?.[1] ?? '';
+const typescriptWhiteboardAnchor = typescriptSchemas.match(
+  /export interface WhiteboardImportCommentAnchorDTO \{([\s\S]*?)\n\}/,
+)?.[1] ?? '';
+for (const field of ['surface', 'drafter_page_id']) {
+  if (!pythonWhiteboardAnchor.includes(`${field}:`)) {
+    throw new Error(`Python WhiteboardImportCommentAnchorDTO is missing ${field}`);
+  }
+  if (!typescriptWhiteboardAnchor.includes(`${field}?`)) {
+    throw new Error(`TypeScript WhiteboardImportCommentAnchorDTO is missing optional ${field}`);
+  }
+}
+
+console.log('Whiteboard comment-scope parity tests: 2 fields mirrored');

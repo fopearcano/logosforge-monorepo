@@ -119,3 +119,55 @@ def test_whiteboard_import_api_returns_the_persisted_project_and_map() -> None:
     assert body["scenes_created"] == 1
     assert body["scene_ids_by_block"] == [body["scene_ids_by_block"][0]] * 2
     assert db.get_scene_by_id(body["scene_ids_by_block"][0]).project_id == project.id
+
+
+def test_whiteboard_import_api_preserves_scope_and_skips_drafter_comments() -> None:
+    db = Database()
+    client = TestClient(create_api(db=db))
+
+    response = client.post(
+        "/api/import/whiteboard",
+        json={
+            "title": "Scoped API graduation",
+            "mode": "novel",
+            "blocks": [
+                {"id": "p1", "type": "paragraph", "text": "Alpha beta"},
+            ],
+            "comments": [
+                {
+                    "id": "canonical-comment",
+                    "anchor": {
+                        "block_index": 0,
+                        "block_id": "p1",
+                        "from_offset": 0,
+                        "to_offset": 5,
+                    },
+                    "quote": "Alpha",
+                },
+                {
+                    "id": "drafter-comment",
+                    "anchor": {
+                        "surface": "drafter",
+                        "drafter_page_id": "scene-draft:1",
+                        "block_index": 0,
+                        "block_id": "p1",
+                        "from_offset": 6,
+                        "to_offset": 10,
+                    },
+                    "quote": "beta",
+                    "replies": [
+                        {"id": "draft-reply", "body": "Keep experimenting"},
+                    ],
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["comments_created"] == 1
+    assert body["comments_skipped"] == 1
+    assert body["comment_replies_created"] == 0
+    assert body["comment_replies_skipped"] == 1
+    imported = db.get_all_comments(body["project_id"])
+    assert [comment.source_id for comment in imported] == ["canonical-comment"]

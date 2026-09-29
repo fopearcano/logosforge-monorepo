@@ -22,7 +22,7 @@ import re
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Optional, TypeVar
+from typing import Any, Callable, Literal, Optional, TypeVar
 from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -1241,8 +1241,11 @@ class CommentAnchor(BaseModel):
     """Where a comment attaches: a character span inside a block. Anchored by
     a stable block id when available, with block INDEX as a legacy/navigation
     fallback, plus quoted text and short prefix/suffix context. Older comments
-    have no ids and continue to re-locate through the text selectors."""
+    have no ids and continue to re-locate through the text selectors. Anchors
+    without an explicit writing surface are legacy manuscript anchors."""
 
+    surface: Literal["manuscript", "drafter"] = "manuscript"
+    drafter_page_id: Optional[str] = None
     block_index: int
     block_id: Optional[str] = None
     from_offset: int
@@ -1251,6 +1254,22 @@ class CommentAnchor(BaseModel):
     end_block_id: Optional[str] = None
     prefix: str = ""
     suffix: str = ""
+
+    @model_validator(mode="after")
+    def validate_writing_surface(self) -> "CommentAnchor":
+        if self.surface == "drafter":
+            if (
+                self.drafter_page_id is None
+                or _DRAFTER_PAGE_ID_RE.fullmatch(self.drafter_page_id) is None
+            ):
+                raise ValueError(
+                    "drafter comment anchors require a valid drafter page id"
+                )
+        elif self.drafter_page_id is not None:
+            raise ValueError(
+                "manuscript comment anchors must not include a drafter page id"
+            )
+        return self
 
 
 class CommentReply(BaseModel):

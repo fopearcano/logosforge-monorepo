@@ -93,7 +93,6 @@ export function App() {
   const [editorBlockIds, setEditorBlockIds] = useState<string[]>([]);
   const [editorBlockTextsDocId, setEditorBlockTextsDocId] = useState<string | null>(null);
   const [activePath, setActivePath] = useState<string[]>([]);
-  const [writingSurfaceKind, setWritingSurfaceKind] = useState<'manuscript' | 'draft'>('manuscript');
   const manuscriptNavigatorRef = useRef<(blockIndex: number) => void>(() => {});
   const scrollToBlock = useCallback((blockIndex: number) => {
     manuscriptNavigatorRef.current(blockIndex);
@@ -200,11 +199,6 @@ export function App() {
     [nudgeOutlineWidth, setOutlineWidthPersist],
   );
   const commentsPanelOpen = useCommentsPanelOpen();
-  const manuscriptActiveRef = useRef(true);
-  manuscriptActiveRef.current = writingSurfaceKind === 'manuscript';
-  useEffect(() => {
-    if (writingSurfaceKind === 'draft' && commentsPanelOpen) toggleCommentsPanel();
-  }, [writingSurfaceKind, commentsPanelOpen]);
   // Live open-state of the LittleBoy agents (Billy chat + Logos), published by
   // LittleBoyProvider — drives the title-bar toggle buttons' active state.
   const littleBoy = useSyncExternalStore(subscribeLittleBoyOpenState, getLittleBoyOpenState);
@@ -321,7 +315,7 @@ export function App() {
         else if (action === 'toggleStoryMap') a.toggleStoryMap();
         else if (action === 'focusMode') a.toggleFocus();
         else if (action === 'toggleTheme') a.cycleTheme();
-        else if (action === 'toggleComments' && manuscriptActiveRef.current) toggleCommentsPanel();
+        else if (action === 'toggleComments') toggleCommentsPanel();
       }),
     [],
   );
@@ -371,7 +365,7 @@ export function App() {
         a.toggleFocus();
       } else if (e.code === 'KeyC') {
         e.preventDefault();
-        if (manuscriptActiveRef.current) toggleCommentsPanel();
+        toggleCommentsPanel();
       }
     };
     window.addEventListener('keydown', onKey);
@@ -526,12 +520,9 @@ export function App() {
           <button
             type="button"
             className={`psyke-toggle${commentsPanelOpen ? ' is-active' : ''}`}
-            onClick={() => { if (manuscriptActiveRef.current) toggleCommentsPanel(); }}
+            onClick={toggleCommentsPanel}
             aria-pressed={commentsPanelOpen}
-            disabled={writingSurfaceKind !== 'manuscript'}
-            title={writingSurfaceKind === 'manuscript'
-              ? 'Toggle Comments (Ctrl/Cmd+Shift+C)'
-              : 'Comments belong to the Manuscript'}
+            title="Toggle Comments for the active writing page (Ctrl/Cmd+Shift+C)"
           >
             Comments
           </button>
@@ -595,7 +586,6 @@ export function App() {
             setEditorBlockIds(blockIds);
             setEditorBlockTextsDocId(docId);
           }}
-          onWritingSurfaceChange={setWritingSurfaceKind}
           onRegisterManuscriptNavigator={registerManuscriptNavigator}
         />
       </div>

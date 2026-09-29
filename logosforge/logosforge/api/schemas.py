@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, RootModel
+from pydantic import BaseModel, Field, RootModel, model_validator
 
 # ---------------------------------------------------------------------------
 # Projects
@@ -103,6 +103,11 @@ class WhiteboardImportBlockDTO(BaseModel):
 
 
 class WhiteboardImportCommentAnchorDTO(BaseModel):
+    surface: Literal["manuscript", "drafter"] = "manuscript"
+    drafter_page_id: str | None = Field(
+        default=None,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+    )
     block_index: int = Field(ge=0)
     block_id: str | None = None
     from_offset: int = Field(ge=0)
@@ -111,6 +116,16 @@ class WhiteboardImportCommentAnchorDTO(BaseModel):
     end_block_id: str | None = None
     prefix: str = ""
     suffix: str = ""
+
+    @model_validator(mode="after")
+    def validate_writing_surface(self) -> WhiteboardImportCommentAnchorDTO:
+        if self.surface == "drafter" and self.drafter_page_id is None:
+            raise ValueError("drafter comment anchors require a drafter page id")
+        if self.surface == "manuscript" and self.drafter_page_id is not None:
+            raise ValueError(
+                "manuscript comment anchors must not include a drafter page id"
+            )
+        return self
 
 
 class WhiteboardImportCommentReplyDTO(BaseModel):

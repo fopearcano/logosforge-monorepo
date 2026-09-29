@@ -744,6 +744,18 @@ def import_whiteboard_document(
             raw_replies = source_comment.get("replies") or []
             if not isinstance(raw_replies, list):
                 raw_replies = []
+            source_anchor = source_comment.get("anchor")
+            # Pro scenes are built only from the canonical manuscript blocks.
+            # A Drafter page has an independent block/index namespace, so never
+            # reinterpret its comments as manuscript annotations during import.
+            # Missing surface metadata is the legacy manuscript representation.
+            if (
+                isinstance(source_anchor, dict)
+                and source_anchor.get("surface", "manuscript") != "manuscript"
+            ):
+                comments_skipped += 1
+                comment_replies_skipped += len(raw_replies)
+                continue
             mapped = _map_comment_anchor(
                 source_comment, blocks, scenes, placements, scene_ids,
             )

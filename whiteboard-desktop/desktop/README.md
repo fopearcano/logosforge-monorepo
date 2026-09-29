@@ -21,7 +21,8 @@ Whiteboard is alpha software. Its current core is **0.9.0-alpha**.
 - A persisted manual Outline with typed tree nodes, templates, drag/drop,
   filtering, stable manuscript links, a derived **From Document** navigator, and
   Story Map.
-- Per-document PSYKE story-bible entries and manuscript-anchored comment threads.
+- Per-document PSYKE story-bible entries and writing-page-scoped comment threads
+  for the Manuscript and each Drafter page.
 - Billy chat and Logos inline assistance through configurable local or cloud AI
   providers. AI is optional; no provider is contacted until the user configures
   one.

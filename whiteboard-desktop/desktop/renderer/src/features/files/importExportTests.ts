@@ -234,7 +234,25 @@ check('suggested no-ext stem', suggestedExportName('notes', 'md') === 'notes.md'
   check('buildExport routes comments', md.startsWith('# Comments — My Script') && md.includes('> x'));
 }
 
-// 15. FDX export (blocksToFdx) — typed paragraphs, XML-escaped, round-trips via parseFdx.
+// 15. Drafter comments name their owning writing page instead of borrowing a
+//     manuscript heading with the same block index.
+{
+  const md = buildCommentsReport(payload({
+    comments: [{
+      quote: 'alternate beat',
+      body: 'keep this version',
+      resolved: false,
+      blockIndex: 0,
+      drafterPageTitle: 'Alternate arrival',
+    }],
+  }));
+  check(
+    'Drafter comment report labels the owning page',
+    md.includes('### 1. Drafter — Alternate arrival · ¶ 1'),
+  );
+}
+
+// 16. FDX export (blocksToFdx) — typed paragraphs, XML-escaped, round-trips via parseFdx.
 {
   const sp: WhiteboardBlock[] = [
     { id: 'b0', type: 'paragraph', text: 'INT. HOUSE - DAY' },

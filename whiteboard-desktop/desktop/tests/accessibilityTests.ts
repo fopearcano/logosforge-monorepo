@@ -351,7 +351,6 @@ requireMarkers('Drafter tab keyboard contract', sourceText('features/drafter/Dra
 ]);
 requireMarkers('Drafter manuscript isolation', sourceText('features/whiteboard/WhiteboardPage.tsx'), [
   'onChangeBlocks={manuscriptActive ? handleBlocks : handleDraftBlocks}',
-  'commentMarks={manuscriptActive ? commentMarks : []}',
   'manuscriptActive && !showPreview && <StoryMap',
   'File Open / import-replace always target the canonical manuscript',
   'commitManuscriptBlocks(blocks)',
@@ -359,6 +358,29 @@ requireMarkers('Drafter manuscript isolation', sourceText('features/whiteboard/W
   'activeSurfaceKind={activeSurface.kind}',
   'data-active-writing-surface="true"',
 ]);
+requireMarkers('Drafter comment surface isolation', sourceText('features/whiteboard/WhiteboardPage.tsx'), [
+  'commentsForSurface(commentsApi.comments, activeSurface)',
+  "commentsForSurface(commentsRef.current, { kind: 'manuscript' })",
+  'commentMarks={commentMarks}',
+  'surface={activeSurface}',
+  'await drafter.flush()',
+  'currentPage.blocks !== blockSnapshot',
+  'missingDrafterPageCommentIds(commentsApi.comments, pageIds)',
+]);
+requireMarkers('Drafter comment creation and panel isolation', sourceText('features/comments/CommentsLayer.tsx'), [
+  'selectionToDraft(editor, surface)',
+  'comments={surfaceComments}',
+  'scopeIdentityRef.current !== scopeIdentity',
+]);
+const appCommentsText = sourceText('App.tsx');
+requireMarkers('Drafter comments shell access', appCommentsText, [
+  "else if (action === 'toggleComments') toggleCommentsPanel()",
+  'onClick={toggleCommentsPanel}',
+  'Toggle Comments for the active writing page',
+]);
+if (appCommentsText.includes('Comments belong to the Manuscript')) {
+  failures.push('Drafter comments shell still labels Comments as manuscript-only');
+}
 requireMarkers('Drafter provisional AI context', sourceText('features/littleboy/context/projectContext.ts'), [
   'Active Drafter page:',
   'provisional working material outside the canonical manuscript',

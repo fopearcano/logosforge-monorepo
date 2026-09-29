@@ -115,7 +115,7 @@ The tabs above the editor contain one permanent **Manuscript** tab plus any proj
 - **Drafter → Import file as page…** copies a Text, Markdown, or Fountain file into a new internal page. It does not keep a live link to the source file.
 - Pages inherit the document's writing mode and editor settings. Copy and paste into the Manuscript whenever material is ready.
 - Billy and Logos use the active page selection and nearby prose while retaining the same project's canonical manuscript digest, manual Outline, narrative profile, and PSYKE. The AI context explicitly labels Drafter prose as provisional.
-- Comments, manuscript breadcrumbs, Story Map, manuscript file import, and ordinary publication exports remain attached to the **Manuscript** tab. Clicking an Outline or Story Map destination returns there automatically.
+- Each Drafter page has its own isolated inline comments. Manuscript breadcrumbs, Story Map, manuscript file import, and ordinary publication exports remain attached to the **Manuscript** tab. Clicking an Outline or Story Map destination returns there automatically.
 - Drafter has an independent revision and crash-recovery journal. A conflict cannot overwrite the manuscript or another saved Drafter version.
 
 **Nerd Mode (optional editor aids, all off by default):**
@@ -179,7 +179,7 @@ Comments are inline notes pinned to a span of text — for revision passes, edit
 - **Resolve:** mark a comment resolved once it's handled; resolved comments can be hidden.
 - **Panel:** toggle the comments side panel with `Ctrl+Shift+C`.
 
-Comments are available on the **Manuscript** tab. New comments combine a stable manuscript-block ID with quoted text and surrounding context, so highlights follow the intended passage through inserted blocks, duplicate wording, and edits. Legacy comments keep working through their text selectors; a comment is cleaned up only when its passage is genuinely gone.
+Comments are available on the **Manuscript** and every **Drafter** page. The panel shows only the active writing page's threads, and each new comment records that page together with a stable block ID, quoted text, and surrounding context. Highlights therefore follow the intended passage through inserted blocks, duplicate wording, and edits without leaking between Manuscript or Drafter pages. Legacy comments remain Manuscript comments; a comment is cleaned up only after its owning page is durably saved and its passage is genuinely gone.
 
 ---
 
@@ -232,7 +232,7 @@ see [Moving a project to LogosForge Pro](#16-moving-a-project-to-logosforge-pro)
 | HTML | A styled, self-contained web page of the manuscript. |
 | JSON | Title, mode, and raw blocks. |
 | LogosForge (`.logosforge`) | Manuscript + outline (JSON envelope). |
-| Comments | A Markdown report of all comments, grouped open/resolved. |
+| Comments | A Markdown report of all comments, grouped open/resolved and labelled with their Drafter page when applicable. |
 | PDF | The print path — a paginated script for screenplays, plain print otherwise. |
 
 For a true "save everything" snapshot, use **Export Project (.lfbundle)** — it's the only single file that captures Drafter pages, document settings, outline, comments, *and* characters alongside the prose. Whiteboard aborts this export if any component cannot be read; it never reports success for a bundle that silently dropped Drafter, PSYKE, or damaged local state. Pro imports Drafter pages as tagged Notes and preserves their structured source blocks in project settings. To restore Whiteboard itself, restore the `~/.logosforge` data folder instead.
@@ -355,11 +355,12 @@ beats, outline, and outline links; and preserves the exact structured Drafter
 blocks plus other Whiteboard-only settings in the imported project's settings store.
 Progression scene anchors are remapped only when their title uniquely matches an
 imported scene; unresolved anchors keep their progression beat unlinked and are reported.
-Whiteboard comment threads are also recreated in Pro when their text span can be
+Whiteboard Manuscript comment threads are also recreated in Pro when their text span can be
 mapped safely to the imported scene title/content. Replies, open/resolved state,
 timestamps, cross-field or cross-scene ranges, and source provenance are
 preserved; unmappable threads are skipped and reported rather than attached to
-the wrong passage.
+the wrong passage. Drafter-page comment threads remain in the source `.lfbundle`;
+Pro currently reports them as skipped because it has no Drafter comment surface.
 
 In Pro's Manuscript, safely mapped passages are visibly marked; activate a mark
 to open its anchored thread. Select text in a scene title or prose and choose

@@ -139,6 +139,18 @@ function exportPayloadFromProjectBundle(content: string): ExportPayload {
     throw new Error('The backend returned an invalid project snapshot.');
   }
   const rawComments = Array.isArray(project.comments) ? project.comments : [];
+  const drafter = asRecord(project.drafter);
+  const drafterPages = Array.isArray(drafter?.pages) ? drafter.pages : [];
+  const drafterTitles = new Map<string, string>();
+  drafterPages.forEach((value) => {
+    const page = asRecord(value);
+    if (typeof page?.id === 'string') {
+      drafterTitles.set(
+        page.id,
+        typeof page.title === 'string' && page.title.trim() ? page.title.trim() : 'Untitled draft',
+      );
+    }
+  });
   const comments: ExportComment[] = rawComments.flatMap((value) => {
     const comment = asRecord(value);
     const anchor = asRecord(comment?.anchor);
@@ -148,6 +160,9 @@ function exportPayloadFromProjectBundle(content: string): ExportPayload {
       body: typeof comment.body === 'string' ? comment.body : '',
       resolved: comment.resolved === true,
       blockIndex: typeof anchor.block_index === 'number' ? anchor.block_index : 0,
+      ...(anchor.surface === 'drafter' && typeof anchor.drafter_page_id === 'string'
+        ? { drafterPageTitle: drafterTitles.get(anchor.drafter_page_id) ?? anchor.drafter_page_id }
+        : {}),
       ...(typeof comment.created_at === 'string' ? { createdAt: comment.created_at } : {}),
     }];
   });

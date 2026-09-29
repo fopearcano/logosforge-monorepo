@@ -52,7 +52,9 @@ function equalAnchor(a: CommentAnchor | undefined, b: CommentAnchor | undefined)
   if (a === b) return true;
   if (!a || !b) return false;
   return (
-    a.block_index === b.block_index
+    (a.surface ?? 'manuscript') === (b.surface ?? 'manuscript')
+    && (a.drafter_page_id ?? null) === (b.drafter_page_id ?? null)
+    && a.block_index === b.block_index
     && a.block_id === b.block_id
     && a.from_offset === b.from_offset
     && a.to_offset === b.to_offset

@@ -69,6 +69,7 @@ def test_build_bundle_pure() -> None:
     comments = CommentsDocument(comments=[
         Comment(
             id="c1", anchor=CommentAnchor(
+                surface="drafter", drafter_page_id="draft-one",
                 block_index=1, block_id="block-body", from_offset=0, to_offset=3,
             ),
             quote="The", body="opening?", resolved=False,
@@ -137,6 +138,8 @@ def test_build_bundle_pure() -> None:
     check(
         "comment carried with stable anchor",
         len(cm) == 1
+        and cm[0]["anchor"]["surface"] == "drafter"
+        and cm[0]["anchor"]["drafter_page_id"] == "draft-one"
         and cm[0]["anchor"]["block_index"] == 1
         and cm[0]["anchor"]["block_id"] == "block-body"
         and cm[0]["quote"] == "The",

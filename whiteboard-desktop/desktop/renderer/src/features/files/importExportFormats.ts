@@ -1008,6 +1008,8 @@ export interface ExportComment {
   body: string;
   resolved: boolean;
   blockIndex: number;
+  /** Set for a Drafter-owned comment; manuscript comments use the document blocks. */
+  drafterPageTitle?: string;
   createdAt?: string;
 }
 
@@ -1119,7 +1121,9 @@ export function buildCommentsReport(p: ExportPayload, nowIso: string = new Date(
     if (!items.length) return;
     out.push(`## ${heading}`, '');
     items.forEach((c, i) => {
-      const loc = nearestHeading(p.blocks, c.blockIndex) || `¶ ${c.blockIndex + 1}`;
+      const loc = c.drafterPageTitle
+        ? `Drafter — ${c.drafterPageTitle} · ¶ ${c.blockIndex + 1}`
+        : nearestHeading(p.blocks, c.blockIndex) || `¶ ${c.blockIndex + 1}`;
       out.push(`### ${i + 1}. ${loc}`, '');
       out.push(`> ${(c.quote || '').trim() || '(no quoted text)'}`, '');
       out.push((c.body || '').trim() || '_(empty note)_', '');

@@ -54,6 +54,15 @@ _NO_PROVIDER_NOTE = (
 MANUAL_OUTLINE_MAX_NODES = 80
 MANUAL_OUTLINE_MAX_CHARS = 2600
 LOGOS_NEARBY_MAX_CHARS = 600  # mirrors logosforge.logos.context._EXCERPT_LIMIT
+LOGOS_DRAFTER_OUTLINE_MAX_CHARS = 220
+LOGOS_DRAFTER_COMMENTS_MAX_CHARS = 130
+LOGOS_DRAFTER_TITLE_MAX_CHARS = 48
+
+_DRAFTER_SURFACE_BLOCK_RE = re.compile(
+    r"(?im)^Active Drafter page:[ \t]*(?P<title>[^\r\n]+)\r?\n"
+    r"Treat the active editor text as provisional working material "
+    r"outside the canonical manuscript\."
+)
 
 
 def _outline_sort_key(node: dict) -> tuple[float, str]:
@@ -177,19 +186,59 @@ def _clip_tail(text: str, limit: int) -> str:
     return "… " + value[-max(0, limit - 2):].lstrip()
 
 
+def _logos_drafter_surface_context(nearby: str) -> tuple[str, str]:
+    """Return an invariant Drafter label plus context without UI boilerplate.
+
+    The renderer prepends the active writing-surface description before the
+    cursor excerpt. Logos deliberately keeps the *tail* of that combined text,
+    so a long Drafter page used to evict the very warning that says the page is
+    provisional. Recognize the stable surface header and rebuild a compact
+    backend-owned label that is budgeted independently from the cursor text.
+    """
+    value = (nearby or "").strip()
+    match = _DRAFTER_SURFACE_BLOCK_RE.search(value)
+    if match is None:
+        return "", value
+
+    title = re.sub(r"\s+", " ", match.group("title")).strip()
+    title = _clip_head(title, LOGOS_DRAFTER_TITLE_MAX_CHARS) or "Untitled draft"
+    label = (
+        f"[Active Drafter page: {title}; PROVISIONAL, NONCANONICAL; "
+        "separate from the canonical manuscript]"
+    )
+
+    # Avoid spending the remaining excerpt budget on a duplicate of the label.
+    without_surface = (value[:match.start()] + value[match.end():]).strip()
+    return label, without_surface
+
+
 def _logos_nearby_context(pid: int, nearby: str = "", comments: str = "") -> str:
     """Fit all Whiteboard-only grounding into Logos's 600-char excerpt.
 
-    Manual structure goes first, open writer comments retain a middle budget,
-    and the TAIL of renderer context is kept because the actual cursor paragraph
-    follows its manuscript-heading digest. This prevents any one source from
-    silently crowding the others out when the core builds LogosContext.
+    An active Drafter identity is an invariant: it must survive even when the
+    page, manual Outline, and comments all compete for the excerpt. Manual
+    structure and comments then retain bounded budgets, and the TAIL of renderer
+    context is kept because the actual cursor paragraph follows its project
+    digest. This prevents exploratory prose from being mistaken for canonical
+    manuscript text while still keeping cursor-nearest grounding.
     """
-    outline = _clip_head(_manual_outline_context(pid), 300)
-    comment_text = _clip_head(comments, 140)
-    fixed = "\n\n".join(p for p in (outline, comment_text) if p)
-    remaining = max(0, LOGOS_NEARBY_MAX_CHARS - len(fixed) - (2 if fixed and nearby.strip() else 0))
-    cursor_text = _clip_tail(nearby, remaining)
+    surface, nearby_without_surface = _logos_drafter_surface_context(nearby)
+    outline_limit = LOGOS_DRAFTER_OUTLINE_MAX_CHARS if surface else 300
+    comments_limit = LOGOS_DRAFTER_COMMENTS_MAX_CHARS if surface else 140
+    outline = _clip_head(_manual_outline_context(pid), outline_limit)
+    comment_text = _clip_head(comments, comments_limit)
+    fixed = "\n\n".join(p for p in (surface, outline, comment_text) if p)
+    remaining = max(
+        0,
+        LOGOS_NEARBY_MAX_CHARS
+        - len(fixed)
+        - (2 if fixed and nearby_without_surface else 0),
+    )
+    cursor_text = (
+        _clip_tail(nearby_without_surface, remaining)
+        if remaining > 0
+        else ""
+    )
     return "\n\n".join(p for p in (fixed, cursor_text) if p)[:LOGOS_NEARBY_MAX_CHARS]
 
 
@@ -267,13 +316,20 @@ async def _provider_name(core, pid: int) -> str:
         return "logosforge"
 
 
+def _comment_surface_label(comment) -> str:
+    anchor = getattr(comment, "anchor", None)
+    if getattr(anchor, "surface", "manuscript") == "drafter":
+        page_id = getattr(anchor, "drafter_page_id", None) or "unknown"
+        return f"[Drafter page {page_id}; PROVISIONAL, NONCANONICAL]"
+    return "[Manuscript; canonical]"
+
+
 def _comments_context(pid: int) -> str:
     """Fold the writer's margin comments into a context block so the assistants are
     comment-aware. OPEN notes are live requests to take into account; RESOLVED notes
     record decisions the writer already settled (surfaced so the AI respects them
     and doesn't reopen them). Read straight from the per-document store."""
     try:
-        from app.local_state import comments_store
         notes = [c for c in comments_store.get(str(pid)).comments if (c.body or "").strip()]
     except Exception:
         return ""
@@ -281,7 +337,10 @@ def _comments_context(pid: int) -> str:
         return ""
 
     def _line(c) -> str:
-        head = f'- On "{(c.quote or "").strip()[:80]}": {c.body.strip()}'
+        head = (
+            f'- {_comment_surface_label(c)} On "{(c.quote or "").strip()[:80]}": '
+            f"{c.body.strip()}"
+        )
         replies = getattr(c, "replies", None) or []
         thread = "; ".join(
             f'{(r.author or "you")}: {(r.body or "").strip()}'
@@ -327,13 +386,16 @@ async def ai_reply_to_comment(core, pid: int, assistant: str, comment) -> str:
         for r in (comment.replies or [])
         if (r.body or "").strip()
     )
+    surface_label = _comment_surface_label(comment)
     system = (
         f"You are {assistant}, a concise, friendly writing assistant embedded in a margin-comment "
         "thread in the LogosForge Whiteboard. The writer @-mentioned you in a comment about a "
-        "passage of their draft. Reply helpfully and briefly to the conversation."
+        f"passage of their draft on {surface_label}. Reply helpfully and briefly to the "
+        "conversation, preserving whether the passage is canonical or provisional."
     )
     message = (
-        (f'Passage in question: "{quote}".\n' if quote else "")
+        f"Writing surface: {surface_label}\n"
+        + (f'Passage in question: "{quote}".\n' if quote else "")
         + f"Comment: {(comment.body or '').strip()}\n"
         + (f"Thread so far:\n{thread}\n" if thread else "")
         + f"\nReply as {assistant}."

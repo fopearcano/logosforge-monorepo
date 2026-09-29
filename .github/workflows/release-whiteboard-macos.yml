@@ -53,7 +53,7 @@ on:
         description: "Existing Whiteboard tag to build and publish"
         type: string
         required: false
-        default: "whiteboard-v0.1.15"
+        default: "whiteboard-v0.1.16"
 
 permissions:
   contents: write

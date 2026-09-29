@@ -66,7 +66,12 @@ import {
 import { eligibleOrphanCleanupIds } from './orphanCleanupGate';
 import { restoreFocusAfterNotificationDismiss } from './notificationFocus';
 import { CommentsLayer } from '../comments/CommentsLayer';
-import { findOrphanIds, reconcileMarks } from '../comments/commentsAnchor';
+import {
+  commentsForSurface,
+  findOrphanIds,
+  missingDrafterPageCommentIds,
+  reconcileMarks,
+} from '../comments/commentsAnchor';
 import { useResolvedHidden } from '../comments/commentsPanelStore';
 import { useComments } from '../comments/useComments';
 
@@ -110,7 +115,6 @@ interface Props {
     blockIds: string[],
     docId: string | null,
   ) => void;
-  onWritingSurfaceChange?: (kind: 'manuscript' | 'draft') => void;
   onRegisterManuscriptNavigator?: (navigate: ((blockIndex: number) => void) | null) => void;
 }
 
@@ -124,7 +128,6 @@ export function WhiteboardPage({
   onTitleChange,
   locationPath,
   onEditorLocation,
-  onWritingSurfaceChange,
   onRegisterManuscriptNavigator,
 }: Props) {
   const {
@@ -268,12 +271,10 @@ export function WhiteboardPage({
       setSurfaceState({ documentId: doc.id, surface: activeSurface });
     }
   }, [doc?.id, activeSurface, surfaceState]);
-
-  const onWritingSurfaceChangeRef = useRef(onWritingSurfaceChange);
-  onWritingSurfaceChangeRef.current = onWritingSurfaceChange;
+  const activeCommentScope = `${doc?.id ?? 'none'}:${writingSurfaceTabId(activeSurface)}`;
   useEffect(() => {
-    onWritingSurfaceChangeRef.current?.(activeSurface.kind);
-  }, [activeSurface.kind]);
+    setActiveCommentId(null);
+  }, [activeCommentScope]);
 
   const updateDraftBlocks = drafter.updatePageBlocks;
   useEffect(() => {
@@ -367,14 +368,26 @@ export function WhiteboardPage({
     () => deriveOutline(liveBlocks.length ? liveBlocks : (doc?.blocks ?? []), mode),
     [liveBlocks, doc, mode],
   );
+  const manuscriptComments = useMemo(
+    () => commentsForSurface(commentsApi.comments, { kind: 'manuscript' }),
+    [commentsApi.comments],
+  );
+  const activeComments = useMemo(
+    () => commentsForSurface(commentsApi.comments, activeSurface),
+    [commentsApi.comments, activeSurface],
+  );
+  const activeSurfaceRef = useRef(activeSurface);
+  activeSurfaceRef.current = activeSurface;
+  const drafterPagesRef = useRef(drafter.pages);
+  drafterPagesRef.current = drafter.pages;
   const commentMarks = useMemo(
     () =>
       reconcileMarks(
-        hideResolved ? commentsApi.comments.filter((c) => !c.resolved) : commentsApi.comments,
-        liveBlocks.map((b) => b.text ?? ''),
-        liveBlocks.map((b) => b.id),
+        hideResolved ? activeComments.filter((c) => !c.resolved) : activeComments,
+        activeBlocks.map((b) => b.text ?? ''),
+        activeBlocks.map((b) => b.id),
       ),
-    [commentsApi.comments, liveBlocks, hideResolved],
+    [activeComments, activeBlocks, hideResolved],
   );
   // A comment must not outlive its anchor: when an edit deletes the block (or the
   // exact text) a comment is pinned to, the quote is gone from the whole doc —
@@ -384,7 +397,7 @@ export function WhiteboardPage({
   const removeComment = commentsApi.remove;
   useEffect(() => {
     if (saveStatus === 'saving' || saveStatus === 'error') return undefined;
-    if (!liveBlocks.length || !commentsApi.comments.length) return undefined;
+    if (!liveBlocks.length || !manuscriptComments.length) return undefined;
     const persistence = liveBlocksPersistenceRef.current;
     if (
       !persistence
@@ -393,7 +406,7 @@ export function WhiteboardPage({
       || (!persistence.durable && !persistence.receipt)
     ) return undefined;
     const orphans = findOrphanIds(
-      commentsApi.comments,
+      manuscriptComments,
       liveBlocks.map((b) => b.text ?? ''),
       liveBlocks.map((b) => b.id),
     );
@@ -418,7 +431,7 @@ export function WhiteboardPage({
         if (!currentPersistence || currentPersistence.blocks !== currentBlocks) return;
         const identity = captureDocumentIdentity();
         const currentOrphans = findOrphanIds(
-          commentsRef.current,
+          commentsForSurface(commentsRef.current, { kind: 'manuscript' }),
           currentBlocks.map((block) => block.text ?? ''),
           currentBlocks.map((block) => block.id),
         );
@@ -441,9 +454,95 @@ export function WhiteboardPage({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [liveBlocks, liveBlocksDocId, commentsApi.comments, removeComment, saveStatus]);
-  const activeSurfaceRef = useRef(activeSurface);
-  activeSurfaceRef.current = activeSurface;
+  }, [liveBlocks, liveBlocksDocId, manuscriptComments, removeComment, saveStatus]);
+  // Drafter anchors use the same relocation rules, but their deletion fence is
+  // the page collection's durable save rather than the manuscript patch receipt.
+  // Recheck document, page, exact block snapshot, and orphan status after flush:
+  // an edit, tab switch, conflict, or failed save must retain the comment.
+  useEffect(() => {
+    if (
+      activeSurface.kind !== 'draft'
+      || !activeDraft
+      || !activeComments.length
+      || drafter.loading
+      || drafter.error
+      || drafter.saveStatus === 'error'
+      || drafter.saveStatus === 'conflict'
+    ) return undefined;
+    const texts = activeBlocks.map((block) => block.text ?? '');
+    const blockIds = activeBlocks.map((block) => block.id);
+    const orphanIds = findOrphanIds(activeComments, texts, blockIds);
+    if (!orphanIds.length) return undefined;
+
+    const identity = captureDocumentIdentity();
+    const pageId = activeSurface.pageId;
+    const blockSnapshot = activeDraft.blocks;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        if (!(await drafter.flush()) || cancelled) return;
+        const currentIdentity = captureDocumentIdentity();
+        const currentSurface = activeSurfaceRef.current;
+        const currentPage = drafterPagesRef.current.find((page) => page.id === pageId);
+        if (
+          currentIdentity.documentId !== identity.documentId
+          || currentIdentity.incarnation !== identity.incarnation
+          || currentSurface.kind !== 'draft'
+          || currentSurface.pageId !== pageId
+          || !currentPage
+          || currentPage.blocks !== blockSnapshot
+        ) return;
+        const currentOrphans = new Set(findOrphanIds(
+          commentsForSurface(commentsRef.current, { kind: 'draft', pageId }),
+          currentPage.blocks.map((block) => block.text ?? ''),
+          currentPage.blocks.map((block) => block.id),
+        ));
+        if (cancelled) return;
+        orphanIds.filter((id) => currentOrphans.has(id)).forEach((id) => void removeComment(id));
+      })().catch(() => {
+        // The retained Drafter queue owns retry/error reporting. Never delete on failure.
+      });
+    }, 1200);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [
+    activeBlocks,
+    activeComments,
+    activeDraft,
+    activeSurface,
+    drafter.error,
+    drafter.flush,
+    drafter.loading,
+    removeComment,
+  ]);
+  // Once the Drafter collection is durably settled, clear threads whose owning
+  // page no longer exists. Loading/saving/conflict states deliberately retain
+  // them, so a transient empty collection or failed page deletion cannot lose data.
+  useEffect(() => {
+    if (
+      !drafter.available
+      || drafter.loading
+      || drafter.error
+      || drafter.saveStatus === 'saving'
+      || drafter.saveStatus === 'error'
+      || drafter.saveStatus === 'conflict'
+      || commentsApi.loading
+    ) return;
+    const pageIds = new Set(drafter.pages.map((page) => page.id));
+    missingDrafterPageCommentIds(commentsApi.comments, pageIds)
+      .forEach((id) => void removeComment(id));
+  }, [
+    commentsApi.comments,
+    commentsApi.loading,
+    drafter.available,
+    drafter.error,
+    drafter.loading,
+    drafter.pages,
+    drafter.saveStatus,
+    removeComment,
+  ]);
   const flushDrafter = drafter.flush;
   const selectWritingSurface = useCallback(async (surface: WritingSurface) => {
     if (!doc || isDocumentInteractionLocked()) return;
@@ -982,15 +1081,13 @@ export function WhiteboardPage({
       <ConfirmDialog
         open={draftToDelete !== null}
         title="Delete Drafter page"
-        message={`Delete “${draftToDelete?.title || 'Untitled draft'}”? This removes the page from this project and can’t be undone.`}
+        message={`Delete “${draftToDelete?.title || 'Untitled draft'}”? This removes the page and its comments from this project and can’t be undone.`}
         confirmLabel="Delete page"
         onConfirm={() => {
           const deleting = draftToDelete;
           setDraftToDelete(null);
           if (!deleting) return;
-          const wasActive = activeSurface.kind === 'draft' && activeSurface.pageId === deleting.id;
           drafter.deletePage(deleting.id);
-          if (wasActive) void selectWritingSurface({ kind: 'manuscript' });
         }}
         onCancel={() => setDraftToDelete(null)}
       />
@@ -1213,9 +1310,9 @@ export function WhiteboardPage({
               editorTools={editorTools}
               folds={folds}
               onToggleFold={toggleFold}
-              commentMarks={manuscriptActive ? commentMarks : []}
-              activeCommentId={manuscriptActive ? activeCommentId : null}
-              onCommentClick={manuscriptActive ? setActiveCommentId : undefined}
+              commentMarks={commentMarks}
+              activeCommentId={activeCommentId}
+              onCommentClick={setActiveCommentId}
             />
             {showPreview && <PreviewView blocks={activeBlocks} settings={settingsApi.settings} />}
           </>
@@ -1264,10 +1361,10 @@ export function WhiteboardPage({
           />
         </RenderErrorBoundary>
       )}
-      {editor && doc && manuscriptActive && (
+      {editor && doc && (
         <RenderErrorBoundary
           name="Comments"
-          resetKey={doc.id}
+          resetKey={`${doc.id}:${writingSurfaceTabId(activeSurface)}`}
           className="wb-overlay-boundary"
         >
           <CommentsLayer
@@ -1275,6 +1372,10 @@ export function WhiteboardPage({
             api={commentsApi}
             activeId={activeCommentId}
             setActiveId={setActiveCommentId}
+            surface={activeSurface}
+            surfaceLabel={manuscriptActive ? 'Manuscript' : (activeDraft?.title ?? 'Drafter page')}
+            scopeIdentity={`${doc.id}:${doc.incarnation}:${writingSurfaceTabId(activeSurface)}`}
+            beforeCreate={activeSurface.kind === 'draft' ? drafter.flush : undefined}
           />
         </RenderErrorBoundary>
       )}

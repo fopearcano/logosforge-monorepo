@@ -57,6 +57,10 @@ export interface WhiteboardImportBlockDTO {
   marks?: Array<{ type: string; from: number; to: number }> | null;
 }
 export interface WhiteboardImportCommentAnchorDTO {
+  /** Omitted on legacy bundles, which always means the canonical manuscript. */
+  surface?: 'manuscript' | 'drafter';
+  /** Required when surface is 'drafter'; absent/null for manuscript comments. */
+  drafter_page_id?: string | null;
   block_index: number;
   block_id?: string | null;
   from_offset: number;

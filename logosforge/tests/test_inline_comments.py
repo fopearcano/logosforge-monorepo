@@ -717,6 +717,54 @@ def test_whiteboard_import_maps_utf16_marks_trim_and_cross_field_replies() -> No
     assert db.get_all_comments(result["project_id"]) == []
 
 
+def test_whiteboard_import_skips_drafter_comments_and_their_replies() -> None:
+    db = Database()
+    result = whiteboard_import.import_whiteboard_document(
+        db,
+        {
+            "title": "Scoped comments",
+            "mode": "novel",
+            "blocks": [
+                {"id": "p1", "type": "paragraph", "text": "Alpha beta"},
+            ],
+            "comments": [
+                {
+                    "id": "legacy-manuscript",
+                    "anchor": {
+                        "block_index": 0,
+                        "block_id": "p1",
+                        "from_offset": 0,
+                        "to_offset": 5,
+                    },
+                    "quote": "Alpha",
+                },
+                {
+                    "id": "drafter-only",
+                    "anchor": {
+                        "surface": "drafter",
+                        "drafter_page_id": "scene-draft:1",
+                        "block_index": 0,
+                        "block_id": "p1",
+                        "from_offset": 6,
+                        "to_offset": 10,
+                    },
+                    "quote": "beta",
+                    "replies": [
+                        {"id": "draft-reply", "body": "Keep experimenting"},
+                    ],
+                },
+            ],
+        },
+    )
+
+    assert result["comments_created"] == 1
+    assert result["comments_skipped"] == 1
+    assert result["comment_replies_created"] == 0
+    assert result["comment_replies_skipped"] == 1
+    imported = db.get_all_comments(result["project_id"])
+    assert [comment.source_id for comment in imported] == ["legacy-manuscript"]
+
+
 def test_whiteboard_import_honours_explicit_end_index_without_end_id() -> None:
     """A legacy multi-block anchor may predate stable end-block IDs."""
     db = Database()

@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from app.document_lifecycle import locked_document_request, request_document_incarnation
 from app.local_state import (
     Comment,
+    CommentAnchor,
     CommentCreate,
     CommentReplyCreate,
     CommentUpdate,
@@ -20,6 +21,7 @@ from app.local_state import (
     MutationIdConflict,
     ResourceRevisionConflict,
     comments_store,
+    drafter_pages_store,
 )
 from app.resource_revision import (
     IF_MATCH_HEADER,
@@ -75,6 +77,24 @@ def _publish_revision(
     if response is not None:
         response.headers["ETag"] = resource_etag(
             "comments", incarnation, revision
+        )
+
+
+def _validate_anchor_page(document_id: str, anchor: CommentAnchor | None) -> None:
+    if anchor is None or anchor.surface != "drafter":
+        return
+    page_id = anchor.drafter_page_id
+    if not any(
+        page.id == page_id
+        for page in drafter_pages_store.get_document(document_id).pages
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "drafter_page_not_found",
+                "message": "The Drafter page referenced by this comment does not exist.",
+                "page_id": page_id,
+            },
         )
 
 
@@ -179,6 +199,7 @@ async def create_comment(
             detail="A comment must anchor to selected text (quote must not be empty).",
         )
     async with locked_document_request(request, doc, mutation=True) as locked:
+        _validate_anchor_page(locked.document_id, payload.anchor)
         created = comments_store.create(locked.document_id, uuid4().hex, payload)
         ai = await maybe_ai_reply(
             request.app.state.core,
@@ -216,6 +237,7 @@ async def update_comment(
             )
         if conditional:
             payload = await _validate_conditional_resolution(request, payload)
+        _validate_anchor_page(locked.document_id, payload.anchor)
         try:
             updated = comments_store.update(
                 locked.document_id,

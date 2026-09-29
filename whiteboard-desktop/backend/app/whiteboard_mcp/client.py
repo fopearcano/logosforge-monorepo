@@ -887,6 +887,8 @@ class WhiteboardApiClient:
     def _validated_comment_anchor(value: Any) -> dict[str, Any]:
         required = {"block_index", "from_offset", "to_offset"}
         optional = {
+            "surface",
+            "drafter_page_id",
             "block_id",
             "end_block_index",
             "end_block_id",
@@ -926,6 +928,24 @@ class WhiteboardApiClient:
                 raise WhiteboardApiError(
                     "The Whiteboard comment response has an invalid shape."
                 )
+        surface = value.get("surface", "manuscript")
+        drafter_page_id = value.get("drafter_page_id")
+        if surface not in {"manuscript", "drafter"}:
+            raise WhiteboardApiError(
+                "The Whiteboard comment response has an invalid shape."
+            )
+        if surface == "drafter":
+            if (
+                not isinstance(drafter_page_id, str)
+                or _DRAFTER_PAGE_ID_RE.fullmatch(drafter_page_id) is None
+            ):
+                raise WhiteboardApiError(
+                    "The Whiteboard comment response has an invalid shape."
+                )
+        elif drafter_page_id is not None:
+            raise WhiteboardApiError(
+                "The Whiteboard comment response has an invalid shape."
+            )
         for key in ("prefix", "suffix"):
             context = value.get(key, "")
             if not WhiteboardApiClient._bounded_utf8_string(

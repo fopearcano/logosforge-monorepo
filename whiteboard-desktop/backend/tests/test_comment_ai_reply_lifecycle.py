@@ -36,6 +36,66 @@ def _request(core: _Core, incarnation: str):
     )
 
 
+def test_comments_context_labels_drafter_notes_as_provisional(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    document_id = 992000
+    comments = CommentsStore(tmp_path)
+    comments.create(
+        str(document_id),
+        "manuscript-comment",
+        CommentCreate(
+            anchor=CommentAnchor(block_index=0, from_offset=0, to_offset=4),
+            quote="Rain",
+            body="Keep the canonical opening",
+        ),
+    )
+    comments.create(
+        str(document_id),
+        "drafter-comment",
+        CommentCreate(
+            anchor=CommentAnchor(
+                surface="drafter",
+                drafter_page_id="scene-draft:1",
+                block_index=0,
+                from_offset=0,
+                to_offset=4,
+            ),
+            quote="Mist",
+            body="Experiment with this alternate opening",
+        ),
+    )
+    monkeypatch.setattr(littleboy_router, "comments_store", comments)
+
+    context = littleboy_router._comments_context(document_id)
+
+    assert '[Manuscript; canonical] On "Rain"' in context
+    assert (
+        '[Drafter page scene-draft:1; PROVISIONAL, NONCANONICAL] On "Mist"'
+        in context
+    )
+    assert "Experiment with this alternate opening" in context
+
+    captured: dict[str, str] = {}
+
+    async def capture_chat(_core, _pid, system_prompt, message, **_kwargs) -> str:
+        captured["system_prompt"] = system_prompt
+        captured["message"] = message
+        return "Try the alternate cadence."
+
+    monkeypatch.setattr(littleboy_router, "_core_chat", capture_chat)
+    drafter_comment = comments.get(str(document_id)).comments[1]
+    reply = asyncio.run(
+        littleboy_router.ai_reply_to_comment(
+            SimpleNamespace(), document_id, "Billy", drafter_comment
+        )
+    )
+    assert reply == "Try the alternate cadence."
+    assert "scene-draft:1; PROVISIONAL, NONCANONICAL" in captured["system_prompt"]
+    assert "scene-draft:1; PROVISIONAL, NONCANONICAL" in captured["message"]
+
+
 def test_interrupted_mention_retry_generates_one_deterministic_assistant_reply(
     tmp_path: Path,
     monkeypatch,

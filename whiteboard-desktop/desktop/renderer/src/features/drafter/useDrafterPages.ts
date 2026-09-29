@@ -53,7 +53,7 @@ export interface DrafterPagesStore {
   saveStatus: DrafterSaveStatus;
   createPage: (title: string, blocks?: WhiteboardBlock[]) => DrafterPage | null;
   renamePage: (id: string, title: string) => void;
-  deletePage: (id: string) => void;
+  deletePage: (id: string) => boolean;
   updatePageBlocks: (id: string, blocks: WhiteboardBlock[]) => void;
   replacePages: (pages: DrafterPage[]) => boolean;
   flush: () => Promise<boolean>;
@@ -243,7 +243,7 @@ export function useDrafterPages({
   }, [commit]);
 
   const deletePage = useCallback((id: string) => {
-    commit(removeDrafterPage(pagesRef.current, id));
+    return commit(removeDrafterPage(pagesRef.current, id));
   }, [commit]);
 
   const updatePageBlocks = useCallback((id: string, blocks: WhiteboardBlock[]) => {

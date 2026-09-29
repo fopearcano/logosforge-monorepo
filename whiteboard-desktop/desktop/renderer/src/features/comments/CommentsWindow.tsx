@@ -1,9 +1,10 @@
-/** The hideable Comments side panel — a list of every comment in the document. */
+/** The hideable Comments side panel — comments on the active writing surface. */
 
 import type { Comment } from './commentsApi';
 
 interface Props {
   comments: Comment[];
+  surfaceLabel: string;
   hideResolved: boolean;
   onToggleHideResolved: () => void;
   onSelect: (id: string) => void;
@@ -14,6 +15,7 @@ interface Props {
 
 export function CommentsWindow({
   comments,
+  surfaceLabel,
   hideResolved,
   onToggleHideResolved,
   onSelect,
@@ -26,9 +28,9 @@ export function CommentsWindow({
   const ordered = hideResolved ? open : [...open, ...resolved];
 
   return (
-    <aside className="comments-window" aria-label="Comments">
+    <aside className="comments-window" aria-label={`Comments for ${surfaceLabel}`}>
       <header className="comments-head">
-        <span className="comments-title">Comments</span>
+        <span className="comments-title">Comments · {surfaceLabel}</span>
         <span className="comments-count">{open.length}</span>
         {resolved.length > 0 && (
           <button
@@ -54,7 +56,7 @@ export function CommentsWindow({
       <div className="comments-body">
         {comments.length === 0 ? (
           <p className="comments-empty">
-            No comments yet. Select text in your document and click <strong>Comment</strong> to
+            No comments yet. Select text on this writing page and click <strong>Comment</strong> to
             add one.
           </p>
         ) : ordered.length === 0 ? (

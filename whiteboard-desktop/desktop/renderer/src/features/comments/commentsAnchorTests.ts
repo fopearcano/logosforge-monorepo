@@ -6,7 +6,15 @@
  * (esbuild + node): `npm run test:comments`. Throws on failure.
  */
 
-import { findOrphanIds, locate, reconcileMarks } from './commentsAnchor';
+import {
+  commentMatchesSurface,
+  commentSurfaceAnchor,
+  commentsForSurface,
+  findOrphanIds,
+  locate,
+  missingDrafterPageCommentIds,
+  reconcileMarks,
+} from './commentsAnchor';
 import type { Comment } from './commentsApi';
 import {
   acknowledgeCommentPatch,
@@ -42,6 +50,8 @@ interface MkOpts {
   end?: number; // end_block_index for a multi-block selection
   blockId?: string;
   endBlockId?: string;
+  surface?: 'manuscript' | 'drafter';
+  drafterPageId?: string;
 }
 function mk(
   id: string,
@@ -54,6 +64,8 @@ function mk(
   return {
     id,
     anchor: {
+      surface: opts.surface,
+      drafter_page_id: opts.drafterPageId,
       block_index,
       block_id: opts.blockId,
       from_offset,
@@ -326,7 +338,27 @@ check('empty doc orphans nothing', findOrphanIds([mk('a', 0, 4, 8, 'rain')], [])
     pendingCommentPatch(identity, 'intent-newer').body === 'second'
       && applyRetainedCommentIntent(identity, server).body === 'second',
   );
-  discardRetainedCommentIntent(identity, 'intent-newer');
+discardRetainedCommentIntent(identity, 'intent-newer');
+}
+
+// 26b. Anchor acknowledgement includes its writing-page namespace. Identical
+//      offsets on a different Drafter page are a newer intent, not the same anchor.
+{
+  const identity: CapturedDocumentIdentity = { documentId: '42', incarnation: 'inc-anchor-surface' };
+  const pageA = mk('surface-anchor', 0, 0, 4, 'rain', {
+    surface: 'drafter',
+    drafterPageId: 'page-a',
+  }).anchor;
+  const pageB = { ...pageA, drafter_page_id: 'page-b' };
+  retainCommentPatch(identity, 'surface-anchor', { anchor: pageA });
+  const sent = pendingCommentPatch(identity, 'surface-anchor');
+  retainCommentPatch(identity, 'surface-anchor', { anchor: pageB });
+  acknowledgeCommentPatch(identity, 'surface-anchor', sent);
+  check(
+    'anchor acknowledgement retains a newer Drafter page namespace',
+    pendingCommentPatch(identity, 'surface-anchor').anchor?.drafter_page_id === 'page-b',
+  );
+  discardRetainedCommentIntent(identity, 'surface-anchor');
 }
 
 // 27. A failed optimistic reply followed by a successful scalar edit must not be
@@ -583,6 +615,82 @@ check('empty doc orphans nothing', findOrphanIds([mk('a', 0, 4, 8, 'rain')], [])
       && !hasRetainedCommentIntent(identity, commentId),
   );
   setCurrentDocumentIdentity('', '');
+}
+
+// 34. Surface ownership is explicit for new comments while legacy anchors remain
+//     manuscript comments. A Drafter comment belongs to exactly one page.
+{
+  const legacy = mk('legacy', 0, 0, 4, 'rain');
+  const manuscript = mk('manuscript', 0, 0, 4, 'rain', { surface: 'manuscript' });
+  const draftA = mk('draft-a', 0, 0, 4, 'rain', {
+    surface: 'drafter',
+    drafterPageId: 'page-a',
+  });
+  const draftB = mk('draft-b', 0, 0, 4, 'rain', {
+    surface: 'drafter',
+    drafterPageId: 'page-b',
+  });
+  check('legacy comment remains manuscript-owned', commentMatchesSurface(legacy, { kind: 'manuscript' }));
+  check('legacy comment never leaks into Drafter', !commentMatchesSurface(legacy, { kind: 'draft', pageId: 'page-a' }));
+  check('explicit manuscript comment remains manuscript-owned', commentMatchesSurface(manuscript, { kind: 'manuscript' }));
+  check('Drafter comment matches its own page', commentMatchesSurface(draftA, { kind: 'draft', pageId: 'page-a' }));
+  check('Drafter comment is isolated from another page', !commentMatchesSurface(draftA, { kind: 'draft', pageId: 'page-b' }));
+  check(
+    'surface filter returns only the active Drafter page',
+    commentsForSurface([legacy, manuscript, draftA, draftB], { kind: 'draft', pageId: 'page-a' })
+      .map((comment) => comment.id)
+      .join(',') === 'draft-a',
+  );
+  check(
+    'new Drafter anchors carry their exact page namespace',
+    JSON.stringify(commentSurfaceAnchor({ kind: 'draft', pageId: 'page-a' }))
+      === JSON.stringify({ surface: 'drafter', drafter_page_id: 'page-a' }),
+  );
+  check(
+    'new manuscript anchors carry no Drafter page id',
+    JSON.stringify(commentSurfaceAnchor({ kind: 'manuscript' }))
+      === JSON.stringify({ surface: 'manuscript' }),
+  );
+}
+
+// 35. Marks and orphan cleanup receive a surface-filtered set. This prevents a
+//     Drafter anchor from painting onto, or being deleted against, manuscript text.
+{
+  const manuscript = mk('manuscript-orphan', 0, 0, 4, 'gone', { surface: 'manuscript' });
+  const draft = mk('draft-safe', 0, 0, 4, 'rain', {
+    surface: 'drafter',
+    drafterPageId: 'page-a',
+  });
+  const all = [manuscript, draft];
+  const manuscriptOnly = commentsForSurface(all, { kind: 'manuscript' });
+  const draftOnly = commentsForSurface(all, { kind: 'draft', pageId: 'page-a' });
+  check(
+    'manuscript marks cannot paint Drafter comments',
+    reconcileMarks(manuscriptOnly, ['The rain fell']).length === 0,
+  );
+  check(
+    'Drafter marks paint against their page text',
+    reconcileMarks(draftOnly, ['rain']).map((mark) => mark.id).join(',') === 'draft-safe',
+  );
+  check(
+    'manuscript orphan cleanup cannot delete Drafter comments',
+    findOrphanIds(manuscriptOnly, ['unrelated']).join(',') === 'manuscript-orphan',
+  );
+}
+
+// 36. Durable page cleanup targets only comments whose Drafter owner vanished;
+//     it never treats manuscript/legacy threads as page-owned.
+{
+  const comments = [
+    mk('legacy', 0, 0, 4, 'rain'),
+    mk('manuscript', 0, 0, 4, 'rain', { surface: 'manuscript' }),
+    mk('draft-kept', 0, 0, 4, 'rain', { surface: 'drafter', drafterPageId: 'kept' }),
+    mk('draft-deleted', 0, 0, 4, 'rain', { surface: 'drafter', drafterPageId: 'deleted' }),
+  ];
+  check(
+    'page cleanup removes only threads owned by missing Drafter pages',
+    missingDrafterPageCommentIds(comments, new Set(['kept'])).join(',') === 'draft-deleted',
+  );
 }
 
 // --- report ---

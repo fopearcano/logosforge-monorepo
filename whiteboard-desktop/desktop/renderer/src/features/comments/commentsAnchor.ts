@@ -20,6 +20,7 @@ import type { Editor } from '@tiptap/react';
 
 import type { Comment, CommentDraft } from './commentsApi';
 import type { CommentMark } from './commentsExtension';
+import type { WritingSurface } from '../drafter/types';
 
 const CONTEXT = 32; // chars of prefix/suffix context captured for disambiguation
 const MIN_CONTEXT_MATCH = 4; // a landmark must match ≥ this many chars to be considered
@@ -28,7 +29,44 @@ const MAX_GAP_SLACK = 40; // how much an edited span may grow beyond the origina
 
 /** Build a draft from the current non-empty selection (one block, or spanning
  * several — the anchor records start + end edges and the quote joins blocks). */
-export function selectionToDraft(editor: Editor): CommentDraft | null {
+export function commentSurfaceAnchor(
+  surface: WritingSurface,
+): Pick<CommentDraft['anchor'], 'surface' | 'drafter_page_id'> {
+  return surface.kind === 'draft'
+    ? { surface: 'drafter', drafter_page_id: surface.pageId }
+    : { surface: 'manuscript' };
+}
+
+/** Legacy anchors are manuscript-owned; Drafter anchors match exactly one page. */
+export function commentMatchesSurface(comment: Comment, surface: WritingSurface): boolean {
+  const storedSurface = comment.anchor.surface ?? 'manuscript';
+  return surface.kind === 'manuscript'
+    ? storedSurface === 'manuscript'
+    : storedSurface === 'drafter' && comment.anchor.drafter_page_id === surface.pageId;
+}
+
+export function commentsForSurface(comments: Comment[], surface: WritingSurface): Comment[] {
+  return comments.filter((comment) => commentMatchesSurface(comment, surface));
+}
+
+/** Drafter threads whose owning page was durably deleted. */
+export function missingDrafterPageCommentIds(
+  comments: Comment[],
+  existingPageIds: ReadonlySet<string>,
+): string[] {
+  return comments
+    .filter((comment) => (
+      comment.anchor.surface === 'drafter'
+      && typeof comment.anchor.drafter_page_id === 'string'
+      && !existingPageIds.has(comment.anchor.drafter_page_id)
+    ))
+    .map((comment) => comment.id);
+}
+
+export function selectionToDraft(
+  editor: Editor,
+  surface: WritingSurface = { kind: 'manuscript' },
+): CommentDraft | null {
   const { state } = editor;
   const { from, to, empty } = state.selection;
   if (empty || to <= from) return null;
@@ -47,6 +85,7 @@ export function selectionToDraft(editor: Editor): CommentDraft | null {
     const blockText = state.doc.textBetween(startBlockStart, blockEnd);
     return {
       anchor: {
+        ...commentSurfaceAnchor(surface),
         block_index: startBlock,
         block_id: startBlockId,
         from_offset: fromOffset,
@@ -68,6 +107,7 @@ export function selectionToDraft(editor: Editor): CommentDraft | null {
   const endBlockText = state.doc.textBetween(endBlockStart, $to.end());
   return {
     anchor: {
+      ...commentSurfaceAnchor(surface),
       block_index: startBlock,
       block_id: startBlockId,
       from_offset: fromOffset,

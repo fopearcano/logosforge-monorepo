@@ -25,6 +25,10 @@ import { responseError } from '../../api/responseError';
 const DEFAULT_BASE_URL = 'http://127.0.0.1:8777';
 
 export interface CommentAnchor {
+  /** Legacy anchors omit this and therefore belong to the canonical manuscript. */
+  surface?: 'manuscript' | 'drafter';
+  /** Required when surface is `drafter`; identifies the project-owned scratch page. */
+  drafter_page_id?: string | null;
   block_index: number;
   /** Stable Whiteboard block identity (new anchors); index remains fallback. */
   block_id?: string;

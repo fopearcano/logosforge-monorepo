@@ -18,6 +18,9 @@
 | `Mod + Shift + C` | Toggle the Comments panel |
 | `Alt + ↓` / `Alt + ↑` | Jump to next / previous unresolved comment (scrolls to it + opens it) |
 
+Comments are isolated to the active writing page: the Manuscript and each Drafter
+page keep their own anchored threads.
+
 ## AI agents — LittleBoy  (`Mod + Shift + …`)
 | Shortcut | Action |
 |----------|--------|
