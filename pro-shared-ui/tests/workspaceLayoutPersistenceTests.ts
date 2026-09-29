@@ -1,6 +1,11 @@
 import type { PlatformAdapter } from "../src/adapters/platform";
 import {
+  focusPanel,
+  movePanel,
+  resizeDock,
   resizeNavigator,
+  serializeWorkspaceLayout,
+  setFloatingPanelMinimized,
   setNavigatorCollapsed,
   setWorkspacePreset,
   resetWorkspaceLayout,
@@ -454,6 +459,64 @@ async function hydrate(options: UseWorkspaceLayoutOptions): Promise<WorkspaceLay
   state = render(options);
   check("deliberate edit can repair an invalid primary", repaired && saveOptions.length === 1 && state.error === null);
   check("invalid-primary repair preserves any host backup", saveOptions[0]?.preserveBackup === true);
+  resetHookRuntime();
+}
+
+// Hydration and the debounced save pipeline preserve Phase 2 left-dock and
+// floating-window state exactly, including hidden Cockpit state while Focus is
+// temporarily projected.
+{
+  resetHookRuntime();
+  let rich = resetWorkspaceLayout(PANEL_IDS);
+  rich = movePanel(rich, "dashboard", { kind: "dock", region: "left", index: 0 });
+  rich = resizeDock(rich, "left", 433);
+  rich = movePanel(rich, "ai-companions", {
+    kind: "floating",
+    bounds: { x: 109, y: 73, width: 611, height: 451 },
+  });
+  rich = movePanel(rich, "outline", {
+    kind: "floating",
+    bounds: { x: -31, y: 187, width: 389, height: 277 },
+  });
+  rich = setFloatingPanelMinimized(rich, "outline", true);
+  rich = focusPanel(rich, "ai-companions");
+  const expected = serializeWorkspaceLayout(rich);
+  const saves: WorkspaceLayout[] = [];
+  const options: UseWorkspaceLayoutOptions = {
+    projectId: 14,
+    platform: platform({
+      loadLayout: async () => JSON.parse(expected) as WorkspaceLayout,
+      saveLayout: async (_projectId, value) => { saves.push(value as WorkspaceLayout); },
+    }),
+    allowedPanelIds: PANEL_IDS,
+    debounceMs: 60_000,
+  };
+
+  let state = await hydrate(options);
+  check(
+    "rich Phase 2 layout hydrates without normalization loss",
+    serializeWorkspaceLayout(state.layout) === expected,
+  );
+  state.updateLayout((layout) => setWorkspacePreset(layout, "focus"));
+  state = render(options);
+  check(
+    "Focus projection keeps persisted left and floating state in memory",
+    state.layout.preset === "focus"
+      && state.layout.docks.left.sizePx === 433
+      && state.layout.docks.left.panelIds.join(",") === "dashboard"
+      && state.layout.floatingPanels.length === 2,
+  );
+  state.updateLayout((layout) => setWorkspacePreset(layout, "cockpit"));
+  state = render(options);
+  check(
+    "Cockpit restoration recreates the hydrated rich layout exactly",
+    serializeWorkspaceLayout(state.layout) === expected,
+  );
+  const flushed = await state.flushLayout();
+  check(
+    "rich Phase 2 save snapshot remains byte-for-byte stable",
+    flushed && saves.length === 1 && serializeWorkspaceLayout(saves[0]!) === expected,
+  );
   resetHookRuntime();
 }
 

@@ -11,6 +11,7 @@ import {
   getPanelPlacement,
   getWorkspaceVisibility,
   focusPanel,
+  moveFloatingPanel,
   movePanel,
   openPanel,
   reconcileWorkspaceLayout,
@@ -134,6 +135,78 @@ function jsonClone<T>(value: T): T {
 }
 
 {
+  let layout = createDefaultWorkspaceLayout();
+  layout = movePanel(layout, "ai-companions", {
+    kind: "floating",
+    bounds: { x: 111, y: 75, width: 530, height: 410 },
+  });
+  layout = movePanel(layout, "outline", {
+    kind: "floating",
+    bounds: { x: -42, y: 93, width: 360, height: 280 },
+  });
+  layout = setFloatingPanelMinimized(layout, "outline", true);
+  layout = bringFloatingPanelToFront(layout, "ai-companions");
+
+  const source = serializeWorkspaceLayout(layout);
+  const outlineBefore = layout.floatingPanels.find((panel) => panel.panelId === "outline");
+  const moved = moveFloatingPanel(layout, "outline", 999_999, -999_999);
+  const outlineAfter = moved.floatingPanels.find((panel) => panel.panelId === "outline");
+  check("floating move does not mutate its source", serializeWorkspaceLayout(layout) === source);
+  check(
+    "floating move clamps persisted coordinates",
+    outlineAfter?.x === 100_000 && outlineAfter.y === -100_000,
+  );
+  check(
+    "floating move preserves size, minimized state, and stack ownership",
+    outlineAfter?.width === outlineBefore?.width
+      && outlineAfter?.height === outlineBefore?.height
+      && outlineAfter?.minimized === true
+      && outlineAfter?.zIndex === outlineBefore?.zIndex,
+  );
+  check(
+    "floating move preserves the current focused panel",
+    moved.focused?.zone === "floating" && moved.focused.panelId === "ai-companions",
+  );
+}
+
+{
+  let layout = createDefaultWorkspaceLayout();
+  layout = movePanel(layout, "ai-companions", {
+    kind: "floating",
+    bounds: { x: 40, y: 48, width: 540, height: 420 },
+  });
+  layout = movePanel(layout, "outline", {
+    kind: "floating",
+    bounds: { x: 92, y: 106, width: 400, height: 300 },
+  });
+  layout = focusPanel(layout, "ai-companions");
+  layout = setFloatingPanelMinimized(layout, "ai-companions", true);
+  check(
+    "minimizing the focused float transfers focus to the visible center fallback",
+    layout.focused?.zone === "center"
+      && layout.focused.panelId === layout.docks.center.activePanelId,
+  );
+  check(
+    "minimizing a float preserves its persisted placement",
+    layout.floatingPanels.some((panel) => panel.panelId === "ai-companions" && panel.minimized),
+  );
+
+  const restored = focusPanel(layout, "ai-companions");
+  const restoredAi = restored.floatingPanels.find((panel) => panel.panelId === "ai-companions");
+  check(
+    "focusing a minimized float restores and focuses it",
+    restoredAi?.minimized === false
+      && restored.focused?.zone === "floating"
+      && restored.focused.panelId === "ai-companions",
+  );
+  check(
+    "focusing a restored float raises it above its siblings",
+    restoredAi?.zIndex === restored.floatingPanels.length - 1
+      && restored.floatingPanels.at(-1)?.panelId === "ai-companions",
+  );
+}
+
+{
   const initial = createDefaultWorkspaceLayout();
   const collapsed = setDockCollapsed(initial, "right", true);
   check("dock can collapse", collapsed.docks.right.collapsed);
@@ -166,6 +239,45 @@ function jsonClone<T>(value: T): T {
 }
 
 {
+  let layout = createDefaultWorkspaceLayout();
+  layout = movePanel(layout, "dashboard", { kind: "dock", region: "left", index: 0 });
+  layout = movePanel(layout, "decision-radar", { kind: "dock", region: "left", index: 1 });
+  layout = resizeDock(layout, "left", 421);
+  check(
+    "left dock owns moved panels exactly once",
+    layout.docks.left.panelIds.join(",") === "dashboard,decision-radar"
+      && !layout.docks.center.panelIds.includes("dashboard")
+      && !layout.docks.right.panelIds.includes("decision-radar"),
+  );
+  check("left dock retains its independent width", layout.docks.left.sizePx === 421);
+
+  layout = setDockCollapsed(layout, "left", true);
+  check(
+    "collapsing the focused left dock preserves ownership and falls back to center focus",
+    layout.docks.left.collapsed
+      && layout.docks.left.panelIds.join(",") === "dashboard,decision-radar"
+      && layout.focused?.zone === "center",
+  );
+  layout = setDockCollapsed(layout, "left", false);
+  check(
+    "expanding the left dock restores its active-panel focus",
+    !layout.docks.left.collapsed
+      && layout.focused?.zone === "left"
+      && layout.focused.panelId === layout.docks.left.activePanelId,
+  );
+
+  const tooWide = resizeDock(layout, "left", 100_000);
+  check("left resize clamps to its maximum", tooWide.docks.left.sizePx === DOCK_SIZE.left.max);
+  const movedAway = movePanel(layout, "dashboard", { kind: "dock", region: "bottom", index: 0 });
+  check(
+    "moving out of the left dock transfers unique panel ownership",
+    !movedAway.docks.left.panelIds.includes("dashboard")
+      && movedAway.docks.bottom.panelIds.filter((panelId) => panelId === "dashboard").length === 1
+      && validateWorkspaceLayout(movedAway).ok,
+  );
+}
+
+{
   const cockpit = createDefaultWorkspaceLayout();
   const rightState = serializeWorkspaceLayout(setDockCollapsed(cockpit, "right", true));
   let layout = setDockCollapsed(cockpit, "right", true);
@@ -176,6 +288,62 @@ function jsonClone<T>(value: T): T {
   layout = toggleWorkspacePreset(layout);
   check("toggle returns to Cockpit", layout.preset === "cockpit");
   check("Focus round trip retains dock preference", serializeWorkspaceLayout(layout) === rightState);
+}
+
+{
+  let rich = createDefaultWorkspaceLayout();
+  rich = movePanel(rich, "dashboard", { kind: "dock", region: "left", index: 0 });
+  rich = resizeDock(rich, "left", 437);
+  rich = movePanel(rich, "ai-companions", {
+    kind: "floating",
+    bounds: { x: 137, y: 81, width: 618, height: 454 },
+  });
+  rich = movePanel(rich, "outline", {
+    kind: "floating",
+    bounds: { x: -23, y: 211, width: 377, height: 266 },
+  });
+  rich = setFloatingPanelMinimized(rich, "outline", true);
+  rich = focusPanel(rich, "ai-companions");
+
+  const encoded = serializeWorkspaceLayout(rich);
+  const restored = restoreWorkspaceLayout(encoded);
+  const ai = rich.floatingPanels.find((panel) => panel.panelId === "ai-companions");
+  const outline = rich.floatingPanels.find((panel) => panel.panelId === "outline");
+  check(
+    "rich left-and-floating layout records distinct geometry, stack, minimized, and focus state",
+    rich.docks.left.panelIds.join(",") === "dashboard"
+      && rich.docks.left.sizePx === 437
+      && ai?.x === 137
+      && ai.y === 81
+      && ai.width === 618
+      && ai.height === 454
+      && outline?.x === -23
+      && outline.y === 211
+      && outline.minimized
+      && outline.zIndex !== ai.zIndex
+      && rich.focused?.zone === "floating"
+      && rich.focused.panelId === "ai-companions",
+  );
+  check(
+    "rich left-and-floating layout restores byte-for-byte",
+    restored.source === "current" && serializeWorkspaceLayout(restored.layout) === encoded,
+  );
+
+  const focusProjection = setWorkspacePreset(restored.layout, "focus");
+  const focusVisibility = getWorkspaceVisibility(focusProjection);
+  check(
+    "Focus hides rich cockpit surfaces without deleting them",
+    !focusVisibility.docks.left
+      && focusVisibility.floatingPanelIds.length === 0
+      && JSON.stringify(focusProjection.docks) === JSON.stringify(restored.layout.docks)
+      && JSON.stringify(focusProjection.floatingPanels) === JSON.stringify(restored.layout.floatingPanels)
+      && JSON.stringify(focusProjection.focused) === JSON.stringify(restored.layout.focused),
+  );
+  const cockpitProjection = toggleWorkspacePreset(focusProjection);
+  check(
+    "Focus-to-Cockpit restores every rich layout byte",
+    serializeWorkspaceLayout(cockpitProjection) === encoded,
+  );
 }
 
 {

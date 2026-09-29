@@ -40,11 +40,12 @@ const CSS = `
 .lf-shell .lf-row2:hover{background:var(--tint2);}
 /* Real Studio dock workspace. The panel layer uses display:contents so every
    opened panel keeps one stable DOM/React parent while its grid coordinates move. */
-.lf-dock-workspace{position:relative;display:grid;flex:1;min-width:0;min-height:0;overflow:hidden;background:var(--base);}
+.lf-dock-workspace{position:relative;isolation:isolate;display:grid;flex:1;min-width:0;min-height:0;overflow:hidden;background:var(--base);}
 .lf-dock-header{display:flex;align-items:stretch;min-width:0;min-height:0;border-bottom:1px solid var(--line2);background:var(--panel);z-index:4;}
-.lf-dock-header-center{grid-column:1;grid-row:1;}
-.lf-dock-header-right{grid-column:3;grid-row:1;border-left:1px solid var(--line2);}
-.lf-dock-header-bottom{grid-column:1 / 4;grid-row:4;border-top:1px solid var(--line2);}
+.lf-dock-header-left{grid-column:1;grid-row:1;border-right:1px solid var(--line2);}
+.lf-dock-header-center{grid-column:3;grid-row:1;}
+.lf-dock-header-right{grid-column:5;grid-row:1;border-left:1px solid var(--line2);}
+.lf-dock-header-bottom{grid-column:1 / 6;grid-row:4;border-top:1px solid var(--line2);}
 .lf-dock-tabs{display:flex;align-items:stretch;min-width:0;overflow-x:auto;scrollbar-width:thin;}
 .lf-dock-tab-group{display:flex;align-items:stretch;flex:none;border-right:1px solid var(--line2);}
 .lf-dock-tab,.lf-dock-tab-action,.lf-dock-header-actions button{border:0;background:transparent;color:var(--txt2);font:inherit;font-size:9px;letter-spacing:.08em;cursor:pointer;}
@@ -57,6 +58,8 @@ const CSS = `
 .lf-dock-header-actions button{padding:0 10px;}
 .lf-dock-panel-layer{display:contents;}
 .lf-dock-panel{position:relative;min-width:0;min-height:0;overflow:auto;padding:12px;background:var(--base);}
+.lf-dock-panel-content{min-width:0;min-height:0;height:100%;}
+.lf-dock-panel-left{border-right:1px solid var(--line2);}
 .lf-dock-panel-right{border-left:1px solid var(--line2);}
 .lf-dock-panel-bottom{border-top:1px solid var(--line2);}
 .lf-dock-panel-flush{padding:0;overflow:hidden;}
@@ -64,14 +67,55 @@ const CSS = `
 .lf-dock-resizer{z-index:5;touch-action:none;display:flex;align-items:center;justify-content:center;background:transparent;}
 .lf-dock-resizer::after{content:"";display:block;border-radius:3px;background:var(--line-cy);transition:background .12s,box-shadow .12s;}
 .lf-dock-resizer:hover::after,.lf-dock-resizer:focus-visible::after{background:var(--accent);box-shadow:0 0 8px color-mix(in srgb,var(--accent) 55%,transparent);}
-.lf-dock-resizer-right{grid-column:2;grid-row:1 / 3;cursor:col-resize;}
-.lf-dock-resizer-right::after{width:3px;height:42px;}
-.lf-dock-resizer-bottom{grid-column:1 / 4;grid-row:3;cursor:row-resize;}
+.lf-dock-resizer-left{grid-column:2;grid-row:1 / 3;cursor:col-resize;}
+.lf-dock-resizer-right{grid-column:4;grid-row:1 / 3;cursor:col-resize;}
+.lf-dock-resizer-left::after,.lf-dock-resizer-right::after{width:3px;height:42px;}
+.lf-dock-resizer-bottom{grid-column:1 / 6;grid-row:3;cursor:row-resize;}
 .lf-dock-resizer-bottom::after{width:42px;height:3px;}
 .lf-dock-collapsed{z-index:4;border:0;background:var(--panel2);color:var(--accent);font:inherit;font-size:9px;letter-spacing:.12em;cursor:pointer;}
-.lf-dock-collapsed-right{grid-column:3;grid-row:1 / 3;writing-mode:vertical-rl;border-left:1px solid var(--line2);}
-.lf-dock-collapsed-bottom{grid-column:1 / 4;grid-row:4;border-top:1px solid var(--line2);}
+.lf-dock-collapsed-left{grid-column:1;grid-row:1 / 3;writing-mode:vertical-rl;transform:rotate(180deg);border-right:1px solid var(--line2);}
+.lf-dock-collapsed-right{grid-column:5;grid-row:1 / 3;writing-mode:vertical-rl;border-left:1px solid var(--line2);}
+.lf-dock-collapsed-bottom{grid-column:1 / 6;grid-row:4;border-top:1px solid var(--line2);}
 .lf-dock-collapsed:hover{background:var(--tint2);color:var(--strong);}
+/* Modeless tear-off panels remain in the stable panel layer. Bounds and stack
+   order are supplied as inline layout state; these classes own their chrome. */
+.lf-floating-panel{position:absolute!important;display:flex;flex-direction:column;min-width:220px;min-height:132px;max-width:calc(100% - 16px);max-height:calc(100% - 16px);padding:0;overflow:hidden;border:1px solid var(--line2);background:var(--panel);box-shadow:0 12px 36px rgba(0,0,0,.48),0 0 0 1px color-mix(in srgb,var(--accent) 8%,transparent);z-index:var(--lf-floating-z,20);}
+.lf-floating-panel[hidden]{display:none!important;}
+.lf-floating-panel-active,.lf-floating-panel:focus-within{border-color:color-mix(in srgb,var(--accent) 68%,var(--line2));box-shadow:0 14px 42px rgba(0,0,0,.56),0 0 14px color-mix(in srgb,var(--accent) 18%,transparent);}
+.lf-floating-panel-minimized{display:none!important;}
+.lf-floating-panel-titlebar{display:flex;align-items:center;flex:none;min-width:0;height:32px;border-bottom:1px solid var(--line2);background:var(--panel2);color:var(--txt2);cursor:move;touch-action:none;user-select:none;}
+.lf-floating-panel-titlebar[hidden],.lf-floating-panel-resizer[hidden]{display:none!important;}
+.lf-floating-panel-titlebar:hover{background:var(--tint2);}
+.lf-floating-panel-title{min-width:0;flex:1;overflow:hidden;padding:0 9px;font-size:9px;font-weight:600;letter-spacing:.1em;text-overflow:ellipsis;text-transform:uppercase;white-space:nowrap;}
+.lf-floating-panel-active .lf-floating-panel-title,.lf-floating-panel:focus-within .lf-floating-panel-title{color:var(--accent);}
+.lf-floating-panel-actions{display:flex;align-self:stretch;flex:none;border-left:1px solid var(--line2);}
+.lf-floating-panel-actions button{width:30px;min-width:30px;padding:0;border:0;border-left:1px solid var(--line2);background:transparent;color:var(--txt3);font:inherit;font-size:10px;cursor:pointer;}
+.lf-floating-panel-actions button:first-child{border-left:0;}
+.lf-floating-panel-actions button:hover{background:var(--tint2);color:var(--strong);}
+.lf-floating-panel-actions button:disabled{cursor:wait;opacity:.55;}
+.lf-floating-panel-content{position:relative;display:flex;flex:1;min-width:0;min-height:0;overflow:auto;padding:12px;background:var(--base);}
+.lf-floating-panel-content>*{min-width:0;min-height:0;}
+.lf-floating-panel.lf-dock-panel-flush .lf-floating-panel-content{overflow:hidden;padding:0;}
+.lf-floating-panel-resizer{position:absolute;right:0;bottom:0;z-index:2;width:22px;height:22px;border:0;background:transparent;color:var(--txt3);cursor:nwse-resize;touch-action:none;}
+.lf-floating-panel-resizer::before,.lf-floating-panel-resizer::after{content:"";position:absolute;right:4px;bottom:4px;width:10px;height:1px;background:currentColor;transform:rotate(-45deg);transform-origin:right center;}
+.lf-floating-panel-resizer::before{right:7px;bottom:4px;width:6px;}
+.lf-floating-panel-resizer:hover,.lf-floating-panel-resizer:focus-visible{color:var(--accent);background:color-mix(in srgb,var(--accent) 8%,transparent);}
+.lf-floating-minimized-tray{position:absolute;left:50%;bottom:8px;z-index:1000;display:flex;align-items:stretch;max-width:calc(100% - 20px);min-height:30px;overflow-x:auto;transform:translateX(-50%);border:1px solid var(--line2);background:color-mix(in srgb,var(--panel2) 94%,transparent);box-shadow:0 8px 24px rgba(0,0,0,.4);backdrop-filter:blur(6px);}
+.lf-floating-minimized-tray-label{display:flex;align-items:center;flex:none;padding:0 8px;border-right:1px solid var(--line2);color:var(--txt3);font-size:8px;letter-spacing:.12em;text-transform:uppercase;}
+.lf-floating-minimized-tray-item{flex:none;max-width:190px;padding:0 10px;border:0;border-right:1px solid var(--line2);background:transparent;color:var(--txt2);font:inherit;font-size:9px;letter-spacing:.06em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;}
+.lf-floating-minimized-tray-item:last-child{border-right:0;}
+.lf-floating-minimized-tray-item:hover{background:var(--tint2);color:var(--accent);}
+.lf-floating-minimized-tray-item:disabled{cursor:wait;opacity:.55;}
+/* Grid-layer drop targets do not intercept the pointer; the workspace drag
+   controller chooses a region and only toggles the visual active state. */
+.lf-dock-drop-target{position:relative;z-index:999;min-width:0;min-height:0;pointer-events:none;}
+.lf-dock-drop-target::after{content:"";position:absolute;inset:6px;border:1px dashed var(--accent);background:color-mix(in srgb,var(--accent) 10%,transparent);box-shadow:inset 0 0 18px color-mix(in srgb,var(--accent) 10%,transparent);opacity:0;transform:scale(.985);transition:opacity .12s,transform .12s;}
+.lf-dock-drop-target.is-active::after,.lf-dock-drop-target[data-drop-active="true"]::after{opacity:1;transform:scale(1);}
+.lf-dock-drop-target-left{grid-column:1;grid-row:1 / 3;}
+.lf-dock-drop-target-center{grid-column:3;grid-row:1 / 3;}
+.lf-dock-drop-target-right{grid-column:5;grid-row:1 / 3;}
+.lf-dock-drop-target-bottom{grid-column:1 / 6;grid-row:4 / 6;}
+.lf-dock-drop-target-floating{position:absolute;inset:0;}
 .lf-workspace-navigator{position:relative;display:flex;flex:none;min-width:0;min-height:0;border-right:1px solid var(--line2);background:var(--panel2);}
 .lf-workspace-navigator-content{display:flex;flex:1;min-width:0;min-height:0;overflow:hidden;}
 .lf-workspace-navigator-collapse{position:absolute;right:8px;top:4px;z-index:7;width:24px;height:24px;border:1px solid var(--line2);background:var(--panel);color:var(--txt2);font:inherit;cursor:pointer;}
@@ -82,6 +126,14 @@ const CSS = `
 .lf-workspace-navigator-collapsed{width:34px;flex:none;display:flex;border-right:1px solid var(--line2);background:var(--panel2);}
 .lf-workspace-navigator-collapsed button{width:100%;border:0;background:transparent;color:var(--accent);font:inherit;font-size:9px;letter-spacing:.12em;writing-mode:vertical-rl;cursor:pointer;}
 .lf-workspace-navigator-collapsed button:hover{background:var(--tint2);color:var(--strong);}
+@media (max-width:760px){
+  .lf-floating-panel{min-width:min(220px,calc(100% - 16px));max-width:calc(100% - 8px);max-height:calc(100% - 8px);}
+  .lf-floating-panel-titlebar{height:36px;}
+  .lf-floating-panel-title{padding-inline:7px;}
+  .lf-floating-panel-actions button{width:34px;min-width:34px;}
+  .lf-floating-minimized-tray{right:4px;bottom:4px;left:4px;max-width:none;transform:none;}
+  .lf-floating-minimized-tray-label{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0;}
+}
 @media (prefers-reduced-motion:reduce){
   .lf-shell *, .lf-shell *::before, .lf-shell *::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important;}
 }

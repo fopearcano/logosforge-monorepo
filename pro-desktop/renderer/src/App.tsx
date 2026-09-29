@@ -53,13 +53,18 @@ import {
   useRuntimeFaultReporter,
   createDeferredDisposer,
   closePanel as closeWorkspacePanel,
+  bringFloatingPanelToFront,
+  focusPanel as focusWorkspacePanel,
   getPanelPlacement,
+  moveFloatingPanel,
   openPanel as openWorkspacePanel,
   placePanel,
   resetWorkspaceLayout,
   resizeDock,
+  resizeFloatingPanel,
   resizeNavigator,
   setDockCollapsed,
+  setFloatingPanelMinimized,
   setNavigatorCollapsed,
   setWorkspacePreset,
   toggleDockCollapsed,
@@ -67,6 +72,7 @@ import {
   useWorkspaceLayout,
   focusAfterWorkspaceAction,
   workspacePanelDomToken,
+  type FloatingPanelBounds,
 } from '@logosforge/pro-shared-ui';
 import { WRITING_MODES, type WritingMode, type ProjectDTO } from '@logosforge/ui-contracts';
 import { desktop, platform, type CoreStatus } from './platform';
@@ -369,9 +375,9 @@ export function App() {
   );
   const visiblePanels = useMemo(() => visibleGroups.flatMap((g) => g.panels), [visibleGroups]);
 
-  // Normalize mode-ineligible and not-yet-rendered zones in one queued pass.
-  // Keeping this atomic prevents a left/floating panel that is invalid for the
-  // current writing mode from being closed by one task and reopened by another.
+  // Normalize mode-ineligible panels and keep the permanent AI surface in its
+  // right-hand home. Left docks and floating windows are first-class rendered
+  // placements and must survive hydration unchanged.
   useEffect(() => {
     if (!workspaceHydrated) return;
     const unavailable = new Set(PANELS
@@ -381,11 +387,7 @@ export function App() {
       .some((panelId) => getPanelPlacement(workspaceLayout, panelId) !== null);
     const aiPlacement = getPanelPlacement(workspaceLayout, AI_PANEL_ID);
     const aiNeedsHome = aiPlacement?.kind !== 'dock' || aiPlacement.region !== 'right';
-    const unsupportedIsOpen = [
-      ...workspaceLayout.docks.left.panelIds,
-      ...workspaceLayout.floatingPanels.map((panel) => panel.panelId),
-    ].some((panelId) => !unavailable.has(panelId));
-    if (!unavailableIsOpen && !unsupportedIsOpen && !aiNeedsHome) return;
+    if (!unavailableIsOpen && !aiNeedsHome) return;
     void runWorkspaceMutation((layout) => {
       let next = layout;
       unavailable.forEach((panelId) => {
@@ -400,22 +402,13 @@ export function App() {
           index: next.docks.right.panelIds.length,
         });
       }
-      const unsupported = [
-        ...next.docks.left.panelIds,
-        ...next.floatingPanels.map((panel) => panel.panelId),
-      ].filter((panelId) => !unavailable.has(panelId));
-      unsupported.forEach((panelId) => {
-        next = placePanel(next, panelId, {
-          kind: 'dock',
-          region: 'center',
-          index: next.docks.center.panelIds.length,
-        });
-      });
       if (previouslyFocused) {
         const placement = getPanelPlacement(next, previouslyFocused);
         if (placement?.kind === 'dock') {
           next.docks[placement.region].activePanelId = previouslyFocused;
           next.focused = { zone: placement.region, panelId: previouslyFocused };
+        } else if (placement?.kind === 'floating') {
+          next = focusWorkspacePanel(next, previouslyFocused);
         }
       }
       return next.focused === null ? openWorkspacePanel(next, 'manuscript', 'center') : next;
@@ -724,9 +717,49 @@ export function App() {
 
   const moveDockPanel = useCallback((panelId: string, region: WorkspaceDockRegion, index: number) => {
     if (panelId === 'manuscript' && region !== 'center') return Promise.resolve(false);
+    if (panelId === AI_PANEL_ID && region !== 'right') return Promise.resolve(false);
     return runWorkspaceMutation(
       (layout) => placePanel(layout, panelId, { kind: 'dock', region, index }),
       'Panel move stopped; the previous dock layout is unchanged.',
+    );
+  }, [runWorkspaceMutation]);
+
+  const floatWorkspacePanel = useCallback((panelId: string, bounds?: Partial<FloatingPanelBounds>) => {
+    if (panelId === 'manuscript' || panelId === AI_PANEL_ID) return Promise.resolve(false);
+    return runWorkspaceMutation(
+      (layout) => placePanel(layout, panelId, { kind: 'floating', bounds }),
+      'Panel tear-off stopped; the previous workspace layout is unchanged.',
+    );
+  }, [runWorkspaceMutation]);
+
+  const moveWorkspaceFloatingPanel = useCallback((panelId: string, x: number, y: number) => {
+    if (panelId === 'manuscript' || panelId === AI_PANEL_ID) return;
+    applyWorkspaceLayout((layout) => moveFloatingPanel(layout, panelId, x, y));
+  }, [applyWorkspaceLayout]);
+
+  const resizeWorkspaceFloatingPanel = useCallback((panelId: string, width: number, height: number) => {
+    if (panelId === 'manuscript' || panelId === AI_PANEL_ID) return;
+    applyWorkspaceLayout((layout) => resizeFloatingPanel(layout, panelId, width, height));
+  }, [applyWorkspaceLayout]);
+
+  const focusWorkspaceFloatingPanel = useCallback((panelId: string) => {
+    const current = workspaceLayoutRef.current;
+    const floating = current.floatingPanels.find((entry) => entry.panelId === panelId);
+    const alreadyFront = floating?.zIndex === current.floatingPanels.length - 1
+      && current.focused?.zone === 'floating'
+      && current.focused.panelId === panelId;
+    if (!alreadyFront) applyWorkspaceLayout((layout) => bringFloatingPanelToFront(layout, panelId));
+  }, [applyWorkspaceLayout]);
+
+  const changeFloatingPanelMinimized = useCallback((panelId: string, minimized: boolean) => {
+    if (panelId === 'manuscript' || panelId === AI_PANEL_ID) return Promise.resolve(false);
+    return runWorkspaceMutation(
+      (layout) => minimized
+        ? setFloatingPanelMinimized(layout, panelId, true)
+        : focusWorkspacePanel(setFloatingPanelMinimized(layout, panelId, false), panelId),
+      minimized
+        ? 'Panel minimize stopped; the floating panel remains open.'
+        : 'Panel restore stopped; the panel remains minimized.',
     );
   }, [runWorkspaceMutation]);
 
@@ -738,7 +771,7 @@ export function App() {
     );
   }, [runWorkspaceMutation]);
 
-  const changeDockCollapsed = useCallback((region: 'right' | 'bottom') => {
+  const changeDockCollapsed = useCallback((region: 'left' | 'right' | 'bottom') => {
     return runWorkspaceMutation(
       (layout) => toggleDockCollapsed(layout, region),
       'Dock visibility change stopped; the workspace is unchanged.',
@@ -785,9 +818,11 @@ export function App() {
 
   const openedPanels = useMemo<WorkspacePanelDefinition[]>(() => {
     const openedIds = [...new Set([
+      ...workspaceLayout.docks.left.panelIds,
       ...workspaceLayout.docks.center.panelIds,
       ...workspaceLayout.docks.right.panelIds,
       ...workspaceLayout.docks.bottom.panelIds,
+      ...workspaceLayout.floatingPanels.map((panel) => panel.panelId),
     ])];
     return openedIds.flatMap<WorkspacePanelDefinition>((panelId): WorkspacePanelDefinition[] => {
       if (panelId === AI_PANEL_ID) {
@@ -981,9 +1016,14 @@ export function App() {
                 disabled={projectSwitching || closePending}
                 onActivate={(panelId) => activateDockPanel(panelId)}
                 onMove={(panelId, region, index) => moveDockPanel(panelId, region, index)}
+                onFloat={floatWorkspacePanel}
                 onClose={closeDockPanel}
                 onToggleDock={changeDockCollapsed}
                 onResizeDock={(region, size) => applyWorkspaceLayout((layout) => resizeDock(layout, region, size))}
+                onMoveFloating={moveWorkspaceFloatingPanel}
+                onResizeFloating={resizeWorkspaceFloatingPanel}
+                onMinimizeFloating={changeFloatingPanelMinimized}
+                onFocusFloating={focusWorkspaceFloatingPanel}
                 onReset={restoreDefaultWorkspace}
               />
             ) : (

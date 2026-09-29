@@ -120,10 +120,11 @@ mode changes only while a project is an empty scaffold. The workspace is also
 remounted at the project boundary, so drafts, chat results and loading-state data
 from one project can never appear inside another.
 
-Each project also owns a versioned workspace layout. Center, right and bottom
-docks keep independently active tab stacks; panels can be moved by drag/drop or
-the keyboard-accessible move controls, resized, collapsed and restored. Focus is
-a non-destructive manuscript-only projection of the saved Cockpit arrangement.
+Each project also owns a versioned workspace layout. Left, center, right and
+bottom docks keep independently active tab stacks; panels can be moved by
+drag/drop or keyboard-accessible controls, torn into modeless floating windows,
+resized, minimized, collapsed, restored and docked again. Focus is a
+non-destructive manuscript-only projection of the saved Cockpit arrangement.
 Layout writes use the same project handoff/close barrier as editor drafts and an
 atomic host-side file replacement. Each normal replacement retains the prior
 generation; shared UI validates primary and backup separately, repairs from a
@@ -191,10 +192,10 @@ Codex configuration and the proposal/review/apply safety model.
 
 ## Status
 
-- **Workspace** is a dockable, keyboard-accessible three-region shell with
-  per-project versioned persistence, Focus/Cockpit projections and safe reset.
-  The reserved left/floating model zones are recovered into the visible center
-  dock until their dedicated surfaces are implemented.
+- **Workspace** is a dockable, keyboard-accessible four-region shell with
+  modeless floating panels, per-project versioned persistence, Focus/Cockpit
+  projections and safe reset. Window bounds, z-order, minimization and every
+  dock's active/collapsed state survive project changes and application restarts.
 - **Packaging** is configured for self-contained Windows installer/portable,
   macOS 12+ Intel DMG, and Linux x64 AppImage builds. The Monterey build uses
   Electron 43, the final Electron line that supports macOS 12. Electron starts

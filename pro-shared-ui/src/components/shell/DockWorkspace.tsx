@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -12,8 +13,12 @@ import {
 } from "react";
 import {
   DOCK_SIZE,
+  FLOATING_PANEL_SIZE,
   NAVIGATOR_SIZE,
+  getPanelPlacement,
   getWorkspaceVisibility,
+  type FloatingPanelBounds,
+  type FloatingPanelLayout,
   type WorkspaceLayout,
 } from "../../workspace/layoutModel";
 import {
@@ -22,7 +27,7 @@ import {
   type WorkspaceActionResult,
 } from "./workspaceInteraction";
 
-export const WORKSPACE_DOCK_REGIONS = ["center", "right", "bottom"] as const;
+export const WORKSPACE_DOCK_REGIONS = ["left", "center", "right", "bottom"] as const;
 export type WorkspaceDockRegion = (typeof WORKSPACE_DOCK_REGIONS)[number];
 
 export interface WorkspacePanelDefinition {
@@ -45,9 +50,14 @@ export interface DockWorkspaceProps {
   disabled?: boolean;
   onActivate: (panelId: string, region: WorkspaceDockRegion) => WorkspaceActionResult;
   onMove: (panelId: string, region: WorkspaceDockRegion, index: number) => WorkspaceActionResult;
+  onFloat: (panelId: string, bounds?: Partial<FloatingPanelBounds>) => WorkspaceActionResult;
   onClose: (panelId: string) => WorkspaceActionResult;
   onToggleDock: (region: Exclude<WorkspaceDockRegion, "center">) => WorkspaceActionResult;
-  onResizeDock: (region: "right" | "bottom", sizePx: number) => void;
+  onResizeDock: (region: "left" | "right" | "bottom", sizePx: number) => void;
+  onMoveFloating: (panelId: string, x: number, y: number) => void;
+  onResizeFloating: (panelId: string, width: number, height: number) => void;
+  onMinimizeFloating: (panelId: string, minimized: boolean) => WorkspaceActionResult;
+  onFocusFloating: (panelId: string) => void;
   onReset: () => WorkspaceActionResult;
 }
 
@@ -65,12 +75,35 @@ const DOCK_SEPARATOR_PX = 8;
 const DOCK_HEADER_PX = 34;
 const MIN_CENTER_WIDTH_PX = 280;
 const MIN_CENTER_HEIGHT_PX = 180;
+const COLLAPSED_DOCK_PX = 34;
+const FLOATING_TITLEBAR_PX = 34;
+const FLOATING_VISIBLE_EDGE_PX = 96;
 
-function regionForPanel(layout: WorkspaceLayout, panelId: string): WorkspaceDockRegion | null {
-  for (const region of WORKSPACE_DOCK_REGIONS) {
-    if (layout.docks[region].panelIds.includes(panelId)) return region;
-  }
-  return null;
+interface WorkspaceViewport {
+  width: number;
+  height: number;
+}
+
+export function projectFloatingBounds(
+  bounds: FloatingPanelBounds,
+  viewport: WorkspaceViewport,
+): FloatingPanelBounds {
+  if (viewport.width <= 0 || viewport.height <= 0) return { ...bounds };
+  const width = Math.max(1, Math.min(Math.round(bounds.width), Math.round(viewport.width)));
+  const height = Math.max(
+    FLOATING_TITLEBAR_PX,
+    Math.min(Math.round(bounds.height), Math.round(viewport.height)),
+  );
+  const minX = Math.min(0, viewport.width - FLOATING_VISIBLE_EDGE_PX);
+  const maxX = Math.max(minX, viewport.width - Math.min(width, FLOATING_VISIBLE_EDGE_PX));
+  const minY = 0;
+  const maxY = Math.max(0, viewport.height - FLOATING_TITLEBAR_PX);
+  return {
+    x: Math.max(minX, Math.min(maxX, Math.round(bounds.x))),
+    y: Math.max(minY, Math.min(maxY, Math.round(bounds.y))),
+    width,
+    height,
+  };
 }
 
 function DockHeader({
@@ -81,6 +114,7 @@ function DockHeader({
   disabled,
   onActivate,
   onMove,
+  onFloat,
   onClose,
   onToggleDock,
   onReset,
@@ -92,6 +126,7 @@ function DockHeader({
   disabled: boolean;
   onActivate: DockWorkspaceProps["onActivate"];
   onMove: DockWorkspaceProps["onMove"];
+  onFloat: DockWorkspaceProps["onFloat"];
   onClose: DockWorkspaceProps["onClose"];
   onToggleDock: DockWorkspaceProps["onToggleDock"];
   onReset: DockWorkspaceProps["onReset"];
@@ -143,6 +178,7 @@ function DockHeader({
 
   const onDrop = useCallback((event: ReactDragEvent) => {
     event.preventDefault();
+    event.stopPropagation();
     const panelId = event.dataTransfer.getData(DRAG_MIME)
       || event.dataTransfer.getData("text/plain");
     if (panelId && panelById.has(panelId)) onMove(panelId, region, dock.panelIds.length);
@@ -153,7 +189,10 @@ function DockHeader({
       className={`lf-dock-header lf-dock-header-${region}`}
       data-dock-drop-region={region}
       onDragOver={(event) => {
-        if (event.dataTransfer.types.includes(DRAG_MIME)) event.preventDefault();
+        if (event.dataTransfer.types.includes(DRAG_MIME)) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
       }}
       onDrop={onDrop}
     >
@@ -203,23 +242,57 @@ function DockHeader({
                 {panel.label}
               </button>
               {panel.movable !== false && (
-                <button
-                  type="button"
-                  className="lf-dock-tab-action"
-                  disabled={disabled}
-                  aria-label={`Move ${panel.label} to ${nextRegion} dock`}
-                  title={`Move to ${nextRegion} dock`}
-                  onClick={() => {
-                    focusAfterWorkspaceAction(
-                      onMove(panel.id, nextRegion, layout.docks[nextRegion].panelIds.length),
-                      () => workspaceRef.current?.querySelector<HTMLElement>(
-                        `#lf-tab-${workspacePanelDomToken(panel.id)}`,
-                      ),
-                    );
-                  }}
-                >
-                  ↦
-                </button>
+                <>
+                  <button
+                    type="button"
+                    className="lf-dock-tab-action"
+                    disabled={disabled}
+                    aria-label={`Move ${panel.label} to ${nextRegion} dock`}
+                    title={`Move to ${nextRegion} dock`}
+                    onClick={() => {
+                      focusAfterWorkspaceAction(
+                        onMove(panel.id, nextRegion, layout.docks[nextRegion].panelIds.length),
+                        () => workspaceRef.current?.querySelector<HTMLElement>(
+                          `#lf-tab-${workspacePanelDomToken(panel.id)}`,
+                        ),
+                      );
+                    }}
+                  >
+                    ↦
+                  </button>
+                  <button
+                    type="button"
+                    className="lf-dock-tab-action"
+                    disabled={disabled}
+                    aria-label={`Float ${panel.label}`}
+                    title={`Float ${panel.label}`}
+                    onClick={() => {
+                      const bounds = workspaceRef.current?.getBoundingClientRect();
+                      const offset = layout.floatingPanels.length * 24;
+                      const width = Math.min(
+                        FLOATING_PANEL_SIZE.defaultWidth,
+                        Math.max(FLOATING_PANEL_SIZE.minWidth, (bounds?.width ?? 760) - 48),
+                      );
+                      const height = Math.min(
+                        FLOATING_PANEL_SIZE.defaultHeight,
+                        Math.max(FLOATING_PANEL_SIZE.minHeight, (bounds?.height ?? 560) - 72),
+                      );
+                      focusAfterWorkspaceAction(
+                        onFloat(panel.id, {
+                          x: Math.max(16, Math.round(((bounds?.width ?? width) - width) / 2) + offset),
+                          y: 48 + offset,
+                          width,
+                          height,
+                        }),
+                        () => workspaceRef.current?.querySelector<HTMLElement>(
+                          `#lf-floating-title-${workspacePanelDomToken(panel.id)}`,
+                        ),
+                      );
+                    }}
+                  >
+                    ◇
+                  </button>
+                </>
               )}
               {panel.closable !== false && (
                 <button
@@ -276,7 +349,7 @@ function DockHeader({
             aria-label={`Collapse ${region} dock`}
             title={`Collapse ${region} dock`}
           >
-            {region === "right" ? "›" : "⌄"}
+            {region === "left" ? "‹" : region === "right" ? "›" : "⌄"}
           </button>
         )}
       </div>
@@ -288,18 +361,20 @@ function DockResizer({
   region,
   value,
   workspaceRef,
+  oppositeExtent = 0,
   disabled,
   onChange,
 }: {
-  region: "right" | "bottom";
+  region: "left" | "right" | "bottom";
   value: number;
   workspaceRef: RefObject<HTMLDivElement>;
+  oppositeExtent?: number;
   disabled: boolean;
   onChange: (value: number) => void;
 }) {
   const dragging = useRef(false);
   const limits = DOCK_SIZE[region];
-  const vertical = region === "right";
+  const vertical = region !== "bottom";
   const [metrics, setMetrics] = useState<{ extent: number; maximum: number }>({
     extent: value,
     maximum: limits.max,
@@ -319,10 +394,10 @@ function DockResizer({
     const bounds = workspaceRef.current?.getBoundingClientRect();
     if (!bounds) return limits.max;
     const available = vertical
-      ? bounds.width - MIN_CENTER_WIDTH_PX - DOCK_SEPARATOR_PX
+      ? bounds.width - MIN_CENTER_WIDTH_PX - oppositeExtent - (DOCK_SEPARATOR_PX * 2)
       : bounds.height - DOCK_HEADER_PX - DOCK_SEPARATOR_PX - DOCK_HEADER_PX - MIN_CENTER_HEIGHT_PX;
     return Math.max(0, Math.min(limits.max, Math.round(available)));
-  }, [limits.max, vertical, workspaceRef]);
+  }, [limits.max, oppositeExtent, vertical, workspaceRef]);
 
   const readRenderedExtent = useCallback(() => {
     const panel = workspaceRef.current?.querySelector<HTMLElement>(`.lf-dock-panel-${region}:not([hidden])`);
@@ -359,18 +434,22 @@ function DockResizer({
     if (disabled || !dragging.current) return;
     const bounds = workspaceRef.current?.getBoundingClientRect();
     if (!bounds) return;
-    const requested = vertical
-      ? bounds.right - event.clientX
-      : bounds.bottom - event.clientY - DOCK_HEADER_PX;
+    const requested = region === "left"
+      ? event.clientX - bounds.left
+      : region === "right"
+        ? bounds.right - event.clientX
+        : bounds.bottom - event.clientY - DOCK_HEADER_PX;
     onChange(clamp(requested));
-  }, [clamp, disabled, onChange, vertical, workspaceRef]);
+  }, [clamp, disabled, onChange, region, workspaceRef]);
 
   const onKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (disabled) return;
     const step = event.shiftKey ? 64 : 16;
     let next: number | null = null;
-    if (vertical && event.key === "ArrowLeft") next = metrics.extent + step;
-    else if (vertical && event.key === "ArrowRight") next = metrics.extent - step;
+    if (region === "left" && event.key === "ArrowLeft") next = metrics.extent - step;
+    else if (region === "left" && event.key === "ArrowRight") next = metrics.extent + step;
+    else if (region === "right" && event.key === "ArrowLeft") next = metrics.extent + step;
+    else if (region === "right" && event.key === "ArrowRight") next = metrics.extent - step;
     else if (!vertical && event.key === "ArrowUp") next = metrics.extent + step;
     else if (!vertical && event.key === "ArrowDown") next = metrics.extent - step;
     else if (event.key === "Home") next = limits.min;
@@ -378,7 +457,7 @@ function DockResizer({
     if (next === null) return;
     event.preventDefault();
     onChange(clamp(next));
-  }, [clamp, disabled, limits.min, metrics.extent, metrics.maximum, onChange, vertical]);
+  }, [clamp, disabled, limits.min, metrics.extent, metrics.maximum, onChange, region, vertical]);
 
   const ariaMinimum = Math.min(limits.min, metrics.maximum);
   const ariaValue = Math.max(ariaMinimum, Math.min(metrics.maximum, metrics.extent));
@@ -518,8 +597,337 @@ export function WorkspaceNavigator({
   );
 }
 
+type FloatingInteraction =
+  | {
+    kind: "move";
+    startClientX: number;
+    startClientY: number;
+    originX: number;
+    originY: number;
+    restoreX: number;
+    restoreY: number;
+  }
+  | {
+    kind: "resize";
+    startClientX: number;
+    startClientY: number;
+    originWidth: number;
+    originHeight: number;
+    restoreWidth: number;
+    restoreHeight: number;
+  };
+
+function WorkspacePanelSurface({
+  panel,
+  layout,
+  workspaceRef,
+  viewport,
+  visible,
+  active,
+  region,
+  floating,
+  disabled,
+  onMove,
+  onClose,
+  onMoveFloating,
+  onResizeFloating,
+  onMinimizeFloating,
+  onFocusFloating,
+}: {
+  panel: WorkspacePanelDefinition;
+  layout: WorkspaceLayout;
+  workspaceRef: RefObject<HTMLDivElement>;
+  viewport: WorkspaceViewport;
+  visible: boolean;
+  active: boolean;
+  region: WorkspaceDockRegion | null;
+  floating: FloatingPanelLayout | undefined;
+  disabled: boolean;
+  onMove: DockWorkspaceProps["onMove"];
+  onClose: DockWorkspaceProps["onClose"];
+  onMoveFloating: DockWorkspaceProps["onMoveFloating"];
+  onResizeFloating: DockWorkspaceProps["onResizeFloating"];
+  onMinimizeFloating: DockWorkspaceProps["onMinimizeFloating"];
+  onFocusFloating: DockWorkspaceProps["onFocusFloating"];
+}) {
+  const interactionRef = useRef<FloatingInteraction | null>(null);
+  const token = workspacePanelDomToken(panel.id);
+  const interactionDisabled = disabled || panel.movable === false;
+  const projected = floating
+    ? projectFloatingBounds(floating, viewport)
+    : null;
+  const clearInteraction = useCallback(() => {
+    interactionRef.current = null;
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+  }, []);
+  useEffect(() => clearInteraction, [clearInteraction]);
+  useEffect(() => {
+    if (disabled) clearInteraction();
+  }, [clearInteraction, disabled]);
+
+  const cancelInteraction = useCallback(() => {
+    const interaction = interactionRef.current;
+    if (!interaction) return;
+    if (interaction.kind === "move") {
+      onMoveFloating(panel.id, interaction.restoreX, interaction.restoreY);
+    } else {
+      onResizeFloating(panel.id, interaction.restoreWidth, interaction.restoreHeight);
+    }
+    clearInteraction();
+  }, [clearInteraction, onMoveFloating, onResizeFloating, panel.id]);
+
+  const moveByKeyboard = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (interactionDisabled || !projected || event.target !== event.currentTarget) return;
+    const step = event.shiftKey ? 48 : 12;
+    let x = projected.x;
+    let y = projected.y;
+    if (event.key === "ArrowLeft") x -= step;
+    else if (event.key === "ArrowRight") x += step;
+    else if (event.key === "ArrowUp") y -= step;
+    else if (event.key === "ArrowDown") y += step;
+    else if (event.key === "Home") ({ x, y } = { x: 0, y: 0 });
+    else return;
+    event.preventDefault();
+    const next = projectFloatingBounds({ ...projected, x, y }, viewport);
+    onFocusFloating(panel.id);
+    onMoveFloating(panel.id, next.x, next.y);
+  }, [interactionDisabled, onFocusFloating, onMoveFloating, panel.id, projected, viewport]);
+
+  const resizeByKeyboard = useCallback((event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (interactionDisabled || !projected || event.target !== event.currentTarget) return;
+    const step = event.shiftKey ? 48 : 12;
+    let width = projected.width;
+    let height = projected.height;
+    if (event.key === "ArrowLeft") width -= step;
+    else if (event.key === "ArrowRight") width += step;
+    else if (event.key === "ArrowUp") height -= step;
+    else if (event.key === "ArrowDown") height += step;
+    else if (event.key === "Home") {
+      width = FLOATING_PANEL_SIZE.minWidth;
+      height = FLOATING_PANEL_SIZE.minHeight;
+    } else if (event.key === "End") {
+      width = viewport.width > 0 ? viewport.width - projected.x : FLOATING_PANEL_SIZE.maxWidth;
+      height = viewport.height > 0 ? viewport.height - projected.y : FLOATING_PANEL_SIZE.maxHeight;
+    } else return;
+    event.preventDefault();
+    const maximumWidth = viewport.width > 0
+      ? Math.max(FLOATING_PANEL_SIZE.minWidth, viewport.width - projected.x)
+      : FLOATING_PANEL_SIZE.maxWidth;
+    const maximumHeight = viewport.height > 0
+      ? Math.max(FLOATING_PANEL_SIZE.minHeight, viewport.height - projected.y)
+      : FLOATING_PANEL_SIZE.maxHeight;
+    onFocusFloating(panel.id);
+    onResizeFloating(
+      panel.id,
+      Math.max(FLOATING_PANEL_SIZE.minWidth, Math.min(maximumWidth, Math.round(width))),
+      Math.max(FLOATING_PANEL_SIZE.minHeight, Math.min(maximumHeight, Math.round(height))),
+    );
+  }, [interactionDisabled, onFocusFloating, onResizeFloating, panel.id, projected, viewport]);
+
+  const dockGrid = region === "left"
+    ? { gridColumn: "1", gridRow: "2" }
+    : region === "center"
+      ? { gridColumn: "3", gridRow: "2" }
+      : region === "right"
+        ? { gridColumn: "5", gridRow: "2" }
+        : { gridColumn: "1 / 6", gridRow: "5" };
+  const surfaceStyle = floating && projected
+    ? {
+      left: projected.x,
+      top: projected.y,
+      width: projected.width,
+      height: projected.height,
+      zIndex: 20 + floating.zIndex,
+    }
+    : dockGrid;
+  const floatingActive = floating !== undefined && layout.focused?.zone === "floating"
+    && layout.focused.panelId === panel.id;
+
+  return (
+    <section
+      id={`lf-panel-${token}`}
+      className={`${floating ? "lf-floating-panel" : `lf-dock-panel lf-dock-panel-${region}`}${
+        floatingActive ? " lf-floating-panel-active" : ""
+      }${floating?.minimized ? " lf-floating-panel-minimized" : ""}${
+        panel.flush ? " lf-dock-panel-flush" : ""
+      }`}
+      role={floating ? "dialog" : "tabpanel"}
+      aria-modal={floating ? false : undefined}
+      aria-labelledby={floating ? `lf-floating-title-${token}` : `lf-tab-${token}`}
+      aria-hidden={!visible}
+      hidden={!visible}
+      data-panel-id={panel.id}
+      data-panel-active={active || undefined}
+      data-dock-region={region ?? undefined}
+      data-floating-panel={floating ? "true" : undefined}
+      style={surfaceStyle}
+      onFocusCapture={() => {
+        if (floating && !disabled) onFocusFloating(panel.id);
+      }}
+      onPointerDownCapture={() => {
+        if (floating && !disabled) onFocusFloating(panel.id);
+      }}
+    >
+      <div
+        id={`lf-floating-title-${token}`}
+        className="lf-floating-panel-titlebar"
+        role="toolbar"
+        aria-label={`Move ${panel.label} floating panel`}
+        tabIndex={floating && !interactionDisabled ? 0 : -1}
+        hidden={!floating}
+        onKeyDown={moveByKeyboard}
+        onPointerDown={(event) => {
+          if (interactionDisabled || !projected) return;
+          const target = event.target;
+          if (target instanceof Element && target.closest("button")) return;
+          onFocusFloating(panel.id);
+          interactionRef.current = {
+            kind: "move",
+            startClientX: event.clientX,
+            startClientY: event.clientY,
+            originX: projected.x,
+            originY: projected.y,
+            restoreX: floating?.x ?? projected.x,
+            restoreY: floating?.y ?? projected.y,
+          };
+          event.currentTarget.setPointerCapture(event.pointerId);
+          document.body.style.cursor = "move";
+          document.body.style.userSelect = "none";
+        }}
+        onPointerMove={(event) => {
+          const interaction = interactionRef.current;
+          if (interactionDisabled || !projected || interaction?.kind !== "move") return;
+          const next = projectFloatingBounds({
+            ...projected,
+            x: interaction.originX + event.clientX - interaction.startClientX,
+            y: interaction.originY + event.clientY - interaction.startClientY,
+          }, viewport);
+          onMoveFloating(panel.id, next.x, next.y);
+        }}
+        onPointerUp={clearInteraction}
+        onPointerCancel={cancelInteraction}
+        onLostPointerCapture={cancelInteraction}
+        title={`Drag ${panel.label}; arrow keys move it and Shift moves farther`}
+      >
+        <span className="lf-floating-panel-title">{panel.label}</span>
+        <span className="lf-floating-panel-actions">
+          {WORKSPACE_DOCK_REGIONS.map((destination) => (
+            <button
+              key={destination}
+              type="button"
+              disabled={!floating || interactionDisabled || (panel.id === "manuscript" && destination !== "center")}
+              aria-label={`Dock ${panel.label} to ${destination}`}
+              title={`Dock to ${destination}`}
+              onClick={() => {
+                focusAfterWorkspaceAction(
+                  onMove(panel.id, destination, layout.docks[destination].panelIds.length),
+                  () => workspaceRef.current?.querySelector<HTMLElement>(
+                    `#lf-tab-${workspacePanelDomToken(panel.id)}`,
+                  ),
+                );
+              }}
+            >
+              {destination[0]!.toUpperCase()}
+            </button>
+          ))}
+          <button
+            type="button"
+            disabled={!floating || interactionDisabled}
+            aria-label={`Minimize ${panel.label}`}
+            title={`Minimize ${panel.label}`}
+            onClick={() => {
+              focusAfterWorkspaceAction(
+                onMinimizeFloating(panel.id, true),
+                () => workspaceRef.current?.querySelector<HTMLElement>(
+                  `[data-floating-restore="${token}"]`,
+                ),
+              );
+            }}
+          >
+            —
+          </button>
+          {panel.closable !== false && (
+            <button
+              type="button"
+              disabled={!floating || disabled}
+              aria-label={`Close ${panel.label}`}
+              title={`Close ${panel.label}`}
+              onClick={() => {
+                focusAfterWorkspaceAction(
+                  onClose(panel.id),
+                  () => workspaceRef.current?.querySelector<HTMLElement>(
+                    '[data-dock-drop-region="center"] [role="tab"][aria-selected="true"]',
+                  ),
+                );
+              }}
+            >
+              ×
+            </button>
+          )}
+        </span>
+      </div>
+      <div className={floating ? "lf-floating-panel-content" : "lf-dock-panel-content"}>
+        {panel.node}
+      </div>
+      <button
+        type="button"
+        className="lf-floating-panel-resizer"
+        aria-label={`Resize ${panel.label} floating panel`}
+        aria-description={projected
+          ? `${projected.width} by ${projected.height} pixels. Left and right adjust width; up and down adjust height.`
+          : "Left and right adjust width; up and down adjust height."}
+        tabIndex={floating && !interactionDisabled ? 0 : -1}
+        hidden={!floating}
+        onKeyDown={resizeByKeyboard}
+        onPointerDown={(event) => {
+          if (interactionDisabled || !projected) return;
+          onFocusFloating(panel.id);
+          interactionRef.current = {
+            kind: "resize",
+            startClientX: event.clientX,
+            startClientY: event.clientY,
+            originWidth: projected.width,
+            originHeight: projected.height,
+            restoreWidth: floating?.width ?? projected.width,
+            restoreHeight: floating?.height ?? projected.height,
+          };
+          event.currentTarget.setPointerCapture(event.pointerId);
+          document.body.style.cursor = "nwse-resize";
+          document.body.style.userSelect = "none";
+        }}
+        onPointerMove={(event) => {
+          const interaction = interactionRef.current;
+          if (interactionDisabled || !projected || interaction?.kind !== "resize") return;
+          const maximumWidth = viewport.width > 0
+            ? Math.max(FLOATING_PANEL_SIZE.minWidth, viewport.width - projected.x)
+            : FLOATING_PANEL_SIZE.maxWidth;
+          const maximumHeight = viewport.height > 0
+            ? Math.max(FLOATING_PANEL_SIZE.minHeight, viewport.height - projected.y)
+            : FLOATING_PANEL_SIZE.maxHeight;
+          onResizeFloating(
+            panel.id,
+            Math.max(FLOATING_PANEL_SIZE.minWidth, Math.min(
+              maximumWidth,
+              interaction.originWidth + event.clientX - interaction.startClientX,
+            )),
+            Math.max(FLOATING_PANEL_SIZE.minHeight, Math.min(
+              maximumHeight,
+              interaction.originHeight + event.clientY - interaction.startClientY,
+            )),
+          );
+        }}
+        onPointerUp={clearInteraction}
+        onPointerCancel={cancelInteraction}
+        onLostPointerCapture={cancelInteraction}
+        title={`Drag to resize ${panel.label}; arrow keys also work`}
+      />
+    </section>
+  );
+}
+
 /**
- * A three-region work surface whose panel wrappers always remain children of
+ * A four-region work surface whose panel wrappers always remain children of
  * one stable React parent. Moving a tab changes its CSS grid coordinates; it
  * does not reparent/remount editors, chat sessions, or their pending state.
  */
@@ -529,28 +937,79 @@ export function DockWorkspace({
   disabled = false,
   onActivate,
   onMove,
+  onFloat,
   onClose,
   onToggleDock,
   onResizeDock,
+  onMoveFloating,
+  onResizeFloating,
+  onMinimizeFloating,
+  onFocusFloating,
   onReset,
 }: DockWorkspaceProps) {
   const workspaceRef = useRef<HTMLDivElement>(null);
+  const [viewport, setViewport] = useState<WorkspaceViewport>({ width: 0, height: 0 });
+  const [floatingDropActive, setFloatingDropActive] = useState(false);
   const panelById = useMemo(() => new Map(panels.map((panel) => [panel.id, panel])), [panels]);
   const visibility = getWorkspaceVisibility(layout);
   const focus = layout.preset === "focus";
+  const leftHasPanels = layout.docks.left.panelIds.length > 0;
   const rightHasPanels = layout.docks.right.panelIds.length > 0;
   const bottomHasPanels = layout.docks.bottom.panelIds.length > 0;
+  const leftVisible = visibility.docks.left;
   const rightVisible = visibility.docks.right;
   const bottomVisible = visibility.docks.bottom;
-  const rightExtent = focus || !rightHasPanels ? 0 : rightVisible ? layout.docks.right.sizePx : 34;
+  const leftExtent = focus || !leftHasPanels ? 0 : leftVisible ? layout.docks.left.sizePx : COLLAPSED_DOCK_PX;
+  const rightExtent = focus || !rightHasPanels ? 0 : rightVisible ? layout.docks.right.sizePx : COLLAPSED_DOCK_PX;
   const bottomHeaderExtent = focus || !bottomHasPanels ? 0 : bottomVisible ? 34 : 28;
   const bottomBodyExtent = bottomVisible ? layout.docks.bottom.sizePx : 0;
+  const leftSeparator = leftVisible ? DOCK_SEPARATOR_PX : 0;
+  const rightSeparator = rightVisible ? DOCK_SEPARATOR_PX : 0;
+
+  useLayoutEffect(() => {
+    const root = workspaceRef.current;
+    if (!root) return;
+    const update = () => {
+      const bounds = root.getBoundingClientRect();
+      const next = { width: Math.round(bounds.width), height: Math.round(bounds.height) };
+      setViewport((current) => current.width === next.width && current.height === next.height
+        ? current
+        : next);
+    };
+    update();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(update);
+    observer.observe(root);
+    return () => observer.disconnect();
+  }, []);
+
+  // Project both preferred side sizes together. Persisted sizes stay untouched,
+  // while the live grid always reserves a readable center track.
+  let leftTrackPx = leftExtent;
+  let rightTrackPx = rightExtent;
+  if (viewport.width > 0) {
+    const available = Math.max(
+      0,
+      viewport.width - MIN_CENTER_WIDTH_PX - leftSeparator - rightSeparator,
+    );
+    if (leftTrackPx + rightTrackPx > available) {
+      if (!leftVisible && rightVisible) {
+        leftTrackPx = Math.min(leftTrackPx, available);
+        rightTrackPx = Math.max(0, available - leftTrackPx);
+      } else if (leftVisible && !rightVisible) {
+        rightTrackPx = Math.min(rightTrackPx, available);
+        leftTrackPx = Math.max(0, available - rightTrackPx);
+      } else {
+        const desired = leftTrackPx + rightTrackPx;
+        const ratio = desired <= 0 ? 0.5 : leftTrackPx / desired;
+        leftTrackPx = Math.round(available * ratio);
+        rightTrackPx = Math.max(0, available - leftTrackPx);
+      }
+    }
+  }
   // Persist the writer's preferred sizes, but project them through soft center
   // minimums at render time. A maximized navigator plus a maximized right or
   // bottom dock must never squeeze the manuscript track to zero.
-  const rightTrack = rightVisible
-    ? `min(${rightExtent}px, max(0px, calc(100% - ${MIN_CENTER_WIDTH_PX + DOCK_SEPARATOR_PX}px)))`
-    : `${rightExtent}px`;
   const bottomTrack = bottomVisible
     ? `min(${bottomBodyExtent}px, max(0px, calc(100% - ${
       DOCK_HEADER_PX + DOCK_SEPARATOR_PX + DOCK_HEADER_PX + MIN_CENTER_HEIGHT_PX
@@ -558,7 +1017,7 @@ export function DockWorkspace({
     : "0px";
 
   const rootStyle = {
-    gridTemplateColumns: `minmax(0, 1fr) ${rightVisible ? DOCK_SEPARATOR_PX : 0}px ${rightTrack}`,
+    gridTemplateColumns: `${leftTrackPx}px ${leftSeparator}px minmax(0, 1fr) ${rightSeparator}px ${rightTrackPx}px`,
     gridTemplateRows: `${DOCK_HEADER_PX}px minmax(0, 1fr) ${
       bottomVisible ? DOCK_SEPARATOR_PX : 0
     }px ${bottomHeaderExtent}px ${bottomTrack}`,
@@ -572,7 +1031,47 @@ export function DockWorkspace({
       data-workspace-preset={layout.preset}
       aria-busy={disabled || undefined}
       style={rootStyle}
+      onDragOver={(event) => {
+        if (disabled || !event.dataTransfer.types.includes(DRAG_MIME)) return;
+        event.preventDefault();
+        setFloatingDropActive(true);
+      }}
+      onDragLeave={(event) => {
+        const related = event.relatedTarget;
+        if (!(related instanceof Node) || !event.currentTarget.contains(related)) {
+          setFloatingDropActive(false);
+        }
+      }}
+      onDragEndCapture={() => setFloatingDropActive(false)}
+      onDrop={(event) => {
+        if (disabled) return;
+        const panelId = event.dataTransfer.getData(DRAG_MIME)
+          || event.dataTransfer.getData("text/plain");
+        setFloatingDropActive(false);
+        if (!panelId || panelById.get(panelId)?.movable === false) return;
+        event.preventDefault();
+        const bounds = event.currentTarget.getBoundingClientRect();
+        void onFloat(panelId, {
+          x: event.clientX - bounds.left - 80,
+          y: event.clientY - bounds.top - 16,
+        });
+      }}
     >
+      {leftVisible && (
+        <DockHeader
+          region="left"
+          layout={layout}
+          workspaceRef={workspaceRef}
+          panelById={panelById}
+          disabled={disabled}
+          onActivate={onActivate}
+          onMove={onMove}
+          onFloat={onFloat}
+          onClose={onClose}
+          onToggleDock={onToggleDock}
+          onReset={onReset}
+        />
+      )}
       <DockHeader
         region="center"
         layout={layout}
@@ -581,6 +1080,7 @@ export function DockWorkspace({
         disabled={disabled}
         onActivate={onActivate}
         onMove={onMove}
+        onFloat={onFloat}
         onClose={onClose}
         onToggleDock={onToggleDock}
         onReset={onReset}
@@ -594,6 +1094,7 @@ export function DockWorkspace({
           disabled={disabled}
           onActivate={onActivate}
           onMove={onMove}
+          onFloat={onFloat}
           onClose={onClose}
           onToggleDock={onToggleDock}
           onReset={onReset}
@@ -608,17 +1109,29 @@ export function DockWorkspace({
           disabled={disabled}
           onActivate={onActivate}
           onMove={onMove}
+          onFloat={onFloat}
           onClose={onClose}
           onToggleDock={onToggleDock}
           onReset={onReset}
         />
       )}
 
+      {leftVisible && (
+        <DockResizer
+          region="left"
+          value={layout.docks.left.sizePx}
+          workspaceRef={workspaceRef}
+          oppositeExtent={rightTrackPx}
+          disabled={disabled}
+          onChange={(value) => onResizeDock("left", value)}
+        />
+      )}
       {rightVisible && (
         <DockResizer
           region="right"
           value={layout.docks.right.sizePx}
           workspaceRef={workspaceRef}
+          oppositeExtent={leftTrackPx}
           disabled={disabled}
           onChange={(value) => onResizeDock("right", value)}
         />
@@ -633,6 +1146,24 @@ export function DockWorkspace({
         />
       )}
 
+      {!focus && leftHasPanels && !leftVisible && (
+        <button
+          type="button"
+          className="lf-dock-collapsed lf-dock-collapsed-left"
+          disabled={disabled}
+          onClick={() => {
+            focusAfterWorkspaceAction(
+              onToggleDock("left"),
+              () => workspaceRef.current?.querySelector<HTMLElement>(
+                '[data-dock-drop-region="left"] [role="tab"][aria-selected="true"]',
+              ),
+            );
+          }}
+          aria-label="Expand left dock"
+        >
+          LEFT ›
+        </button>
+      )}
       {!focus && rightHasPanels && !rightVisible && (
         <button
           type="button"
@@ -672,36 +1203,77 @@ export function DockWorkspace({
 
       <div className="lf-dock-panel-layer">
         {panels.map((panel) => {
-          const region = regionForPanel(layout, panel.id);
-          if (region === null) return null;
-          const dock = layout.docks[region];
-          const active = focus && region === "center"
-            ? panel.id === "manuscript"
-            : dock.activePanelId === panel.id;
-          const visible = active && visibility.docks[region];
-          const grid = region === "center"
-            ? { gridColumn: "1", gridRow: "2" }
-            : region === "right"
-              ? { gridColumn: "3", gridRow: "2" }
-              : { gridColumn: "1 / 4", gridRow: "5" };
+          const placement = getPanelPlacement(layout, panel.id);
+          if (placement === null) return null;
+          const region = placement.kind === "dock" ? placement.region : null;
+          const floating = placement.kind === "floating"
+            ? layout.floatingPanels.find((entry) => entry.panelId === panel.id)
+            : undefined;
+          const active = region === null
+            ? layout.focused?.zone === "floating" && layout.focused.panelId === panel.id
+            : focus && region === "center"
+              ? panel.id === "manuscript"
+              : layout.docks[region].activePanelId === panel.id;
+          const visible = floating
+            ? visibility.floatingPanelIds.includes(panel.id)
+            : region !== null && active && visibility.docks[region];
           return (
-            <section
+            <WorkspacePanelSurface
               key={panel.id}
-              id={`lf-panel-${workspacePanelDomToken(panel.id)}`}
-              className={`lf-dock-panel lf-dock-panel-${region}${panel.flush ? " lf-dock-panel-flush" : ""}`}
-              role="tabpanel"
-              aria-labelledby={`lf-tab-${workspacePanelDomToken(panel.id)}`}
-              aria-hidden={!visible}
-              hidden={!visible}
-              data-panel-id={panel.id}
-              data-dock-region={region}
-              style={grid}
-            >
-              {panel.node}
-            </section>
+              panel={panel}
+              layout={layout}
+              workspaceRef={workspaceRef}
+              viewport={viewport}
+              visible={visible}
+              active={active}
+              region={region}
+              floating={floating}
+              disabled={disabled}
+              onMove={onMove}
+              onClose={onClose}
+              onMoveFloating={onMoveFloating}
+              onResizeFloating={onResizeFloating}
+              onMinimizeFloating={onMinimizeFloating}
+              onFocusFloating={onFocusFloating}
+            />
           );
         })}
       </div>
+      {!focus && layout.floatingPanels.some((panel) => panel.minimized) && (
+        <div className="lf-floating-minimized-tray" role="toolbar" aria-label="Minimized panels">
+          <span className="lf-floating-minimized-tray-label">FLOATS</span>
+          {layout.floatingPanels.filter((entry) => entry.minimized).map((entry) => {
+            const panel = panelById.get(entry.panelId);
+            if (!panel) return null;
+            const token = workspacePanelDomToken(panel.id);
+            return (
+              <button
+                key={panel.id}
+                type="button"
+                className="lf-floating-minimized-tray-item"
+                data-floating-restore={token}
+                disabled={disabled}
+                aria-label={`Restore ${panel.label}`}
+                onClick={() => {
+                  focusAfterWorkspaceAction(
+                    onMinimizeFloating(panel.id, false),
+                    () => workspaceRef.current?.querySelector<HTMLElement>(
+                      `#lf-floating-title-${token}`,
+                    ),
+                  );
+                }}
+              >
+                {panel.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      <div
+        className={`lf-dock-drop-target lf-dock-drop-target-floating${floatingDropActive ? " is-active" : ""}`}
+        data-drop-active={floatingDropActive || undefined}
+        aria-hidden="true"
+      />
     </div>
   );
 }

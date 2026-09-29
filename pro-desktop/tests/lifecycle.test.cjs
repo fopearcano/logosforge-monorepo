@@ -30,6 +30,19 @@ for (const marker of [
 ]) {
   if (!app.includes(marker)) failures.push(`App bootstrap ownership missing ${marker}`);
 }
+for (const marker of [
+  '...workspaceLayout.docks.left.panelIds',
+  '...workspaceLayout.floatingPanels.map((panel) => panel.panelId)',
+  'onFloat={floatWorkspacePanel}',
+  'onMoveFloating={moveWorkspaceFloatingPanel}',
+  'onMinimizeFloating={changeFloatingPanelMinimized}',
+  'bringFloatingPanelToFront(layout, panelId)',
+]) {
+  if (!app.includes(marker)) failures.push(`App Phase 2 workspace integration missing ${marker}`);
+}
+if (app.includes('const unsupportedIsOpen') || app.includes('const unsupported = [')) {
+  failures.push('App still rehomes supported left/floating placements into the center dock');
+}
 if (app.includes('window.setTimeout(() => setBootstrapAttempt')) {
   failures.push('App still creates an unowned bootstrap retry timer');
 }

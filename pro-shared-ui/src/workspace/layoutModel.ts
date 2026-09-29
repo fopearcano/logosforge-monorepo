@@ -1036,7 +1036,36 @@ export function setFloatingPanelMinimized(
 ): WorkspaceLayout {
   const next = cloneWorkspaceLayout(layout);
   const panel = next.floatingPanels.find((entry) => entry.panelId === panelId);
-  if (panel) panel.minimized = minimized;
+  if (panel) {
+    panel.minimized = minimized;
+    // A minimized window must not remain the logical focus target: it is hidden
+    // from both pointer and keyboard users. Prefer the permanent center surface,
+    // then fall back to the first remaining workspace surface.
+    if (minimized && next.focused?.panelId === panelId) {
+      const centerPanelId = next.docks.center.activePanelId;
+      next.focused = centerPanelId === null
+        ? firstAvailableFocus(next)
+        : { zone: "center", panelId: centerPanelId };
+    }
+  }
+  return next;
+}
+
+/** Move a floating panel without changing its size, minimization, or z-order. */
+export function moveFloatingPanel(
+  layout: WorkspaceLayout,
+  panelId: string,
+  x: number,
+  y: number,
+): WorkspaceLayout {
+  assertFiniteNumber(x, "floating x");
+  assertFiniteNumber(y, "floating y");
+  const next = cloneWorkspaceLayout(layout);
+  const panel = next.floatingPanels.find((entry) => entry.panelId === panelId);
+  if (panel) {
+    panel.x = clampInteger(x, -POSITION_LIMIT, POSITION_LIMIT);
+    panel.y = clampInteger(y, -POSITION_LIMIT, POSITION_LIMIT);
+  }
   return next;
 }
 

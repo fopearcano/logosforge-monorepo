@@ -5,11 +5,16 @@ import {
   WorkspaceNavigator,
   WorkspaceShell,
   activateDockPanel,
+  bringFloatingPanelToFront,
   closePanel,
   createDefaultWorkspaceLayout,
+  focusPanel,
+  moveFloatingPanel,
   movePanel,
   resizeDock,
+  resizeFloatingPanel,
   resizeNavigator,
+  setFloatingPanelMinimized,
   setNavigatorCollapsed,
   toggleDockCollapsed,
   toggleWorkspacePreset,
@@ -48,7 +53,15 @@ function PreviewPanel({ title, color, editable = false }: { title: string; color
 }
 
 export function WorkspaceDockHarness() {
-  const [layout, setLayout] = useState(createDefaultWorkspaceLayout);
+  const [layout, setLayout] = useState(() => {
+    let initial = createDefaultWorkspaceLayout();
+    initial = movePanel(initial, "decision-radar", { kind: "dock", region: "left", index: 0 });
+    initial = movePanel(initial, "dashboard", {
+      kind: "floating",
+      bounds: { x: 70, y: 62, width: 560, height: 390 },
+    });
+    return initial;
+  });
   const panels = useMemo<WorkspacePanelDefinition[]>(() => [
     { id: "manuscript", label: "Manuscript", closable: false, movable: false, node: <PreviewPanel title="Manuscript" color="#e8443a" editable /> },
     { id: "dashboard", label: "Dashboard", node: <PreviewPanel title="Dashboard" color="#4cc2ff" editable /> },
@@ -74,7 +87,7 @@ export function WorkspaceDockHarness() {
         <button type="button" onClick={() => setLayout((current) => toggleWorkspacePreset(current))} style={{ width: "100%", padding: 8 }}>
           {layout.preset === "focus" ? "Exit Focus" : "Enter Focus"}
         </button>
-        <p style={{ color: "var(--txt3)", fontSize: 10, lineHeight: 1.6 }}>Drag resize grips or focus them and use arrow keys. Move tabs with ↦ or drag them to another header.</p>
+        <p style={{ color: "var(--txt3)", fontSize: 10, lineHeight: 1.6 }}>Drag resize grips or focus them and use arrow keys. Move tabs with ↦, tear them off with ◇, or drag them to another header / the workspace.</p>
       </aside>
     </WorkspaceNavigator>
   );
@@ -98,9 +111,16 @@ export function WorkspaceDockHarness() {
               panels={panels}
               onActivate={(panelId, region) => setLayout((current) => activateDockPanel(current, region, panelId))}
               onMove={move}
+              onFloat={(panelId, bounds) => setLayout((current) => movePanel(current, panelId, { kind: "floating", bounds }))}
               onClose={(panelId) => setLayout((current) => closePanel(current, panelId))}
               onToggleDock={(region) => setLayout((current) => toggleDockCollapsed(current, region))}
               onResizeDock={(region, size) => setLayout((current) => resizeDock(current, region, size))}
+              onMoveFloating={(panelId, x, y) => setLayout((current) => moveFloatingPanel(current, panelId, x, y))}
+              onResizeFloating={(panelId, width, height) => setLayout((current) => resizeFloatingPanel(current, panelId, width, height))}
+              onMinimizeFloating={(panelId, minimized) => setLayout((current) => minimized
+                ? setFloatingPanelMinimized(current, panelId, true)
+                : focusPanel(setFloatingPanelMinimized(current, panelId, false), panelId))}
+              onFocusFloating={(panelId) => setLayout((current) => bringFloatingPanelToFront(current, panelId))}
               onReset={() => setLayout(createDefaultWorkspaceLayout())}
             />
           }

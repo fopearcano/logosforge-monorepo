@@ -76,7 +76,7 @@ for (const marker of [
   'role="tablist"',
   'role="tab"',
   'aria-selected={active}',
-  'role="tabpanel"',
+  'role={floating ? "dialog" : "tabpanel"}',
   'role="separator"',
   'aria-valuemin',
   'aria-valuetext',
@@ -86,6 +86,11 @@ for (const marker of [
   'data-dock-drop-region',
   'MIN_CENTER_WIDTH_PX',
   'MIN_CENTER_HEIGHT_PX',
+  'aria-modal={floating ? false : undefined}',
+  'region="left"',
+  'lf-floating-panel-titlebar',
+  'lf-floating-panel-resizer',
+  'aria-label={`Restore ${panel.label}`}',
 ]) {
   if (!dockWorkspace.includes(marker)) failures.push(`Dock workspace accessibility missing ${marker}`);
 }
