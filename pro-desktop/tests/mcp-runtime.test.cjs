@@ -183,6 +183,12 @@ check('packaged smoke validates the exact descriptor endpoint before seeding wri
   packagedSmoke.includes('base_url, auth_token, nonce, app_pid, core_pid = _validate_descriptor(') &&
   packagedSmoke.indexOf('= _validate_descriptor(') <
     packagedSmoke.indexOf('project_id, comment_id, comment_revision = _seed_comment('));
+check('packaged smoke uses a non-destructive Windows process liveness query',
+  packagedSmoke.includes('return _windows_process_is_alive(pid)') &&
+  packagedSmoke.includes('kernel32.GetExitCodeProcess') &&
+  packagedSmoke.includes('exit_code.value == still_active') &&
+  packagedSmoke.indexOf('return _windows_process_is_alive(pid)') <
+    packagedSmoke.indexOf('os.kill(pid, 0)'));
 check('packaged smoke applies comment proposals and rejects stale and replayed writes',
   packagedSmoke.includes('"logosforge_apply_proposal"') &&
   packagedSmoke.includes('installed MCP stale sibling apply') &&
