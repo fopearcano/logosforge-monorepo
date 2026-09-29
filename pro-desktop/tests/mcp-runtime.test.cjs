@@ -189,6 +189,10 @@ check('packaged smoke uses a non-destructive Windows process liveness query',
   packagedSmoke.includes('exit_code.value == still_active') &&
   packagedSmoke.indexOf('return _windows_process_is_alive(pid)') <
     packagedSmoke.indexOf('os.kill(pid, 0)'));
+check('packaged smoke seeds renderer-canonical comment context before comparing revisions',
+  packagedSmoke.includes('"content": "Packaged comment anchor"') &&
+  packagedSmoke.includes('"to_offset": 8') &&
+  packagedSmoke.includes('"suffix": " comment anchor"'));
 check('packaged smoke applies comment proposals and rejects stale and replayed writes',
   packagedSmoke.includes('"logosforge_apply_proposal"') &&
   packagedSmoke.includes('installed MCP stale sibling apply') &&

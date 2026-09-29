@@ -76,6 +76,7 @@ def _seed_comment(base_url: str, token: str) -> tuple[int, int, str]:
                 "end_scene_id": int(scene["id"]),
                 "end_field": "content",
                 "to_offset": 8,
+                "suffix": " comment anchor",
             },
             "quote": "Packaged",
             "body": "Inspect this packaged thread.",
