@@ -136,6 +136,7 @@ export function ModeStrip() {
 function FocusToggle({ layout, onToggle }: { layout: ShellLayout; onToggle?: () => void }) {
   const seg = (label: string, on: boolean, target: ShellLayout) => (
     <button type="button"
+      aria-pressed={on}
       onClick={onToggle && layout !== target ? onToggle : undefined}
       style={{
         display: "grid", placeItems: "center", padding: "0 11px", font: "inherit", letterSpacing: ".16em", border: "none",
@@ -145,7 +146,7 @@ function FocusToggle({ layout, onToggle }: { layout: ShellLayout; onToggle?: () 
     >{label}</button>
   );
   return (
-    <div style={{ display: "flex", height: 26, border: "1px solid var(--line2)", fontSize: 9 }} title="Focus mode hides the rails; Cockpit shows everything">
+    <div role="group" aria-label="Workspace mode" style={{ display: "flex", height: 26, border: "1px solid var(--line2)", fontSize: 9 }} title="Focus mode hides the rails; Cockpit shows everything">
       {seg("FOCUS", layout === "focus", "focus")}
       {seg("COCKPIT", layout === "cockpit", "cockpit")}
     </div>

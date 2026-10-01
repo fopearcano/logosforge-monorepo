@@ -1582,6 +1582,16 @@ async function waitProFocusedPanel(page, name) {
   return button;
 }
 
+async function waitProDomFocus(locator, label) {
+  const target = await waitVisible(locator, label);
+  await waitFor(
+    async () => target.evaluate((element) => element === document.activeElement),
+    `${label} to receive focus`,
+  );
+  record('ui', `focused: ${label}`);
+  return target;
+}
+
 async function collapseProAiDock(page) {
   const collapseRight = page.getByRole('button', { name: 'Collapse right dock', exact: true });
   if (await collapseRight.isVisible().catch(() => false)) {
@@ -1602,6 +1612,218 @@ async function collapseProAiDock(page) {
     page.getByRole('button', { name: 'Open AI dock', exact: true }),
     'collapsed Pro AI dock strip',
   );
+}
+
+async function verifyProWorkspaceShell(session, importedProjectId) {
+  const { page } = session;
+  const projectId = Number(importedProjectId);
+  assert.ok(Number.isSafeInteger(projectId) && projectId > 0, 'Pro workspace-shell project id is invalid');
+
+  await selectProPanel(page, 'Notes', 'Notes Panel');
+  await waitProFocusedPanel(page, 'Notes');
+  const notesSurface = page.locator('section[data-panel-id="notes"]').first();
+  await waitVisible(notesSurface, 'active Pro Notes workspace surface');
+  assert.equal(
+    await notesSurface.getAttribute('data-panel-active'),
+    'true',
+    'Pro Notes workspace surface is not active',
+  );
+
+  await page.getByRole('button', { name: 'Float Notes', exact: true }).click();
+  await waitFor(
+    async () => (await notesSurface.getAttribute('data-floating-panel')) === 'true'
+      && (await notesSurface.getAttribute('role')) === 'dialog'
+      && (await notesSurface.getAttribute('aria-modal')) === 'false'
+      && await notesSurface.isVisible(),
+    'Pro Notes modeless floating workspace surface',
+  );
+  const floatingTitle = await waitProDomFocus(
+    page.getByRole('toolbar', { name: 'Move Notes floating panel', exact: true }),
+    'Pro Notes floating titlebar',
+  );
+  assert.equal(
+    await notesSurface.getAttribute('aria-labelledby'),
+    await floatingTitle.getAttribute('id'),
+    'Pro Notes floating dialog is not labelled by its titlebar',
+  );
+
+  const initialLeft = await notesSurface.evaluate((element) => Number.parseFloat(element.style.left));
+  assert.equal(Number.isFinite(initialLeft), true, 'Pro Notes floating surface has no numeric left position');
+  await floatingTitle.focus();
+  await page.keyboard.press('ArrowRight');
+  await waitFor(
+    async () => notesSurface.evaluate(
+      (element, previous) => Number.parseFloat(element.style.left) > previous,
+      initialLeft,
+    ),
+    'keyboard movement of the Pro Notes floating panel',
+  );
+
+  const resizeHandle = await waitVisible(
+    page.getByRole('button', { name: 'Resize Notes floating panel', exact: true }),
+    'Pro Notes floating resize handle',
+  );
+  const initialWidth = await notesSurface.evaluate((element) => Number.parseFloat(element.style.width));
+  assert.equal(Number.isFinite(initialWidth), true, 'Pro Notes floating surface has no numeric width');
+  await resizeHandle.focus();
+  await page.keyboard.press('ArrowRight');
+  await waitFor(
+    async () => notesSurface.evaluate(
+      (element, previous) => Number.parseFloat(element.style.width) > previous,
+      initialWidth,
+    ),
+    'keyboard resize of the Pro Notes floating panel',
+  );
+
+  await notesSurface.getByRole('button', { name: 'Minimize Notes', exact: true }).click();
+  const restoreNotes = await waitProDomFocus(
+    page.getByRole('button', { name: 'Restore Notes', exact: true }),
+    'Pro Notes minimized-panel restore action',
+  );
+  assert.notEqual(
+    await notesSurface.getAttribute('hidden'),
+    null,
+    'Minimized Pro Notes surface remained exposed',
+  );
+  await restoreNotes.click();
+  await waitFor(
+    async () => await notesSurface.isVisible()
+      && (await notesSurface.getAttribute('data-floating-panel')) === 'true',
+    'restored Pro Notes floating surface',
+  );
+  await waitProDomFocus(floatingTitle, 'restored Pro Notes floating titlebar');
+
+  await notesSurface.getByRole('button', { name: 'Dock Notes to left', exact: true }).click();
+  await waitFor(
+    async () => (await notesSurface.getAttribute('data-dock-region')) === 'left'
+      && (await notesSurface.getAttribute('role')) === 'tabpanel'
+      && await notesSurface.isVisible(),
+    'Pro Notes left-dock placement',
+  );
+  const notesTab = await waitProDomFocus(
+    page.locator('[data-dock-drop-region="left"]')
+      .getByRole('tab', { name: 'Notes', exact: true }),
+    'Pro Notes left-dock tab',
+  );
+  assert.equal(await notesTab.getAttribute('aria-selected'), 'true', 'Pro Notes left-dock tab is not selected');
+  assert.equal(
+    await notesTab.getAttribute('aria-controls'),
+    await notesSurface.getAttribute('id'),
+    'Pro Notes tab does not control its panel surface',
+  );
+  assert.equal(
+    await notesSurface.getAttribute('aria-labelledby'),
+    await notesTab.getAttribute('id'),
+    'Pro Notes panel surface is not labelled by its selected tab',
+  );
+
+  await page.getByRole('button', { name: 'Collapse left dock', exact: true }).click();
+  await waitProDomFocus(
+    page.getByRole('button', { name: 'Expand left dock', exact: true }),
+    'collapsed Pro left dock strip',
+  );
+
+  const projectsResult = await localServiceRequest(session, '/api/projects');
+  assert.ok(Array.isArray(projectsResult.data), 'Pro workspace-shell project list is invalid');
+  const starterId = Number(
+    projectsResult.data.find((project) => Number(project?.id) !== projectId)?.id,
+  );
+  assert.ok(Number.isSafeInteger(starterId) && starterId > 0, 'Pro workspace-shell test found no starter project');
+  const projectSelect = proProjectSelect(page);
+  const projectsButton = page.locator('aside.rail nav')
+    .getByRole('button', { name: 'Projects', exact: true });
+
+  await projectSelect.selectOption(String(starterId));
+  await waitFor(
+    async () => Number(await projectSelect.inputValue()) === starterId
+      && await projectsButton.isEnabled()
+      && (await page.getByRole('button', { name: 'Expand left dock', exact: true }).count()) === 0
+      && (await page.locator('section[data-panel-id="notes"][data-dock-region="left"]').count()) === 0,
+    'starter project to retain its independent default workspace layout',
+    STARTUP_TIMEOUT_MS,
+  );
+
+  await projectSelect.selectOption(String(projectId));
+  await waitFor(
+    async () => Number(await projectSelect.inputValue()) === projectId
+      && await projectsButton.isEnabled(),
+    'imported project selection after workspace isolation check',
+    STARTUP_TIMEOUT_MS,
+  );
+  await waitVisible(
+    page.getByRole('button', { name: 'Expand left dock', exact: true }),
+    'restored imported-project left dock strip',
+    STARTUP_TIMEOUT_MS,
+  );
+  await waitFor(
+    async () => (await page.locator(
+      'section[data-panel-id="notes"][data-dock-region="left"][hidden]',
+    ).count()) === 1,
+    'imported project to restore its collapsed Notes placement',
+    STARTUP_TIMEOUT_MS,
+  );
+
+  const workspace = page.locator('[data-screen-label="Studio Dock Workspace"]');
+  const workspaceMode = page.getByRole('group', { name: 'Workspace mode', exact: true });
+  const focusMode = workspaceMode.getByRole('button', { name: 'FOCUS', exact: true });
+  const cockpitMode = workspaceMode.getByRole('button', { name: 'COCKPIT', exact: true });
+  assert.equal(
+    await cockpitMode.getAttribute('aria-pressed'),
+    'true',
+    'Pro workspace did not expose Cockpit as the selected mode',
+  );
+  await focusMode.click();
+  await waitFor(
+    async () => (await workspace.getAttribute('data-workspace-preset')) === 'focus'
+      && (await focusMode.getAttribute('aria-pressed')) === 'true'
+      && (await page.getByRole('button', { name: 'Expand left dock', exact: true }).count()) === 0,
+    'Pro Focus projection to hide the saved Cockpit layout',
+  );
+  await cockpitMode.click();
+  await waitFor(
+    async () => (await workspace.getAttribute('data-workspace-preset')) === 'cockpit'
+      && (await cockpitMode.getAttribute('aria-pressed')) === 'true'
+      && await page.getByRole('button', { name: 'Expand left dock', exact: true }).isVisible(),
+    'Pro Cockpit projection to restore its collapsed left dock',
+  );
+  record('journey', 'Pro floating/docking keyboard accessibility and project-scoped workspace layout verified');
+}
+
+async function verifyProWorkspaceShellAfterRestart(page) {
+  const expandLeft = await waitVisible(
+    page.getByRole('button', { name: 'Expand left dock', exact: true }),
+    'persisted Pro left dock strip after restart',
+    STARTUP_TIMEOUT_MS,
+  );
+  await waitFor(
+    async () => (await page.locator(
+      'section[data-panel-id="notes"][data-dock-region="left"][hidden]',
+    ).count()) === 1,
+    'persisted Pro Notes left-dock placement after restart',
+    STARTUP_TIMEOUT_MS,
+  );
+  await expandLeft.click();
+  const notesTab = await waitProDomFocus(
+    page.locator('[data-dock-drop-region="left"]')
+      .getByRole('tab', { name: 'Notes', exact: true }),
+    'persisted Pro Notes left-dock tab after restart',
+  );
+  assert.equal(await notesTab.getAttribute('aria-selected'), 'true', 'Restarted Pro Notes tab is not selected');
+  const notesSurface = await waitVisible(
+    page.locator('section[data-panel-id="notes"][data-dock-region="left"]:not([hidden])'),
+    'persisted Pro Notes surface after restart',
+  );
+  assert.equal(
+    await notesTab.getAttribute('aria-controls'),
+    await notesSurface.getAttribute('id'),
+    'Restarted Pro Notes tab lost its panel relationship',
+  );
+  await page.getByRole('button', { name: 'Collapse left dock', exact: true }).click();
+  await waitVisible(
+    page.getByRole('button', { name: 'Expand left dock', exact: true }),
+    're-collapsed Pro left dock after restart verification',
+  );
+  record('journey', 'Pro project workspace layout survived packaged restart');
 }
 
 async function preseedProPsykeIdSpace(session, bundle) {
@@ -2480,6 +2702,29 @@ async function editProManuscript(session, projectId, bodyMarker, proMarker) {
       return text.includes('UNSAVED') || text.includes('SAVING…');
     }, 'Pro manuscript dirty/saving transition', 10_000);
     await withTimeout(patchHeld, 10_000, 'Pro manuscript PATCH interception');
+    // Keep raw DOM locators for assertions made while the Omnibox modal is
+    // open. Its accessibility contract makes the application root inert and
+    // aria-hidden, so getByRole correctly stops resolving background controls
+    // even though their layout state remains visible and unchanged.
+    const collapseBottom = await waitVisible(
+      page.locator('button[aria-label="Collapse bottom dock"]'),
+      'Pro bottom dock before held-save workspace action',
+    );
+    const expandBottom = page.locator('button[aria-label="Expand bottom dock"]');
+    await collapseBottom.click();
+    // Give the queued mutation an opportunity to run. It must remain behind
+    // the same pending-project save that guards Omnibox navigation below.
+    await delay(250);
+    assert.equal(
+      await collapseBottom.isVisible(),
+      true,
+      'Pro collapsed the bottom dock before its manuscript save completed',
+    );
+    assert.equal(
+      await expandBottom.count(),
+      0,
+      'Pro exposed the collapsed bottom dock before its manuscript save completed',
+    );
     const { dialog, input } = await openProOmnibox(page);
     await input.fill('Notes');
     const notesOption = await proOmniboxOption(dialog, 'PANELS', 'Notes');
@@ -2496,17 +2741,31 @@ async function editProManuscript(session, projectId, bodyMarker, proMarker) {
       0,
       'Pro navigated to Notes before its manuscript save completed',
     );
+    assert.equal(
+      await collapseBottom.isVisible(),
+      true,
+      'Pro workspace mutation crossed the held manuscript save barrier',
+    );
     releasePatch();
     await waitFor(
       async () => !(await dialog.isVisible().catch(() => false)),
       'Pro omnibox to finish navigation after its manuscript save',
     );
+    await waitVisible(expandBottom, 'Pro bottom dock collapsed after the held manuscript save');
   } finally {
     releasePatch();
     await page.unroute(scenePatchRoute, routeHandler);
   }
   await waitVisible(proScreen(page, 'Notes Panel'), 'Pro Notes after dirty omnibox handoff');
   await waitProFocusedPanel(page, 'Notes');
+  const expandBottom = page.getByRole('button', { name: 'Expand bottom dock', exact: true });
+  if (await expandBottom.isVisible().catch(() => false)) {
+    await expandBottom.click();
+    await waitVisible(
+      page.getByRole('button', { name: 'Collapse bottom dock', exact: true }),
+      'restored Pro bottom dock after held-save workspace check',
+    );
+  }
   const reopenedManuscript = await selectProPanel(page, 'Manuscript', 'Manuscript Editor');
   await waitText(reopenedManuscript, proMarker, 'Pro marker after dirty omnibox handoff');
   await waitText(reopenedManuscript, 'ALL SAVED', 'Pro manuscript omnibox save barrier', { timeoutMs: UI_TIMEOUT_MS });
@@ -2562,6 +2821,7 @@ async function verifyProRestart(session, bundle, expectedDestination, bodyMarker
     expectedDestination.projectId,
     'A different Pro project id was selected after restart',
   );
+  await verifyProWorkspaceShellAfterRestart(page);
   const manuscript = await selectProPanel(page, 'Manuscript', 'Manuscript Editor');
   await waitText(manuscript, bodyMarker, 'Whiteboard marker after Pro restart');
   await waitText(manuscript, proMarker, 'Pro marker after Pro restart');
@@ -2610,6 +2870,7 @@ async function runProJourney({ electron, exePath, root, bundlePath, bundle, mark
   );
   await editProManuscript(first, expectedDestination.projectId, bodyMarker, proMarker);
   await exportProMarkdown(first, markdownPath, bodyMarker, proMarker);
+  await verifyProWorkspaceShell(first, expectedDestination.projectId);
   await captureScreenshot(first, 'markdown-exported');
   const proDbPath = path.join(first.runtime.userData, 'logosforge.db');
   await closeSession(first);
