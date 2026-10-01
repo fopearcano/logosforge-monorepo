@@ -55,6 +55,9 @@ const PSYKE_NOTES = 'Created through the packaged Whiteboard UI.';
 const PSYKE_SECOND_NAME = 'Ivo Acceptance';
 const PSYKE_SECOND_DESCRIPTION = 'Packaged acceptance rival';
 const PSYKE_SECOND_NOTES = 'Created through the authenticated packaged Whiteboard API.';
+const OMNIBOX_ENTITY_NAME = `Vesper Packaged ${process.pid}`;
+const OMNIBOX_NOTE_TITLE = `Omnibox Packaged Note ${process.pid}`;
+const OMNIBOX_NOTE_CONTENT = 'Acceptance-only note reached through authoritative project search.';
 // Use a relation with a distinct stored inverse so the packaged gate catches
 // endpoint reversal as well as missing/unmapped relations.
 const PSYKE_RELATION_TYPE = 'payoff';
@@ -1498,6 +1501,47 @@ function proProjectSelect(page) {
   return page.locator('aside.rail > label.field > select').nth(1);
 }
 
+function proAppearanceSelect(page) {
+  return page.locator('aside.rail > label.field > select').nth(2);
+}
+
+async function openProOmnibox(page) {
+  await page.keyboard.press('Control+K');
+  const dialog = await waitVisible(
+    page.getByRole('dialog', { name: 'Studio omnibox', exact: true }),
+    'Pro Studio omnibox',
+  );
+  const input = await waitVisible(
+    dialog.getByRole('combobox', { name: 'Search the current project', exact: true }),
+    'Pro Studio omnibox search',
+  );
+  return { dialog, input };
+}
+
+async function proOmniboxOption(dialog, groupName, label) {
+  const group = await waitVisible(
+    dialog.getByRole('group', { name: groupName, exact: true }),
+    `Pro Studio omnibox ${groupName} group`,
+  );
+  const option = await waitVisible(
+    group.getByRole('option').filter({ hasText: label }),
+    `Pro Studio omnibox ${groupName} option ${label}`,
+  );
+  assert.equal(await option.isEnabled(), true, `Pro Studio omnibox option is disabled: ${label}`);
+  return option;
+}
+
+async function activateProOmniboxOption(page, query, groupName, label) {
+  const { dialog, input } = await openProOmnibox(page);
+  await input.fill(query);
+  const option = await proOmniboxOption(dialog, groupName, label);
+  await option.click();
+  await waitFor(
+    async () => !(await dialog.isVisible().catch(() => false)),
+    `Pro Studio omnibox to close after opening ${label}`,
+  );
+}
+
 async function waitProReady(session) {
   const { page } = session;
   const projectsButton = await waitVisible(
@@ -1526,6 +1570,16 @@ async function selectProPanel(page, name, screenName) {
   );
   await button.click();
   return waitVisible(proScreen(page, screenName), `Pro ${screenName} screen`);
+}
+
+async function waitProFocusedPanel(page, name) {
+  const button = page.locator('aside.rail nav').getByRole('button', { name, exact: true });
+  await waitFor(
+    async () => (await button.getAttribute('aria-current')) === 'page',
+    `Pro ${name} panel focus`,
+  );
+  record('ui', `focused: Pro ${name} panel`);
+  return button;
 }
 
 async function collapseProAiDock(page) {
@@ -1892,6 +1946,358 @@ async function importAndVerifyInPro(session, bundlePath, bundle, bodyMarker) {
   return { ...destination, ...commentDestination };
 }
 
+async function verifyProOmniboxNavigation(session, destination) {
+  const { page } = session;
+  const projectId = Number(destination?.projectId);
+  const resolvedCommentId = Number(destination?.resolvedCommentId);
+  assert.ok(Number.isSafeInteger(projectId) && projectId > 0, 'Pro Studio omnibox project fixture id is invalid');
+  assert.ok(
+    Number.isSafeInteger(resolvedCommentId) && resolvedCommentId > 0,
+    'Pro Studio omnibox resolved-comment fixture id is invalid',
+  );
+
+  const createdNote = await localServiceRequest(session, `/api/projects/${projectId}/notes`, {
+    method: 'POST',
+    body: {
+      title: OMNIBOX_NOTE_TITLE,
+      content: OMNIBOX_NOTE_CONTENT,
+      tags: ['packaged-acceptance', 'omnibox'],
+      pinned: false,
+    },
+  });
+  assert.equal(createdNote.status, 201, 'Pro Studio omnibox note fixture creation returned the wrong status');
+  const noteId = Number(createdNote.data?.id);
+  assert.ok(Number.isSafeInteger(noteId) && noteId > 0, 'Pro Studio omnibox note fixture id is invalid');
+  assert.equal(createdNote.data?.title, OMNIBOX_NOTE_TITLE, 'Pro Studio omnibox note fixture title changed');
+
+  const notes = proScreen(page, 'Notes Panel');
+  try {
+    await activateProOmniboxOption(page, OMNIBOX_NOTE_TITLE, 'NOTES', OMNIBOX_NOTE_TITLE);
+    await waitVisible(notes, 'Pro Notes opened from Studio omnibox note result');
+    await waitProFocusedPanel(page, 'Notes');
+    const noteTitle = await waitVisible(
+      notes.getByLabel('Note title', { exact: true }),
+      'Pro Studio omnibox targeted note title',
+    );
+    assert.equal(
+      await noteTitle.inputValue(),
+      OMNIBOX_NOTE_TITLE,
+      'Pro Studio omnibox opened the wrong note',
+    );
+    await waitFor(
+      async () => noteTitle.evaluate((element) => element === document.activeElement),
+      'Pro Studio omnibox note target to receive input focus',
+    );
+  } finally {
+    const cancel = notes.getByRole('button', { name: 'CANCEL', exact: true });
+    if (await cancel.isVisible().catch(() => false)) {
+      await cancel.click().catch((error) => record(
+        'cleanup',
+        `Pro Studio omnibox note editor close: ${errorText(error)}`,
+      ));
+    }
+    const deleted = await localServiceRequest(
+      session,
+      `/api/projects/${projectId}/notes/${noteId}`,
+      { method: 'DELETE' },
+    );
+    assert.equal(deleted.status, 200, 'Pro Studio omnibox note cleanup returned the wrong status');
+    assert.equal(deleted.data?.ok, true, 'Pro Studio omnibox note cleanup was not acknowledged');
+    assert.equal(deleted.data?.deleted, noteId, 'Pro Studio omnibox note cleanup deleted the wrong note');
+    const afterCleanup = await localServiceRequest(session, `/api/projects/${projectId}/notes`);
+    assert.ok(Array.isArray(afterCleanup.data), 'Pro Studio omnibox note cleanup returned an invalid note list');
+    assert.equal(
+      afterCleanup.data.some((note) => Number(note?.id) === noteId),
+      false,
+      'Pro Studio omnibox note cleanup left its temporary note behind',
+    );
+  }
+
+  const commentsBeforeTarget = await selectProPanel(page, 'Comments', 'Comments Panel');
+  const showOpenComments = commentsBeforeTarget.getByRole('button', { name: 'Show open comments', exact: true });
+  if ((await showOpenComments.getAttribute('aria-pressed')) !== 'true') await showOpenComments.click();
+  await waitFor(
+    async () => (await showOpenComments.getAttribute('aria-pressed')) === 'true',
+    'Pro Comments OPEN-only preference before resolved omnibox navigation',
+  );
+  const resolvedThread = commentsBeforeTarget.getByRole(
+    'button',
+    { name: 'Open comment on “Chapter One”', exact: true },
+  );
+  await waitFor(
+    async () => (await resolvedThread.count()) === 0,
+    'resolved Pro comment to be hidden by the OPEN-only preference',
+  );
+
+  await activateProOmniboxOption(
+    page,
+    RESOLVED_COMMENT_BODY,
+    'COMMENTS',
+    RESOLVED_COMMENT_BODY,
+  );
+  const comments = await waitVisible(
+    proScreen(page, 'Comments Panel'),
+    'Pro Comments opened from Studio omnibox comment result',
+  );
+  await waitProFocusedPanel(page, 'Comments');
+  const targetedResolvedThread = await waitVisible(
+    comments.getByRole('button', { name: 'Open comment on “Chapter One”', exact: true }),
+    'Pro Studio omnibox targeted resolved comment thread',
+  );
+  assert.equal(
+    await targetedResolvedThread.getAttribute('aria-pressed'),
+    'true',
+    `Pro Studio omnibox did not select resolved comment ${resolvedCommentId}`,
+  );
+  await waitText(comments, RESOLVED_COMMENT_BODY, 'Pro Studio omnibox resolved comment detail');
+  await waitVisible(
+    comments.getByRole('button', { name: 'Reopen comment', exact: true }),
+    'Pro Studio omnibox resolved comment state',
+  );
+  let lastResolvedCommentFocusOwner = '';
+  await waitFor(
+    async () => {
+      const focusState = await targetedResolvedThread.evaluate((element) => {
+        const active = document.activeElement;
+        const activeElement = active instanceof HTMLElement
+          ? `${active.tagName.toLowerCase()}[aria-label="${active.getAttribute('aria-label') ?? ''}"][data-screen-label="${active.getAttribute('data-screen-label') ?? ''}"]`
+          : String(active);
+        return { matched: element === active, activeElement };
+      });
+      if (!focusState.matched && focusState.activeElement !== lastResolvedCommentFocusOwner) {
+        lastResolvedCommentFocusOwner = focusState.activeElement;
+        record('ui', `waiting for resolved comment row focus; active=${focusState.activeElement}`);
+      }
+      return focusState.matched;
+    },
+    'Pro Studio omnibox resolved comment target to receive row focus',
+  );
+  assert.equal(
+    await comments.getByRole('button', { name: 'Show open comments', exact: true }).getAttribute('aria-pressed'),
+    'true',
+    'Resolved omnibox navigation changed the persistent OPEN-only comment preference',
+  );
+
+  const scenesResult = await localServiceRequest(session, `/api/projects/${projectId}/scenes`);
+  const firstSceneId = Number(scenesResult.data.find((scene) => scene?.title === 'Chapter One')?.id);
+  assert.ok(Number.isSafeInteger(firstSceneId) && firstSceneId > 0, 'Pro Studio omnibox scene fixture id is invalid');
+  await activateProOmniboxOption(page, 'Chapter One', 'SCENES', 'Chapter One');
+  const manuscript = await waitVisible(
+    proScreen(page, 'Manuscript Editor'),
+    'Pro Manuscript opened from Studio omnibox scene result',
+  );
+  await waitProFocusedPanel(page, 'Manuscript');
+  const targetScene = manuscript.locator(`#ms-scene-${firstSceneId}`);
+  await waitFor(
+    async () => (await targetScene.getAttribute('data-scene-prose')) === 'live',
+    'Pro Studio omnibox scene target to become the active live editor',
+  );
+  await waitFor(
+    async () => targetScene.locator('[data-prose]').evaluate(
+      (element) => element === document.activeElement,
+    ),
+    'Pro Studio omnibox scene target to receive editor focus',
+  );
+  assert.equal(
+    await manuscript.getByLabel('Scene 1 title', { exact: true }).inputValue(),
+    'Chapter One',
+    'Pro Studio omnibox opened the wrong scene',
+  );
+
+  await activateProOmniboxOption(page, PSYKE_NAME, 'PSYKE', PSYKE_NAME);
+  const psyke = await waitVisible(
+    proScreen(page, 'PSYKE Bible'),
+    'Pro PSYKE Bible opened from Studio omnibox result',
+  );
+  await waitProFocusedPanel(page, 'PSYKE');
+  const entriesResult = await localServiceRequest(session, `/api/projects/${projectId}/psyke/entries`);
+  const primaryId = Number(entriesResult.data.find((entry) => entry?.name === PSYKE_NAME)?.id);
+  assert.ok(Number.isSafeInteger(primaryId) && primaryId > 0, 'Pro Studio omnibox PSYKE fixture id is invalid');
+  const primaryRow = await waitVisible(
+    psyke.locator(`[data-psyke-entry-id="${primaryId}"]`),
+    'Pro Studio omnibox PSYKE target row',
+  );
+  assert.equal(
+    await primaryRow.getAttribute('aria-pressed'),
+    'true',
+    'Pro Studio omnibox did not select the requested PSYKE entry',
+  );
+
+  const appearance = proAppearanceSelect(page);
+  const originalTheme = await appearance.inputValue();
+  assert.ok(
+    ['dark', 'light', 'warm'].includes(originalTheme),
+    `Unexpected Pro appearance before omnibox test: ${originalTheme}`,
+  );
+  const alternateTheme = originalTheme === 'light' ? 'dark' : 'light';
+  await activateProOmniboxOption(
+    page,
+    `Use ${alternateTheme} appearance`,
+    'COMMANDS',
+    `Use ${alternateTheme} appearance`,
+  );
+  await waitFor(
+    async () => (await appearance.inputValue()) === alternateTheme,
+    `Pro ${alternateTheme} appearance command`,
+  );
+  assert.equal(
+    await page.evaluate(() => document.documentElement.dataset.theme),
+    alternateTheme,
+    'Pro Studio omnibox appearance command did not update the document theme',
+  );
+  await activateProOmniboxOption(
+    page,
+    `Use ${originalTheme} appearance`,
+    'COMMANDS',
+    `Use ${originalTheme} appearance`,
+  );
+  await waitFor(
+    async () => (await appearance.inputValue()) === originalTheme,
+    `restored Pro ${originalTheme} appearance`,
+  );
+
+  const projectsResult = await localServiceRequest(session, '/api/projects');
+  assert.ok(Array.isArray(projectsResult.data), 'Pro project response is invalid during omnibox test');
+  const starter = projectsResult.data.find((project) => Number(project?.id) !== projectId);
+  const starterId = Number(starter?.id);
+  assert.ok(Number.isSafeInteger(starterId) && starterId > 0, 'Pro omnibox test found no starter project');
+  const projectSelect = proProjectSelect(page);
+  await projectSelect.selectOption(String(starterId));
+  await waitFor(
+    async () => Number(await projectSelect.inputValue()) === starterId
+      && await page.locator('aside.rail nav').getByRole('button', { name: 'Projects', exact: true }).isEnabled(),
+    'Pro starter project selection before MRU test',
+  );
+
+  const { dialog, input } = await openProOmnibox(page);
+  await input.fill(PROJECT_TITLE);
+  const recentProject = await proOmniboxOption(dialog, 'PROJECTS', PROJECT_TITLE);
+  await waitText(recentProject, 'Recent ·', 'Pro Studio omnibox recent-project detail');
+  await recentProject.click();
+  await waitFor(
+    async () => Number(await projectSelect.inputValue()) === projectId
+      && !(await dialog.isVisible().catch(() => false)),
+    'Pro imported project selection from Studio omnibox',
+  );
+
+  const escapePalette = await openProOmnibox(page);
+  await page.keyboard.press('Escape');
+  await waitFor(
+    async () => !(await escapePalette.dialog.isVisible().catch(() => false)),
+    'Pro Studio omnibox Escape close',
+  );
+  record('journey', 'Pro Studio omnibox note, resolved-comment, scene, PSYKE, command, project, and Escape navigation verified');
+}
+
+async function previewProOmniboxCommand(page, command) {
+  const { dialog, input } = await openProOmnibox(page);
+  await input.fill(command);
+  const preview = await proOmniboxOption(dialog, 'COMMANDS', `Preview ${command}`);
+  await waitFor(
+    async () => (await preview.getAttribute('aria-selected')) === 'true',
+    'Pro Studio omnibox command-preview keyboard selection',
+  );
+  await page.keyboard.press('Enter');
+  const review = await waitVisible(
+    dialog.getByRole('group', { name: 'PROJECT CHANGE · CONFIRMATION REQUIRED', exact: true }),
+    'Pro Studio omnibox mutating-command review',
+  );
+  await waitText(review, command, 'Pro Studio omnibox normalized command');
+  await waitVisible(
+    review.getByRole('button', { name: 'CANCEL · ESC', exact: true }),
+    'Pro Studio omnibox command cancel action',
+  );
+  await waitVisible(
+    review.getByRole('button', { name: 'CONFIRM & RUN', exact: true }),
+    'Pro Studio omnibox command confirmation action',
+  );
+  return { dialog, input, review };
+}
+
+async function verifyProOmniboxCommandReview(session, projectId) {
+  const { page } = session;
+  const command = `/create character ${OMNIBOX_ENTITY_NAME}`;
+  const baseline = await localServiceRequest(session, `/api/projects/${projectId}/psyke/entries`);
+  assert.equal(baseline.data.length, 2, 'Pro omnibox command test requires exactly two imported PSYKE entries');
+  assert.equal(
+    baseline.data.some((entry) => entry?.name === OMNIBOX_ENTITY_NAME),
+    false,
+    'Pro omnibox command fixture already exists',
+  );
+
+  const cancelled = await previewProOmniboxCommand(page, command);
+  await page.keyboard.press('Escape');
+  await waitFor(
+    async () => await cancelled.input.isEnabled()
+      && !(await cancelled.review.isVisible().catch(() => false)),
+    'Pro Studio omnibox command-preview cancellation',
+  );
+  const afterCancel = await localServiceRequest(session, `/api/projects/${projectId}/psyke/entries`);
+  assert.equal(afterCancel.data.length, 2, 'Cancelling the Pro omnibox command changed the PSYKE entry count');
+  assert.equal(
+    afterCancel.data.some((entry) => entry?.name === OMNIBOX_ENTITY_NAME),
+    false,
+    'Cancelling the Pro omnibox command preview still created an entry',
+  );
+  await page.keyboard.press('Escape');
+  await waitFor(
+    async () => !(await cancelled.dialog.isVisible().catch(() => false)),
+    'Pro Studio omnibox close after command cancellation',
+  );
+
+  const confirmed = await previewProOmniboxCommand(page, command);
+  await confirmed.review.getByRole('button', { name: 'CONFIRM & RUN', exact: true }).click();
+  await waitFor(
+    async () => !(await confirmed.dialog.isVisible().catch(() => false)),
+    'Pro Studio omnibox close after confirmed command',
+  );
+  const psyke = await waitVisible(
+    proScreen(page, 'PSYKE Bible'),
+    'Pro PSYKE Bible after confirmed omnibox command',
+  );
+  await waitText(psyke, OMNIBOX_ENTITY_NAME, 'Pro PSYKE entry created by confirmed omnibox command');
+
+  const createdResult = await localServiceRequest(session, `/api/projects/${projectId}/psyke/entries`);
+  assert.equal(createdResult.data.length, 3, 'Confirmed Pro omnibox command did not add exactly one PSYKE entry');
+  const created = createdResult.data.find((entry) => entry?.name === OMNIBOX_ENTITY_NAME);
+  const createdId = Number(created?.id);
+  assert.ok(Number.isSafeInteger(createdId) && createdId > 0, 'Confirmed Pro omnibox command created no PSYKE entry');
+  await waitProFocusedPanel(page, 'PSYKE');
+  const createdRow = await waitVisible(
+    psyke.locator(`[data-psyke-entry-id="${createdId}"]`),
+    'Pro command-created PSYKE row',
+  );
+  assert.equal(
+    await createdRow.getAttribute('aria-pressed'),
+    'true',
+    'Confirmed Pro omnibox command did not select its created PSYKE entry',
+  );
+
+  await activateProOmniboxOption(page, OMNIBOX_ENTITY_NAME, 'PSYKE', OMNIBOX_ENTITY_NAME);
+  await waitText(
+    proScreen(page, 'PSYKE Bible'),
+    OMNIBOX_ENTITY_NAME,
+    'Pro Studio omnibox re-opened its command-created PSYKE entry',
+  );
+  await selectProPanel(page, 'Manuscript', 'Manuscript Editor');
+  const deleted = await localServiceRequest(
+    session,
+    `/api/projects/${projectId}/psyke/entries/${createdId}`,
+    { method: 'DELETE' },
+  );
+  assert.equal(deleted.status, 200, 'Pro omnibox acceptance cleanup returned the wrong status');
+  assert.equal(deleted.data?.ok, true, 'Pro omnibox acceptance cleanup was not acknowledged');
+  assert.equal(deleted.data?.deleted, createdId, 'Pro omnibox acceptance cleanup deleted the wrong PSYKE entry');
+  const afterCleanup = await localServiceRequest(session, `/api/projects/${projectId}/psyke/entries`);
+  assert.equal(afterCleanup.data.length, 2, 'Pro omnibox acceptance cleanup did not restore the imported PSYKE graph');
+  assert.equal(
+    afterCleanup.data.some((entry) => entry?.name === OMNIBOX_ENTITY_NAME),
+    false,
+    'Pro omnibox acceptance cleanup left its temporary PSYKE entry behind',
+  );
+  record('journey', 'Pro Studio omnibox slash-command preview, cancel, confirm, navigation, and cleanup verified');
+}
+
 async function configureProAiAndChat(page) {
   const settings = await selectProPanel(page, 'AI Settings', 'AI Settings');
   await settings.getByLabel('AI provider', { exact: true }).selectOption({ label: 'LM Studio' });
@@ -1933,6 +2339,7 @@ async function editProManuscript(page, bodyMarker, proMarker) {
   // The Billy exercise opens the dock again before this edit step.
   await collapseProAiDock(page);
   const manuscript = await selectProPanel(page, 'Manuscript', 'Manuscript Editor');
+  await waitProFocusedPanel(page, 'Manuscript');
   await waitText(manuscript, bodyMarker, 'Pro manuscript before edit');
   const firstScene = manuscript.locator('[data-scene-id]').first();
   await waitVisible(firstScene, 'Pro first scene');
@@ -1944,17 +2351,79 @@ async function editProManuscript(page, bodyMarker, proMarker) {
     await staticProse.click();
     editor = await waitVisible(firstScene.locator('[data-prose][contenteditable="true"]'), 'Pro live prose editor');
   }
-  await editor.click();
-  await page.keyboard.press('Control+End');
-  await page.keyboard.press('Enter');
-  await page.keyboard.type(proMarker);
-  await waitText(editor, proMarker, 'typed Pro manuscript marker');
-  await waitFor(async () => {
-    const text = (await manuscript.textContent()) ?? '';
-    return text.includes('UNSAVED') || text.includes('SAVING…');
-  }, 'Pro manuscript dirty/saving transition', 10_000);
-  await waitText(manuscript, 'ALL SAVED', 'Pro manuscript autosave', { timeoutMs: UI_TIMEOUT_MS });
-  record('journey', 'Pro manuscript keyboard edit/autosave complete');
+  const sceneId = Number(await firstScene.getAttribute('data-scene-id'));
+  assert.ok(Number.isSafeInteger(sceneId) && sceneId > 0, 'Pro dirty-save barrier scene id is invalid');
+  const scenePatchRoute = '**/api/projects/*/scenes/*';
+  let heldPatch = false;
+  let releaseHeldPatch = () => {};
+  let markPatchHeld = () => {};
+  const patchHeld = new Promise((resolve) => { markPatchHeld = resolve; });
+  const patchRelease = new Promise((resolve) => { releaseHeldPatch = resolve; });
+  const routeHandler = async (route) => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    const targetsScene = pathname.startsWith('/api/projects/') && pathname.endsWith(`/scenes/${sceneId}`);
+    if (!heldPatch && request.method() === 'PATCH' && targetsScene) {
+      heldPatch = true;
+      markPatchHeld();
+      await patchRelease;
+    }
+    try {
+      await route.continue();
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('Route is already handled')) return;
+      throw error;
+    }
+  };
+  await page.route(scenePatchRoute, routeHandler);
+  let patchReleased = false;
+  const releasePatch = () => {
+    if (patchReleased) return;
+    patchReleased = true;
+    releaseHeldPatch();
+  };
+  try {
+    await editor.click();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type(proMarker);
+    await waitText(editor, proMarker, 'typed Pro manuscript marker');
+    await waitFor(async () => {
+      const text = (await manuscript.textContent()) ?? '';
+      return text.includes('UNSAVED') || text.includes('SAVING…');
+    }, 'Pro manuscript dirty/saving transition', 10_000);
+    await withTimeout(patchHeld, 10_000, 'Pro manuscript PATCH interception');
+    const { dialog, input } = await openProOmnibox(page);
+    await input.fill('Notes');
+    const notesOption = await proOmniboxOption(dialog, 'PANELS', 'Notes');
+    await notesOption.click();
+    await waitText(dialog, 'SAVING & OPENING…', 'Pro omnibox held by the manuscript save barrier');
+    assert.equal(await dialog.isVisible(), true, 'Pro omnibox closed before its manuscript save completed');
+    assert.equal(
+      await page.locator('[data-panel-id="manuscript"][data-panel-active="true"]:not([hidden])').count(),
+      1,
+      'Pro left Manuscript before its pending save completed',
+    );
+    assert.equal(
+      await page.locator('[data-panel-id="notes"][data-panel-active="true"]:not([hidden])').count(),
+      0,
+      'Pro navigated to Notes before its manuscript save completed',
+    );
+    releasePatch();
+    await waitFor(
+      async () => !(await dialog.isVisible().catch(() => false)),
+      'Pro omnibox to finish navigation after its manuscript save',
+    );
+  } finally {
+    releasePatch();
+    await page.unroute(scenePatchRoute, routeHandler);
+  }
+  await waitVisible(proScreen(page, 'Notes Panel'), 'Pro Notes after dirty omnibox handoff');
+  await waitProFocusedPanel(page, 'Notes');
+  const reopenedManuscript = await selectProPanel(page, 'Manuscript', 'Manuscript Editor');
+  await waitText(reopenedManuscript, proMarker, 'Pro marker after dirty omnibox handoff');
+  await waitText(reopenedManuscript, 'ALL SAVED', 'Pro manuscript omnibox save barrier', { timeoutMs: UI_TIMEOUT_MS });
+  record('journey', 'Pro manuscript dirty-save barrier and keyboard edit persistence complete');
 }
 
 async function exportProMarkdown(session, outputPath, bodyMarker, proMarker) {
@@ -2032,6 +2501,8 @@ async function runProJourney({ electron, exePath, root, bundlePath, bundle, mark
     dialogs: { open: [bundlePath], save: [markdownPath] },
   });
   const expectedDestination = await importAndVerifyInPro(first, bundlePath, bundle, bodyMarker);
+  await verifyProOmniboxNavigation(first, expectedDestination);
+  await verifyProOmniboxCommandReview(first, expectedDestination.projectId);
   await configureProAiAndChat(first.page);
   await assertRealSettingsUnchanged('Pro packaged journey');
   await waitFile(
