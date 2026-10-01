@@ -71,6 +71,7 @@ const RESOLVED_COMMENT_BODY = 'Chapter promise checked against the outline.';
 const COMMENT_SCENE_TITLE = 'Chapter Two';
 const FIRST_SCENE_BODY = 'The archive waits behind a sealed brass door.';
 const QA_PREFIX = 'Ada stepped into the archive, dust hanging in the dawn light.';
+const SCENE_NAVIGATOR_MARKER = `Scene navigator save-barrier probe ${process.pid}.`;
 const STARTUP_TIMEOUT_MS = 90_000;
 const UI_TIMEOUT_MS = 30_000;
 const CLOSE_TIMEOUT_MS = 20_000;
@@ -1592,6 +1593,33 @@ async function waitProDomFocus(locator, label) {
   return target;
 }
 
+function proSceneNavigator(page) {
+  return page.locator('[data-scene-navigator="true"]');
+}
+
+async function waitProSceneActivation(page, navigator, sceneId, label) {
+  const manuscript = await waitVisible(
+    proScreen(page, 'Manuscript Editor'),
+    `Pro Manuscript after ${label}`,
+  );
+  await waitProFocusedPanel(page, 'Manuscript');
+  const row = navigator.locator(`button[data-scene-id="${sceneId}"]`);
+  const scene = manuscript.locator(`#ms-scene-${sceneId}`);
+  await waitFor(
+    async () => (await row.getAttribute('aria-current')) === 'location'
+      && (await row.getAttribute('data-opening')) == null
+      && (await scene.getAttribute('data-scene-prose')) === 'live',
+    `${label} to become the current live Pro scene`,
+  );
+  await waitFor(
+    async () => scene.locator('[data-prose]').evaluate(
+      (element) => element === document.activeElement,
+    ),
+    `${label} to focus its Pro scene editor`,
+  );
+  return { manuscript, row, scene };
+}
+
 async function collapseProAiDock(page) {
   const collapseRight = page.getByRole('button', { name: 'Collapse right dock', exact: true });
   if (await collapseRight.isVisible().catch(() => false)) {
@@ -2166,6 +2194,211 @@ async function importAndVerifyInPro(session, bundlePath, bundle, bodyMarker) {
   assert.equal(dialogState.save, 1, 'Pro consumed the Markdown save path before export');
   record('journey', `Pro imported and verified ${bundlePath}`);
   return { ...destination, ...commentDestination };
+}
+
+async function verifyProSceneNavigator(session, importedProjectId) {
+  const { page } = session;
+  const projectId = Number(importedProjectId);
+  assert.ok(Number.isSafeInteger(projectId) && projectId > 0, 'Pro scene-navigator project id is invalid');
+
+  const importedResult = await localServiceRequest(session, `/api/projects/${projectId}/scenes`);
+  assert.ok(Array.isArray(importedResult.data), 'Pro scene-navigator imported scene response is invalid');
+  assert.ok(importedResult.data.length >= 2, 'Pro scene-navigator test requires at least two imported scenes');
+  const importedScenes = [...importedResult.data]
+    .sort((left, right) => left.sort_order - right.sort_order || left.id - right.id);
+  const knownScene = importedScenes.find((scene) => scene?.title === 'Chapter One');
+  const otherScene = importedScenes.find((scene) => Number(scene?.id) !== Number(knownScene?.id));
+  const knownSceneId = Number(knownScene?.id);
+  const otherSceneId = Number(otherScene?.id);
+  assert.ok(Number.isSafeInteger(knownSceneId) && knownSceneId > 0, 'Pro scene navigator lost Chapter One');
+  assert.ok(Number.isSafeInteger(otherSceneId) && otherSceneId > 0, 'Pro scene navigator has no second scene fixture');
+
+  const navigator = await waitVisible(proSceneNavigator(page), 'Pro live Scene Navigator');
+  const accessibleRegion = await waitVisible(
+    page.getByRole('region', { name: 'SCENES', exact: true }),
+    'accessible Pro Scene Navigator region',
+  );
+  assert.equal(
+    await accessibleRegion.getAttribute('data-scene-navigator'),
+    'true',
+    'The accessible SCENES region is not the live Pro Scene Navigator',
+  );
+  const search = await waitVisible(
+    navigator.getByRole('searchbox', { name: 'Filter project scenes', exact: true }),
+    'Pro Scene Navigator search',
+  );
+  const rows = navigator.locator('button[data-scene-id]');
+  await waitFor(
+    async () => (await rows.count()) === importedScenes.length,
+    'all imported scenes to appear in the Pro Scene Navigator',
+  );
+  for (const scene of importedScenes) {
+    const sceneId = Number(scene.id);
+    const title = scene.title?.trim() || 'Untitled scene';
+    const row = await waitVisible(
+      navigator.locator(`button[data-scene-id="${sceneId}"]`),
+      `Pro Scene Navigator row ${sceneId}`,
+    );
+    await waitText(row, title, `Pro Scene Navigator title ${title}`);
+  }
+
+  await search.fill(otherScene.title);
+  await waitFor(
+    async () => (await rows.count()) === 1
+      && (await rows.first().getAttribute('data-scene-id')) === String(otherSceneId),
+    'Pro Scene Navigator filtered scene result',
+  );
+  await search.fill('');
+  await waitFor(
+    async () => (await rows.count()) === importedScenes.length,
+    'Pro Scene Navigator imported rows after clearing its search',
+  );
+
+  // Start elsewhere so the rail row has to open Manuscript as well as target
+  // the requested scene.
+  await selectProPanel(page, 'Outline', 'Outline Panel');
+  const knownRow = navigator.locator(`button[data-scene-id="${knownSceneId}"]`);
+  await knownRow.click();
+  const activated = await waitProSceneActivation(
+    page,
+    navigator,
+    knownSceneId,
+    'Pro Scene Navigator Chapter One activation',
+  );
+
+  await waitText(activated.manuscript, 'ALL SAVED', 'Pro manuscript before Scene Navigator save-barrier check');
+  const editor = activated.scene.locator('[data-prose][contenteditable="true"]');
+  await waitVisible(editor, 'Pro Scene Navigator source editor');
+  const scenePatchRoute = '**/api/projects/*/scenes/*';
+  let heldPatch = false;
+  let releaseHeldPatch = () => {};
+  let markPatchHeld = () => {};
+  const patchHeld = new Promise((resolve) => { markPatchHeld = resolve; });
+  const patchRelease = new Promise((resolve) => { releaseHeldPatch = resolve; });
+  const routeHandler = async (route) => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    const targetsScene = pathname.startsWith('/api/projects/')
+      && pathname.endsWith(`/scenes/${knownSceneId}`);
+    if (!heldPatch && request.method() === 'PATCH' && targetsScene) {
+      heldPatch = true;
+      markPatchHeld();
+      await patchRelease;
+    }
+    try {
+      await route.continue();
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('Route is already handled')) return;
+      throw error;
+    }
+  };
+  await page.route(scenePatchRoute, routeHandler);
+  let patchReleased = false;
+  const releasePatch = () => {
+    if (patchReleased) return;
+    patchReleased = true;
+    releaseHeldPatch();
+  };
+  try {
+    await editor.click();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type(SCENE_NAVIGATOR_MARKER);
+    await waitText(editor, SCENE_NAVIGATOR_MARKER, 'typed Pro Scene Navigator save-barrier marker');
+    await waitFor(async () => {
+      const text = (await activated.manuscript.textContent()) ?? '';
+      return text.includes('UNSAVED') || text.includes('SAVING…');
+    }, 'Pro Scene Navigator manuscript dirty/saving transition', 10_000);
+    await withTimeout(patchHeld, 10_000, 'Pro Scene Navigator manuscript PATCH interception');
+
+    const otherRow = navigator.locator(`button[data-scene-id="${otherSceneId}"]`);
+    await otherRow.click();
+    await waitFor(
+      async () => (await otherRow.getAttribute('data-opening')) === 'true',
+      'Pro Scene Navigator queued scene activation',
+    );
+    await delay(250);
+    assert.equal(
+      await knownRow.getAttribute('aria-current'),
+      'location',
+      'Pro Scene Navigator left the current scene before its manuscript save completed',
+    );
+    assert.equal(
+      await otherRow.getAttribute('aria-current'),
+      null,
+      'Pro Scene Navigator marked the next scene current before its manuscript save completed',
+    );
+    assert.equal(
+      await activated.scene.getAttribute('data-scene-prose'),
+      'live',
+      'Pro Scene Navigator replaced the live editor before its manuscript save completed',
+    );
+
+    releasePatch();
+    await waitProSceneActivation(
+      page,
+      navigator,
+      otherSceneId,
+      'queued Pro Scene Navigator activation after manuscript save',
+    );
+  } finally {
+    releasePatch();
+    await page.unroute(scenePatchRoute, routeHandler);
+  }
+  await waitText(
+    proScreen(page, 'Manuscript Editor'),
+    'ALL SAVED',
+    'Pro manuscript after Scene Navigator save-barrier handoff',
+    { timeoutMs: UI_TIMEOUT_MS },
+  );
+
+  const projectsResult = await localServiceRequest(session, '/api/projects');
+  assert.ok(Array.isArray(projectsResult.data), 'Pro scene-navigator project response is invalid');
+  const starterId = Number(
+    projectsResult.data.find((project) => Number(project?.id) !== projectId)?.id,
+  );
+  assert.ok(Number.isSafeInteger(starterId) && starterId > 0, 'Pro Scene Navigator found no starter project');
+  const starterResult = await localServiceRequest(session, `/api/projects/${starterId}/scenes`);
+  assert.ok(Array.isArray(starterResult.data), 'Pro scene-navigator starter scene response is invalid');
+  const starterSceneIds = starterResult.data.map((scene) => Number(scene.id)).sort((a, b) => a - b);
+  const importedSceneIds = importedScenes.map((scene) => Number(scene.id)).sort((a, b) => a - b);
+  const projectSelect = proProjectSelect(page);
+  const projectsButton = page.locator('aside.rail nav')
+    .getByRole('button', { name: 'Projects', exact: true });
+
+  await projectSelect.selectOption(String(starterId));
+  await waitFor(
+    async () => Number(await projectSelect.inputValue()) === starterId
+      && await projectsButton.isEnabled()
+      && JSON.stringify(
+        (await rows.evaluateAll((elements) => elements
+          .map((element) => Number(element.getAttribute('data-scene-id')))
+          .sort((a, b) => a - b))),
+      ) === JSON.stringify(starterSceneIds),
+    'Pro Scene Navigator to replace imported rows for the starter project',
+    STARTUP_TIMEOUT_MS,
+  );
+  const staleImportedRows = await rows.evaluateAll(
+    (elements, importedIds) => elements.filter(
+      (element) => importedIds.includes(Number(element.getAttribute('data-scene-id'))),
+    ).length,
+    importedSceneIds,
+  );
+  assert.equal(staleImportedRows, 0, 'Pro Scene Navigator leaked imported-project scenes into the starter project');
+
+  await projectSelect.selectOption(String(projectId));
+  await waitFor(
+    async () => Number(await projectSelect.inputValue()) === projectId
+      && await projectsButton.isEnabled()
+      && JSON.stringify(
+        (await rows.evaluateAll((elements) => elements
+          .map((element) => Number(element.getAttribute('data-scene-id')))
+          .sort((a, b) => a - b))),
+      ) === JSON.stringify(importedSceneIds),
+    'Pro Scene Navigator imported rows after project restoration',
+    STARTUP_TIMEOUT_MS,
+  );
+  record('journey', 'Pro live Scene Navigator visibility, search, guarded activation, and project isolation verified');
 }
 
 async function verifyProOmniboxNavigation(session, destination) {
@@ -2860,6 +3093,7 @@ async function runProJourney({ electron, exePath, root, bundlePath, bundle, mark
     dialogs: { open: [bundlePath], save: [markdownPath] },
   });
   const expectedDestination = await importAndVerifyInPro(first, bundlePath, bundle, bodyMarker);
+  await verifyProSceneNavigator(first, expectedDestination.projectId);
   await verifyProOmniboxNavigation(first, expectedDestination);
   await verifyProOmniboxCommandReview(first, expectedDestination.projectId);
   await configureProAiAndChat(first.page);

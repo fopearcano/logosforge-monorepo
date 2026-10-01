@@ -7,6 +7,7 @@ import {
   WorkspaceShell,
   DockWorkspace,
   WorkspaceNavigator,
+  StudioSceneNavigator,
   type WorkspaceDockRegion,
   type WorkspaceLayout,
   type WorkspacePanelDefinition,
@@ -955,6 +956,11 @@ export function App() {
       >
         ＋ NEW PROJECT
       </button>
+      <StudioSceneNavigator
+        disabled={!workspaceHydrated || projectSwitching || closePending}
+        onOpenScene={(sceneId) => selectPanel('manuscript', { sceneId })}
+        onSearch={() => setPaletteOpen(true)}
+      />
       <label className="field">
         appearance
         <select value={ambiance} onChange={(e) => setAmbiance(e.target.value as typeof ambiance)}>

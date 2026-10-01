@@ -93,6 +93,15 @@ for (const marker of [
 ]) {
   if (!app.includes(marker)) failures.push(`App note/comment navigation integration missing ${marker}`);
 }
+if (!app.includes('StudioSceneNavigator,')) {
+  failures.push('App does not import the shared live scene navigator');
+}
+if (!/<StudioSceneNavigator[\s\S]{0,500}?onOpenScene=\{\(sceneId\)\s*=>\s*selectPanel\(['"]manuscript['"],\s*\{\s*sceneId\s*\}\)\}/.test(app)) {
+  failures.push('Scene navigator does not use the save-barrier-aware manuscript navigation path');
+}
+if (!/<StudioSceneNavigator[\s\S]{0,500}?onSearch=\{\(\)\s*=>\s*setPaletteOpen\(true\)\}/.test(app)) {
+  failures.push('Scene navigator search does not open the existing Studio Omnibox');
+}
 for (const forbidden of ["cmd.startsWith('nav:')", "cmd.startsWith('ai:')", "cmd.startsWith('theme:')"]) {
   if (app.includes(forbidden)) failures.push(`App still uses the native-menu command switch: ${forbidden}`);
 }

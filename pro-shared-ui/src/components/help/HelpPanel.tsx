@@ -43,7 +43,7 @@ const GUIDE: { title: string; items: [string, string][] }[] = [
     ["Unexpected errors", "Failures outside React panels — such as an unhandled background task — appear in a dismissible error banner and remain in the developer console for diagnosis. Stalled health checks, reads and AI operations end with a visible timeout; ordinary data writes are not cut off mid-commit. Normal request cancellations stay quiet."],
   ] },
   { title: "② The workspace", items: [
-    ["Left rail", "Every section, grouped: Plan · Structure · Analytics · Bible · Export. Click to switch — or press ⌘K and type where you want to go."],
+    ["Left rail", "Filter and open the active project's scenes without leaving the workspace; a scene jump waits for pending manuscript saves before it moves. Every Studio section remains grouped below: Plan · Structure · Analytics · Bible · Export. Use Search project or press ⌘K for the full Omnibox."],
     ["AI dock (right)", "Your AI companions, available in any section. Drag its left edge to resize (340–900px), or focus the divider and use Left/Right arrows (Shift = larger step; Home/End = limits). Click › to collapse it to a strip, ‹ AI to reopen."],
     ["FOCUS / COCKPIT", "Top-right toggle: FOCUS is distraction-free (just the page — Esc to exit); COCKPIT shows the full workstation."],
   ] },

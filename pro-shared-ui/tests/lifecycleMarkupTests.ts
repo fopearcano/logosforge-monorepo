@@ -45,6 +45,7 @@ const manuscript = requireMarkers("components/manuscript/ManuscriptEditor.tsx", 
   "commentDraft && !commentComposerOpen && !commentBusy",
   "contentVisibility: commentOverlayActive ? \"visible\" : \"auto\"",
   "jump(next.location.sceneId, false)",
+  'setSelection({ sceneId: id, text: "", section: "Manuscript" })',
 ]);
 if ((manuscript.match(/<ProseEditor/g) ?? []).length !== 1) failures.push("ManuscriptEditor must keep one conditional ProseEditor render site");
 if (manuscript.includes("contentById")) failures.push("ManuscriptEditor duplicates the whole manuscript in parent content state");

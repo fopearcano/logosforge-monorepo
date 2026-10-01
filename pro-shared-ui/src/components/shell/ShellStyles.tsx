@@ -126,6 +126,33 @@ const CSS = `
 .lf-workspace-navigator-collapsed{width:34px;flex:none;display:flex;border-right:1px solid var(--line2);background:var(--panel2);}
 .lf-workspace-navigator-collapsed button{width:100%;border:0;background:transparent;color:var(--accent);font:inherit;font-size:9px;letter-spacing:.12em;writing-mode:vertical-rl;cursor:pointer;}
 .lf-workspace-navigator-collapsed button:hover{background:var(--tint2);color:var(--strong);}
+/* Shared live scene index. It owns a bounded scroll region so a long manuscript
+   never pushes the host's panel navigation out of reach. */
+.lf-studio-scene-navigator{display:flex;flex:none;min-width:0;max-height:min(34vh,320px);flex-direction:column;margin:8px 10px;border:1px solid var(--line2);background:var(--tint);}
+.lf-studio-scene-navigator-heading{display:flex;align-items:center;gap:7px;min-height:28px;padding:0 8px;border-bottom:1px solid var(--line2);color:var(--txt3);font-size:8px;letter-spacing:.16em;}
+.lf-studio-scene-navigator-heading>span:nth-child(2){color:var(--accent);}
+.lf-studio-scene-search-action{margin-left:auto;padding:3px 5px;border:1px solid var(--line2);background:transparent;color:var(--txt2);font:inherit;font-size:7px;letter-spacing:.04em;cursor:pointer;white-space:nowrap;}
+.lf-studio-scene-search-action:hover{border-color:var(--line-cy);color:var(--accent);}
+.lf-studio-scene-search-action[aria-disabled="true"]{cursor:wait;opacity:.58;}
+.lf-studio-scene-filter{display:flex;align-items:center;gap:6px;padding:6px 7px;border-bottom:1px solid var(--line2);color:var(--txt3);font-size:7px;letter-spacing:.12em;}
+.lf-studio-scene-filter input{width:100%;min-width:0;padding:4px 5px;border:1px solid var(--line2);background:var(--raised);color:var(--txt);font:inherit;font-size:9px;letter-spacing:0;outline:0;}
+.lf-studio-scene-filter input::placeholder{color:var(--txt3);}
+.lf-studio-scene-list{min-height:0;margin:0;padding:3px 0;overflow-y:auto;list-style:none;}
+.lf-studio-scene-list li{margin:0;padding:0;}
+.lf-studio-scene-row{display:flex;width:100%;min-width:0;align-items:center;gap:7px;padding:6px 7px;border:0;border-left:2px solid transparent;background:transparent;color:var(--txt2);font:inherit;text-align:left;cursor:pointer;}
+.lf-studio-scene-row:hover{background:var(--tint2);color:var(--txt);}
+.lf-studio-scene-row[aria-current="location"]{border-left-color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,transparent);color:var(--strong);}
+.lf-studio-scene-row[aria-disabled="true"]{cursor:wait;opacity:.58;}
+.lf-studio-scene-position{width:22px;flex:none;color:var(--txt3);font-family:'Chakra Petch',sans-serif;font-size:9px;text-align:right;}
+.lf-studio-scene-copy{display:flex;min-width:0;flex:1;flex-direction:column;gap:1px;}
+.lf-studio-scene-title,.lf-studio-scene-meta{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.lf-studio-scene-title{font-size:10px;}
+.lf-studio-scene-meta{color:var(--txt3);font-size:7.5px;}
+.lf-studio-scene-state{width:10px;flex:none;color:var(--accent);font-size:8px;text-align:center;}
+.lf-studio-scene-message{padding:9px;color:var(--txt3);font-size:8px;line-height:1.4;text-align:center;}
+.lf-studio-scene-error{display:flex;align-items:center;gap:6px;border-bottom:1px solid color-mix(in srgb,var(--crimson) 45%,transparent);background:color-mix(in srgb,var(--crimson) 8%,transparent);color:var(--crimson);text-align:left;}
+.lf-studio-scene-error span{min-width:0;flex:1;}
+.lf-studio-scene-error button{padding:2px 4px;border:1px solid currentColor;background:transparent;color:inherit;font:inherit;font-size:7px;cursor:pointer;}
 @media (max-width:760px){
   .lf-floating-panel{min-width:min(220px,calc(100% - 16px));max-width:calc(100% - 8px);max-height:calc(100% - 8px);}
   .lf-floating-panel-titlebar{height:36px;}

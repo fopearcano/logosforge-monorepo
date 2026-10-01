@@ -1275,7 +1275,12 @@ export function ManuscriptEditor(props: PanelProps) {
     setActiveId(id);
     setActiveContent((current) => current?.id === id ? current : null);
     setWarmSceneIds((current) => touchWarmSceneIds(current, id));
-  }, []);
+    // Keep the shared Studio context aligned with title focus, outline jumps,
+    // and other scene activations that happen before the prose editor publishes
+    // a text selection. The live navigator and MCP bridge can then identify the
+    // active scene without waiting for a second focus event inside the prose.
+    setSelection({ sceneId: id, text: "", section: "Manuscript" });
+  }, [setSelection]);
   const registerFlush = useCallback((id: number, h: FlushHandlers | null) => {
     if (h) flushers.current.set(id, h); else flushers.current.delete(id);
   }, []);
