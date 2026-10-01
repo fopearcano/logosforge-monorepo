@@ -247,86 +247,9 @@ class LogosForgeMcpGateway:
 
     def search(self, query: str) -> dict:
         pid = self._project_id()
-        needle = (query or "").strip().casefold()
-        if not needle:
+        if not (query or "").strip():
             raise GatewayError("Search query must not be empty.")
-
-        matches: list[dict[str, Any]] = []
-
-        def add(
-            kind: str,
-            item_id: Any,
-            title: str,
-            text: str,
-            metadata: dict[str, Any] | None = None,
-        ) -> None:
-            haystack = text.casefold()
-            offset = haystack.find(needle)
-            if offset < 0 or len(matches) >= 100:
-                return
-            start = max(0, offset - 100)
-            end = min(len(text), offset + len(query) + 140)
-            excerpt = text[start:end].replace("\n", " ").strip()
-            match = {
-                "kind": kind,
-                "id": item_id,
-                "title": title,
-                "excerpt": ("…" if start else "") + excerpt + ("…" if end < len(text) else ""),
-            }
-            if metadata:
-                match.update(metadata)
-            matches.append(match)
-
-        scenes = self.client.list_scenes(pid)
-        for scene in scenes:
-            text = "\n".join(str(scene.get(key, "") or "") for key in (
-                "title", "summary", "synopsis", "goal", "conflict", "outcome",
-                "beat", "act", "chapter", "plotline", "content",
-            ))
-            add("scene", scene.get("id"), str(scene.get("title", "")), text)
-
-        notes = self.client.list_notes(pid)
-        for note in notes:
-            text = "\n".join((
-                str(note.get("title", "")), str(note.get("content", "")),
-                " ".join(str(tag) for tag in note.get("tags", [])),
-            ))
-            add("note", note.get("id"), str(note.get("title", "")), text)
-
-        entries = self.client.list_psyke_entries(pid)
-        for entry in entries:
-            text = "\n".join((
-                str(entry.get("name", "")), str(entry.get("type", "")),
-                " ".join(str(alias) for alias in entry.get("aliases", [])),
-                str(entry.get("notes", "")),
-                json.dumps(entry.get("details", {}), ensure_ascii=False, default=str),
-            ))
-            add("psyke", entry.get("id"), str(entry.get("name", "")), text)
-
-        comments = self.client.list_comments(pid)
-        for comment in comments:
-            replies = comment.get("replies", [])
-            text = "\n".join((
-                str(comment.get("quote", "")),
-                str(comment.get("body", "")),
-                "\n".join(
-                    f"{reply.get('author', '')}: {reply.get('body', '')}"
-                    for reply in replies
-                    if isinstance(reply, dict)
-                ),
-            ))
-            add(
-                "comment",
-                comment.get("id"),
-                f"Comment {comment.get('id')}: {_preview(comment.get('quote'), 80)}",
-                text,
-                {
-                    "revision": comment.get("revision", ""),
-                    "resolved": bool(comment.get("resolved")),
-                },
-            )
-
-        return {"query": query, "matches": matches, "limit": 100}
+        return self.client.search_project(query, pid)
 
     def live_context(self, action: str) -> dict:
         self._project_id()

@@ -218,16 +218,17 @@ async def _exercise_installed_mcp(
         if len(listed.tools) != 38:
             raise RuntimeError(f"expected 38 MCP tools, received {len(listed.tools)}")
         tool_names = {tool.name for tool in listed.tools}
-        expected_comment_tools = {
+        expected_tools = {
+            "logosforge_search",
             "logosforge_list_comments",
             "logosforge_propose_comment_reply",
             "logosforge_propose_comment_resolution",
         }
-        missing_comment_tools = expected_comment_tools - tool_names
-        if missing_comment_tools:
+        missing_tools = expected_tools - tool_names
+        if missing_tools:
             raise RuntimeError(
-                "missing Phase 5C MCP tools: "
-                + ", ".join(sorted(missing_comment_tools))
+                "missing required MCP tools: "
+                + ", ".join(sorted(missing_tools))
             )
         _structured(
             await session.call_tool("logosforge_list_projects", {}),
@@ -239,6 +240,27 @@ async def _exercise_installed_mcp(
             ),
             "installed MCP project selection",
         )
+        search = _structured(
+            await session.call_tool(
+                "logosforge_search", {"query": "Inspect this packaged thread."},
+            ),
+            "installed MCP canonical project search",
+        )
+        search_match = next(
+            (
+                item for item in search.get("matches", [])
+                if item.get("kind") == "comment" and item.get("id") == comment_id
+            ),
+            None,
+        )
+        if search_match is None:
+            raise RuntimeError("installed MCP search did not return the seeded comment")
+        if search_match.get("revision") != comment_revision:
+            raise RuntimeError("installed MCP search returned the wrong comment revision")
+        if search_match.get("resolved") is not False:
+            raise RuntimeError(
+                "installed MCP search returned the wrong comment resolution state"
+            )
         comment_page = _structured(
             await session.call_tool(
                 "logosforge_list_comments", {"include_resolved": True},
@@ -690,8 +712,8 @@ def _smoke_app(app: Path, timeout: int, codex_command: str | None = None) -> Non
                 _stop_process_tree(process, app_pid, core_pid)
         print(
             "Packaged Pro published a verified descriptor, advertised 38 MCP tools "
-            "including the Phase 5C comment tools, applied revision-guarded reply "
-            "and resolution proposals, and rejected stale and replayed applies."
+            "including canonical project search, applied revision-guarded reply and "
+            "resolution proposals, and rejected stale and replayed applies."
         )
 
 

@@ -152,6 +152,14 @@ class LogosForgeApiClient:
         pid = int(project_id) if project_id is not None else self.require_project_id()
         return self.request("GET", f"{self._prefix}/projects/{pid}")
 
+    def search_project(self, query: str, project_id: int | None = None) -> dict:
+        pid = int(project_id) if project_id is not None else self.require_project_id()
+        return self.request(
+            "GET",
+            f"{self._prefix}/projects/{pid}/search",
+            query={"q": query},
+        )
+
     def create_project(self, body: dict) -> dict:
         return self.request("POST", f"{self._prefix}/projects", body)
 

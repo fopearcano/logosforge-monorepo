@@ -193,6 +193,11 @@ check('packaged smoke seeds renderer-canonical comment context before comparing 
   packagedSmoke.includes('"content": "Packaged comment anchor"') &&
   packagedSmoke.includes('"to_offset": 8') &&
   packagedSmoke.includes('"suffix": " comment anchor"'));
+check('packaged smoke exercises canonical project search with comment metadata',
+  packagedSmoke.includes('"logosforge_search"') &&
+  packagedSmoke.includes('"Inspect this packaged thread."') &&
+  packagedSmoke.includes('search_match.get("revision") != comment_revision') &&
+  packagedSmoke.includes('search_match.get("resolved") is not False'));
 check('packaged smoke applies comment proposals and rejects stale and replayed writes',
   packagedSmoke.includes('"logosforge_apply_proposal"') &&
   packagedSmoke.includes('installed MCP stale sibling apply') &&

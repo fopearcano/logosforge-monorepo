@@ -71,6 +71,48 @@ def test_api_client_get_scene_uses_full_scene_endpoint_and_keeps_revision():
     assert result["revision"] == "rev-scene-31"
 
 
+def test_api_client_search_uses_typed_project_endpoint_and_encodes_query():
+    client = LogosForgeApiClient(
+        base_url="http://127.0.0.1:8765", project_id=7, auth_token="secret",
+    )
+    captured = {}
+    response = {
+        "query": "distant thunder & rain",
+        "matches": [{
+            "kind": "comment",
+            "id": 81,
+            "title": "Comment 81: Packaged",
+            "excerpt": "Keep the distant thunder & rain.",
+            "revision": "a" * 64,
+            "resolved": False,
+        }],
+        "limit": 100,
+    }
+
+    def fake_urlopen(request, timeout=None):
+        captured.update(
+            url=request.full_url,
+            method=request.get_method(),
+            authorization=request.headers.get("Authorization"),
+            timeout=timeout,
+        )
+        return _response(response)
+
+    with mock.patch.object(ac.urllib.request, "urlopen", fake_urlopen):
+        result = client.search_project("distant thunder & rain")
+
+    assert captured == {
+        "url": (
+            "http://127.0.0.1:8765/api/projects/7/search"
+            "?q=distant+thunder+%26+rain"
+        ),
+        "method": "GET",
+        "authorization": "Bearer secret",
+        "timeout": 15.0,
+    }
+    assert result == response
+
+
 def test_api_client_requires_an_explicit_project_for_scoped_calls():
     client = LogosForgeApiClient(project_id=None)
 
@@ -181,6 +223,7 @@ class _FakeApiClient:
             "/api/projects/1/psyke/relations": [],
         }
         self.requests: list[tuple[str, str, dict | None]] = []
+        self.search_calls: list[tuple[int, str]] = []
 
     @property
     def has_auth_token(self) -> bool:
@@ -208,6 +251,21 @@ class _FakeApiClient:
             if project["id"] == pid:
                 return copy.deepcopy(project)
         raise LogosForgeApiError(f"Project {pid} not found")
+
+    def search_project(self, query: str, project_id: int | None = None) -> dict:
+        pid = int(project_id) if project_id is not None else self.require_project_id()
+        self.search_calls.append((pid, query))
+        matches = []
+        if pid == 1 and query.casefold() == "distant thunder":
+            matches = [{
+                "kind": "comment",
+                "id": 81,
+                "title": "Comment 81: Before",
+                "excerpt": "Keep the distant thunder.",
+                "revision": "a" * 64,
+                "resolved": False,
+            }]
+        return {"query": query, "matches": matches, "limit": 100}
 
     def select_project(self, project_id: int) -> dict:
         project = self.get_project(project_id)
@@ -404,7 +462,7 @@ def test_scene_reads_return_full_content_and_revision_but_lists_are_compact():
     assert "content" not in listed[0]
 
 
-def test_snapshot_uses_canonical_cast_and_search_includes_scene_prose():
+def test_snapshot_uses_canonical_cast_and_bounded_comment_summaries():
     gateway, _ = _gateway()
 
     snapshot = gateway.snapshot()
@@ -421,23 +479,29 @@ def test_snapshot_uses_canonical_cast_and_search_includes_scene_prose():
     assert snapshot["comments"][0]["reply_count"] == 1
     assert "replies" not in snapshot["comments"][0]
 
-    search = gateway.search("Before")
-    scene_match = next(
-        match for match in search["matches"] if match["kind"] == "scene"
-    )
-    assert scene_match["id"] == 11
-    assert "Before." in scene_match["excerpt"]
 
-    comment_search = gateway.search("distant thunder")
-    assert len(comment_search["matches"]) == 1
-    assert comment_search["matches"][0]["kind"] == "comment"
-    assert comment_search["matches"][0]["id"] == 81
-    assert comment_search["matches"][0]["revision"] == "a" * 64
-    assert comment_search["matches"][0]["resolved"] is False
+def test_search_delegates_once_to_selected_project_and_preserves_comment_metadata():
+    gateway, fake = _gateway()
 
-    resolved_search = gateway.search("Resolved cadence")
-    assert resolved_search["matches"][0]["id"] == 82
-    assert resolved_search["matches"][0]["resolved"] is True
+    result = gateway.search("distant thunder")
+
+    assert fake.search_calls == [(1, "distant thunder")]
+    assert result == {
+        "query": "distant thunder",
+        "matches": [{
+            "kind": "comment",
+            "id": 81,
+            "title": "Comment 81: Before",
+            "excerpt": "Keep the distant thunder.",
+            "revision": "a" * 64,
+            "resolved": False,
+        }],
+        "limit": 100,
+    }
+
+    with pytest.raises(GatewayError, match="must not be empty"):
+        gateway.search("   ")
+    assert fake.search_calls == [(1, "distant thunder")]
 
 
 def test_comment_reads_are_complete_filtered_and_paged():
@@ -565,6 +629,36 @@ def test_comment_tool_handlers_reject_unscoped_fields_and_invalid_pages():
     )
     assert unscoped_author["ok"] is False
     assert "Unexpected argument" in unscoped_author["error"]
+
+
+def test_search_tool_is_strict_project_scoped_and_bounded():
+    from logosforge.librechat.mcp_server import call_tool
+
+    gateway, fake = _gateway()
+    found = call_tool(
+        gateway, "logosforge_search", {"query": "distant thunder"},
+    )
+    assert found["ok"] is True
+    assert found["result"]["matches"][0]["revision"] == "a" * 64
+    assert fake.search_calls == [(1, "distant thunder")]
+
+    blank = call_tool(gateway, "logosforge_search", {"query": "   "})
+    assert blank == {"ok": False, "error": "'query' must be a non-empty string."}
+
+    oversized = call_tool(gateway, "logosforge_search", {"query": "x" * 501})
+    assert oversized == {
+        "ok": False,
+        "error": "'query' is too long (maximum 500 characters).",
+    }
+
+    unscoped = call_tool(
+        gateway,
+        "logosforge_search",
+        {"query": "distant thunder", "project_id": 2},
+    )
+    assert unscoped["ok"] is False
+    assert "Unexpected argument" in unscoped["error"]
+    assert fake.search_calls == [(1, "distant thunder")]
 
 
 def test_scene_proposal_does_not_mutate_and_requires_current_revision():
@@ -741,6 +835,13 @@ def test_mcp_registry_has_unique_focused_tools_and_no_legacy_self_approval():
     assert server.HANDLERS[
         "logosforge_propose_comment_resolution"
     ].idempotent is False
+    search = server.HANDLERS["logosforge_search"]
+    assert search.input_schema == server._obj(
+        {"query": {"type": "string", "maxLength": 500}}, ["query"],
+    )
+    assert search.read_only is True
+    assert search.destructive is False
+    assert search.idempotent is True
 
 
 def test_mcp_config_defaults_to_loopback_and_rejects_unsafe_remote_urls():
@@ -807,6 +908,19 @@ def test_real_mcp_stdio_initializes_and_advertises_structured_tools():
         "required": ["ok"],
         "additionalProperties": False,
     }
+    assert tools["logosforge_search"].inputSchema == {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "maxLength": 500},
+        },
+        "required": ["query"],
+        "additionalProperties": False,
+    }
+    search_annotations = tools["logosforge_search"].annotations
+    assert search_annotations.readOnlyHint is True
+    assert search_annotations.destructiveHint is False
+    assert search_annotations.idempotentHint is True
+    assert search_annotations.openWorldHint is False
     annotations = tools["logosforge_apply_proposal"].annotations
     assert annotations.readOnlyHint is False
     assert annotations.destructiveHint is True

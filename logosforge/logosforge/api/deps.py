@@ -10,6 +10,7 @@ from logosforge.api.config import ApiConfig
 from logosforge.api.errors import forbidden, not_found
 from logosforge.api.events import ApiEventBroker
 from logosforge.db import Database
+from logosforge.psyke_command_plans import PsykeCommandPlanService
 
 
 def get_db(request: Request) -> Database:
@@ -22,6 +23,10 @@ def get_config(request: Request) -> ApiConfig:
 
 def get_broker(request: Request) -> ApiEventBroker:
     return request.app.state.broker
+
+
+def get_psyke_command_plans(request: Request) -> PsykeCommandPlanService:
+    return request.app.state.psyke_command_plans
 
 
 def get_project(

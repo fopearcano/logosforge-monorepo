@@ -20,6 +20,7 @@ from logosforge.api.routes import (
     projects,
     psyke,
     quantum,
+    search,
     scenes,
     themes,
     timeline,
@@ -30,6 +31,7 @@ from logosforge.api.routes import (
 # Ordered list of every router mounted under the /api prefix.
 ALL_ROUTERS = [
     projects.router,
+    search.router,
     scenes.router,
     outline.router,
     plot.router,

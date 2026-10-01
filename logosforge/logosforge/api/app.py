@@ -15,9 +15,10 @@ from logosforge.api.config import ApiConfig
 from logosforge.api.deps import require_auth
 from logosforge.api.errors import install_error_handlers
 from logosforge.api.events import ApiEventBroker
-from logosforge.api.schemas import HealthDTO
 from logosforge.api.routes import ALL_ROUTERS
+from logosforge.api.schemas import HealthDTO
 from logosforge.db import Database
+from logosforge.psyke_command_plans import PsykeCommandPlanService
 
 API_PREFIX = "/api"
 
@@ -58,6 +59,9 @@ def create_api(
     app.state.db = db
     app.state.config = config
     app.state.broker = ApiEventBroker()
+    # Command plans are capability-like and must not survive an API process
+    # restart, even when the same Database object is reused by an embedded host.
+    app.state.psyke_command_plans = PsykeCommandPlanService(db)
 
     # -- CORS --------------------------------------------------------------
     app.add_middleware(

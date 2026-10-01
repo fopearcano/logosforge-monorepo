@@ -135,16 +135,17 @@ async def _exercise_mcp(
         if len(listed.tools) != 38:
             raise RuntimeError(f"expected 38 MCP tools, received {len(listed.tools)}")
         tool_names = {tool.name for tool in listed.tools}
-        expected_comment_tools = {
+        expected_tools = {
+            "logosforge_search",
             "logosforge_list_comments",
             "logosforge_propose_comment_reply",
             "logosforge_propose_comment_resolution",
         }
-        missing_comment_tools = expected_comment_tools - tool_names
-        if missing_comment_tools:
+        missing_tools = expected_tools - tool_names
+        if missing_tools:
             raise RuntimeError(
-                "missing Phase 5C MCP tools: "
-                + ", ".join(sorted(missing_comment_tools))
+                "missing required MCP tools: "
+                + ", ".join(sorted(missing_tools))
             )
         _structured(
             await session.call_tool("logosforge_list_projects", {}),
@@ -156,6 +157,25 @@ async def _exercise_mcp(
             ),
             "MCP project selection",
         )
+        search = _structured(
+            await session.call_tool(
+                "logosforge_search", {"query": "Inspect this packaged thread."},
+            ),
+            "MCP canonical project search",
+        )
+        search_match = next(
+            (
+                item for item in search.get("matches", [])
+                if item.get("kind") == "comment" and item.get("id") == comment_id
+            ),
+            None,
+        )
+        if search_match is None:
+            raise RuntimeError("MCP search did not return the seeded comment")
+        if search_match.get("revision") != comment_revision:
+            raise RuntimeError("MCP search returned the wrong comment revision")
+        if search_match.get("resolved") is not False:
+            raise RuntimeError("MCP search returned the wrong comment resolution state")
         comment_page = _structured(
             await session.call_tool(
                 "logosforge_list_comments", {"include_resolved": True},
@@ -291,8 +311,8 @@ def smoke(executable: Path, mcp_executable: Path | None = None) -> None:
                     process.wait(timeout=10)
         print(
             "Frozen LogosForge MCP initialized, advertised 38 tools including the "
-            "Phase 5C comment tools, read a seeded thread, and created both "
-            "non-mutating comment proposal types."
+            "Phase 5C comment tools, searched and read a seeded thread, and "
+            "created both non-mutating comment proposal types."
         )
 
 

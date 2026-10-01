@@ -28,7 +28,29 @@ if (!KNOWN_EVENTS.includes('comments_changed')) {
   throw new Error('comments_changed is missing from the known project events');
 }
 
-console.log('Contract route/event tests: 3 passed, 0 failed');
+const psykeConsoleRoute = ROUTES.psykeConsoleSuggestions(42);
+if (psykeConsoleRoute !== '/api/projects/42/psyke/console/suggestions') {
+  throw new Error(`PSYKE Console route mismatch: ${psykeConsoleRoute}`);
+}
+
+const projectSearchRoute = ROUTES.projectSearch(42);
+if (projectSearchRoute !== '/api/projects/42/search') {
+  throw new Error(`project search route mismatch: ${projectSearchRoute}`);
+}
+
+const psykeCommandRoutes = [
+  ROUTES.psykeConsolePlan(42),
+  ROUTES.psykeConsoleExecute(42),
+];
+const expectedPsykeCommandRoutes = [
+  '/api/projects/42/psyke/console/plan',
+  '/api/projects/42/psyke/console/execute',
+];
+if (JSON.stringify(psykeCommandRoutes) !== JSON.stringify(expectedPsykeCommandRoutes)) {
+  throw new Error(`PSYKE command route mismatch: ${psykeCommandRoutes}`);
+}
+
+console.log('Contract route/event tests: 6 passed, 0 failed');
 
 const pythonSchemas = readFileSync('../logosforge/logosforge/api/schemas.py', 'utf8');
 const typescriptSchemas = readFileSync('src/types.ts', 'utf8');

@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, RootModel, model_validator
+from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
 
 # ---------------------------------------------------------------------------
 # Projects
@@ -53,6 +53,24 @@ class HealthDTO(BaseModel):
 class ProjectActionResultDTO(BaseModel):
     ok: bool
     project_id: int
+
+
+ProjectSearchKind = Literal["scene", "note", "psyke", "comment"]
+
+
+class ProjectSearchMatchDTO(BaseModel):
+    kind: ProjectSearchKind
+    id: int
+    title: str
+    excerpt: str = ""
+    revision: str | None = None
+    resolved: bool | None = None
+
+
+class ProjectSearchResponseDTO(BaseModel):
+    query: str
+    matches: list[ProjectSearchMatchDTO] = Field(default_factory=list)
+    limit: int = Field(ge=1, le=100)
 
 
 class DeleteResultDTO(BaseModel):
@@ -745,6 +763,60 @@ class PsykeEntryUpdateDTO(BaseModel):
     notes: str | None = None
     is_global: bool | None = None
     details: dict[str, Any] | None = None
+
+
+class PsykeConsoleSuggestionDTO(BaseModel):
+    text: str
+    description: str = ""
+    icon: str = ""
+    category: str
+    score: float
+    entry_id: int = 0
+
+
+class PsykeConsolePlanRequestDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    command: str = Field(min_length=1, max_length=500)
+    active_scene_id: int | None = Field(default=None, gt=0)
+
+
+class PsykeConsoleCommandPlanDTO(BaseModel):
+    plan_id: str
+    command: str
+    normalized_command: str
+    action: Literal[
+        "create_psyke_entry",
+        "open_scene",
+        "open_psyke_entry",
+    ]
+    summary: str
+    effects: list[str] = Field(default_factory=list)
+    requires_confirmation: bool
+    mutates: bool
+    target_type: Literal["scene", "psyke_entry"]
+    target_id: int | None = None
+    expires_at: datetime
+
+
+class PsykeConsoleExecuteRequestDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    plan_id: str = Field(min_length=1, max_length=64)
+    confirmed: Literal[True]
+
+
+class PsykeConsoleExecutionDTO(BaseModel):
+    ok: bool
+    action: Literal[
+        "create_psyke_entry",
+        "open_scene",
+        "open_psyke_entry",
+    ]
+    message: str
+    mutated: bool
+    target_type: Literal["scene", "psyke_entry"]
+    target_id: int
 
 
 class PsykeRelationDTO(BaseModel):

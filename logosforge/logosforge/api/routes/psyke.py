@@ -2,13 +2,32 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+
 from fastapi import APIRouter, Depends, Query
 
 from logosforge.api import schemas, serializers
-from logosforge.api.deps import get_broker, get_db, get_project
-from logosforge.api.errors import bad_request, not_found
+from logosforge.api.deps import (
+    get_broker,
+    get_db,
+    get_project,
+    get_psyke_command_plans,
+)
+from logosforge.api.errors import bad_request, conflict, forbidden, not_found
 from logosforge.api.events import ApiEventBroker
 from logosforge.db import Database
+from logosforge.psyke_command_plans import (
+    CommandPlanAmbiguousError,
+    CommandPlanConfirmationError,
+    CommandPlanConflictError,
+    CommandPlanInputError,
+    CommandPlanNotFoundError,
+    PsykeCommandPlanService,
+)
+from logosforge.psyke_command_registry import CommandRegistry
+from logosforge.psyke_search import PsykeSearchIndex
+from logosforge.psyke_suggestions import suggest
+from logosforge.psyke_system_commands import SystemCommandHandlers
 
 router = APIRouter(tags=["psyke"])
 
@@ -37,6 +56,59 @@ def _progression_or_404(db: Database, project_id: int, progression_id: int):
         raise not_found(f"PSYKE progression {progression_id} not found")
     _entry_or_404(db, project_id, progression.entry_id)
     return progression
+
+
+@dataclass
+class _SceneTermNode:
+    children: dict[str, "_SceneTermNode"] = field(default_factory=dict)
+    entry_ids: set[int] = field(default_factory=set)
+
+
+def _is_word_character(value: str) -> bool:
+    return value == "_" or value.isalnum()
+
+
+def _scene_relevant_entry_ids(scene, entries) -> set[int]:
+    """Find exact, case-insensitive name/alias mentions in a scene.
+
+    The lookarounds avoid substring boosts (for example, ``Mary`` must not
+    match ``Maryland``) while still supporting multi-word names and aliases.
+    Only the three fields surfaced by the console context contract participate.
+    """
+    scene_text = "\n".join(
+        (scene.title or "", scene.summary or "", scene.content or "")
+    ).casefold()
+    root = _SceneTermNode()
+    for entry in entries:
+        if entry.id is None:
+            continue
+        raw_terms = [entry.name, *(entry.aliases.split(",") if entry.aliases else [])]
+        for raw_term in raw_terms:
+            term = raw_term.strip().casefold()
+            if not term:
+                continue
+            node = root
+            for character in term:
+                node = node.children.setdefault(character, _SceneTermNode())
+            node.entry_ids.add(entry.id)
+
+    relevant: set[int] = set()
+    for start in range(len(scene_text)):
+        if start > 0 and _is_word_character(scene_text[start - 1]):
+            continue
+        node = root
+        cursor = start
+        while cursor < len(scene_text):
+            node = node.children.get(scene_text[cursor])
+            if node is None:
+                break
+            cursor += 1
+            if node.entry_ids and (
+                cursor == len(scene_text)
+                or not _is_word_character(scene_text[cursor])
+            ):
+                relevant.update(node.entry_ids)
+    return relevant
 
 
 # -- Entries -----------------------------------------------------------------
@@ -271,3 +343,123 @@ def search_psyke(
         if not needle or needle in haystack:
             results.append(serializers.psyke_entry_to_dto(db, e))
     return results
+
+
+@router.get(
+    "/projects/{project_id}/psyke/console/suggestions",
+    response_model=list[schemas.PsykeConsoleSuggestionDTO],
+)
+def psyke_console_suggestions(
+    q: str = Query("", max_length=500, description="PSYKE Console input"),
+    scene_id: int | None = Query(None, description="Optional in-project scene context"),
+    project=Depends(get_project),
+    db: Database = Depends(get_db),
+):
+    """Return ranked, read-only console suggestions for one project.
+
+    ``SystemCommandHandlers`` is used only to populate command metadata in the
+    registry. This endpoint never resolves or invokes a handler.
+    """
+    entries = db.get_all_psyke_entries(project.id)
+    search_index = PsykeSearchIndex(db, project.id, lazy=True)
+    search_index.rebuild_from(entries)
+
+    registry = CommandRegistry()
+    SystemCommandHandlers(db, project.id).register_all(registry)
+
+    scene_entry_ids = None
+    if scene_id is not None:
+        scene = _scene_or_404(db, project.id, scene_id)
+        scene_entry_ids = _scene_relevant_entry_ids(scene, entries)
+
+    return [
+        schemas.PsykeConsoleSuggestionDTO(
+            text=item.text,
+            description=item.description,
+            icon=item.icon,
+            category=item.category,
+            score=item.score,
+            entry_id=item.entry_id,
+        )
+        for item in suggest(
+            q,
+            search_index,
+            registry=registry,
+            scene_entry_ids=scene_entry_ids,
+        )
+    ]
+
+
+@router.post(
+    "/projects/{project_id}/psyke/console/plan",
+    response_model=schemas.PsykeConsoleCommandPlanDTO,
+)
+def plan_psyke_console_command(
+    body: schemas.PsykeConsolePlanRequestDTO,
+    project=Depends(get_project),
+    plans: PsykeCommandPlanService = Depends(get_psyke_command_plans),
+):
+    """Preview a deterministic project-local command without executing it."""
+    try:
+        plan = plans.create_plan(
+            project.id,
+            body.command,
+            active_scene_id=body.active_scene_id,
+        )
+    except CommandPlanAmbiguousError as exc:
+        raise conflict(str(exc), code="ambiguous_command_target") from exc
+    except CommandPlanInputError as exc:
+        raise bad_request(str(exc)) from exc
+    return schemas.PsykeConsoleCommandPlanDTO(
+        plan_id=plan.plan_id,
+        command=plan.command,
+        normalized_command=plan.normalized_command,
+        action=plan.action,
+        summary=plan.summary,
+        effects=list(plan.effects),
+        requires_confirmation=plan.requires_confirmation,
+        mutates=plan.mutates,
+        target_type=plan.target_type,
+        target_id=plan.target_id,
+        expires_at=plan.expires_at,
+    )
+
+
+@router.post(
+    "/projects/{project_id}/psyke/console/execute",
+    response_model=schemas.PsykeConsoleExecutionDTO,
+)
+def execute_psyke_console_command(
+    body: schemas.PsykeConsoleExecuteRequestDTO,
+    project=Depends(get_project),
+    plans: PsykeCommandPlanService = Depends(get_psyke_command_plans),
+    broker: ApiEventBroker = Depends(get_broker),
+):
+    """Execute the exact stored plan after any required confirmation."""
+    try:
+        result = plans.execute_plan(
+            project.id,
+            body.plan_id,
+            confirmed=body.confirmed,
+        )
+    except CommandPlanNotFoundError as exc:
+        raise not_found(str(exc)) from exc
+    except CommandPlanConfirmationError as exc:
+        raise forbidden(str(exc)) from exc
+    except CommandPlanConflictError as exc:
+        raise conflict(str(exc), code="stale_command_plan") from exc
+
+    if result.mutated and result.target_type == "psyke_entry":
+        broker.publish(
+            "psyke_changed",
+            project_id=project.id,
+            entry_id=result.target_id,
+        )
+    return schemas.PsykeConsoleExecutionDTO(
+        ok=result.ok,
+        action=result.action,
+        message=result.message,
+        mutated=result.mutated,
+        target_type=result.target_type,
+        target_id=result.target_id,
+    )

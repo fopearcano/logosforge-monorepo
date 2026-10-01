@@ -162,6 +162,14 @@ The three comment-specific tools are `logosforge_list_comments`,
 (`resolved: true`) or Reopen (`resolved: false`); neither proposal tool changes
 the thread until `logosforge_apply_proposal` succeeds.
 
+`logosforge_search(query)` uses the same typed, project-scoped search endpoint
+as the Pro workspace. It returns bounded matches from scenes, notes, PSYKE, and
+user-authored comment threads without loading those domains separately through
+the gateway. Comment matches retain their exact thread `revision` and
+`resolved` state so an agent can follow with a current full-thread read before
+preparing a proposal. The selected MCP project is authoritative; callers cannot
+override it with a project id in the search arguments.
+
 Scene edits require the current scene `revision`. The API performs the final
 atomic stale-revision check, so newer prose cannot be silently overwritten.
 Comment reply and Resolve/Reopen proposals likewise require the exact

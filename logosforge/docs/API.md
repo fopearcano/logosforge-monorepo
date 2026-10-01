@@ -116,6 +116,19 @@ Changing `narrative_engine` is accepted only while the project is still an
 empty scaffold. Once manuscript or planning content exists, the API returns
 `409 writing_mode_locked` so existing prose is never reinterpreted silently.
 
+### Project search
+```
+GET /api/projects/{project_id}/search?q={query}&kinds=scene&kinds=psyke&limit=100
+```
+
+Search is authenticated and strictly scoped to the selected project. It reads
+the authoritative scene, note, PSYKE, and comment rows on demand, so committed
+edits are visible immediately without a separate index. `kinds` may be repeated
+with any of `scene`, `note`, `psyke`, or `comment`; omitting it searches all four.
+`limit` is bounded to 1–100. Results are returned best-first as compact
+`{ kind, id, title, excerpt, revision?, resolved? }` records; the revision and
+resolution fields are present only for comment matches.
+
 ### Scenes / manuscript
 ```
 GET    /api/projects/{project_id}/scenes

@@ -22,6 +22,7 @@ export const ROUTES = {
   projectSave: (id: number) => `/api/projects/${id}/save`,
   projectClose: (id: number) => `/api/projects/${id}/close`,
   projectSettings: (id: number) => `/api/projects/${id}/settings`,
+  projectSearch: (id: number) => `/api/projects/${id}/search`,
 
   // Per-project domains (p = project id)
   scenes: (p: number) => `/api/projects/${p}/scenes`,
@@ -44,6 +45,9 @@ export const ROUTES = {
   psykeProgressions: (p: number) => `/api/projects/${p}/psyke/progressions`,
   psykeProgression: (p: number, progressionId: number) => `/api/projects/${p}/psyke/progressions/${progressionId}`,
   psykeSearch: (p: number) => `/api/projects/${p}/psyke/search`,
+  psykeConsoleSuggestions: (p: number) => `/api/projects/${p}/psyke/console/suggestions`,
+  psykeConsolePlan: (p: number) => `/api/projects/${p}/psyke/console/plan`,
+  psykeConsoleExecute: (p: number) => `/api/projects/${p}/psyke/console/execute`,
   notes: (p: number) => `/api/projects/${p}/notes`,
   note: (p: number, noteId: number) => `/api/projects/${p}/notes/${noteId}`,
   noteSceneLink: (p: number, noteId: number, sceneId: number) => `/api/projects/${p}/notes/${noteId}/scene-links/${sceneId}`,

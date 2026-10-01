@@ -120,6 +120,11 @@ and stale-state guard under an opaque, expiring id. Only
 proposal is single-use. There is no generic action tool and no
 `confirmed=true` shortcut.
 
+`logosforge_search` delegates to the core's typed, project-scoped search route
+in one authenticated request. Results remain bounded and include authoritative
+comment revision/resolution metadata; the gateway does not fetch and combine
+whole scene, note, PSYKE, and comment collections itself.
+
 Writes are disabled by default. They require the explicit MCP write gate and,
 by default, a shared API token; scene writes also require the current revision
 so the API can reject stale prose atomically. Configure the MCP client to ask

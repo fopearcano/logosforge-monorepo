@@ -361,6 +361,28 @@ export interface SettingsDTO {
   settings: Record<string, unknown>;
 }
 
+// ── Project-wide search ─────────────────────────────────────────────────────
+export type ProjectSearchKind = "scene" | "note" | "psyke" | "comment";
+
+/** One bounded, core-ranked match from the active project's searchable text. */
+export interface ProjectSearchMatchDTO {
+  kind: ProjectSearchKind;
+  id: number;
+  title: string;
+  excerpt: string;
+  /** Present for revisioned resources such as comments. */
+  revision?: string | null;
+  /** Present for comment matches. */
+  resolved?: boolean | null;
+}
+
+/** Authoritative project search response; matches are ordered best-first. */
+export interface ProjectSearchResponseDTO {
+  query: string;
+  matches: ProjectSearchMatchDTO[];
+  limit: number;
+}
+
 // ── Writing modes ──────────────────────────────────────────────────────────
 export interface WritingModeDTO {
   id: string;
@@ -604,6 +626,59 @@ export interface PsykeProgressionCreateDTO {
 export interface PsykeProgressionUpdateDTO {
   text: string;
   scene_id?: number | null;
+}
+
+/** Ranked result from the core-owned PSYKE Console suggestion engine. */
+export interface PsykeConsoleSuggestionDTO {
+  text: string;
+  description: string;
+  icon: string;
+  /** intent | command | nl_command | entity | entity_action | nl_action */
+  category: string;
+  score: number;
+  /** Zero for command-only suggestions; otherwise the authoritative entry id. */
+  entry_id: number;
+}
+
+export type PsykeConsoleAction =
+  | "create_psyke_entry"
+  | "open_scene"
+  | "open_psyke_entry";
+export type PsykeConsoleTarget = "scene" | "psyke_entry";
+
+/** Read-only request to resolve and freeze one safe console command. */
+export interface PsykeConsolePlanRequestDTO {
+  command: string;
+  active_scene_id?: number | null;
+}
+
+/** Opaque, short-lived preview. Only its plan_id is accepted for execution. */
+export interface PsykeConsoleCommandPlanDTO {
+  plan_id: string;
+  command: string;
+  normalized_command: string;
+  action: PsykeConsoleAction;
+  summary: string;
+  effects: string[];
+  requires_confirmation: boolean;
+  mutates: boolean;
+  target_type: PsykeConsoleTarget;
+  target_id: number | null;
+  expires_at: string;
+}
+
+export interface PsykeConsoleExecuteRequestDTO {
+  plan_id: string;
+  confirmed: true;
+}
+
+export interface PsykeConsoleExecutionDTO {
+  ok: boolean;
+  action: PsykeConsoleAction;
+  message: string;
+  mutated: boolean;
+  target_type: PsykeConsoleTarget;
+  target_id: number;
 }
 
 // ── Notes ──────────────────────────────────────────────────────────────────
