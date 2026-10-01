@@ -188,13 +188,16 @@ export function useWorkspaceLayout({
         // payload and prevents later in-memory mutations from changing it.
         const payload = JSON.parse(serializeWorkspaceLayout(snapshot)) as WorkspaceLayout;
         if (mountedRef.current && ownerIsCurrent()) setSaving(true);
-        write = Promise.resolve().then(() => saveLayout.call(
+        // Invoke synchronously before wrapping the result. Browser hosts whose
+        // storage write is synchronous can therefore persist a zero-debounce
+        // edit in the same event turn instead of depending on an unload timer.
+        write = Promise.resolve(saveLayout.call(
           targetPlatform,
           targetProjectId,
           payload,
           { preserveBackup },
         ));
-        await trackProjectWrite(write);
+        await trackProjectWrite(write, { saveKey: `workspace-layout:${targetProjectId}` });
       } catch (saveError) {
         // A completion belonging to an old project/reload may neither publish
         // an error nor clear the current owner's dirty state.
@@ -243,6 +246,10 @@ export function useWorkspaceLayout({
 
   const scheduleSave = useCallback(() => {
     clearTimer();
+    if (debounceMsRef.current <= 0) {
+      void flushLayout();
+      return;
+    }
     timerRef.current = setTimeout(() => {
       timerRef.current = null;
       void flushLayout();
@@ -267,7 +274,7 @@ export function useWorkspaceLayout({
     if (currentProjectId !== undefined) {
       dirtyRef.current = true;
       dirtyRevisionRef.current += 1;
-      markProjectSavePending();
+      markProjectSavePending(`workspace-layout:${currentProjectId}`);
       scheduleSave();
     }
   }, [scheduleSave]);
@@ -309,7 +316,7 @@ export function useWorkspaceLayout({
     if (currentProjectId !== undefined) {
       dirtyRef.current = true;
       dirtyRevisionRef.current += 1;
-      markProjectSavePending();
+      markProjectSavePending(`workspace-layout:${currentProjectId}`);
       scheduleSave();
     }
   }, [allowedPanelFingerprint, scheduleSave, stableAllowedPanelIds]);
@@ -389,7 +396,7 @@ export function useWorkspaceLayout({
           preserveBackupRef.current = recoveredFromBackup;
           dirtyRef.current = true;
           dirtyRevisionRef.current += 1;
-          markProjectSavePending();
+          markProjectSavePending(`workspace-layout:${targetProjectId}`);
           scheduleSave();
         } else if (restored.source === "default" && restored.fallbackReason !== "absent") {
           // If the writer deliberately resets after an invalid primary, do not

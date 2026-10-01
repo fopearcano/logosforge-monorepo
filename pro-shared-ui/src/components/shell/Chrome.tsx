@@ -3,16 +3,27 @@ import type { AdaptDTO } from "@logosforge/ui-contracts";
 import type { ShellLayout } from "./shellVars";
 import { useStudio, useNavigate } from "../../adapters/StudioProvider";
 import { createLatestRequestGate } from "../../hooks/latestRequest";
+import type { WorkspaceCoreState, WorkspaceStatusModel, WorkspaceStatusTone } from "../../status/workspaceStatus";
+export { PsykeConsole } from "./PsykeConsole";
 
 /** Top-bar omnibox — opens the app's command palette. */
 export function CommandPalette({ onOpen }: { onOpen?: () => void }) {
+  const available = typeof onOpen === "function";
   return (
     <div style={{ flex: 1, display: "flex", justifyContent: "center" }}>
-      <button type="button" onClick={onOpen} className="lf-cmd" style={{ display: "flex", alignItems: "center", gap: 10, width: 560, height: 30, padding: "0 12px", background: "var(--tint)", border: "1px solid var(--line2)", borderRadius: 2, color: "var(--txt3)", transition: ".15s", cursor: onOpen ? "text" : "default", font: "inherit", textAlign: "left" }}>
+      <button
+        type="button"
+        onClick={onOpen}
+        disabled={!available}
+        aria-label={available ? "Open command palette" : "Command palette is available in the desktop host"}
+        title={available ? "Open command palette" : "The browser preview does not host desktop commands"}
+        className="lf-cmd"
+        style={{ display: "flex", alignItems: "center", gap: 10, width: 560, height: 30, padding: "0 12px", background: "var(--tint)", border: "1px solid var(--line2)", borderRadius: 2, color: "var(--txt3)", transition: ".15s", cursor: available ? "text" : "not-allowed", font: "inherit", textAlign: "left", opacity: available ? 1 : 0.62 }}
+      >
         <span style={{ display: "grid", placeItems: "center", width: 18, height: 16, border: "1px solid var(--line2)", fontSize: 9, color: "var(--txt2)" }}>⌘K</span>
         <span style={{ color: "var(--accent)" }}>❯</span>
-        <span style={{ fontSize: 11, letterSpacing: ".04em", flex: 1 }}>Run a command · jump to a section · open an AI tool…</span>
-        <span style={{ fontSize: 8, letterSpacing: ".2em", color: "var(--txt3)", border: "1px solid var(--line2)", padding: "1px 5px" }}>PALETTE</span>
+        <span style={{ fontSize: 11, letterSpacing: ".04em", flex: 1 }}>{available ? "Run a command · jump to a section · open an AI tool…" : "Command palette is hosted by the desktop app"}</span>
+        <span style={{ fontSize: 8, letterSpacing: ".2em", color: "var(--txt3)", border: "1px solid var(--line2)", padding: "1px 5px" }}>{available ? "PALETTE" : "DESKTOP"}</span>
       </button>
     </div>
   );
@@ -141,29 +152,62 @@ function FocusToggle({ layout, onToggle }: { layout: ShellLayout; onToggle?: () 
   );
 }
 
-function SyncHud({ countdown }: { countdown: string }) {
+const STATUS_COLOR: Record<WorkspaceStatusTone, string> = {
+  neutral: "var(--txt2)",
+  info: "var(--accent)",
+  success: "var(--green)",
+  warning: "var(--amber)",
+  danger: "var(--crimson)",
+};
+
+const UNKNOWN_STATUS: WorkspaceStatusModel = {
+  kind: "ready",
+  priority: 0,
+  tone: "neutral",
+  copy: "LOCAL STATUS UNKNOWN",
+  detail: "No runtime persistence status was supplied by this host.",
+  storage: "local",
+  storageCopy: "LOCAL",
+  dirty: false,
+  inFlightCount: 0,
+  lastSavedAt: null,
+};
+
+function SyncHud({ status = UNKNOWN_STATUS }: { status?: WorkspaceStatusModel }) {
+  const color = STATUS_COLOR[status.tone];
+  const saved = status.lastSavedAt == null ? "No completed save in this session" : `Last local save ${new Date(status.lastSavedAt).toLocaleTimeString()}`;
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 9, height: 26, padding: "0 11px", border: "1px solid rgba(98,217,154,.35)", background: "rgba(98,217,154,.06)" }}>
-      <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--green)", boxShadow: "0 0 8px var(--green)" }} />
-      <span style={{ fontSize: 9, letterSpacing: ".16em", color: "var(--green)" }}>SYNCED</span>
-      <span style={{ width: 1, height: 13, background: "var(--line2)" }} />
-      <span style={{ fontSize: 9, color: "var(--txt2)", letterSpacing: ".08em" }}>⟲ AUTOSAVE {countdown}</span>
-      <span style={{ width: 1, height: 13, background: "var(--line2)" }} />
-      <span style={{ fontSize: 9, color: "var(--txt3)", letterSpacing: ".12em" }}>LOCAL</span>
-    </div>
+    <>
+      <span role="status" aria-live="polite" aria-atomic="true" style={{ position: "absolute", width: 1, height: 1, padding: 0, margin: -1, overflow: "hidden", clip: "rect(0,0,0,0)", whiteSpace: "nowrap", border: 0 }}>
+        {status.copy}. {status.detail}
+      </span>
+      <details style={{ position: "relative", height: 26 }}>
+        <summary aria-label={`Workspace status: ${status.copy}`} style={{ listStyle: "none", display: "flex", alignItems: "center", gap: 9, height: 26, padding: "0 11px", border: `1px solid color-mix(in srgb, ${color} 38%, transparent)`, background: "var(--tint)", cursor: "pointer" }}>
+          <span aria-hidden="true" style={{ width: 7, height: 7, borderRadius: "50%", background: color, boxShadow: `0 0 8px ${color}` }} />
+          <span style={{ fontSize: 9, letterSpacing: ".13em", color }}>{status.copy}</span>
+          <span aria-hidden="true" style={{ width: 1, height: 13, background: "var(--line2)" }} />
+          <span style={{ fontSize: 8, color: "var(--txt3)", letterSpacing: ".12em" }}>{status.storageCopy}</span>
+        </summary>
+        <div style={{ position: "absolute", top: 32, right: 0, zIndex: 70, width: 320, padding: "11px 12px", border: "1px solid var(--line)", borderTop: `2px solid ${color}`, background: "var(--raised)", boxShadow: "0 14px 38px rgba(0,0,0,.48)", fontSize: 9, lineHeight: 1.5 }}>
+          <div style={{ color, letterSpacing: ".14em", marginBottom: 5 }}>{status.copy}</div>
+          <div style={{ color: "var(--txt2)" }}>{status.detail}</div>
+          <div style={{ color: "var(--txt3)", marginTop: 7 }}>{saved} · storage: this device</div>
+        </div>
+      </details>
+    </>
   );
 }
 
 export function TopBar({
   formatBadge,
   layout,
-  countdown,
+  runtimeStatus,
   onCommandPalette,
   onToggleFocus,
 }: {
   formatBadge: string;
   layout: ShellLayout;
-  countdown: string;
+  runtimeStatus?: WorkspaceStatusModel;
   onCommandPalette?: () => void;
   onToggleFocus?: () => void;
 }) {
@@ -190,39 +234,23 @@ export function TopBar({
       <CommandPalette onOpen={onCommandPalette} />
       <ModeStrip />
       <FocusToggle layout={layout} onToggle={onToggleFocus} />
-      <SyncHud countdown={countdown} />
+      <SyncHud status={runtimeStatus} />
     </div>
   );
 }
 
-/** PSYKE console slim bar (omni-input surface 2), pinned under the editor. */
-export function PsykeConsole() {
-  return (
-    <div style={{ height: 30, flex: "none", display: "flex", alignItems: "center", gap: 10, padding: "0 14px", background: "var(--panel2)", borderTop: "1px solid var(--line)", position: "relative" }}>
-      <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 2, background: "var(--accent)", boxShadow: "0 0 10px var(--accent)" }} />
-      <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 700, color: "var(--accent)", fontSize: 12 }}>ψ</span>
-      <span style={{ color: "var(--accent)" }}>❯</span>
-      <span style={{ flex: 1, fontSize: 11, color: "var(--txt3)", letterSpacing: ".03em" }}>
-        Search the bible or type <span style={{ color: "var(--txt2)" }}>/</span> for commands — <span style={{ color: "var(--txt2)" }}>/create  /open  /go  /ai  /idea</span>
-      </span>
-      <span style={{ fontSize: 8, letterSpacing: ".22em", color: "var(--txt3)", border: "1px solid var(--line2)", padding: "2px 6px" }}>PSYKE CONSOLE</span>
-      <span style={{ fontSize: 8, letterSpacing: ".2em", color: "var(--txt3)" }}>⌘⏎</span>
-    </div>
-  );
-}
-
-export function StatusBar({ countdown, sync, statusCenter }: { countdown: string; sync: string; statusCenter: string }) {
-  void sync;
+export function StatusBar({ runtimeStatus = UNKNOWN_STATUS, coreState = "connecting", statusCenter }: { runtimeStatus?: WorkspaceStatusModel; coreState?: WorkspaceCoreState; statusCenter: string }) {
+  const color = STATUS_COLOR[runtimeStatus.tone];
+  const coreColor = coreState === "connected" ? "var(--green)" : coreState === "error" ? "var(--crimson)" : "var(--amber)";
   return (
     <div style={{ position: "relative", zIndex: 30, height: 26, flex: "none", display: "flex", alignItems: "center", gap: 14, padding: "0 14px", background: "var(--base)", borderTop: "1px solid var(--line)", fontSize: 9, letterSpacing: ".06em", color: "var(--txt3)" }}>
       <span style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--txt2)" }}>
-        <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--green)", boxShadow: "0 0 6px var(--green)", animation: "lf-pulse 2.4s ease-in-out infinite" }} />CORE · CONNECTED
+        <span style={{ width: 6, height: 6, borderRadius: "50%", background: coreColor, boxShadow: `0 0 6px ${coreColor}`, animation: coreState === "connecting" ? "lf-pulse 2.4s ease-in-out infinite" : undefined }} />CORE · {coreState.toUpperCase()}
       </span>
-      <span style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--green)", border: "1px solid rgba(98,217,154,.28)", padding: "1px 8px", letterSpacing: ".14em" }}>LOCAL-FIRST</span>
+      <span style={{ display: "flex", alignItems: "center", gap: 6, color, border: `1px solid color-mix(in srgb, ${color} 30%, transparent)`, padding: "1px 8px", letterSpacing: ".12em" }}>{runtimeStatus.copy}</span>
       <div style={{ flex: 1, textAlign: "center", color: "var(--txt2)", letterSpacing: ".12em" }}>{statusCenter}</div>
       <span style={{ color: "var(--txt2)" }}>UTF-8</span>
-      <span style={{ color: "var(--txt2)" }}>⟲ {countdown}</span>
-      <span style={{ color: "var(--txt2)" }}>LOCAL</span>
+      <span style={{ color: "var(--txt2)" }}>{runtimeStatus.storageCopy} DATA</span>
     </div>
   );
 }

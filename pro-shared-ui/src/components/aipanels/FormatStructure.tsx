@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { GnPageDTO, GnPanelDTO, GnContinuityItemDTO, GnContinuityAppearanceDTO, StageCueDTO, StageEntranceExitDTO, StageBusinessDTO, SeasonDTO, EpisodeDTO, SeriesArcDTO, EpisodePlotlineDTO, ContinuityMemoryDTO, SceneDTO, CharacterDTO, PsykeEntryDTO } from "@logosforge/ui-contracts";
 import { PanelShell, Corners, type PanelProps } from "../shell/PanelShell";
 import { useStudio } from "../../adapters/StudioProvider";
-import { flushPendingProjectSaves, markProjectSavePending, registerProjectFlusher, trackProjectWrite } from "../../adapters/projectSaveCoordinator";
+import { discardProjectSavePending, flushPendingProjectSaves, markProjectSavePending, registerProjectFlusher, trackProjectWrite } from "../../adapters/projectSaveCoordinator";
 import { createLatestRequestGate } from "../../hooks/latestRequest";
 import { ApiRequestError } from "../../adapters/httpApiClient";
 import { ConfirmDeleteButton } from "../common/ConfirmDeleteButton";
@@ -256,16 +256,24 @@ function SceneGraphAuthoring({ pid }: { pid: number }) {
   persistWkwRef.current = async () => {
     if (wkwInFlightRef.current) return wkwInFlightRef.current;
     const draft = wkwDraftRef.current;
-    if (!draft || draft.text === draft.original) return true;
+    if (!draft) return true;
+    const saveKey = `scene-wkw:${pid}:${draft.sceneId}`;
+    if (draft.text === draft.original) {
+      discardProjectSavePending(saveKey);
+      return true;
+    }
     const operation = (async () => {
       if (mounted.current) { setSavingEdit(true); setMsg("saving…"); }
       try {
         const force = forceWkwOverwriteRef.current;
         forceWkwOverwriteRef.current = false;
-        const updated = await trackProjectWrite(api.updateScene(pid, draft.sceneId, {
-          who_knows_what: draft.text,
-          ...(!force && draft.revision ? { expected_revision: draft.revision } : {}),
-        }));
+        const updated = await trackProjectWrite(
+          api.updateScene(pid, draft.sceneId, {
+            who_knows_what: draft.text,
+            ...(!force && draft.revision ? { expected_revision: draft.revision } : {}),
+          }),
+          { saveKey },
+        );
         if (wkwDraftRef.current?.sceneId === draft.sceneId) {
           wkwDraftRef.current = { ...wkwDraftRef.current, original: draft.text, revision: updated.revision ?? "" };
         }
@@ -304,6 +312,7 @@ function SceneGraphAuthoring({ pid }: { pid: number }) {
       return false;
     }
     if (next.target === draft.original.target && next.value === draft.original.value && next.kind === draft.original.kind) {
+      discardProjectSavePending(`continuity:${pid}:${draft.sceneId}:${draft.id}`);
       continuityDraftRef.current = null;
       if (mounted.current) setEditId(null);
       return true;
@@ -311,7 +320,10 @@ function SceneGraphAuthoring({ pid }: { pid: number }) {
     const operation = (async () => {
       if (mounted.current) { setSavingEdit(true); setDelErr(""); }
       try {
-        await api.updateContinuity(pid, draft.sceneId, draft.id, next);
+        await trackProjectWrite(
+          api.updateContinuity(pid, draft.sceneId, draft.id, next),
+          { saveKey: `continuity:${pid}:${draft.sceneId}:${draft.id}` },
+        );
         const current = continuityDraftRef.current;
         if (current === draft) {
           continuityDraftRef.current = null;
@@ -364,6 +376,7 @@ function SceneGraphAuthoring({ pid }: { pid: number }) {
       const text = latest.who_knows_what ?? "";
       setScenes(rows);
       wkwDraftRef.current = { sceneId: latest.id, original: text, text, revision: latest.revision ?? "" };
+      discardProjectSavePending(`scene-wkw:${pid}:${latest.id}`);
       setWkw(text); setWkwConflict(false); setMsg("reloaded newer who-knows");
     } catch (error) {
       setMsg(`reload failed — ${error instanceof Error ? error.message : String(error)}`);
@@ -395,7 +408,7 @@ function SceneGraphAuthoring({ pid }: { pid: number }) {
       wkwDraftRef.current = current?.sceneId === sel
         ? { ...current, text }
         : { sceneId: sel, original: "", text, revision: scenes.find((scene) => scene.id === sel)?.revision ?? "" };
-      markProjectSavePending();
+      markProjectSavePending(`scene-wkw:${pid}:${sel}`);
     }
   };
   const delNote = async (id: number) => { if (sel == null) return; setBusyDel(`n${id}`); setDelErr(""); try { await api.deleteContinuity(pid, sel, id); await reloadNotes(); } catch (e) { setDelErr(`delete failed — ${e instanceof Error ? e.message : String(e)}`); } finally { setBusyDel(null); } };
@@ -410,9 +423,15 @@ function SceneGraphAuthoring({ pid }: { pid: number }) {
     const draft = continuityDraftRef.current;
     if (!draft) return;
     continuityDraftRef.current = { ...draft, value: { ...draft.value, ...patch } };
-    markProjectSavePending();
+    markProjectSavePending(`continuity:${pid}:${draft.sceneId}:${draft.id}`);
   };
-  const cancelContinuityEdit = () => { continuityDraftRef.current = null; setEditId(null); setDelErr(""); };
+  const cancelContinuityEdit = () => {
+    const draft = continuityDraftRef.current;
+    if (draft) discardProjectSavePending(`continuity:${pid}:${draft.sceneId}:${draft.id}`);
+    continuityDraftRef.current = null;
+    setEditId(null);
+    setDelErr("");
+  };
   const saveNote = async (id: number) => {
     if (continuityDraftRef.current?.id !== id) return;
     await persistContinuityRef.current();
@@ -674,6 +693,7 @@ function SeriesAuthoring({ pid }: { pid: number }) {
       return false;
     }
     if (title === draft.original) {
+      discardProjectSavePending(`${draft.kind}-title:${pid}:${draft.id}`);
       renameDraftRef.current = null;
       if (mounted.current) setEditKey(null);
       return true;
@@ -681,8 +701,17 @@ function SeriesAuthoring({ pid }: { pid: number }) {
     const operation = (async () => {
       if (mounted.current) { setRenameBusy(true); setDelErr(""); }
       try {
-        if (draft.kind === "season") await api.updateSeason(pid, draft.id, { title });
-        else await api.updateEpisode(pid, draft.id, { title });
+        if (draft.kind === "season") {
+          await trackProjectWrite(
+            api.updateSeason(pid, draft.id, { title }),
+            { saveKey: `season-title:${pid}:${draft.id}` },
+          );
+        } else {
+          await trackProjectWrite(
+            api.updateEpisode(pid, draft.id, { title }),
+            { saveKey: `episode-title:${pid}:${draft.id}` },
+          );
+        }
         const current = renameDraftRef.current;
         if (current === draft) {
           renameDraftRef.current = null;
@@ -716,9 +745,16 @@ function SeriesAuthoring({ pid }: { pid: number }) {
   const changeRename = (text: string) => {
     setEditVal(text);
     if (renameDraftRef.current) renameDraftRef.current = { ...renameDraftRef.current, text };
-    markProjectSavePending();
+    const draft = renameDraftRef.current;
+    markProjectSavePending(`${draft?.kind ?? "series"}-title:${pid}:${draft?.id ?? "none"}`);
   };
-  const cancelRename = () => { renameDraftRef.current = null; setEditKey(null); setDelErr(""); };
+  const cancelRename = () => {
+    const draft = renameDraftRef.current;
+    if (draft) discardProjectSavePending(`${draft.kind}-title:${pid}:${draft.id}`);
+    renameDraftRef.current = null;
+    setEditKey(null);
+    setDelErr("");
+  };
   const delSeason = async (id: number) => { if (!await persistRenameRef.current()) return; setBusyDel(`s${id}`); setDelErr(""); try { await api.deleteSeason(pid, id); await loadAll(); } catch (e) { setDelErr(`delete failed — ${e instanceof Error ? e.message : String(e)}`); } finally { setBusyDel(null); } };
   const delEpisode = async (id: number) => { if (!await persistRenameRef.current()) return; setBusyDel(`e${id}`); setDelErr(""); try { await api.deleteEpisode(pid, id); await loadAll(); } catch (e) { setDelErr(`delete failed — ${e instanceof Error ? e.message : String(e)}`); } finally { setBusyDel(null); } };
   const delArc = async (id: number) => { setBusyDel(`arc${id}`); setDelErr(""); try { await api.deleteSeriesArc(pid, id); await loadAll(); } catch (e) { setDelErr(`delete failed — ${e instanceof Error ? e.message : String(e)}`); } finally { setBusyDel(null); } };

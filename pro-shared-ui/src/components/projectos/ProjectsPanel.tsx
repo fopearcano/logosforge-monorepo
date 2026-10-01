@@ -4,7 +4,7 @@ import { PanelShell, Corners, type PanelProps } from "../shell/PanelShell";
 import { useStudio, useSelectProject, useRefreshProjects } from "../../adapters/StudioProvider";
 import { parseProjectBundle, importProjectBundle } from "../../adapters/projectBundle";
 import { useProjects } from "../../hooks";
-import { flushPendingProjectSaves, markProjectSavePending, prepareProjectHandoff, registerProjectFlusher } from "../../adapters/projectSaveCoordinator";
+import { discardProjectSavePending, flushPendingProjectSaves, markProjectSavePending, prepareProjectHandoff, registerProjectFlusher, trackProjectWrite } from "../../adapters/projectSaveCoordinator";
 import { useMountedRef } from "../../hooks/useMountedRef";
 
 /**
@@ -75,6 +75,7 @@ export function ProjectsPanel(props: PanelProps) {
     if (!draft) return true;
     const title = draft.text.trim();
     if (!title || title === draft.original) {
+      discardProjectSavePending(`project-title:${draft.id}`);
       renameDraftRef.current = null;
       if (mounted.current) setRenamingId(null);
       return true;
@@ -82,7 +83,10 @@ export function ProjectsPanel(props: PanelProps) {
     const operation = (async () => {
       if (mounted.current) { setBusy(true); setErr(null); }
       try {
-        await api.updateProject(draft.id, { title });
+        await trackProjectWrite(
+          api.updateProject(draft.id, { title }),
+          { saveKey: `project-title:${draft.id}` },
+        );
         const current = renameDraftRef.current;
         if (current === draft) renameDraftRef.current = null;
         else if (current?.id === draft.id) renameDraftRef.current = { ...current, original: title };
@@ -115,13 +119,15 @@ export function ProjectsPanel(props: PanelProps) {
     setRenameText(project.title || "");
   };
   const cancelRename = () => {
+    if (renameDraftRef.current) discardProjectSavePending(`project-title:${renameDraftRef.current.id}`);
     renameDraftRef.current = null;
     setRenamingId(null);
   };
   const changeRenameText = (text: string) => {
     setRenameText(text);
     if (renameDraftRef.current) renameDraftRef.current = { ...renameDraftRef.current, text };
-    markProjectSavePending();
+    const projectId = renameDraftRef.current?.id;
+    markProjectSavePending(`project-title:${projectId ?? "none"}`);
   };
 
   const create = async () => {

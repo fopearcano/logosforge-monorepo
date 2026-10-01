@@ -1,7 +1,9 @@
-import { useMemo, useState, type ReactElement } from "react";
+import { useCallback, useMemo, useRef, useState, type ReactElement } from "react";
 import {
   StudioProvider,
   createHttpApiClient,
+  flushPendingProjectSaves,
+  resetProjectSaveStatus,
   type ApiClient,
   type PlatformAdapter,
   // 01 shell
@@ -21,18 +23,49 @@ import {
 } from "../src/index";
 import { WRITING_MODES, type WritingMode } from "@logosforge/ui-contracts";
 import { createMockApiClient } from "./mockApi";
+import { previewWorkspaceStatus } from "./previewStatus";
+import { IntegratedWorkspaceHarness } from "./IntegratedWorkspaceHarness";
 
 // Two ApiClient implementations the preview switches between: a static mock and a
 // live HTTP client that hits the running logosforge core via the /api Vite proxy.
 const mockApi = createMockApiClient();
 const liveApi = createHttpApiClient(); // baseUrl "" → Vite proxies /api → localhost:8765
 
-type Item = [label: string, node: ReactElement, w: number, h: number];
+type PreviewDataSource = "mock" | "live";
+type PreviewIdentityGuard = () => Promise<void>;
+type PreviewItemContext = {
+  source: PreviewDataSource;
+  identitySwitching: boolean;
+  registerIdentityGuard: (guard: PreviewIdentityGuard | null) => void;
+};
+type ItemNode = ReactElement | ((context: PreviewItemContext) => ReactElement);
+type Item = [label: string, node: ItemNode, w: number, h: number];
 type Group = { name: string; items: Item[] };
+
+function WorkspaceShellDesignFixture() {
+  return (
+    <div
+      data-preview-fixture="workspace-shell-design"
+      style={{ position: "relative", width: "100%", height: "100%" }}
+    >
+      <div style={{ position: "absolute", top: 50, right: 14, zIndex: 1000, border: "1px solid #ffb454", background: "#11151e", color: "#ffb454", padding: "5px 8px", fontSize: 9, letterSpacing: ".12em", pointerEvents: "none" }}>
+        SYNTHETIC DESIGN FIXTURE
+      </div>
+      <WorkspaceShell runtimeStatus={previewWorkspaceStatus} coreState="connected" />
+    </div>
+  );
+}
 
 const GROUPS: Group[] = [
   { name: "01 · Workspace Shell", items: [
-    ["Workspace Shell — Cockpit", <WorkspaceShell />, 1600, 900],
+    ["Workspace Shell — Integrated", ({ source, identitySwitching, registerIdentityGuard }) => (
+      <IntegratedWorkspaceHarness
+        source={source}
+        externalTransitioning={identitySwitching}
+        registerIdentityGuard={registerIdentityGuard}
+      />
+    ), 1600, 900],
+    ["Workspace Shell — Design Fixture", <WorkspaceShellDesignFixture />, 1600, 900],
   ] },
   { name: "02 · Manuscript & Structure", items: [
     ["Manuscript Editor", <ManuscriptEditor />, 1520, 900],
@@ -89,7 +122,42 @@ const ALL = GROUPS.flatMap((g) => g.items);
 // SAVE works in `npm run dev`. The other capabilities are best-effort no-ops.
 const previewPlatform: PlatformAdapter = {
   isDesktop: false,
-  openFile: async () => ({ canceled: true }),
+  openFile: async (options) => new Promise((resolve) => {
+    const picker = document.createElement("input");
+    picker.type = "file";
+    picker.accept = (options?.filters ?? [])
+      .flatMap((filter) => filter.extensions)
+      .map((extension) => `.${extension.replace(/^\./, "")}`)
+      .join(",");
+    picker.style.display = "none";
+    document.body.appendChild(picker);
+    let settled = false;
+    const finish = (result: Awaited<ReturnType<PlatformAdapter["openFile"]>>) => {
+      if (settled) return;
+      settled = true;
+      picker.remove();
+      resolve(result);
+    };
+    picker.addEventListener("cancel", () => finish({ canceled: true }), { once: true });
+    picker.addEventListener("change", () => {
+      const file = picker.files?.[0];
+      if (!file) { finish({ canceled: true }); return; }
+      void file.arrayBuffer().then((buffer) => {
+        const bytes = new Uint8Array(buffer);
+        let binary = "";
+        for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+          binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+        }
+        finish({
+          canceled: false,
+          path: file.name,
+          content: new TextDecoder().decode(bytes),
+          contentBase64: btoa(binary),
+        });
+      }, () => finish({ canceled: true }));
+    }, { once: true });
+    try { picker.click(); } catch { finish({ canceled: true }); }
+  }),
   openExternal: async (target) => { window.open(target, "_blank", "noopener"); },
   saveFile: async ({ suggestedName, content, contentBase64, mimeType }) => {
     let blob: Blob;
@@ -114,13 +182,44 @@ const previewPlatform: PlatformAdapter = {
 };
 
 export function App() {
-  const [sel, setSel] = useState("Workspace Shell — Cockpit");
+  const [sel, setSel] = useState("Workspace Shell — Integrated");
   const [mode, setMode] = useState<WritingMode>("screenplay");
-  const [source, setSource] = useState<"mock" | "live">("mock");
+  const [source, setSource] = useState<PreviewDataSource>("mock");
   const [projectId, setProjectId] = useState(1);
+  const [identityError, setIdentityError] = useState<string | null>(null);
+  const [identitySwitching, setIdentitySwitching] = useState(false);
+  const identitySwitchingRef = useRef(false);
+  const identityGuardRef = useRef<PreviewIdentityGuard | null>(null);
+  const registerIdentityGuard = useCallback((guard: PreviewIdentityGuard | null) => {
+    identityGuardRef.current = guard;
+  }, []);
   const services = useMemo(() => ({ api: source === "live" ? liveApi : mockApi, platform: previewPlatform }), [source]);
   const item = ALL.find((i) => i[0] === sel) ?? ALL[0]!;
-  const [label, node, w, h] = item;
+  const [label, itemNode, w, h] = item;
+  const integratedWorkspace = label === "Workspace Shell — Integrated";
+  const node = typeof itemNode === "function"
+    ? itemNode({ source, identitySwitching, registerIdentityGuard })
+    : itemNode;
+  const changeIdentity = useCallback(async (change: () => void) => {
+    if (identitySwitchingRef.current) return;
+    identitySwitchingRef.current = true;
+    setIdentitySwitching(true);
+    try {
+      // The integrated host has its own serialized queue (project opens, panel
+      // mutations). Drain it before the global editor/layout barrier so an old
+      // async handoff cannot publish state after the new source/screen mounts.
+      await identityGuardRef.current?.();
+      await flushPendingProjectSaves({ commitActiveField: true });
+      resetProjectSaveStatus();
+      change();
+      setIdentityError(null);
+    } catch (error) {
+      setIdentityError(`Preview switch stopped because pending edits could not be saved. ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      identitySwitchingRef.current = false;
+      setIdentitySwitching(false);
+    }
+  }, []);
 
   return (
     <div style={{ display: "flex", height: "100vh", background: "#000", color: "#e4e8ef", fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }}>
@@ -128,30 +227,54 @@ export function App() {
         <div style={{ padding: "12px 14px", borderBottom: "1px solid #1c2430" }}>
           <div style={{ fontSize: 13, fontWeight: 700, letterSpacing: ".12em", color: "#fff" }}>LOGOSFORGE STUDIO</div>
           <div style={{ fontSize: 8, letterSpacing: ".3em", color: "#e8443a", marginTop: 3 }}>UI PREVIEW · {ALL.length} PANELS</div>
-          <div style={{ marginTop: 11, fontSize: 9, color: "#8b95a5" }}>writing mode (drives --accent re-skin):</div>
-          <select value={mode} onChange={(e) => setMode(e.target.value as WritingMode)} style={{ width: "100%", marginTop: 4, background: "#11151e", color: "#e4e8ef", border: "1px solid #1c2430", fontSize: 11, padding: "4px 6px" }}>
-            {WRITING_MODES.map((m) => <option key={m} value={m}>{m}</option>)}
-          </select>
+          <div style={{ marginTop: 11, fontSize: 9, color: "#8b95a5" }}>
+            {integratedWorkspace ? "writing mode:" : "writing mode (drives --accent re-skin):"}
+          </div>
+          {integratedWorkspace ? (
+            <div style={{ marginTop: 4, border: "1px solid #1c2430", padding: "5px 6px", color: "#8b95a5", fontSize: 9, lineHeight: 1.4 }}>
+              Core-owned by the project selected inside the workspace.
+            </div>
+          ) : (
+            <select value={mode} onChange={(e) => setMode(e.target.value as WritingMode)} style={{ width: "100%", marginTop: 4, background: "#11151e", color: "#e4e8ef", border: "1px solid #1c2430", fontSize: 11, padding: "4px 6px" }}>
+              {WRITING_MODES.map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+          )}
           <div style={{ marginTop: 9, fontSize: 9, color: "#8b95a5" }}>data source (ApiClient):</div>
-          <select value={source} onChange={(e) => setSource(e.target.value as "mock" | "live")} style={{ width: "100%", marginTop: 4, background: "#11151e", color: "#e4e8ef", border: "1px solid #1c2430", fontSize: 11, padding: "4px 6px" }}>
+          <select value={source} disabled={identitySwitching} onChange={(e) => { const next = e.target.value as PreviewDataSource; void changeIdentity(() => setSource(next)); }} style={{ width: "100%", marginTop: 4, background: "#11151e", color: "#e4e8ef", border: "1px solid #1c2430", fontSize: 11, padding: "4px 6px" }}>
             <option value="mock">mock (sample data)</option>
             <option value="live">live core (:8765)</option>
           </select>
-          <div style={{ marginTop: 9, fontSize: 9, color: "#8b95a5" }}>project id:</div>
-          <input type="number" min={1} value={projectId} onChange={(e) => setProjectId(Number(e.target.value) || 1)} style={{ width: "100%", marginTop: 4, background: "#11151e", color: "#e4e8ef", border: "1px solid #1c2430", fontSize: 11, padding: "4px 6px" }} />
+          {!integratedWorkspace && (
+            <>
+              <div style={{ marginTop: 9, fontSize: 9, color: "#8b95a5" }}>project id:</div>
+              <input type="number" min={1} value={projectId} disabled={identitySwitching} onChange={(e) => { const next = Number(e.target.value) || 1; void changeIdentity(() => setProjectId(next)); }} style={{ width: "100%", marginTop: 4, background: "#11151e", color: "#e4e8ef", border: "1px solid #1c2430", fontSize: 11, padding: "4px 6px" }} />
+            </>
+          )}
+          {identityError && <div role="alert" style={{ marginTop: 8, color: "#ffb454", fontSize: 9, lineHeight: 1.5 }}>{identityError}</div>}
         </div>
         {GROUPS.map((g) => (
           <div key={g.name} style={{ padding: "8px 0" }}>
             <div style={{ padding: "5px 14px", fontSize: 8, letterSpacing: ".18em", color: "#525c6b" }}>{g.name}</div>
             {g.items.map(([l]) => (
-              <div key={l} data-panel={l} onClick={() => setSel(l)} style={{ padding: "6px 14px", fontSize: 11, cursor: "pointer", color: sel === l ? "#4cc2ff" : "#8b95a5", background: sel === l ? "rgba(76,194,255,.08)" : undefined, borderLeft: sel === l ? "2px solid #4cc2ff" : "2px solid transparent" }}>{l}</div>
+              <button
+                key={l}
+                type="button"
+                data-panel={l}
+                disabled={identitySwitching}
+                onClick={() => {
+                  if (sel !== l) void changeIdentity(() => setSel(l));
+                }}
+                style={{ display: "block", width: "100%", padding: "6px 14px", border: "none", borderLeft: sel === l ? "2px solid #4cc2ff" : "2px solid transparent", font: "inherit", fontSize: 11, textAlign: "left", cursor: identitySwitching ? "default" : "pointer", color: sel === l ? "#4cc2ff" : "#8b95a5", background: sel === l ? "rgba(76,194,255,.08)" : "transparent", opacity: identitySwitching ? 0.6 : 1 }}
+              >
+                {l}
+              </button>
             ))}
           </div>
         ))}
       </div>
       <div style={{ flex: 1, overflow: "auto", padding: 24 }}>
         <div style={{ marginBottom: 10, fontSize: 11, color: "#8b95a5" }}>{label}<span style={{ color: "#525c6b" }}> · {w}×{h}</span></div>
-        <StudioProvider services={services} writingMode={mode} projectId={projectId}>
+        <StudioProvider key={`${source}:${projectId}`} services={services} writingMode={mode} projectId={projectId}>
           <div style={{ width: w, height: h, boxShadow: "0 0 0 1px #1c2430" }}>{node}</div>
         </StudioProvider>
       </div>

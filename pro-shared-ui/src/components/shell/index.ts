@@ -13,3 +13,4 @@ export * from "./Navigator";
 export * from "./Chrome";
 export * from "./regions";
 export * from "./shellVars";
+export * from "./StudioOmnibox";

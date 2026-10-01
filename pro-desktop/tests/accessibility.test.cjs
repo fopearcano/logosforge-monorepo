@@ -50,16 +50,51 @@ for (const marker of ['role="separator"', 'aria-valuemin', 'aria-valuemax', 'ari
 }
 
 const palette = fs.readFileSync(path.join(root, 'CommandPalette.tsx'), 'utf8');
-for (const marker of ['<ModalPortal>', 'useModalDialog(', 'role="dialog"', 'aria-modal="true"', 'event.target === event.currentTarget']) {
-  if (!palette.includes(marker)) failures.push(`Command palette dialog missing ${marker}`);
+if (!palette.includes('<StudioOmnibox')) {
+  failures.push('CommandPalette does not delegate to the shared StudioOmnibox');
+}
+const sharedOmnibox = fs.readFileSync(
+  path.join(process.cwd(), '..', 'pro-shared-ui', 'src', 'components', 'shell', 'StudioOmnibox.tsx'),
+  'utf8',
+);
+for (const marker of [
+  '<ModalPortal>',
+  'useModalDialog({',
+  'role="dialog"',
+  'aria-modal="true"',
+  'event.target === event.currentTarget',
+  'role="combobox"',
+  'aria-controls={plan == null ? listId : undefined}',
+  'aria-activedescendant={plan == null ? activeOptionId : undefined}',
+  'role="listbox"',
+  'role="group"',
+  'aria-labelledby={groupId}',
+  'aria-labelledby={planTitleId}',
+  'aria-describedby={planDescriptionId}',
+  'role="option"',
+  'aria-selected={selected}',
+  'aria-busy={activating || planning || executing}',
+  'role="alert"',
+  'role="status"',
+  'aria-live="polite"',
+  'omniboxOptionDomId(idPrefix, item.key)',
+]) {
+  if (!sharedOmnibox.includes(marker)) failures.push(`Shared StudioOmnibox accessibility missing ${marker}`);
 }
 
 const app = fs.readFileSync(path.join(root, 'App.tsx'), 'utf8');
 for (const marker of ['<PanelErrorBoundary name="Studio workspace"', 'name={`${panel.label} panel`}']) {
   if (!app.includes(marker)) failures.push(`App render containment missing ${marker}`);
 }
-for (const marker of ['CommentsPanel,', "{ id: 'comments', label: 'Comments', node: <CommentsPanel /> }"]) {
-  if (!app.includes(marker)) failures.push(`Comments navigation missing ${marker}`);
+const panelCatalog = fs.readFileSync(
+  path.join(process.cwd(), '..', 'pro-shared-ui', 'src', 'workspace', 'panelCatalog.tsx'),
+  'utf8',
+);
+for (const marker of ['CommentsPanel,', '{ id: "comments", label: "Comments", node: <CommentsPanel /> }']) {
+  if (!panelCatalog.includes(marker)) failures.push(`Shared Comments navigation missing ${marker}`);
+}
+for (const marker of ['studioPanelGroupsForMode', 'STUDIO_PANELS', 'STUDIO_WORKSPACE_PANEL_IDS']) {
+  if (!app.includes(marker)) failures.push(`App shared panel-catalog integration missing ${marker}`);
 }
 if (!dock.includes('<PanelErrorBoundary name={`${t.label} AI`}')) {
   failures.push('AI tools do not have per-tool render containment');

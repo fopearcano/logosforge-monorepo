@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   StudioProvider,
   createHttpApiClient,
@@ -10,41 +10,12 @@ import {
   type WorkspaceDockRegion,
   type WorkspaceLayout,
   type WorkspacePanelDefinition,
-  ManuscriptEditor,
-  NotesPanel,
-  CommentsPanel,
-  StoryGrid,
-  StructurePanel,
-  OutlinePanel,
-  FormatStructure,
-  ActsView,
-  BeatsView,
-  ChaptersView,
-  TagsView,
-  PsykeBible,
-  KnowledgeGraph,
-  CanvasPlot,
-  TimelinePanel,
-  NarrativeDashboard,
-  ContinuityPanel,
-  DecisionRadar,
-  ProjectsPanel,
-  AdaptView,
-  ReviewDashboard,
-  PluginsPanel,
-  SeriesNavigator,
-  StoryHealthHud,
-  PacingInsights,
-  CharacterBalance,
-  CoverageAnalysis,
-  VoiceHud,
-  ExportDialog,
-  CrossCutting,
-  CharacterLinks,
-  ThemeScenes,
-  AiSettingsPanel,
-  ConnectorPanel,
-  HelpPanel,
+  type StudioNavigationOptions,
+  STUDIO_AI_COMPANIONS_PANEL_ID,
+  STUDIO_PANELS,
+  STUDIO_WORKSPACE_PANEL_IDS,
+  findStudioPanel,
+  studioPanelGroupsForMode,
   flushPendingProjectSaves,
   prepareProjectHandoff,
   trackProjectWrite,
@@ -73,115 +44,30 @@ import {
   focusAfterWorkspaceAction,
   workspacePanelDomToken,
   type FloatingPanelBounds,
+  createCommandRegistry,
+  deriveWorkspaceStatus,
+  getProjectSaveStatusSnapshot,
+  resetProjectSaveStatus,
+  subscribeProjectSaveStatus,
+  parseRecentProjectIds,
+  rememberRecentProject,
 } from '@logosforge/pro-shared-ui';
 import { WRITING_MODES, type WritingMode, type ProjectDTO } from '@logosforge/ui-contracts';
 import { desktop, platform, type CoreStatus } from './platform';
 import { AiDock, AI_TOOL_KEYS } from './AiDock';
 import { CommandPalette, type Command } from './CommandPalette';
 
-interface Panel {
-  id: string;
-  label: string;
-  node: ReactElement;
-  preferredRegion?: WorkspaceDockRegion;
-  /** If set, the panel only appears in these writing modes (mirrors the Python
-   *  core's per-mode nav gating: Pages=GN-only, Series Navigator=series-only). */
-  modes?: WritingMode[];
-}
-
-interface PanelGroup {
-  group: string;
-  panels: Panel[];
-}
-
-// Nav mirrors the Logosforge Python app's sidebar (main_window._SIDEBAR_LAYOUT):
-// ungrouped top items + the Plan / Structure / Analytics groups, then PSYKE +
-// Graph, the AI tools, and Export/Settings. Uses the panels that exist in React.
-const PANEL_GROUPS: PanelGroup[] = [
-  {
-    group: '',
-    panels: [
-      { id: 'projects', label: 'Projects', node: <ProjectsPanel /> },
-      { id: 'dashboard', label: 'Dashboard', node: <NarrativeDashboard /> },
-      { id: 'manuscript', label: 'Manuscript', node: <ManuscriptEditor /> },
-      { id: 'notes', label: 'Notes', node: <NotesPanel /> },
-      { id: 'comments', label: 'Comments', node: <CommentsPanel /> },
-      { id: 'dexters-room', label: "Dexter's Room", node: <VoiceHud /> },
-    ],
-  },
-  {
-    group: 'PLAN',
-    // "Chapters" is no longer a permanent PLAN entry (it made no sense in
-    // screenplay mode). It moved to STRUCTURE, gated to novel mode — mirroring
-    // how the Python core gates mode-specific nav members by writing mode.
-    panels: [
-      { id: 'outline', label: 'Outline', node: <OutlinePanel />, preferredRegion: 'bottom' },
-      { id: 'story-grid', label: 'Story Grid', node: <StoryGrid /> },
-      { id: 'timeline', label: 'Timeline', node: <TimelinePanel /> },
-      { id: 'canvas-plot', label: 'Canvas Plot', node: <CanvasPlot /> },
-      // Series is meaningful only in series mode (the core gates it the same way);
-      // outside series mode the seasons/episodes tables are always empty.
-      { id: 'series', label: 'Series', node: <SeriesNavigator />, modes: ['series'] },
-    ],
-  },
-  {
-    group: 'STRUCTURE',
-    panels: [
-      { id: 'structure', label: 'Structure', node: <StructurePanel /> },
-      { id: 'acts', label: 'Acts', node: <ActsView /> },
-      { id: 'beats', label: 'Beats', node: <BeatsView /> },
-      // Chapters are a prose-novel structure — shown only in novel mode (they made
-      // no sense as a permanent entry in screenplay/GN/stage/series).
-      { id: 'chapters', label: 'Chapters', node: <ChaptersView />, modes: ['novel'] },
-      { id: 'structure-analysis', label: 'Structure Analysis', node: <CoverageAnalysis /> },
-      { id: 'format-studio', label: 'Format Studio', node: <FormatStructure /> },
-    ],
-  },
-  {
-    group: 'ANALYTICS',
-    panels: [
-      { id: 'health', label: 'Health', node: <StoryHealthHud />, preferredRegion: 'bottom' },
-      { id: 'pacing', label: 'Pacing', node: <PacingInsights /> },
-      { id: 'balance', label: 'Balance', node: <CharacterBalance /> },
-      { id: 'tags', label: 'Tags', node: <TagsView /> },
-      { id: 'continuity', label: 'Continuity', node: <ContinuityPanel /> },
-      { id: 'decision-radar', label: 'Decision Radar', node: <DecisionRadar />, preferredRegion: 'right' },
-      { id: 'adapt', label: 'Adapt', node: <AdaptView /> },
-      { id: 'review', label: 'Review', node: <ReviewDashboard /> },
-    ],
-  },
-  {
-    group: 'BIBLE',
-    panels: [
-      { id: 'psyke', label: 'PSYKE', node: <PsykeBible /> },
-      { id: 'characters', label: 'Characters', node: <CharacterLinks /> },
-      { id: 'theme-scenes', label: 'Theme Scenes', node: <ThemeScenes /> },
-      { id: 'graph', label: 'Graph', node: <KnowledgeGraph /> },
-    ],
-  },
-  {
-    group: '',
-    panels: [
-      { id: 'plugins', label: 'Plugins', node: <PluginsPanel /> },
-      { id: 'connector', label: 'Connector', node: <ConnectorPanel /> },
-      { id: 'export', label: 'Export', node: <ExportDialog /> },
-      { id: 'ai-settings', label: 'AI Settings', node: <AiSettingsPanel /> },
-      { id: 'settings', label: 'Settings', node: <CrossCutting /> },
-      { id: 'help', label: 'Help', node: <HelpPanel /> },
-    ],
-  },
-];
-
-const PANELS: Panel[] = PANEL_GROUPS.flatMap((g) => g.panels);
-const AI_PANEL_ID = 'ai-companions';
-const ALL_PANEL_IDS = [...PANELS.map((panel) => panel.id), AI_PANEL_ID] as const;
+// Shared UI owns the platform-neutral panel catalog. The desktop host retains
+// the AI companion container plus project/bootstrap and lifecycle orchestration.
+const PANELS = STUDIO_PANELS;
+const AI_PANEL_ID = STUDIO_AI_COMPANIONS_PANEL_ID;
+const ALL_PANEL_IDS = STUDIO_WORKSPACE_PANEL_IDS;
 const MANUSCRIPT_TAB_SELECTOR = `#lf-tab-${workspacePanelDomToken('manuscript')}`;
 const ACTIVE_RIGHT_TAB_SELECTOR = '[data-dock-drop-region="right"] [role="tab"][aria-selected="true"]';
 const EXPAND_RIGHT_DOCK_SELECTOR = '[aria-label="Expand right dock"]';
+const RECENT_PROJECTS_KEY = 'lf.omnibox.recent-projects.v1';
 
-function resolvePanel(value: string): Panel | undefined {
-  return PANELS.find((panel) => panel.id === value || panel.label === value);
-}
+const resolvePanel = findStudioPanel;
 
 const DOT: Record<CoreStatus['state'], string> = {
   connecting: '#f5b133',
@@ -215,6 +101,9 @@ export function App() {
   const [closePending, setClosePending] = useState(false);
   const [bootstrapAttempt, setBootstrapAttempt] = useState(0);
   const [pendingScene, setPendingScene] = useState<number | null>(null);
+  const [pendingPsykeEntry, setPendingPsykeEntry] = useState<number | null>(null);
+  const [pendingNote, setPendingNote] = useState<number | null>(null);
+  const [pendingComment, setPendingComment] = useState<number | null>(null);
   const [handoffError, setHandoffError] = useState<string | null>(null);
   const { fault: runtimeFault, dismiss: dismissRuntimeFault } = useRuntimeFaultReporter();
   // Project handoffs, mode changes, and workspace mutations share one queue.
@@ -241,6 +130,20 @@ export function App() {
     platform: platform as PlatformAdapter,
     allowedPanelIds: ALL_PANEL_IDS,
   });
+  const projectSaveStatus = useSyncExternalStore(
+    subscribeProjectSaveStatus,
+    getProjectSaveStatusSnapshot,
+    getProjectSaveStatusSnapshot,
+  );
+  const workspaceStatus = useMemo(() => deriveWorkspaceStatus({
+    coreState: status.state,
+    coreDetail: status.detail,
+    projectSave: projectSaveStatus,
+    workspaceLayoutSaving: workspaceSaving,
+    workspaceLayoutError: workspaceError,
+    handoffPhase: closePending ? 'closing' : projectSwitching ? 'switching' : 'idle',
+    storage: 'local',
+  }), [closePending, projectSaveStatus, projectSwitching, status.detail, status.state, workspaceError, workspaceSaving]);
   const workspaceHydratedProjectRef = useRef<number | undefined>(undefined);
   const workspaceLayoutRef = useRef(workspaceLayout);
   useLayoutEffect(() => {
@@ -253,12 +156,23 @@ export function App() {
   // visibility, dimensions, and Focus/Cockpit are versioned per project above.
   const [aiTab, setAiTab] = useState<string>(() => localStorage.getItem('lf.aiTab') || AI_TOOL_KEYS[0] || 'Billy');
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [recentProjectIds, setRecentProjectIds] = useState<readonly number[]>(
+    () => parseRecentProjectIds(localStorage.getItem(RECENT_PROJECTS_KEY)),
+  );
   const [ambiance, setAmbiance] = useState<'dark' | 'light' | 'warm'>(() => {
     const v = localStorage.getItem('lf.theme');
     return v === 'dark' || v === 'light' || v === 'warm' ? v : 'dark';
   });
   useEffect(() => { localStorage.setItem('lf.aiTab', aiTab); }, [aiTab]);
   useEffect(() => { localStorage.setItem('lf.theme', ambiance); }, [ambiance]);
+  useEffect(() => {
+    if (projectId == null) return;
+    setRecentProjectIds((current) => {
+      const next = rememberRecentProject(current, projectId);
+      localStorage.setItem(RECENT_PROJECTS_KEY, JSON.stringify(next));
+      return next;
+    });
+  }, [projectId]);
   // Drive the global CSS palette (body + command palette live outside the shell).
   useEffect(() => { document.documentElement.dataset.theme = ambiance; }, [ambiance]);
   useEffect(() => {
@@ -313,7 +227,7 @@ export function App() {
     return task;
   }, [applyWorkspaceLayout]);
 
-  const selectPanel = useCallback((panelValue: string, opts?: { sceneId?: number }): Promise<boolean> => {
+  const selectPanel = useCallback((panelValue: string, opts?: StudioNavigationOptions): Promise<boolean> => {
     const panel = resolvePanel(panelValue);
     const panelId = panelValue === AI_PANEL_ID ? AI_PANEL_ID : panel?.id;
     if (!panelId) return Promise.resolve(false);
@@ -325,15 +239,20 @@ export function App() {
       }
       return next;
     }, 'Panel switch stopped; the current workspace remains open.');
-    void task.then((selected) => {
-      if (selected && opts?.sceneId != null) setPendingScene(opts.sceneId);
+    return task.then((selected) => {
+      if (!selected) return false;
+      // A newer successful navigation supersedes every older one-shot target.
+      setPendingScene(opts?.sceneId ?? null);
+      setPendingPsykeEntry(opts?.psykeEntryId ?? null);
+      setPendingNote(opts?.noteId ?? null);
+      setPendingComment(opts?.commentId ?? null);
+      return true;
     });
-    return task;
   }, [runWorkspaceMutation]);
 
   // Cross-panel navigation: any panel can switch panels / open a scene, but no
   // panel unmounts a dirty editor until its save barrier succeeds.
-  const navigate = useCallback((panel: string, opts?: { sceneId?: number }) => {
+  const navigate = useCallback((panel: string, opts?: StudioNavigationOptions) => {
     void selectPanel(panel, opts);
   }, [selectPanel]);
 
@@ -368,12 +287,22 @@ export function App() {
   // Mode-aware nav: mode-specific panels (Chapters=novel, Series=series) appear
   // only in their writing mode — mirroring the Python core's per-mode gating.
   const visibleGroups = useMemo(
-    () => PANEL_GROUPS
-      .map((g) => ({ ...g, panels: g.panels.filter((p) => !p.modes || p.modes.includes(mode)) }))
-      .filter((g) => g.panels.length > 0),
+    () => studioPanelGroupsForMode(mode),
     [mode],
   );
   const visiblePanels = useMemo(() => visibleGroups.flatMap((g) => g.panels), [visibleGroups]);
+  const omniboxPanels = useMemo(() => [
+    ...visiblePanels.map((panel) => ({
+      id: panel.id,
+      label: panel.label,
+      keywords: [panel.id],
+    })),
+    {
+      id: AI_PANEL_ID,
+      label: 'AI Companions',
+      keywords: ['Billy', 'Logos', 'Counterpart', 'assistant'],
+    },
+  ], [visiblePanels]);
 
   // Normalize mode-ineligible panels and keep the permanent AI surface in its
   // right-hand home. Left docks and floating windows are first-class rendered
@@ -415,16 +344,16 @@ export function App() {
     }, 'Workspace normalization stopped; the previous layout remains open.');
   }, [mode, runWorkspaceMutation, workspaceHydrated, workspaceLayout]);
 
-  // ⌘K / Ctrl+K toggles the command palette anywhere; Escape leaves focus mode
+  // ⌘K / Ctrl+K idempotently opens the command palette anywhere; Escape leaves focus mode
   // (when the palette isn't the one consuming the keystroke).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'c') {
         e.preventDefault();
         void selectPanel('Comments');
-      } else if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
+      } else if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && !e.repeat && e.key.toLowerCase() === 'k') {
         e.preventDefault();
-        setPaletteOpen((o) => !o);
+        setPaletteOpen(true);
       } else if (e.key === 'Escape' && workspaceLayoutRef.current.preset === 'focus' && !paletteOpen) {
         void toggleFocus();
       }
@@ -432,14 +361,6 @@ export function App() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [paletteOpen, selectPanel, toggleFocus]);
-
-  // Everything the palette can do: jump to any section, open any AI companion,
-  // toggle focus mode.
-  const commands = useMemo<Command[]>(() => [
-    ...visiblePanels.map((p) => ({ id: `go-${p.label}`, kind: 'Go', label: p.label, run: () => { void selectPanel(p.label); } })),
-    ...AI_TOOL_KEYS.map((k) => ({ id: `ai-${k}`, kind: 'AI', label: k, run: () => openAi(k) })),
-    { id: 'focus', kind: 'View', label: workspaceLayout.preset === 'focus' ? 'Exit focus mode' : 'Enter focus mode', run: toggleFocus },
-  ], [openAi, toggleFocus, visiblePanels, selectPanel, workspaceLayout.preset]);
 
   useEffect(() => {
     if (!desktop) return;
@@ -538,9 +459,13 @@ export function App() {
         return false;
       }
       workspaceHydratedProjectRef.current = undefined;
+      resetProjectSaveStatus();
       setProjectId(target);
       projectIdRef.current = target;
       setPendingScene(null);
+      setPendingPsykeEntry(null);
+      setPendingNote(null);
+      setPendingComment(null);
       setHandoffError(null);
       return true;
     });
@@ -861,23 +786,70 @@ export function App() {
     });
   }, [aiTab, applyWorkspaceLayout, collapseAiDock, projectId, workspaceLayout]);
 
+  // One runtime registry drives the palette and every app-specific native-menu
+  // command. Handlers retain the existing save barriers and focus restoration.
+  const commands = useMemo<Command[]>(() => [
+    {
+      id: 'new-project', kind: 'Project', label: 'New project',
+      keywords: ['create project', 'file'], shortcut: 'Primary+N',
+      enabled: () => !busy && !projectSwitchingRef.current && !closingRef.current,
+      run: newProject,
+    },
+    ...visiblePanels.map((panel) => ({
+      id: `nav:${panel.id}`,
+      kind: 'Go' as const,
+      label: panel.label,
+      aliases: [`nav:${panel.label}`, `go-${panel.label}`],
+      keywords: ['panel', 'workspace', panel.id],
+      showInOmnibox: false,
+      enabled: () => workspaceHydrated && !projectSwitchingRef.current && !closingRef.current,
+      run: () => selectPanel(panel.id),
+    })),
+    ...AI_TOOL_KEYS.map((key) => ({
+      id: `ai:${key}`,
+      kind: 'AI' as const,
+      label: key,
+      aliases: [`ai-${key}`],
+      keywords: ['assistant', 'companion'],
+      run: () => openAi(key),
+    })),
+    {
+      id: 'focus', kind: 'View',
+      label: workspaceLayout.preset === 'focus' ? 'Exit focus mode' : 'Enter focus mode',
+      aliases: ['workspace.focus'], keywords: ['cockpit', 'distraction free'],
+      shortcut: 'Primary+Shift+F', run: toggleFocus,
+    },
+    {
+      id: 'ai-dock', kind: 'View', label: 'Toggle AI dock',
+      aliases: ['workspace.ai-dock'], shortcut: 'Primary+J', run: toggleAiDock,
+    },
+    {
+      id: 'reset-workspace', kind: 'View', label: 'Reset workspace layout',
+      aliases: ['workspace.reset'], keywords: ['restore docks'], run: restoreDefaultWorkspace,
+    },
+    ...(['dark', 'light', 'warm'] as const).map((theme) => ({
+      id: `theme:${theme}`,
+      kind: 'Appearance' as const,
+      label: `Use ${theme} appearance`,
+      aliases: [`appearance.${theme}`],
+      run: () => setAmbiance(theme),
+    })),
+  ], [busy, newProject, openAi, restoreDefaultWorkspace, selectPanel, toggleAiDock, toggleFocus, visiblePanels, workspaceHydrated, workspaceLayout.preset]);
+  const commandRegistry = useMemo(() => createCommandRegistry(commands), [commands]);
+
   // Native menu (electron/menu.ts) → the same handlers the sidebar / palette use.
   useEffect(() => {
     if (!desktop?.onMenuCommand) return;
     return desktop.onMenuCommand((cmd) => {
-      if (cmd === 'new-project') void newProject();
-      else if (cmd === 'palette') setPaletteOpen((o) => !o);
-      else if (cmd === 'focus') toggleFocus();
-      else if (cmd === 'ai-dock') toggleAiDock();
-      else if (cmd === 'reset-workspace') restoreDefaultWorkspace();
-      else if (cmd.startsWith('nav:')) void selectPanel(cmd.slice(4));
-      else if (cmd.startsWith('ai:')) openAi(cmd.slice(3));
-      else if (cmd.startsWith('theme:')) {
-        const t = cmd.slice(6);
-        if (t === 'dark' || t === 'light' || t === 'warm') setAmbiance(t);
+      if (cmd === 'palette') {
+        setPaletteOpen(true);
+        return;
       }
+      void commandRegistry.execute(cmd).catch((error) => setHandoffError(
+        `Command “${cmd}” could not run. ${error instanceof Error ? error.message : String(error)}`,
+      ));
     });
-  }, [newProject, toggleFocus, toggleAiDock, restoreDefaultWorkspace, openAi, selectPanel]);
+  }, [commandRegistry]);
 
   if (!desktop) {
     return (
@@ -988,7 +960,13 @@ export function App() {
         nav={{
           navigate,
           manuscriptTargetSceneId: pendingScene,
-          clearManuscriptTarget: () => setPendingScene(null),
+          clearManuscriptTarget: (sceneId) => setPendingScene((current) => sceneId == null || current === sceneId ? null : current),
+          psykeTargetEntryId: pendingPsykeEntry,
+          clearPsykeTarget: (entryId) => setPendingPsykeEntry((current) => entryId == null || current === entryId ? null : current),
+          noteTargetId: pendingNote,
+          clearNoteTarget: (noteId) => setPendingNote((current) => noteId == null || current === noteId ? null : current),
+          commentTargetId: pendingComment,
+          clearCommentTarget: (commentId) => setPendingComment((current) => commentId == null || current === commentId ? null : current),
           selectProject,
           refreshProjects: () => {
             void refreshProjects().catch((error) => setHandoffError(
@@ -1001,12 +979,12 @@ export function App() {
           writingMode={mode}
           layout={workspaceLayout.preset}
           theme={ambiance}
-          showConsole={false}
+          showConsole
           bottomSlot={<></>}
           rightSlot={<></>}
           statusCenter={`${focusedLabel.toUpperCase()} · ${(projects.find((p) => p.id === projectId)?.title) ?? 'No project'}`}
-          countdown="LIVE"
-          sync={closePending ? 'CLOSING' : workspaceSaving ? 'SAVING' : projectSwitching ? 'SWITCHING' : workspaceHydrated ? '100' : 'LOADING'}
+          runtimeStatus={workspaceStatus}
+          coreState={status.state}
           navSlot={rail}
           centerSlot={
             workspaceHydrated ? (
@@ -1035,7 +1013,19 @@ export function App() {
           onCommandPalette={() => setPaletteOpen(true)}
           onToggleFocus={toggleFocus}
         />
-        <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} commands={commands} />
+        <CommandPalette
+          open={paletteOpen}
+          onClose={() => setPaletteOpen(false)}
+          onError={(error, label) => setHandoffError(
+            `Omnibox action “${label}” could not run. ${error instanceof Error ? error.message : String(error)}`,
+          )}
+          registry={commandRegistry}
+          panels={omniboxPanels}
+          projects={projects}
+          recentProjectIds={recentProjectIds}
+          onNavigate={selectPanel}
+          onSelectProject={selectProject}
+        />
       </StudioProvider>
       </PanelErrorBoundary>
       {(handoffError || workspaceError) && (

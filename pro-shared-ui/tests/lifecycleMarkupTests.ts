@@ -25,13 +25,14 @@ requireMarkers("workspace/useWorkspaceLayout.ts", [
   "loadGenerationRef",
   "registerProjectFlusher(flushLayout)",
   "dirtyRef.current = true",
-  "trackProjectWrite(write)",
+  "trackProjectWrite(write, { saveKey:",
   "flushPromiseRef.current",
   "ownerIsCurrent()",
   "Keep dirty=true",
   "saved !== null && saved !== undefined",
   "clearTimer();",
 ]);
+requireMarkers("components/formatpanels/VoiceHud.tsx", ["retrySaveKey: saveKey", "appendToScene(ownerProjectId, pending.sceneId, pending.text, true)"]);
 requireMarkers("components/shell/DockWorkspace.tsx", [
   "new ResizeObserver(updateMetrics)",
   "observer.disconnect()",
@@ -48,8 +49,84 @@ const manuscript = requireMarkers("components/manuscript/ManuscriptEditor.tsx", 
 if ((manuscript.match(/<ProseEditor/g) ?? []).length !== 1) failures.push("ManuscriptEditor must keep one conditional ProseEditor render site");
 if (manuscript.includes("contentById")) failures.push("ManuscriptEditor duplicates the whole manuscript in parent content state");
 requireMarkers("components/manuscript/ManuscriptEditor.tsx", ["sceneObserverRef.current !== observer", "status === \"dirty\"", "status === \"saving\"", "status === \"error\""]);
-requireMarkers("components/manuscript/CommentsPanel.tsx", ["window.setInterval", "window.clearInterval(timer)", "mutationSequence.current += 1"]);
+requireMarkers("components/manuscript/NotesPanel.tsx", [
+  "useNoteTarget()",
+  "notes.find((note) => note.id === targetId)",
+  'data-note-editor-id={note.id}',
+  "window.requestAnimationFrame",
+  "clearTargetRef.current()",
+  "<NoteEditor key={editing.id}",
+]);
+requireMarkers("components/manuscript/CommentsPanel.tsx", [
+  "window.setInterval",
+  "window.clearInterval(timer)",
+  "mutationSequence.current += 1",
+  "useCommentTarget()",
+  "commentsData.find((comment) => comment.id === targetId",
+  "comment.id === revealedTargetId",
+  "scheduleThreadFocus(targetId, (focused) => {",
+  "document.activeElement === button",
+  "window.cancelAnimationFrame(focusFrameRef.current)",
+]);
 requireMarkers("components/manuscript/commentPreferences.ts", ["removeEventListener(COMMENT_VISIBILITY_EVENT", "removeEventListener(\"storage\""]);
+requireMarkers("adapters/StudioProvider.tsx", [
+  "export interface StudioNavigationOptions",
+  "noteId?: number",
+  "commentId?: number",
+  "noteTargetId?: number | null",
+  "commentTargetId?: number | null",
+  "export function useNoteTarget()",
+  "export function useCommentTarget()",
+]);
+const studioOmnibox = requireMarkers("components/shell/StudioOmnibox.tsx", [
+  "createLatestRequestGate()",
+  "projectSearchAbortRef.current?.abort()",
+  'requests.invalidate("project-search")',
+  'requests.begin("project-search")',
+  'api.searchProject(projectId, searchQuery, ["scene", "note", "psyke", "comment"], controller.signal)',
+  "requests.open()",
+  "requests.close()",
+  'requests.invalidate("plan")',
+  "if (planRef.current)",
+  "canClose: !activating && !executing",
+  'requests.invalidate("suggestions")',
+  'requests.invalidate("execute")',
+  'requests.begin("execute")',
+  "openRef.current",
+  "planAbortRef.current?.abort()",
+  "suggestionAbortRef.current?.abort()",
+  "new AbortController()",
+  "window.clearTimeout(timer)",
+  "controller.signal",
+  "requests.isCurrent(token)",
+  "identityRef.current.projectId !== ownerIdentity.projectId",
+  "identityRef.current.sceneId !== ownerIdentity.sceneId",
+  "activatingRef.current",
+  "executingRef.current",
+  "flushPendingProjectSaves({ commitActiveField: true })",
+  "executeOmniboxPlan({",
+  "PendingProjectSaveError",
+  "StaleOmniboxPlanError",
+]);
+const cancelPlanSource = studioOmnibox.slice(
+  studioOmnibox.indexOf("const cancelPlan"),
+  studioOmnibox.indexOf("const closeNow"),
+);
+if (cancelPlanSource.includes("executingRef.current = false")) {
+  failures.push("StudioOmnibox cancelPlan releases the execution lock before the core request settles");
+}
+if ((studioOmnibox.match(/!requests\.isCurrent\(token\)/g) ?? []).length < 4) {
+  failures.push("StudioOmnibox does not gate all late planning/execution publications");
+}
+if ((studioOmnibox.match(/new AbortController\(\)/g) ?? []).length < 3) {
+  failures.push("StudioOmnibox must independently cancel project search, suggestions, and command-plan requests");
+}
+if (!/return \(\) => \{[\s\S]*?window\.clearTimeout\(timer\);[\s\S]*?projectSearchAbortRef\.current\?\.abort\(\)/.test(studioOmnibox)) {
+  failures.push("StudioOmnibox project-search debounce does not clear its timer and abort its request on cleanup");
+}
+if (!/return \(\) => \{[\s\S]*?window\.clearTimeout\(timer\);[\s\S]*?suggestionAbortRef\.current\?\.abort\(\)/.test(studioOmnibox)) {
+  failures.push("StudioOmnibox suggestion debounce does not clear its timer and abort its request on cleanup");
+}
 const mountedRef = requireMarkers("hooks/useMountedRef.ts", ["mounted.current = true", "mounted.current = false"]);
 if (mountedRef.indexOf("mounted.current = true") > mountedRef.indexOf("mounted.current = false")) {
   failures.push("useMountedRef does not re-open before its cleanup");

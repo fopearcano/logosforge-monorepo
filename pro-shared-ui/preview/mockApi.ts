@@ -1,4 +1,6 @@
+import { WRITING_MODES } from "@logosforge/ui-contracts";
 import type {
+  WritingMode,
   NoteDTO,
   InlineCommentDTO,
   InlineCommentCreateDTO,
@@ -7,11 +9,23 @@ import type {
   CharacterDTO,
   CharacterUpdateDTO,
   ProjectDTO,
+  ProjectCreateDTO,
+  ProjectUpdateDTO,
+  ProjectSearchKind,
+  ProjectSearchMatchDTO,
+  WhiteboardImportDTO,
+  WhiteboardImportResultDTO,
+  ManuscriptImportDTO,
+  ManuscriptImportResultDTO,
+  WritingModesResponseDTO,
   SceneDTO,
   OutlineNodeDTO,
   PsykeEntryDTO,
   PsykeRelationDTO,
   PsykeProgressionDTO,
+  PsykeConsoleCommandPlanDTO,
+  PsykeConsoleExecutionDTO,
+  PsykeConsolePlanRequestDTO,
   TimelineEventDTO,
   PlotBlockDTO,
   PlotSceneDTO,
@@ -23,6 +37,7 @@ import type {
 } from "@logosforge/ui-contracts";
 import type { ApiClient } from "../src/adapters/api";
 import { ApiRequestError } from "../src/adapters/httpApiClient";
+import { trackProjectOperation } from "../src/adapters/projectSaveCoordinator";
 
 const delay = (ms = 280) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -31,8 +46,127 @@ const delay = (ms = 280) => new Promise<void>((r) => setTimeout(r, ms));
 const PROJECTS: ProjectDTO[] = [
   { id: 1, title: "Null Horizon", description: "Screenplay · Feature", narrative_engine: "screenplay", default_writing_format: "screenplay", format_mode: "screenplay" },
   { id: 2, title: "Salt Flats", description: "Novel · Prose", narrative_engine: "novel", default_writing_format: "novel", format_mode: "novel" },
-  { id: 3, title: "The Quiet Fleet", description: "Series · Teleplay", narrative_engine: "series", default_writing_format: "series", format_mode: "series" },
+  { id: 3, title: "The Quiet Fleet", description: "Series · Teleplay", narrative_engine: "series", default_writing_format: "screenplay", format_mode: "screenplay" },
 ];
+
+const MOCK_WRITING_MODES: WritingModesResponseDTO = {
+  default_mode: "novel",
+  modes: [
+    {
+      id: "novel",
+      label: "Novel",
+      structural_units: ["Acts", "Chapters", "Scenes"],
+      default_writing_format: "novel",
+      medium_constraints: "prose voice, interiority, chapter rhythm, character arc, thematic recurrence",
+    },
+    {
+      id: "screenplay",
+      label: "Screenplay",
+      structural_units: ["Acts", "Sequences", "Scenes"],
+      default_writing_format: "screenplay",
+      medium_constraints: "visual action, scene economy, dialogue subtext, setup/payoff, cinematic pacing",
+    },
+    {
+      id: "graphic_novel",
+      label: "Graphic Novel",
+      structural_units: ["Chapters", "Pages", "Panels"],
+      default_writing_format: "graphic_novel",
+      medium_constraints: "page turns, panel rhythm, visual motif, image/text balance, dialogue compression",
+    },
+    {
+      id: "stage_script",
+      label: "Stage Script",
+      structural_units: ["Acts", "Scenes", "Beats", "Stage Directions"],
+      default_writing_format: "stage_script",
+      medium_constraints: "playable conflict, blocking, entrances/exits, performable dialogue, scene economy",
+    },
+    {
+      id: "series",
+      label: "Series",
+      structural_units: ["Seasons", "Episodes", "A/B/C Plots", "Scenes"],
+      default_writing_format: "screenplay",
+      medium_constraints: "episode engine, A/B/C plots, season arc, recurring payoff, long-term continuity",
+    },
+  ],
+};
+
+const MOCK_DEFAULT_FORMAT: Record<WritingMode, string> = Object.fromEntries(
+  MOCK_WRITING_MODES.modes.map((mode) => [mode.id, mode.default_writing_format]),
+) as Record<WritingMode, string>;
+
+function mockWritingMode(value: string | undefined, method: string, path: string): WritingMode {
+  const candidate = value?.trim() || "novel";
+  if ((WRITING_MODES as readonly string[]).includes(candidate)) return candidate as WritingMode;
+  throw new ApiRequestError(method, path, 400, `Unknown writing mode: ${candidate}`, "bad_request");
+}
+
+function cloneProject(project: ProjectDTO): ProjectDTO {
+  return { ...project };
+}
+
+function findMockProject(projects: ProjectDTO[], id: number, method: string, path = `/api/projects/${id}`): ProjectDTO {
+  const project = projects.find((candidate) => candidate.id === id);
+  if (!project) throw new ApiRequestError(method, path, 404, `Project ${id} not found`, "not_found");
+  return project;
+}
+
+function createMockProject(projects: ProjectDTO[], body: ProjectCreateDTO): ProjectDTO {
+  const mode = mockWritingMode(body.narrative_engine, "POST", "/api/projects");
+  const format = body.default_writing_format?.trim() || MOCK_DEFAULT_FORMAT[mode];
+  const project: ProjectDTO = {
+    id: projects.reduce((maximum, candidate) => Math.max(maximum, candidate.id), 0) + 1,
+    title: body.title,
+    description: body.description ?? "",
+    narrative_engine: mode,
+    default_writing_format: format,
+    format_mode: format,
+  };
+  projects.push(project);
+  return cloneProject(project);
+}
+
+const MOCK_PERSISTENT_METHODS = new Set([
+  "backfillCharacterLinks",
+  "generateOutline",
+  "assistantAction",
+  "connectorExecute",
+  "voiceTranscribeSegment",
+  "voiceIntentPreview",
+  "voiceIntentApply",
+  "voiceIntentCancel",
+  "voiceBillyGenerate",
+  "voiceBillyApply",
+  "voiceBillyCancel",
+  "voiceCommit",
+  "voiceUndo",
+  "cancelExtractJob",
+]);
+
+function mockMethodPersists(name: string): boolean {
+  return /^(create|update|delete|patch|set|add|link|unlink|import|apply|revert|sync)/.test(name)
+    || MOCK_PERSISTENT_METHODS.has(name);
+}
+
+/** Mirror the live HTTP client's handoff visibility for mock mutations. */
+function trackMockApiOperations(client: ApiClient): ApiClient {
+  return new Proxy(client, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (typeof property !== "string" || typeof value !== "function") return value;
+      if (property === "executePsykeConsoleCommand") {
+        return (...args: unknown[]) => trackProjectOperation(
+          Promise.resolve(value.apply(target, args)),
+          { persistence: args[2] === true },
+        );
+      }
+      if (!mockMethodPersists(property)) return value.bind(target);
+      return (...args: unknown[]) => trackProjectOperation(
+        Promise.resolve(value.apply(target, args)),
+        { persistence: true },
+      );
+    },
+  });
+}
 
 let MOCK_SCENE_REVISION = 0;
 const scene = (s: Partial<SceneDTO>): SceneDTO => ({
@@ -41,7 +175,7 @@ const scene = (s: Partial<SceneDTO>): SceneDTO => ({
   character_ids: [], place_ids: [], who_knows_what: "", revision: `mock-scene-${++MOCK_SCENE_REVISION}`, ...s,
 });
 
-const SCENES: SceneDTO[] = [
+const SCENE_FIXTURES: SceneDTO[] = [
   scene({ id: 1, title: "Cold Open", summary: "Marlow wakes the station. The planet is already wrong.", act: "ACT I", chapter: "1.1", beat: "Opening Image", content: "The corridor breathes...", sort_order: 1, tags: ["dawn"] }),
   scene({ id: 2, title: "Distress Loop", summary: "A 9-year-old signal repeats. Vesper recognizes the voice.", act: "ACT I", chapter: "1.2", beat: "Catalyst", content: "A hatch cycles.", sort_order: 2, tags: ["setup"] }),
   scene({ id: 3, title: "The Black Box", summary: "A sealed unit is logged, then never opened.", act: "ACT I", chapter: "1.3", beat: "Debate", sort_order: 3, tags: ["setup"] }),
@@ -50,6 +184,15 @@ const SCENES: SceneDTO[] = [
   scene({ id: 21, title: "All Is Lost", summary: "The reactor goes quiet. So does Vesper.", act: "ACT II", chapter: "2.7", beat: "All Is Lost", sort_order: 21, tags: ["climax"] }),
   scene({ id: 22, title: "Break Into Three", summary: "Marlow opens the box.", act: "ACT III", chapter: "3.1", beat: "Break Into Three", sort_order: 22 }),
 ];
+
+function cloneScene(value: SceneDTO): SceneDTO {
+  return {
+    ...value,
+    tags: [...value.tags],
+    character_ids: [...value.character_ids],
+    place_ids: [...value.place_ids],
+  };
+}
 
 const node = (id: number, parent_id: number | null, title: string, description: string, sort_order: number, children: OutlineNodeDTO[] = []): OutlineNodeDTO =>
   ({ id, parent_id, title, description, sort_order, scene_id: null, children });
@@ -258,7 +401,200 @@ const MOCK_VOICE_BILLY = new Map<string, VoiceBillyProposalDTO>();
 let MOCK_VOICE_SEQ = 1;
 
 export function createMockApiClient(): ApiClient {
-  return {
+  // Keep project lifecycle state local to one preview transport. Recreating the
+  // client (for example, when switching mock/live source) starts from the same
+  // deterministic fixtures instead of inheriting mutations from an old client.
+  const projects = PROJECTS.map(cloneProject);
+  const scenesByProject = new Map<number, SceneDTO[]>(
+    projects.map((project) => [
+      project.id,
+      project.id === 1 ? SCENE_FIXTURES.map(cloneScene) : [],
+    ]),
+  );
+  const fixtureProjectId = projects[0]!.id;
+  const scenesFor = (projectId: number): SceneDTO[] => {
+    let values = scenesByProject.get(projectId);
+    if (!values) {
+      values = [];
+      scenesByProject.set(projectId, values);
+    }
+    return values;
+  };
+  const fixtureRowsFor = <T>(projectId: number, rows: readonly T[]): readonly T[] => (
+    projectId === fixtureProjectId ? rows : []
+  );
+  let commandPlanSequence = 1;
+  const commandPlans = new Map<string, PsykeConsoleCommandPlanDTO & { entry_type?: string; entry_name?: string }>();
+  const client = {
+    async health() {
+      await delay(60);
+      return {
+        status: "ok",
+        service: "logosforge-api",
+        instance_nonce: "preview-mock",
+        mode: "preview-mock",
+        version: "1.0.0",
+        api_version: "1.0.0",
+        core_version: "preview",
+      };
+    },
+    async writingModes() {
+      await delay(60);
+      return {
+        default_mode: MOCK_WRITING_MODES.default_mode,
+        modes: MOCK_WRITING_MODES.modes.map((mode) => ({
+          ...mode,
+          structural_units: [...mode.structural_units],
+        })),
+      };
+    },
+    async listProjects() {
+      await delay();
+      return projects.map(cloneProject);
+    },
+    async createProject(body: ProjectCreateDTO) {
+      await delay(160);
+      const project = createMockProject(projects, body);
+      scenesByProject.set(project.id, []);
+      return project;
+    },
+    async importWhiteboard(body: WhiteboardImportDTO): Promise<WhiteboardImportResultDTO> {
+      await delay(220);
+      const title = body.title?.trim() || "Imported Whiteboard";
+      const project = createMockProject(projects, {
+        title,
+        narrative_engine: body.mode,
+      });
+      const projectScenes = scenesFor(project.id);
+      const populatedBlocks = body.blocks.filter((block) => String(block.text ?? "").trim().length > 0);
+      const sceneId = populatedBlocks.length > 0
+        ? projectScenes.reduce((maximum, candidate) => Math.max(maximum, candidate.id), 0) + 1
+        : -1;
+      const sceneTitle = populatedBlocks.find((block) => block.type === "heading")?.text?.trim()
+        || project.title;
+      if (sceneId > 0) {
+        const content = populatedBlocks
+          .filter((block) => block.type !== "heading")
+          .map((block) => String(block.text ?? "").trim())
+          .filter(Boolean)
+          .join("\n\n");
+        const order = projectScenes.reduce((maximum, candidate) => Math.max(maximum, candidate.sort_order), 0) + 1;
+        projectScenes.push(scene({
+          id: sceneId,
+          title: sceneTitle,
+          content,
+          sort_order: order,
+          order_index: order,
+        }));
+      }
+      const comments = body.comments ?? [];
+      const replies = comments.reduce((total, comment) => total + (comment.replies?.length ?? 0), 0);
+      return {
+        project_id: project.id,
+        title: project.title,
+        mode: project.narrative_engine,
+        scenes_created: sceneId > 0 ? 1 : 0,
+        scene_titles: sceneId > 0 ? [sceneTitle] : [],
+        scene_ids_by_block: body.blocks.map((block) => String(block.text ?? "").trim() && sceneId > 0 ? sceneId : -1),
+        comments_created: 0,
+        comments_skipped: comments.length,
+        comment_replies_created: 0,
+        comment_replies_skipped: replies,
+      };
+    },
+    async importManuscript(body: ManuscriptImportDTO): Promise<ManuscriptImportResultDTO> {
+      await delay(220);
+      const fallbackTitle = body.filename?.replace(/\.[^.]+$/, "").trim() || "Imported Manuscript";
+      const project = createMockProject(projects, {
+        title: body.title?.trim() || fallbackTitle,
+        narrative_engine: body.mode,
+      });
+      const projectScenes = scenesFor(project.id);
+      const sceneId = projectScenes.reduce((maximum, candidate) => Math.max(maximum, candidate.id), 0) + 1;
+      const order = projectScenes.reduce((maximum, candidate) => Math.max(maximum, candidate.sort_order), 0) + 1;
+      const sceneTitle = project.title;
+      projectScenes.push(scene({ id: sceneId, title: sceneTitle, sort_order: order, order_index: order }));
+      return {
+        project_id: project.id,
+        title: project.title,
+        mode: project.narrative_engine,
+        scenes_created: 1,
+        scene_titles: [sceneTitle],
+      };
+    },
+    async getProject(id: number) {
+      await delay(100);
+      return cloneProject(findMockProject(projects, id, "GET"));
+    },
+    async updateProject(id: number, body: ProjectUpdateDTO) {
+      await delay(140);
+      const project = findMockProject(projects, id, "PATCH");
+      const requestedMode = body.narrative_engine !== undefined
+        ? mockWritingMode(body.narrative_engine, "PATCH", `/api/projects/${id}`)
+        : undefined;
+      if (body.title !== undefined) project.title = body.title;
+      if (body.description !== undefined) project.description = body.description;
+      if (requestedMode !== undefined) {
+        const format = MOCK_DEFAULT_FORMAT[requestedMode];
+        project.narrative_engine = requestedMode;
+        project.default_writing_format = format;
+        project.format_mode = format;
+      }
+      return cloneProject(project);
+    },
+    async deleteProject(id: number) {
+      await delay(140);
+      findMockProject(projects, id, "DELETE");
+      projects.splice(projects.findIndex((candidate) => candidate.id === id), 1);
+      scenesByProject.delete(id);
+      return { ok: true, deleted: id };
+    },
+    async openProject(id: number) {
+      await delay(100);
+      return cloneProject(findMockProject(projects, id, "POST", `/api/projects/${id}/open`));
+    },
+    async saveProject(id: number) {
+      await delay(80);
+      findMockProject(projects, id, "POST", `/api/projects/${id}/save`);
+      return { ok: true, project_id: id };
+    },
+    async closeProject(id: number) {
+      await delay(80);
+      findMockProject(projects, id, "POST", `/api/projects/${id}/close`);
+      return { ok: true, project_id: id };
+    },
+    async searchProject(
+      p: number,
+      query: string,
+      kinds?: readonly ProjectSearchKind[],
+      signal?: AbortSignal,
+    ) {
+      await delay(80);
+      if (signal?.aborted) throw signal.reason ?? new DOMException("Request cancelled", "AbortError");
+      findMockProject(projects, p, "GET", `/api/projects/${p}/search`);
+      const needle = query.trim().toLocaleLowerCase();
+      const allowed = new Set<ProjectSearchKind>(kinds?.length ? kinds : ["scene", "note", "psyke", "comment"]);
+      const matches: ProjectSearchMatchDTO[] = [];
+      const add = (kind: ProjectSearchKind, id: number, title: string, text: string, extra: Partial<ProjectSearchMatchDTO> = {}) => {
+        if (!allowed.has(kind) || !needle || !text.toLocaleLowerCase().includes(needle)) return;
+        matches.push({ kind, id, title, excerpt: text.replace(/\s+/g, " ").trim().slice(0, 240), ...extra });
+      };
+      for (const sceneRow of scenesFor(p)) {
+        add("scene", sceneRow.id, sceneRow.title, [
+          sceneRow.title, sceneRow.summary, sceneRow.synopsis, sceneRow.goal,
+          sceneRow.conflict, sceneRow.outcome, sceneRow.beat, sceneRow.act,
+          sceneRow.chapter, sceneRow.plotline, sceneRow.content, ...sceneRow.tags,
+        ].join("\n"));
+      }
+      for (const note of fixtureRowsFor(p, NOTES)) add("note", note.id, note.title, [note.title, note.content, ...note.tags].join("\n"));
+      for (const entry of fixtureRowsFor(p, PSYKE)) add("psyke", entry.id, entry.name, [entry.name, entry.type, ...entry.aliases, entry.notes].join("\n"));
+      for (const comment of fixtureRowsFor(p, COMMENTS)) {
+        add("comment", comment.id, `Comment ${comment.id}: ${comment.quote.slice(0, 80)}`, [
+          comment.quote, comment.body, ...comment.replies.map((reply) => `${reply.author}: ${reply.body}`),
+        ].join("\n"), { revision: comment.revision, resolved: comment.resolved });
+      }
+      return { query, matches: matches.slice(0, 40), limit: 40 };
+    },
     async listNotes() { await delay(); return NOTES.map((n) => ({ ...n })); },
     async listComments() {
       await delay();
@@ -360,11 +696,11 @@ export function createMockApiClient(): ApiClient {
     async backfillCharacterLinks() { await delay(); return { ok: true, linked: 0 }; },
     async getThemeScenes(_p: number, entryId: number) { await delay(140); return { entry_id: entryId, scene_ids: [...(MOCK_THEME_SCENES[entryId] ?? [])] }; },
     async setThemeScenes(_p: number, entryId: number, sceneIds: number[]) { await delay(160); MOCK_THEME_SCENES[entryId] = [...sceneIds]; return { entry_id: entryId, scene_ids: [...sceneIds] }; },
-    async listProjects() { await delay(); return PROJECTS.map((p) => ({ ...p })); },
-    async listScenes() { await delay(); return SCENES.map((s) => ({ ...s })); },
+    async listScenes(p: number) { await delay(); return scenesFor(p).map(cloneScene); },
     async updateScene(_p: number, sceneId: number, patch: Record<string, unknown>) {
       await delay(120);
-      const s = SCENES.find((x) => x.id === sceneId);
+      const projectScenes = scenesFor(_p);
+      const s = projectScenes.find((x) => x.id === sceneId);
       if (!s) return { id: sceneId } as unknown as SceneDTO;
       const { expected_revision: expectedRevision, ...writePatch } = patch;
       if (expectedRevision && expectedRevision !== s.revision) {
@@ -373,22 +709,22 @@ export function createMockApiClient(): ApiClient {
       }
       // mirror the core: sort_order in a PATCH is a 0-based REORDER index — move + resequence
       if (typeof writePatch.sort_order === "number") {
-        const ordered = [...SCENES].sort((a, b) => a.sort_order - b.sort_order);
+        const ordered = [...projectScenes].sort((a, b) => a.sort_order - b.sort_order);
         const from = ordered.indexOf(s);
         ordered.splice(from, 1);
         ordered.splice(Math.max(0, Math.min(ordered.length, writePatch.sort_order as number)), 0, s);
         ordered.forEach((sc, i) => { sc.sort_order = i; sc.revision = `mock-scene-${++MOCK_SCENE_REVISION}`; }); // 0-based, mirroring the core
         const { sort_order, ...rest } = writePatch;
         Object.assign(s, rest);
-        SCENES.sort((a, b) => a.sort_order - b.sort_order); // listScenes returns ordered, like the core
+        projectScenes.sort((a, b) => a.sort_order - b.sort_order); // listScenes returns ordered, like the core
         return { ...s };
       }
       Object.assign(s, writePatch);
       s.revision = `mock-scene-${++MOCK_SCENE_REVISION}`;
       return { ...s };
     },
-    async createScene(_p: number, body: Record<string, unknown>) { await delay(140); const id = SCENES.reduce((mx, s) => Math.max(mx, s.id), 0) + 1; const s = scene({ id, title: String((body.title as string) ?? "New Scene"), content: "", sort_order: SCENES.length + 1, order_index: SCENES.length + 1 }); SCENES.push(s); return { ...s }; },
-    async deleteScene(_p: number, sceneId: number) { await delay(120); const i = SCENES.findIndex((x) => x.id === sceneId); if (i >= 0) SCENES.splice(i, 1); },
+    async createScene(_p: number, body: Record<string, unknown>) { await delay(140); const projectScenes = scenesFor(_p); const id = projectScenes.reduce((mx, s) => Math.max(mx, s.id), 0) + 1; const s = scene({ id, title: String((body.title as string) ?? "New Scene"), content: "", sort_order: projectScenes.length + 1, order_index: projectScenes.length + 1 }); projectScenes.push(s); return cloneScene(s); },
+    async deleteScene(_p: number, sceneId: number) { await delay(120); const projectScenes = scenesFor(_p); const i = projectScenes.findIndex((x) => x.id === sceneId); if (i >= 0) projectScenes.splice(i, 1); return { ok: true, deleted: sceneId }; },
     async listLogosActions(_p: number, section?: string) {
       await delay(120);
       const defs: [string, string, string][] = [
@@ -433,16 +769,128 @@ export function createMockApiClient(): ApiClient {
     async createGnContinuityAppearance(_p: number, itemId: number, body: Record<string, unknown>) { await delay(140); const row = { id: 3000 + MOCK_GN_APPEAR.length, continuity_item_id: itemId, ...body }; MOCK_GN_APPEAR.push(row); return { ...row }; },
     async getOutline() { await delay(); return OUTLINE; },
     async listPsyke() { await delay(); return PSYKE.map((e) => ({ ...e })); },
+    async getPsykeConsoleSuggestions(_p: number, query: string, _sceneId?: number | null, _signal?: AbortSignal) {
+      await delay(100);
+      const q = query.trim().toLowerCase();
+      if (!q) return [];
+      if (q.startsWith("/")) {
+        return ["/create", "/open", "/go", "/ai"]
+          .filter((command) => command.startsWith(q))
+          .map((command, index) => ({
+            text: command,
+            description: "PSYKE Console command",
+            icon: "⌘",
+            category: "command",
+            score: 1 - index * 0.01,
+            entry_id: 0,
+          }));
+      }
+      return PSYKE
+        .filter((entry) => [entry.name, ...entry.aliases, entry.notes].join(" ").toLowerCase().includes(q))
+        .slice(0, 8)
+        .map((entry, index) => ({
+          text: entry.name,
+          description: entry.type,
+          icon: "ψ",
+          category: "entity",
+          score: 1 - index * 0.01,
+          entry_id: entry.id,
+        }));
+    },
+    async planPsykeConsoleCommand(_p: number, body: PsykeConsolePlanRequestDTO, signal?: AbortSignal) {
+      await delay(120);
+      if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
+      const projectScenes = scenesFor(_p);
+      const input = body.command.trim();
+      const parts = input.split(/\s+/);
+      const command = (parts.shift() ?? "").replace(/^\//, "").toLowerCase();
+      let plan: PsykeConsoleCommandPlanDTO & { entry_type?: string; entry_name?: string };
+      const plan_id = `mock-plan-${commandPlanSequence++}`;
+      const expires_at = new Date(Date.now() + 120_000).toISOString();
+      if (command === "create") {
+        const entry_type = (parts.shift() ?? "").toLowerCase();
+        const entry_name = parts.join(" ").trim();
+        if (!entry_type || !entry_name) throw new ApiRequestError("POST", "/psyke/console/plan", 400, "Usage: /create <type> <name>", "bad_request");
+        const existing = PSYKE.find((entry) => entry.type.toLowerCase() === entry_type && entry.name.toLowerCase() === entry_name.toLowerCase());
+        plan = existing ? {
+          plan_id, command: "create", normalized_command: `/create ${entry_type} ${existing.name}`,
+          action: "open_psyke_entry", summary: `Open existing ${entry_type} '${existing.name}'`,
+          effects: ["No duplicate will be created.", `Open PSYKE entry #${existing.id} in this project.`],
+          requires_confirmation: false, mutates: false, target_type: "psyke_entry", target_id: existing.id, expires_at,
+        } : {
+          plan_id, command: "create", normalized_command: `/create ${entry_type} ${entry_name}`,
+          action: "create_psyke_entry", summary: `Create ${entry_type} '${entry_name}'`,
+          effects: [`Add one ${entry_type} entry named '${entry_name}' to this project's PSYKE Bible.`, "Open the resulting entry after creation."],
+          requires_confirmation: true, mutates: true, target_type: "psyke_entry", target_id: null, expires_at,
+          entry_type, entry_name,
+        };
+      } else if (command === "open" && parts[0]?.toLowerCase() === "scene") {
+        const target = projectScenes.find((scene) => scene.id === Number(parts[1]));
+        if (!target) throw new ApiRequestError("POST", "/psyke/console/plan", 400, "Scene not found", "bad_request");
+        plan = {
+          plan_id, command: "open", normalized_command: `/open scene ${target.id}`,
+          action: "open_scene", summary: `Open scene #${target.id} '${target.title}'`,
+          effects: [`Open scene #${target.id}; project data will not change.`],
+          requires_confirmation: false, mutates: false, target_type: "scene", target_id: target.id, expires_at,
+        };
+      } else if (command === "open" && parts[0]?.toLowerCase() === "psyke") {
+        const name = parts.slice(1).join(" ").toLowerCase();
+        const target = PSYKE.find((entry) => entry.name.toLowerCase() === name || entry.aliases.some((alias) => alias.toLowerCase() === name));
+        if (!target) throw new ApiRequestError("POST", "/psyke/console/plan", 400, "PSYKE entry not found", "bad_request");
+        plan = {
+          plan_id, command: "open", normalized_command: `/open psyke ${target.name}`,
+          action: "open_psyke_entry", summary: `Open PSYKE entry '${target.name}'`,
+          effects: [`Open ${target.type} entry #${target.id}; project data will not change.`],
+          requires_confirmation: false, mutates: false, target_type: "psyke_entry", target_id: target.id, expires_at,
+        };
+      } else if ((command === "go" || command === "goto") && parts[0]?.toLowerCase() === "scene") {
+        const currentIndex = projectScenes.findIndex((scene) => scene.id === body.active_scene_id);
+        const direction = parts[1]?.toLowerCase();
+        const target = direction === "next" && currentIndex >= 0 ? projectScenes[currentIndex + 1]
+          : (direction === "previous" || direction === "prev") && currentIndex > 0 ? projectScenes[currentIndex - 1]
+            : projectScenes.find((scene) => scene.id === Number(direction));
+        if (!target) throw new ApiRequestError("POST", "/psyke/console/plan", 400, "Scene target is unavailable", "bad_request");
+        plan = {
+          plan_id, command: "go", normalized_command: `/go scene ${direction}`,
+          action: "open_scene", summary: `Open scene #${target.id} '${target.title}'`,
+          effects: [`Open scene #${target.id}; project data will not change.`],
+          requires_confirmation: false, mutates: false, target_type: "scene", target_id: target.id, expires_at,
+        };
+      } else {
+        throw new ApiRequestError("POST", "/psyke/console/plan", 400, `/${command || "?"} is not available in the safe command pipeline yet.`, "bad_request");
+      }
+      commandPlans.set(plan.plan_id, plan);
+      return { ...plan, effects: [...plan.effects] };
+    },
+    async executePsykeConsoleCommand(_p: number, body: { plan_id: string; confirmed: true }, _mutates: boolean): Promise<PsykeConsoleExecutionDTO> {
+      await delay(180);
+      const plan = commandPlans.get(body.plan_id);
+      if (!plan) throw new ApiRequestError("POST", "/psyke/console/execute", 404, "Command plan was not found or has expired.", "not_found");
+      commandPlans.delete(body.plan_id);
+      if (plan.action === "create_psyke_entry") {
+        const entry: PsykeEntryDTO = {
+          id: Math.max(...PSYKE.map((candidate) => candidate.id)) + 1,
+          name: plan.entry_name ?? "New Entry", type: plan.entry_type ?? "other",
+          aliases: [], notes: "", is_global: false, details: {},
+        };
+        PSYKE.push(entry);
+        return { ok: true, action: plan.action, message: `Created ${entry.type} '${entry.name}' and opened it in PSYKE.`, mutated: true, target_type: "psyke_entry", target_id: entry.id };
+      }
+      const target_id = plan.target_id;
+      if (target_id == null) throw new ApiRequestError("POST", "/psyke/console/execute", 409, "Command target became stale", "stale_command_plan");
+      return { ok: true, action: plan.action, message: plan.summary.replace(/^Open /, "Opened "), mutated: false, target_type: plan.target_type, target_id };
+    },
     async listRelations() { await delay(); return RELATIONS.map((r) => ({ ...r })); },
     async listProgressions() { await delay(); return PROGRESSIONS.map((p) => ({ ...p })); },
     async getTimeline() { await delay(); return TIMELINE.map((e) => ({ ...e })); },
     async getPlot() { await delay(); return PLOT.map((b) => ({ ...b })); },
-    async getDashboard() {
+    async getDashboard(p: number) {
       await delay();
-      const n = SCENES.length;
+      const projectScenes = scenesFor(p);
+      const n = projectScenes.length;
       return {
         tension: {
-          points: SCENES.map((s, i) => ({ scene_id: s.id, scene_order: s.sort_order, scene_title: s.title, score: 30 + (i % 4) * 18, char_count: 1 + (i % 3), relation_pairs: i % 2, keyword_hits: i % 3, progression_count: i === n - 1 ? 1 : 0 })),
+          points: projectScenes.map((s, i) => ({ scene_id: s.id, scene_order: s.sort_order, scene_title: s.title, score: 30 + (i % 4) * 18, char_count: 1 + (i % 3), relation_pairs: i % 2, keyword_hits: i % 3, progression_count: i === n - 1 ? 1 : 0 })),
           flags: ["Flat section: scenes 3–5", "Weak buildup in first third"],
         },
         characters: PSYKE.filter((e) => e.type === "character").map((e) => ({ entry_id: e.id, name: e.name, present_scenes: [1, 5], total_scenes: n, flags: e.name === "THE WARDEN" ? ["Absent for 4 consecutive scenes"] : [] })),
@@ -748,7 +1196,7 @@ export function createMockApiClient(): ApiClient {
     },
     async startExtract(p: number, useLlm = true) {
       await delay(300);
-      const sc = SCENES.slice(0, 4);
+      const sc = scenesFor(p).slice(0, 4);
       const result = {
         project_id: p,
         used_llm: useLlm,
@@ -847,19 +1295,21 @@ export function createMockApiClient(): ApiClient {
     async patchSettings(_p: number, body: { settings?: Record<string, unknown> }) { await delay(); SETTINGS = { ...SETTINGS, ...(body?.settings ?? {}) }; return { settings: { ...SETTINGS } }; },
     async export(_p: number, req: ExportRequestDTO): Promise<ExportResponseDTO> {
       await delay();
+      const projectScenes = scenesFor(_p);
       if (req.format === "json") {
-        const payload = { export_type: req.export_type, project: "Null Horizon", scenes: SCENES.map((s) => ({ id: s.id, title: s.title, act: s.act })), psyke: PSYKE.map((e) => ({ name: e.name, type: e.type })) };
+        const payload = { export_type: req.export_type, project: "Null Horizon", scenes: projectScenes.map((s) => ({ id: s.id, title: s.title, act: s.act })), psyke: PSYKE.map((e) => ({ name: e.name, type: e.type })) };
         return { export_type: req.export_type, format: "json", payload, content: null, files: null };
       }
       if (req.format === "csv") {
-        const content = "id,title,act\n" + SCENES.map((s) => `${s.id},"${s.title}","${s.act}"`).join("\n");
+        const content = "id,title,act\n" + projectScenes.map((s) => `${s.id},"${s.title}","${s.act}"`).join("\n");
         return { export_type: req.export_type, format: "csv", content, payload: null, files: null };
       }
       const content =
-        `# Null Horizon\n\n_${req.export_type} · markdown_\n\n## Scenes (${SCENES.length})\n` +
-        SCENES.map((s) => `- **${s.title}** — ${s.summary}`).join("\n") +
+        `# Null Horizon\n\n_${req.export_type} · markdown_\n\n## Scenes (${projectScenes.length})\n` +
+        projectScenes.map((s) => `- **${s.title}** — ${s.summary}`).join("\n") +
         `\n\n## PSYKE (${PSYKE.length})\n` + PSYKE.map((e) => `- ${e.name} (${e.type})`).join("\n");
       return { export_type: req.export_type, format: "markdown", content, payload: null, files: null };
     },
   } as unknown as ApiClient;
+  return trackMockApiOperations(client);
 }

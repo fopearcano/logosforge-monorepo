@@ -7,7 +7,7 @@ import { PanelShell, Corners, type PanelProps } from "../shell/PanelShell";
 import { useStudio } from "../../adapters/StudioProvider";
 import { useSelection } from "../../adapters/selection";
 import { useScenes } from "../../hooks";
-import { flushPendingProjectSaves, markProjectSavePending, registerProjectFlusher, trackProjectWrite } from "../../adapters/projectSaveCoordinator";
+import { discardProjectSavePending, flushPendingProjectSaves, markProjectSavePending, registerProjectFlusher, trackProjectOperation, trackProjectWrite } from "../../adapters/projectSaveCoordinator";
 import { startMic, type MicRecorder } from "./mic";
 import { createLatestRequestGate, type RequestToken } from "../../hooks/latestRequest";
 
@@ -202,8 +202,7 @@ export function VoiceHud(props: PanelProps) {
     }
     const token = requests.begin("mic");
     setErr(null); setNote(null); setMicStarting(true);
-    markProjectSavePending();
-    const starting = startMic();
+    const starting = trackProjectOperation(startMic(), { ownerFlusher: voiceFlusher });
     micStartRef.current = starting;
     try {
       const rec = await starting;
@@ -223,9 +222,8 @@ export function VoiceHud(props: PanelProps) {
     } finally {
       if (micStartRef.current === starting) micStartRef.current = null;
       if (isOwned(ownerProjectId, token)) setMicStarting(false);
-      markProjectSavePending();
     }
-  }, [available, isOwned, requests, stopTimer]);
+  }, [available, isOwned, requests, stopTimer, voiceFlusher]);
 
   const stopRecord = useCallback((): Promise<void> | undefined => {
     const ownerProjectId = projectIdRef.current;
@@ -240,9 +238,8 @@ export function VoiceHud(props: PanelProps) {
     const token = requests.begin("transcribe");
     busyRef.current = true;
     setBusy(true); setErr(null); setNote(null);
-    markProjectSavePending();
     let operation!: Promise<void>;
-    operation = (async () => {
+    operation = trackProjectOperation((async () => {
       try {
         const audio = await rec.stop();
         if (!isOwned(ownerProjectId, token)) return;
@@ -272,28 +269,39 @@ export function VoiceHud(props: PanelProps) {
           busyRef.current = false;
           setBusy(false);
         }
-        markProjectSavePending();
       }
-    })();
+    })(), { ownerFlusher: voiceFlusher });
     transcribeRef.current = operation;
     return operation;
-  }, [api, isOwned, refreshActions, refreshHistory, requests, stopTimer]);
+  }, [api, isOwned, refreshActions, refreshHistory, requests, stopTimer, voiceFlusher]);
 
   const patchSeg = useCallback((id: string, patch: Partial<Seg>) =>
     setSegments((current) => current.map((segment) =>
       segment.id === id ? { ...segment, ...patch } : segment)), []);
 
-  const appendToScene = useCallback(async (ownerProjectId: number, sceneId: number, text: string) => {
-    await flushPendingProjectSaves({ excludeFlusher: voiceFlusher });
+  const appendToScene = useCallback(async (
+    ownerProjectId: number,
+    sceneId: number,
+    text: string,
+    retryOwner = false,
+  ) => {
+    const saveKey = `voice-insert:${ownerProjectId}:${sceneId}`;
+    await flushPendingProjectSaves({
+      excludeFlusher: voiceFlusher,
+      ...(retryOwner ? { retrySaveKey: saveKey } : {}),
+    });
     if (projectIdRef.current !== ownerProjectId) throw new Error("The active project changed before Voice could update the scene.");
     const current = (await api.listScenes(ownerProjectId)).find((scene) => scene.id === sceneId);
     if (!current) throw new Error("The target scene no longer exists.");
     if (projectIdRef.current !== ownerProjectId) throw new Error("The active project changed before Voice could update the scene.");
     const content = (current.content ? current.content + "\n\n" : "") + text;
-    await trackProjectWrite(api.updateScene(ownerProjectId, current.id, {
-      content,
-      ...(current.revision ? { expected_revision: current.revision } : {}),
-    }));
+    await trackProjectWrite(
+      api.updateScene(ownerProjectId, current.id, {
+        content,
+        ...(current.revision ? { expected_revision: current.revision } : {}),
+      }),
+      { saveKey },
+    );
     scenes.refetch();
   }, [api, scenes, voiceFlusher]);
 
@@ -316,9 +324,8 @@ export function VoiceHud(props: PanelProps) {
     const token = requests.begin("work");
     workBusyRef.current = true;
     setWorkBusy(true); setErr(null); setNote(null);
-    markProjectSavePending();
     let operation!: Promise<void>;
-    operation = (async () => {
+    operation = trackProjectOperation((async () => {
       try {
         await action(ownerProjectId, token);
       } catch (error) {
@@ -329,18 +336,17 @@ export function VoiceHud(props: PanelProps) {
           workBusyRef.current = false;
           setWorkBusy(false);
         }
-        markProjectSavePending();
       }
-    })();
+    })(), { ownerFlusher: voiceFlusher });
     actionRef.current = operation;
     return operation;
-  }, [isOwned, requests]);
+  }, [isOwned, requests, voiceFlusher]);
 
   const preservePendingInsert = useCallback((value: PendingInsert, error: unknown) => {
     pendingInsertRef.current = value;
     setPendingInsert(value);
     setErr(`Voice completed, but the scene insertion is still pending. ${error instanceof Error ? error.message : String(error)}`);
-    markProjectSavePending();
+    markProjectSavePending(`voice-insert:${value.projectId}:${value.sceneId}`);
   }, []);
 
   const retryPendingInsert = useCallback(() => {
@@ -348,25 +354,26 @@ export function VoiceHud(props: PanelProps) {
     if (!pending) return;
     void runVoiceAction(async (ownerProjectId, token) => {
       if (pendingInsertRef.current !== pending || ownerProjectId !== pending.projectId) return;
-      await appendToScene(ownerProjectId, pending.sceneId, pending.text);
+      await appendToScene(ownerProjectId, pending.sceneId, pending.text, true);
       if (!isOwned(ownerProjectId, token) || pendingInsertRef.current !== pending) return;
       patchSeg(pending.segId, { committedLabel: pending.label });
       pendingInsertRef.current = null;
       setPendingInsert(null);
       setErr(null);
       setNote(pending.message);
-      markProjectSavePending();
       await Promise.all([refreshHistory(), refreshActions()]);
     }, false, true);
   }, [appendToScene, isOwned, patchSeg, refreshActions, refreshHistory, runVoiceAction]);
 
   const discardPendingInsert = useCallback(() => {
     if (workBusyRef.current) return;
+    const pending = pendingInsertRef.current;
+    if (!pending) return;
     pendingInsertRef.current = null;
     setPendingInsert(null);
     setErr(null);
     setNote("Pending scene insertion discarded; the transcript remains in Voice history.");
-    markProjectSavePending();
+    discardProjectSavePending(`voice-insert:${pending.projectId}:${pending.sceneId}`);
   }, []);
 
   const dismissWork = useCallback(() => {
@@ -381,7 +388,6 @@ export function VoiceHud(props: PanelProps) {
       workRef.current = null;
       setWork(null);
       setNote(result.message || "Voice preview dismissed.");
-      markProjectSavePending();
       await refreshHistory();
     }, true);
   }, [api, isOwned, refreshHistory, runVoiceAction]);
@@ -420,7 +426,6 @@ export function VoiceHud(props: PanelProps) {
       } else setErr(result.message || "Intent could not be applied.");
       workRef.current = null;
       setWork(null);
-      markProjectSavePending();
       await Promise.all([refreshHistory(), refreshActions()]);
     }, true);
   }, [api, ctx, isOwned, patchSeg, refreshActions, refreshHistory, runVoiceAction]);
@@ -469,7 +474,6 @@ export function VoiceHud(props: PanelProps) {
               }, error);
               workRef.current = null;
               setWork(null);
-              markProjectSavePending();
               await Promise.all([refreshHistory(), refreshActions()]);
             }
             return;
@@ -481,7 +485,6 @@ export function VoiceHud(props: PanelProps) {
       } else setErr(result.message || "Could not apply Billy's proposal.");
       workRef.current = null;
       setWork(null);
-      markProjectSavePending();
       await Promise.all([refreshHistory(), refreshActions()]);
     }, true);
   }, [activeScene?.id, api, appendToScene, ctx, isOwned, patchSeg, preservePendingInsert, refreshActions, refreshHistory, runVoiceAction]);

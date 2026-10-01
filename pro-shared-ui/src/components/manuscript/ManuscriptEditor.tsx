@@ -31,6 +31,7 @@ import {
 import { absoluteTime, formatRelativeTime, isImportedSource } from "./commentPresentation";
 import { createSceneSaveQueue, type SceneSaveQueue } from "./sceneSaveQueue";
 import {
+  discardProjectSavePending,
   flushPendingProjectSaves,
   markProjectSavePending,
   registerProjectFlusher,
@@ -248,6 +249,7 @@ function SceneEditor({
   // even if a host accidentally rerenders once with a new active project before
   // this old scene unmounts.
   const ownerProjectId = useRef<number | null>(projectId ?? null).current;
+  const sceneSaveKey = `scene-editor:${ownerProjectId ?? "none"}:${scene.id}`;
   const { setSelection } = useSelection();
   const [title, setTitle] = useState(scene.title ?? "");
   const [content, setContent] = useState(scene.content ?? "");
@@ -300,10 +302,13 @@ function SceneEditor({
     const force = forceOverwriteRef.current;
     forceOverwriteRef.current = false;
     try {
-      const updated = await trackProjectWrite(api.updateScene(ownerProjectId, scene.id, {
-        ...draft,
-        ...(!force && revisionRef.current ? { expected_revision: revisionRef.current } : {}),
-      }));
+      const updated = await trackProjectWrite(
+        api.updateScene(ownerProjectId, scene.id, {
+          ...draft,
+          ...(!force && revisionRef.current ? { expected_revision: revisionRef.current } : {}),
+        }),
+        { saveKey: sceneSaveKey },
+      );
       revisionRef.current = updated.revision ?? "";
       if (mounted.current) { setSaveConflict(false); setSaveError(""); }
     } catch (error) {
@@ -320,7 +325,7 @@ function SceneEditor({
       initial: draftRef.current,
       write: (draft) => writeRef.current(draft),
       onStatus: (next) => statusRef.current(next),
-      onDirty: markProjectSavePending,
+      onDirty: () => markProjectSavePending(sceneSaveKey),
     });
   }
   // report word count + live content (for the FORMAT preview) upward
@@ -388,6 +393,7 @@ function SceneEditor({
       draftRef.current = next;
       revisionRef.current = latest.revision ?? "";
       queueRef.current?.reset(next);
+      discardProjectSavePending(sceneSaveKey);
       setSaveConflict(false); setSaveError(""); setStat("saved");
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : String(error));
@@ -1186,6 +1192,9 @@ function ManuscriptRail({
 // ------------------------------------------------------------------- Manuscript
 export function ManuscriptEditor(props: PanelProps) {
   const { api, projectId, writingMode } = useStudio();
+  const { selection, setSelection } = useSelection();
+  const selectionRef = useRef(selection);
+  selectionRef.current = selection;
   const projectKey = projectId ?? null;
   const { data: scenes, loading, error, refetch } = useScenes();
   const { data: commentData, loading: commentsLoading, error: commentsError, refetch: refetchComments } = useComments();
@@ -1631,6 +1640,9 @@ export function ManuscriptEditor(props: PanelProps) {
       // Dispose local edits only after the destructive request succeeds. If the
       // API rejects, the editor remains live and its draft can still autosave.
       flushers.current.get(id)?.cancel();
+      if (selectionRef.current.sceneId === id) {
+        setSelection({ sceneId: null, text: "" });
+      }
       refetch();
     } catch (error) {
       setActionError(`Couldn't delete the scene — ${error instanceof Error ? error.message : String(error)}`);

@@ -4,7 +4,7 @@ import { PanelShell, Corners, type PanelProps } from "../shell/PanelShell";
 import { useStudio, useNavigate } from "../../adapters/StudioProvider";
 import { useOutline } from "../../hooks";
 import { useSelection } from "../../adapters/selection";
-import { flushPendingProjectSaves, markProjectSavePending, registerProjectFlusher } from "../../adapters/projectSaveCoordinator";
+import { discardProjectSavePending, flushPendingProjectSaves, markProjectSavePending, registerProjectFlusher, trackProjectWrite } from "../../adapters/projectSaveCoordinator";
 import { ConfirmDeleteButton } from "../common/ConfirmDeleteButton";
 
 const panelBox: CSSProperties = {
@@ -74,11 +74,12 @@ interface OutlineHandlers {
   addChapter: (act: OutlineNodeDTO) => void;
   aiUnder: (node: OutlineNodeDTO, childScope: string, label: string) => void;
   jump: (n: OutlineNodeDTO) => void;
+  saveKey: (n: OutlineNodeDTO) => string;
   busy: boolean;
 }
 
 /** A node title that becomes an inline input on ✎ / double-click. */
-function EditableTitle({ node, editing, disabled, onStart, onSave, onCancel, style }: { node: OutlineNodeDTO; editing: boolean; disabled: boolean; onStart: () => void; onSave: (t: string) => Promise<boolean>; onCancel: () => void; style: CSSProperties }) {
+function EditableTitle({ node, editing, disabled, onStart, onSave, onCancel, saveKey, style }: { node: OutlineNodeDTO; editing: boolean; disabled: boolean; onStart: () => void; onSave: (t: string) => Promise<boolean>; onCancel: () => void; saveKey: string; style: CSSProperties }) {
   const [val, setVal] = useState(node.title);
   const cancelling = useRef(false);
   const valRef = useRef(val);
@@ -96,9 +97,9 @@ function EditableTitle({ node, editing, disabled, onStart, onSave, onCancel, sty
         autoFocus
         value={val}
         disabled={disabled}
-        onChange={(e) => { setVal(e.target.value); valRef.current = e.target.value; markProjectSavePending(); }}
+        onChange={(e) => { setVal(e.target.value); valRef.current = e.target.value; markProjectSavePending(saveKey); }}
         onBlur={() => {
-          if (cancelling.current) { cancelling.current = false; onCancel(); }
+          if (cancelling.current) { cancelling.current = false; discardProjectSavePending(saveKey); onCancel(); }
           else void onSave(valRef.current.trim() || node.title);
         }}
         onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); if (e.key === "Escape") { cancelling.current = true; setVal(node.title); e.currentTarget.blur(); } }}
@@ -119,7 +120,7 @@ function renderAct(act: OutlineNodeDTO, actIndex: number, h: OutlineHandlers): R
     <div key={act.id} style={{ border: "1px solid var(--line-cy)", marginBottom: 11 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "9px 11px", background: "rgba(76,194,255,.07)", borderBottom: "1px solid var(--line2)" }}>
         <button type="button" onClick={() => h.onPick(act)} aria-label={`Select ${act.title} for Logos`} title="Select for Logos" style={{ border: "none", background: "transparent", padding: 0, font: "inherit", color: "var(--accent)", fontSize: 9, cursor: "pointer" }}>▾</button>
-        <EditableTitle node={act} editing={h.editingId === act.id} disabled={h.busy} onStart={() => h.startRename(act)} onSave={(t) => h.rename(act, t)} onCancel={h.cancelRename} style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".08em", color: "var(--strong)" }} />
+        <EditableTitle node={act} editing={h.editingId === act.id} disabled={h.busy} onStart={() => h.startRename(act)} onSave={(t) => h.rename(act, t)} onCancel={h.cancelRename} saveKey={h.saveKey(act)} style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 13, letterSpacing: ".08em", color: "var(--strong)" }} />
         <span style={{ fontSize: 9, color: "var(--accent)", fontFamily: "'Chakra Petch'" }}>[{actIndex + 1}]</span>
         <span style={{ fontSize: 8.5, color: "var(--txt3)", marginLeft: "auto" }}>{chapters.length} ch</span>
         <button type="button" aria-label="Rename act" disabled={h.busy} onClick={() => h.startRename(act)} style={nodeIconBtn}>✎</button>
@@ -135,7 +136,7 @@ function renderAct(act: OutlineNodeDTO, actIndex: number, h: OutlineHandlers): R
               <div key={chapter.id}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 5 }}>
                   <span style={{ fontSize: 8, letterSpacing: ".16em", color: "var(--txt3)" }}>CH {actIndex + 1}.{chapterIndex + 1}</span>
-                  <EditableTitle node={chapter} editing={h.editingId === chapter.id} disabled={h.busy} onStart={() => h.startRename(chapter)} onSave={(t) => h.rename(chapter, t)} onCancel={h.cancelRename} style={{ fontSize: 10, letterSpacing: ".1em", color: "var(--txt2)", textTransform: "uppercase" }} />
+                  <EditableTitle node={chapter} editing={h.editingId === chapter.id} disabled={h.busy} onStart={() => h.startRename(chapter)} onSave={(t) => h.rename(chapter, t)} onCancel={h.cancelRename} saveKey={h.saveKey(chapter)} style={{ fontSize: 10, letterSpacing: ".1em", color: "var(--txt2)", textTransform: "uppercase" }} />
                   <button type="button" aria-label="Rename chapter" disabled={h.busy} onClick={() => h.startRename(chapter)} style={{ ...nodeIconBtn, fontSize: 9 }}>✎</button>
                   <button type="button" aria-label="AI generate scene" title="AI: generate a scene under this chapter" disabled={h.busy} onClick={() => h.aiUnder(chapter, "scene", `ch-${chapter.id}`)} style={{ ...nodeIconBtn, fontSize: 9, color: "var(--accent)", opacity: h.busy ? 0.5 : 1 }}>✨</button>
                   {chapter.scene_id != null && <JumpAnchor onJump={() => h.jump(chapter)} />}
@@ -183,12 +184,16 @@ export function OutlinePanel(props: PanelProps) {
   const rename = useCallback(async (node: OutlineNodeDTO, title: string) => {
     if (renameInFlightRef.current) return renameInFlightRef.current;
     if (projectId == null) return false;
-    if (title === node.title) { setEditingId(null); return true; }
+    const saveKey = `outline-title:${projectId}:${node.id}`;
+    if (title === node.title) { discardProjectSavePending(saveKey); setEditingId(null); return true; }
     const operation = (async () => {
       setBusy(true);
       setNote(null);
       try {
-        await api.updateOutlineNode(projectId, node.id, { title });
+        await trackProjectWrite(
+          api.updateOutlineNode(projectId, node.id, { title }),
+          { saveKey },
+        );
         setEditingId((current) => current === node.id ? null : current);
         refetch();
         return true;
@@ -273,7 +278,19 @@ export function OutlinePanel(props: PanelProps) {
   }, [api, projectId, busy, gen, refetch]);
   const aiUnder = useCallback((node: OutlineNodeDTO, childScope: string, label: string) => void generate(childScope, node.id, label), [generate]);
 
-  const handlers: OutlineHandlers = { onPick: pick, editingId, startRename: (node) => { void startRename(node); }, cancelRename, rename, remove, addChapter, aiUnder, jump, busy: busy || gen != null };
+  const handlers: OutlineHandlers = {
+    onPick: pick,
+    editingId,
+    startRename: (node) => { void startRename(node); },
+    cancelRename,
+    rename,
+    remove,
+    addChapter,
+    aiUnder,
+    jump,
+    saveKey: (node) => `outline-title:${projectId ?? "none"}:${node.id}`,
+    busy: busy || gen != null,
+  };
 
   return (
     <PanelShell {...props}>

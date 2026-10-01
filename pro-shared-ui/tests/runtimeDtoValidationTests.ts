@@ -30,6 +30,16 @@ const project = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+const projectSearch = (overrides: Record<string, unknown> = {}) => ({
+  query: "hero",
+  matches: [
+    { kind: "scene", id: 2, title: "Arrival", excerpt: "The hero arrives." },
+    { kind: "comment", id: 5, title: "Comment 5", excerpt: "Sharpen this.", revision: null, resolved: false },
+  ],
+  limit: 40,
+  ...overrides,
+});
+
 const scene = (overrides: Record<string, unknown> = {}) => ({
   id: 2,
   title: "Scene",
@@ -268,6 +278,31 @@ const extractionJob = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+const psykeCommandPlan = (overrides: Record<string, unknown> = {}) => ({
+  plan_id: "lfcp_test",
+  command: "create",
+  normalized_command: "/create character Vesper",
+  action: "create_psyke_entry",
+  summary: "Create character 'Vesper'",
+  effects: ["Add one character."],
+  requires_confirmation: true,
+  mutates: true,
+  target_type: "psyke_entry",
+  target_id: null,
+  expires_at: "2026-09-30T12:00:00Z",
+  ...overrides,
+});
+
+const psykeCommandExecution = (overrides: Record<string, unknown> = {}) => ({
+  ok: true,
+  action: "create_psyke_entry",
+  message: "Created Vesper.",
+  mutated: true,
+  target_type: "psyke_entry",
+  target_id: 7,
+  ...overrides,
+});
+
 const originalFetch = globalThis.fetch;
 const client = createHttpApiClient("", "", {
   healthTimeoutMs: 0,
@@ -343,6 +378,19 @@ try {
     ok: true,
     deleted: 1,
   });
+  await expectValid(
+    "project search validates typed matches with optional metadata",
+    () => client.searchProject(1, "hero", ["scene", "psyke"]),
+    projectSearch(),
+  );
+  await expectInvalid(
+    "project search rejects an unknown match kind",
+    () => client.searchProject(1, "hero", ["scene", "psyke"]),
+    json(projectSearch({ matches: [{ kind: "file", id: 2, title: "Wrong", excerpt: "Wrong" }] })),
+    "GET",
+    "/api/projects/1/search?q=hero&kinds=scene&kinds=psyke",
+    "$.matches[0].kind",
+  );
   await expectInvalid(
     "transported IDs must be safe integers",
     () => client.getProject(1),
@@ -363,6 +411,33 @@ try {
     "POST",
     "/api/import/whiteboard",
     "$.comments_skipped",
+  );
+
+  await expectValid(
+    "PSYKE command planning validates its typed preview",
+    () => client.planPsykeConsoleCommand(1, { command: "/create character Vesper" }),
+    psykeCommandPlan(),
+  );
+  await expectInvalid(
+    "PSYKE command planning rejects an unrecognized action",
+    () => client.planPsykeConsoleCommand(1, { command: "/create character Vesper" }),
+    json(psykeCommandPlan({ action: "delete_everything" })),
+    "POST",
+    "/api/projects/1/psyke/console/plan",
+    "$.action",
+  );
+  await expectValid(
+    "PSYKE command execution validates its typed directive",
+    () => client.executePsykeConsoleCommand(1, { plan_id: "lfcp_test", confirmed: true }, true),
+    psykeCommandExecution(),
+  );
+  await expectInvalid(
+    "PSYKE command execution rejects a malformed target id",
+    () => client.executePsykeConsoleCommand(1, { plan_id: "lfcp_test", confirmed: true }, true),
+    json(psykeCommandExecution({ target_id: "7" })),
+    "POST",
+    "/api/projects/1/psyke/console/execute",
+    "$.target_id",
   );
 
   await expectInvalid(

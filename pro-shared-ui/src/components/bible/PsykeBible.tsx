@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import type { PsykeEntryCreateDTO, PsykeEntryDTO, PsykeProgressionDTO } from "@logosforge/ui-contracts";
 import { useSelection } from "../../adapters/selection";
-import { useStudio } from "../../adapters/StudioProvider";
+import { usePsykeTarget, useStudio } from "../../adapters/StudioProvider";
 import { PanelShell, type PanelProps } from "../shell/PanelShell";
 import { usePsykeEntries, usePsykeRelations, usePsykeProgressions } from "../../hooks";
-import { markProjectSavePending, registerProjectFlusher } from "../../adapters/projectSaveCoordinator";
+import { discardProjectSavePending, markProjectSavePending, registerProjectFlusher, trackProjectWrite } from "../../adapters/projectSaveCoordinator";
 import { createSceneSaveQueue, type SceneSaveQueue } from "../manuscript/sceneSaveQueue";
 import { ConfirmDeleteButton } from "../common/ConfirmDeleteButton";
 import { useMountedRef } from "../../hooks/useMountedRef";
@@ -56,9 +56,9 @@ function TypeRow({ icon, iconColor, label, count, active = false, onClick }: { i
   );
 }
 
-function EntryRow({ icon, iconColor, barColor, border = "var(--line2)", name, sub, active = false, right, onClick }: { icon: string; iconColor: string; barColor: string; border?: string; name: string; sub: ReactNode; active?: boolean; right?: ReactNode; onClick?: () => void }) {
+function EntryRow({ entryId, icon, iconColor, barColor, border = "var(--line2)", name, sub, active = false, right, onClick }: { entryId?: number; icon: string; iconColor: string; barColor: string; border?: string; name: string; sub: ReactNode; active?: boolean; right?: ReactNode; onClick?: () => void }) {
   return (
-    <button type="button" className={active ? undefined : "lf-row2"} onClick={onClick} aria-pressed={active} style={{ position: "relative", width: "100%", border: "none", borderBottom: "1px solid var(--line2)", font: "inherit", textAlign: "left", display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", cursor: "pointer", color: "inherit", background: active ? "linear-gradient(90deg,rgba(76,194,255,.12),transparent)" : "transparent" }}>
+    <button type="button" data-psyke-entry-id={entryId} className={active ? undefined : "lf-row2"} onClick={onClick} aria-pressed={active} style={{ position: "relative", width: "100%", border: "none", borderBottom: "1px solid var(--line2)", font: "inherit", textAlign: "left", display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", cursor: "pointer", color: "inherit", background: active ? "linear-gradient(90deg,rgba(76,194,255,.12),transparent)" : "transparent" }}>
       {active && <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 2, background: barColor, boxShadow: `0 0 8px ${barColor}` }} />}
       <span style={{ width: 22, height: 22, display: "grid", placeItems: "center", border: `1px solid ${border}`, color: iconColor, fontSize: 11 }}>{icon}</span>
       <span style={{ flex: 1, minWidth: 0 }}>
@@ -136,6 +136,7 @@ function psykeBody(draft: PsykeDraft): PsykeEntryCreateDTO {
 function PsykeEditor({ entry, onClose, onChanged }: { entry: PsykeEntryDTO; onClose: () => void; onChanged: () => void }) {
   const { api, projectId } = useStudio();
   const ownerProjectId = useRef(projectId).current;
+  const psykeSaveKey = `psyke-editor:${ownerProjectId ?? "none"}:${entry.id > 0 ? entry.id : "new"}`;
   const [name, setName] = useState(entry.name);
   const [type, setType] = useState(entry.type);
   const [aliases, setAliases] = useState(entry.aliases.join(", "));
@@ -155,7 +156,10 @@ function PsykeEditor({ entry, onClose, onChanged }: { entry: PsykeEntryDTO; onCl
   const writeRef = useRef<(draft: PsykeDraft) => Promise<void>>(async () => {});
   writeRef.current = async (draft) => {
     if (ownerProjectId == null || isNew) throw new Error("This PSYKE entry has not been created yet.");
-    await api.updatePsyke(ownerProjectId, entry.id, psykeBody(draft));
+    await trackProjectWrite(
+      api.updatePsyke(ownerProjectId, entry.id, psykeBody(draft)),
+      { saveKey: psykeSaveKey },
+    );
     onChangedRef.current();
   };
   const queueRef = useRef<SceneSaveQueue<PsykeDraft> | null>(null);
@@ -163,7 +167,7 @@ function PsykeEditor({ entry, onClose, onChanged }: { entry: PsykeEntryDTO; onCl
     queueRef.current = createSceneSaveQueue({
       initial: draftRef.current,
       write: (draft) => writeRef.current(draft),
-      onDirty: markProjectSavePending,
+      onDirty: () => markProjectSavePending(psykeSaveKey),
       onStatus: (status) => {
         if (!mounted.current) return;
         setBusy(status === "saving");
@@ -203,7 +207,10 @@ function PsykeEditor({ entry, onClose, onChanged }: { entry: PsykeEntryDTO; onCl
     setErr(null);
     try {
       if (isNew) {
-        const creating = api.createPsyke(ownerProjectId, psykeBody(draftRef.current));
+        const creating = trackProjectWrite(
+          api.createPsyke(ownerProjectId, psykeBody(draftRef.current)),
+          { saveKey: psykeSaveKey },
+        );
         createInFlightRef.current = creating;
         await creating;
         queueRef.current!.cancel();
@@ -220,7 +227,7 @@ function PsykeEditor({ entry, onClose, onChanged }: { entry: PsykeEntryDTO; onCl
     }
   };
   const remove = async () => {
-    if (isNew) { queueRef.current!.cancel(); onClose(); return; }  // nothing persisted yet
+    if (isNew) { queueRef.current!.cancel(); discardProjectSavePending(psykeSaveKey); onClose(); return; }  // nothing persisted yet
     if (ownerProjectId == null) return;
     setBusy(true);
     try {
@@ -250,7 +257,7 @@ function PsykeEditor({ entry, onClose, onChanged }: { entry: PsykeEntryDTO; onCl
         <span style={{ fontFamily: "'Chakra Petch'", fontSize: 12, letterSpacing: ".16em", color: "var(--accent)" }}>{isNew ? "NEW ENTRY" : "EDIT ENTRY"}</span>
         <div style={{ flex: 1 }} />
         <ConfirmDeleteButton label={isNew ? "unsaved PSYKE draft" : (entry.name || `PSYKE entry ${entry.id}`)} trigger={isNew ? "DISCARD" : "DELETE"} onConfirm={() => { void remove(); }} disabled={busy} triggerStyle={{ ...ebtn(), color: "var(--crimson)", borderColor: "var(--crimson)" }} />
-        <button type="button" onClick={() => { queueRef.current!.cancel(); onClose(); }} disabled={busy} style={ebtn()}>CANCEL</button>
+        <button type="button" onClick={() => { queueRef.current!.cancel(); discardProjectSavePending(psykeSaveKey); onClose(); }} disabled={busy} style={ebtn()}>CANCEL</button>
         <button type="button" onClick={() => void save()} disabled={busy} style={ebtn(true)}>{busy ? "SAVING…" : "SAVE"}</button>
       </div>
       <div style={{ display: "flex", gap: 12 }}>
@@ -285,6 +292,7 @@ function PsykeEditor({ entry, onClose, onChanged }: { entry: PsykeEntryDTO; onCl
 
 export function PsykeBible(props: PanelProps) {
   const { api, projectId } = useStudio();
+  const psykeTarget = usePsykeTarget();
   const ownerProjectId = useRef(projectId).current;
   const { data: entriesData, loading, error, refetch } = usePsykeEntries();
   const { data: relData, loading: relationsLoading, error: relationsError, refetch: refetchRelations } = usePsykeRelations();
@@ -305,6 +313,19 @@ export function PsykeBible(props: PanelProps) {
   const [roleFilter, setRoleFilter] = useState<string | null>(null);
   const q = query.trim().toLowerCase();
   const mounted = useMountedRef();
+  useEffect(() => {
+    if (psykeTarget.entryId == null) return;
+    if (!entries.some((entry) => entry.id === psykeTarget.entryId)) return;
+    setQuery("");
+    setTypeFilter(null);
+    setRoleFilter(null);
+    setSelId(psykeTarget.entryId);
+    const targetId = psykeTarget.entryId;
+    window.requestAnimationFrame(() => {
+      document.querySelector<HTMLElement>(`[data-psyke-entry-id="${targetId}"]`)?.scrollIntoView({ block: "nearest" });
+    });
+    psykeTarget.clear();
+  }, [entries, psykeTarget.entryId, psykeTarget.clear]);
   const progressionDraftRef = useRef<{
     progression: PsykeProgressionDTO;
     original: string;
@@ -322,6 +343,7 @@ export function PsykeBible(props: PanelProps) {
       return false;
     }
     if (text === draft.original) {
+      discardProjectSavePending(`psyke-progression:${ownerProjectId ?? "none"}:${draft.progression.id}`);
       progressionDraftRef.current = null;
       if (mounted.current) setEditProgId(null);
       return true;
@@ -330,10 +352,13 @@ export function PsykeBible(props: PanelProps) {
       if (mounted.current) { setBusy(true); setMutErr(null); }
       try {
         if (ownerProjectId == null) throw new Error("No owning project for this progression.");
-        await api.updateProgression(ownerProjectId, draft.progression.id, {
-          text,
-          scene_id: draft.progression.scene_id ?? null,
-        });
+        await trackProjectWrite(
+          api.updateProgression(ownerProjectId, draft.progression.id, {
+            text,
+            scene_id: draft.progression.scene_id ?? null,
+          }),
+          { saveKey: `psyke-progression:${ownerProjectId}:${draft.progression.id}` },
+        );
         const current = progressionDraftRef.current;
         if (current === draft) progressionDraftRef.current = null;
         else if (current?.progression.id === draft.progression.id) {
@@ -372,9 +397,14 @@ export function PsykeBible(props: PanelProps) {
     if (progressionDraftRef.current) {
       progressionDraftRef.current = { ...progressionDraftRef.current, text };
     }
-    markProjectSavePending();
+    const progressionId = progressionDraftRef.current?.progression.id;
+    markProjectSavePending(`psyke-progression:${ownerProjectId ?? "none"}:${progressionId ?? "none"}`);
   };
   const cancelProgressionEdit = () => {
+    const progressionId = progressionDraftRef.current?.progression.id;
+    if (progressionId != null) {
+      discardProjectSavePending(`psyke-progression:${ownerProjectId ?? "none"}:${progressionId}`);
+    }
     progressionDraftRef.current = null;
     setEditProgId(null);
     setMutErr(null);
@@ -524,6 +554,7 @@ export function PsykeBible(props: PanelProps) {
                         return (
                           <EntryRow
                             key={e.id}
+                            entryId={e.id}
                             icon={m.icon}
                             iconColor={m.color}
                             barColor={m.color}

@@ -24,6 +24,7 @@ import {
   type WorkspacePanelDefinition,
 } from "../src";
 import { createMockApiClient } from "./mockApi";
+import { previewWorkspaceStatus } from "./previewStatus";
 
 const api: ApiClient = createMockApiClient();
 const platform: PlatformAdapter = {
@@ -94,7 +95,13 @@ export function WorkspaceDockHarness() {
 
   return (
     <StudioProvider services={{ api, platform }} writingMode="novel" projectId={1}>
-      <div style={{ width: "100vw", height: "100vh" }}>
+      <div
+        data-preview-fixture="workspace-dock-qa"
+        style={{ position: "relative", width: "100vw", height: "100vh" }}
+      >
+        <div style={{ position: "absolute", top: 50, right: 14, zIndex: 1000, border: "1px solid #ffb454", background: "#11151e", color: "#ffb454", padding: "5px 8px", fontSize: 9, letterSpacing: ".12em", pointerEvents: "none" }}>
+          SYNTHETIC DOCK QA FIXTURE
+        </div>
         <WorkspaceShell
           writingMode="novel"
           layout={layout.preset}
@@ -104,6 +111,8 @@ export function WorkspaceDockHarness() {
           rightSlot={<></>}
           bottomSlot={<></>}
           statusCenter={`${layout.focused?.panelId ?? "workspace"} · DOCK QA`}
+          runtimeStatus={previewWorkspaceStatus}
+          coreState="connected"
           onToggleFocus={() => setLayout((current) => toggleWorkspacePreset(current))}
           centerSlot={
             <DockWorkspace

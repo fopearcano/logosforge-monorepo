@@ -5,7 +5,7 @@ import type {
   CounterpartRequestDTO,
   InlineCommentDTO,
 } from "@logosforge/ui-contracts";
-import { trackProjectWrite } from "../../adapters/projectSaveCoordinator";
+import { trackProjectOperation } from "../../adapters/projectSaveCoordinator";
 
 export type CommentAssistantHandle = "assistant" | "counterpart";
 
@@ -61,7 +61,7 @@ export function persistCommentAssistantReply(
   // Register before the provider request starts. A close/project handoff must
   // wait for generation *and* the eventual reply write, not merely notice the
   // final POST after an untracked provider request happens to finish.
-  return trackProjectWrite((async () => {
+  return trackProjectOperation((async () => {
     const author = handle === "counterpart" ? "Counterpart" : "Assistant";
     const threadContext = buildCommentThreadContext(comment, writerMessage);
     const response = handle === "counterpart"

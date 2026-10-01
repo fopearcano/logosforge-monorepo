@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject } from "react";
 import type { CommentReplyDTO, InlineCommentDTO, SceneDTO } from "@logosforge/ui-contracts";
-import { useNavigate, useStudio } from "../../adapters/StudioProvider";
+import { useCommentTarget, useNavigate, useStudio } from "../../adapters/StudioProvider";
 import { useComments, useScenes } from "../../hooks";
 import { useMountedRef } from "../../hooks/useMountedRef";
-import { trackProjectWrite } from "../../adapters/projectSaveCoordinator";
+import { registerProjectFlusher, trackProjectWrite } from "../../adapters/projectSaveCoordinator";
 import { Corners, PanelShell, type PanelProps } from "../shell/PanelShell";
 import {
   detectCommentAssistantMention,
@@ -91,6 +91,12 @@ interface ThreadOperation {
   assistantHandle?: CommentAssistantHandle;
 }
 
+interface LocalCommentDraftState {
+  threadId: number;
+  dirty: boolean;
+  focus: () => void;
+}
+
 function ThreadRow({ comment, selected, disabled, scenesById, buttonRef, onSelect, onKeyDown }: {
   comment: InlineCommentDTO;
   selected: boolean;
@@ -149,7 +155,7 @@ function AnchorButton({ label, sceneId, sceneTitle, onOpen }: { label: string; s
 
 function CommentDetail({
   comment, scenesById, operation, now, onToggleResolved, onUpdateBody, onCreateReply,
-  onDeleteReply, onDeleteThread, onOpenScene,
+  onDeleteReply, onDeleteThread, onOpenScene, draftStateRef,
 }: {
   comment: InlineCommentDTO;
   scenesById: Map<number, SceneDTO>;
@@ -161,6 +167,7 @@ function CommentDetail({
   onDeleteReply: (reply: CommentReplyDTO) => Promise<boolean>;
   onDeleteThread: () => Promise<boolean>;
   onOpenScene: (sceneId: number) => void;
+  draftStateRef: MutableRefObject<LocalCommentDraftState | null>;
 }) {
   const [replyDraft, setReplyDraft] = useState("");
   const [editing, setEditing] = useState(false);
@@ -170,6 +177,7 @@ function CommentDetail({
   const confirmDeleteRef = useRef<HTMLButtonElement | null>(null);
   const deleteThreadRef = useRef<HTMLButtonElement | null>(null);
   const editCommentRef = useRef<HTMLButtonElement | null>(null);
+  const editComposerRef = useRef<HTMLTextAreaElement | null>(null);
   const replyComposerRef = useRef<HTMLTextAreaElement | null>(null);
   const restoreDeleteFocus = useRef(false);
   const restoreEditFocus = useRef(false);
@@ -187,6 +195,31 @@ function CommentDetail({
     .filter((reply) => !deletedReplyIds.has(reply.id))
     .slice()
     .sort((left, right) => left.sort_order - right.sort_order || left.id - right.id);
+  const editDirty = editing && editDraft !== comment.body;
+  const replyDirty = replyDraft.trim().length > 0;
+  draftStateRef.current = {
+    threadId: comment.id,
+    dirty: editDirty || replyDirty,
+    focus: () => {
+      if (editDirty) editComposerRef.current?.focus();
+      else if (replyDirty) replyComposerRef.current?.focus();
+    },
+  };
+
+  useEffect(() => {
+    const ownerThreadId = comment.id;
+    const unregister = registerProjectFlusher(async () => {
+      const draft = draftStateRef.current;
+      if (draft?.threadId === ownerThreadId && draft.dirty) {
+        throw new Error("Save or cancel the current comment edit, or post or clear its reply, before leaving this thread.");
+      }
+      return true;
+    });
+    return () => {
+      unregister();
+      if (draftStateRef.current?.threadId === ownerThreadId) draftStateRef.current = null;
+    };
+  }, [comment.id, draftStateRef]);
 
   useEffect(() => {
     setReplyDraft("");
@@ -334,6 +367,7 @@ function CommentDetail({
         {editing ? (
           <form onSubmit={(event) => { event.preventDefault(); void submitEdit(); }}>
             <textarea
+              ref={editComposerRef}
               autoFocus
               aria-label="Edit comment body"
               value={editDraft}
@@ -444,6 +478,7 @@ function CommentDetail({
 export function CommentsPanel(props: PanelProps) {
   const { api, platform, projectId } = useStudio();
   const navigate = useNavigate();
+  const commentTarget = useCommentTarget();
   const mounted = useMountedRef();
   const { data: commentsData, loading, error, refetch } = useComments();
   const { data: scenesData } = useScenes();
@@ -454,13 +489,19 @@ export function CommentsPanel(props: PanelProps) {
   const [exportStatus, setExportStatus] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [deletedThreadId, setDeletedThreadId] = useState<number | null>(null);
+  const [revealedTargetId, setRevealedTargetId] = useState<number | null>(null);
   const [now, setNow] = useState(Date.now);
   const operationRef = useRef<ThreadOperation | null>(null);
   const mutationSequence = useRef(0);
   const exportSequence = useRef(0);
   const projectIdRef = useRef(projectId);
   const threadButtonRefs = useRef(new Map<number, HTMLButtonElement>());
+  const draftStateRef = useRef<LocalCommentDraftState | null>(null);
+  const consumingTargetRef = useRef<number | null>(null);
+  const clearTargetRef = useRef(commentTarget.clear);
+  const focusFrameRef = useRef<number | null>(null);
   projectIdRef.current = projectId;
+  clearTargetRef.current = commentTarget.clear;
 
   const comments = (commentsData ?? []).filter((comment) => comment.id !== deletedThreadId);
   const scenes = scenesData ?? [];
@@ -473,12 +514,111 @@ export function CommentsPanel(props: PanelProps) {
   const resolvedCount = comments.length - openCount;
   const visible = useMemo(
     () => comments
-      .filter((comment) => !hideResolved || !comment.resolved)
+      .filter((comment) => !hideResolved || !comment.resolved || comment.id === revealedTargetId)
       .slice()
       .sort((left, right) => compareComments(left, right, sceneOrder)),
-    [comments, hideResolved, sceneOrder],
+    [comments, hideResolved, revealedTargetId, sceneOrder],
   );
   const selected = visible.find((comment) => comment.id === selectedId) ?? visible[0] ?? null;
+
+  const scheduleThreadFocus = useCallback((commentId: number, afterFocus?: (focused: boolean) => void) => {
+    if (focusFrameRef.current != null) window.cancelAnimationFrame(focusFrameRef.current);
+    let remainingAttempts = 120;
+    const attempt = () => {
+      if (remainingAttempts <= 0) {
+        afterFocus?.(false);
+        return;
+      }
+      remainingAttempts -= 1;
+      focusFrameRef.current = window.requestAnimationFrame(() => {
+        focusFrameRef.current = null;
+        const button = threadButtonRefs.current.get(commentId);
+        if (!button || button.disabled) {
+          attempt();
+          return;
+        }
+        button?.scrollIntoView({ block: "nearest" });
+        button?.focus({ preventScroll: true });
+        // A hidden target may mount one commit after selection, while modal
+        // teardown or dock focus work can reclaim focus. Only consume the
+        // navigation target after its row remains active for a full frame.
+        focusFrameRef.current = window.requestAnimationFrame(() => {
+          focusFrameRef.current = null;
+          if (document.activeElement === button) afterFocus?.(true);
+          else attempt();
+        });
+      });
+    };
+    attempt();
+  }, []);
+
+  useEffect(() => () => {
+    if (focusFrameRef.current != null) window.cancelAnimationFrame(focusFrameRef.current);
+  }, []);
+
+  const canLeaveCurrentThread = useCallback((nextThreadId: number | null): boolean => {
+    const draft = draftStateRef.current;
+    if (!draft?.dirty || draft.threadId === nextThreadId) return true;
+    setActionError("Save or cancel the current comment edit, or post or clear its reply, before opening another thread.");
+    window.requestAnimationFrame(() => draft.focus());
+    return false;
+  }, []);
+
+  const selectThread = (commentId: number, focus = false): boolean => {
+    if (!canLeaveCurrentThread(commentId)) return false;
+    setActionError(null);
+    setSelectedId(commentId);
+    setRevealedTargetId((current) => current === commentId ? current : null);
+    if (focus) scheduleThreadFocus(commentId);
+    return true;
+  };
+
+  const changeResolvedFilter = (nextHideResolved: boolean) => {
+    const nextVisible = comments
+      .filter((comment) => !nextHideResolved || !comment.resolved)
+      .slice()
+      .sort((left, right) => compareComments(left, right, sceneOrder));
+    const currentId = selected?.id ?? null;
+    const nextId = nextVisible.some((comment) => comment.id === currentId)
+      ? currentId
+      : nextVisible[0]?.id ?? null;
+    if (nextId !== currentId && !canLeaveCurrentThread(nextId)) return;
+    setActionError(null);
+    setRevealedTargetId(null);
+    setHideResolved(nextHideResolved);
+    setSelectedId(nextId);
+    if (nextId != null) scheduleThreadFocus(nextId);
+  };
+
+  useEffect(() => {
+    const targetId = commentTarget.commentId;
+    if (targetId == null) {
+      consumingTargetRef.current = null;
+      return;
+    }
+    if (commentsData === undefined || consumingTargetRef.current === targetId) return;
+    consumingTargetRef.current = targetId;
+    const target = commentsData.find((comment) => comment.id === targetId && comment.id !== deletedThreadId);
+    if (!target) {
+      setActionError(`Comment #${targetId} is no longer available in this project.`);
+      clearTargetRef.current();
+      return;
+    }
+    if (!canLeaveCurrentThread(targetId)) {
+      clearTargetRef.current();
+      return;
+    }
+
+    setActionError(null);
+    // Preserve the writer's OPEN-only preference. A resolved search target is
+    // admitted as one temporary exception until the writer selects or filters.
+    setRevealedTargetId(hideResolved && target.resolved ? targetId : null);
+    setSelectedId(targetId);
+    scheduleThreadFocus(targetId, (focused) => {
+      if (!focused) setActionError(`Comment #${targetId} opened, but its thread row could not receive focus.`);
+      clearTargetRef.current();
+    });
+  }, [canLeaveCurrentThread, commentTarget.commentId, commentsData, deletedThreadId, hideResolved, scheduleThreadFocus]);
 
   useEffect(() => {
     mutationSequence.current += 1;
@@ -490,13 +630,19 @@ export function CommentsPanel(props: PanelProps) {
     setExportStatus(null);
     setExporting(false);
     setDeletedThreadId(null);
+    setRevealedTargetId(null);
+    consumingTargetRef.current = null;
+    draftStateRef.current = null;
   }, [api, projectId]);
 
   useEffect(() => {
     if (deletedThreadId != null && commentsData && !commentsData.some((comment) => comment.id === deletedThreadId)) {
       setDeletedThreadId(null);
     }
-  }, [commentsData, deletedThreadId]);
+    if (revealedTargetId != null && commentsData && !commentsData.some((comment) => comment.id === revealedTargetId)) {
+      setRevealedTargetId(null);
+    }
+  }, [commentsData, deletedThreadId, revealedTargetId]);
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -682,8 +828,7 @@ export function CommentsPanel(props: PanelProps) {
     event.preventDefault();
     const next = visible[nextIndex];
     if (!next) return;
-    setSelectedId(next.id);
-    threadButtonRefs.current.get(next.id)?.focus();
+    selectThread(next.id, true);
   };
 
   return (
@@ -696,8 +841,8 @@ export function CommentsPanel(props: PanelProps) {
           <span style={{ color: "var(--green)", fontSize: 8 }}>{resolvedCount} RESOLVED</span>
           <span style={{ flex: 1 }} />
           <button type="button" aria-label="Export comments as Markdown" disabled={exporting || loading} onClick={() => { void exportComments(); }} style={{ ...quietButton(), opacity: exporting || loading ? 0.55 : 1 }}>{exporting ? "EXPORTING…" : "EXPORT .MD"}</button>
-          <button type="button" aria-label="Show all comments" aria-pressed={!hideResolved} onClick={() => setHideResolved(false)} style={quietButton(!hideResolved)}>ALL · {comments.length}</button>
-          <button type="button" aria-label="Show open comments" aria-pressed={hideResolved} onClick={() => setHideResolved(true)} style={quietButton(hideResolved)}>OPEN · {openCount}</button>
+          <button type="button" aria-label="Show all comments" aria-pressed={!hideResolved} onClick={() => changeResolvedFilter(false)} style={quietButton(!hideResolved)}>ALL · {comments.length}</button>
+          <button type="button" aria-label="Show open comments" aria-pressed={hideResolved} onClick={() => changeResolvedFilter(true)} style={quietButton(hideResolved)}>OPEN · {openCount}</button>
         </header>
         {actionError && (
           <div role="alert" style={{ flex: "none", display: "flex", alignItems: "center", gap: 9, borderBottom: "1px solid var(--crimson)", background: "rgba(232,68,58,.08)", color: "var(--crimson)", padding: "7px 16px", fontSize: 9.5 }}>
@@ -734,7 +879,7 @@ export function CommentsPanel(props: PanelProps) {
                                 if (element) threadButtonRefs.current.set(comment.id, element);
                                 else threadButtonRefs.current.delete(comment.id);
                               }}
-                              onSelect={() => setSelectedId(comment.id)}
+                              onSelect={() => selectThread(comment.id)}
                               onKeyDown={(event) => moveThreadFocus(comment.id, event)}
                             />
                           ))}
@@ -755,6 +900,7 @@ export function CommentsPanel(props: PanelProps) {
                   onDeleteReply={(reply) => deleteReply(selected, reply)}
                   onDeleteThread={() => deleteThread(selected)}
                   onOpenScene={openScene}
+                  draftStateRef={draftStateRef}
                 />
               )
             : message(loading ? "Loading thread…" : "Select a comment thread.")}

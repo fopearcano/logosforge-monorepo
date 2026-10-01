@@ -16,6 +16,13 @@ import type {
   OutlineNodeDTO,
   ProjectDTO,
   ProjectActionResultDTO,
+  ProjectSearchKind,
+  ProjectSearchMatchDTO,
+  ProjectSearchResponseDTO,
+  PsykeConsoleAction,
+  PsykeConsoleCommandPlanDTO,
+  PsykeConsoleExecutionDTO,
+  PsykeConsoleTarget,
   QuantumSettingsDTO,
   QuantumResultDTO,
   RelationProposalDTO,
@@ -154,6 +161,33 @@ function projectActionResult(value: unknown, path: string): ProjectActionResultD
   return value as ProjectActionResultDTO;
 }
 
+function projectSearchKind(value: unknown, path: string): ProjectSearchKind {
+  return value === "scene" || value === "note" || value === "psyke" || value === "comment"
+    ? value
+    : fail(path, '"scene", "note", "psyke", or "comment"', value);
+}
+
+function projectSearchMatch(value: unknown, path: string): ProjectSearchMatchDTO {
+  const dto = record(value, path);
+  projectSearchKind(requireField(dto, "kind", path), fieldPath(path, "kind"));
+  integerValue(requireField(dto, "id", path), fieldPath(path, "id"));
+  stringValue(requireField(dto, "title", path), fieldPath(path, "title"));
+  stringValue(requireField(dto, "excerpt", path), fieldPath(path, "excerpt"));
+  optional(dto.revision, fieldPath(path, "revision"), (item, itemPath) =>
+    nullable(item, itemPath, stringValue));
+  optional(dto.resolved, fieldPath(path, "resolved"), (item, itemPath) =>
+    nullable(item, itemPath, booleanValue));
+  return value as ProjectSearchMatchDTO;
+}
+
+function projectSearchResponse(value: unknown, path: string): ProjectSearchResponseDTO {
+  const dto = record(value, path);
+  stringValue(requireField(dto, "query", path), fieldPath(path, "query"));
+  arrayOf(requireField(dto, "matches", path), fieldPath(path, "matches"), projectSearchMatch);
+  integerValue(requireField(dto, "limit", path), fieldPath(path, "limit"));
+  return value as ProjectSearchResponseDTO;
+}
+
 function deleteResult(value: unknown, path: string): DeleteResultDTO {
   const dto = record(value, path);
   booleanValue(requireField(dto, "ok", path), fieldPath(path, "ok"));
@@ -248,6 +282,45 @@ function settings(value: unknown, path: string): SettingsDTO {
   const dto = record(value, path);
   record(requireField(dto, "settings", path), fieldPath(path, "settings"));
   return value as SettingsDTO;
+}
+
+function psykeConsoleAction(value: unknown, path: string): PsykeConsoleAction {
+  return value === "create_psyke_entry"
+    || value === "open_scene"
+    || value === "open_psyke_entry"
+    ? value
+    : fail(path, "a supported PSYKE Console action", value);
+}
+
+function psykeConsoleTarget(value: unknown, path: string): PsykeConsoleTarget {
+  return value === "scene" || value === "psyke_entry"
+    ? value
+    : fail(path, '\"scene\" or \"psyke_entry\"', value);
+}
+
+function psykeConsoleCommandPlan(value: unknown, path: string): PsykeConsoleCommandPlanDTO {
+  const dto = record(value, path);
+  for (const key of ["plan_id", "command", "normalized_command", "summary", "expires_at"]) {
+    stringValue(requireField(dto, key, path), fieldPath(path, key));
+  }
+  psykeConsoleAction(requireField(dto, "action", path), fieldPath(path, "action"));
+  stringArray(requireField(dto, "effects", path), fieldPath(path, "effects"));
+  booleanValue(requireField(dto, "requires_confirmation", path), fieldPath(path, "requires_confirmation"));
+  booleanValue(requireField(dto, "mutates", path), fieldPath(path, "mutates"));
+  psykeConsoleTarget(requireField(dto, "target_type", path), fieldPath(path, "target_type"));
+  nullable(requireField(dto, "target_id", path), fieldPath(path, "target_id"), integerValue);
+  return value as PsykeConsoleCommandPlanDTO;
+}
+
+function psykeConsoleExecution(value: unknown, path: string): PsykeConsoleExecutionDTO {
+  const dto = record(value, path);
+  booleanValue(requireField(dto, "ok", path), fieldPath(path, "ok"));
+  psykeConsoleAction(requireField(dto, "action", path), fieldPath(path, "action"));
+  stringValue(requireField(dto, "message", path), fieldPath(path, "message"));
+  booleanValue(requireField(dto, "mutated", path), fieldPath(path, "mutated"));
+  psykeConsoleTarget(requireField(dto, "target_type", path), fieldPath(path, "target_type"));
+  integerValue(requireField(dto, "target_id", path), fieldPath(path, "target_id"));
+  return value as PsykeConsoleExecutionDTO;
 }
 
 function outlineNode(value: unknown, path: string): OutlineNodeDTO {
@@ -508,6 +581,8 @@ export const validateProjectListDTO: RuntimeDtoValidator<ProjectDTO[]> = (value)
   arrayOf(value, "$", project);
 export const validateProjectActionResultDTO: RuntimeDtoValidator<ProjectActionResultDTO> = (value) =>
   projectActionResult(value, "$");
+export const validateProjectSearchResponseDTO: RuntimeDtoValidator<ProjectSearchResponseDTO> = (value) =>
+  projectSearchResponse(value, "$");
 export const validateDeleteResultDTO: RuntimeDtoValidator<DeleteResultDTO> = (value) =>
   deleteResult(value, "$");
 export const validateInlineCommentDTO: RuntimeDtoValidator<InlineCommentDTO> = (value) =>
@@ -520,6 +595,10 @@ export const validateSceneDTO: RuntimeDtoValidator<SceneDTO> = (value) => scene(
 export const validateSceneListDTO: RuntimeDtoValidator<SceneDTO[]> = (value) =>
   arrayOf(value, "$", scene);
 export const validateSettingsDTO: RuntimeDtoValidator<SettingsDTO> = (value) => settings(value, "$");
+export const validatePsykeConsoleCommandPlanDTO: RuntimeDtoValidator<PsykeConsoleCommandPlanDTO> = (value) =>
+  psykeConsoleCommandPlan(value, "$");
+export const validatePsykeConsoleExecutionDTO: RuntimeDtoValidator<PsykeConsoleExecutionDTO> = (value) =>
+  psykeConsoleExecution(value, "$");
 export const validateOutlineNodeDTO: RuntimeDtoValidator<OutlineNodeDTO> = (value) => outlineNode(value, "$");
 export const validateOutlineListDTO: RuntimeDtoValidator<OutlineNodeDTO[]> = (value) =>
   arrayOf(value, "$", outlineNode);

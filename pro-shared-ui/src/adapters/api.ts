@@ -8,6 +8,8 @@ import type {
   ProjectDTO,
   ProjectCreateDTO,
   ProjectUpdateDTO,
+  ProjectSearchKind,
+  ProjectSearchResponseDTO,
   HealthDTO,
   ProjectActionResultDTO,
   DeleteResultDTO,
@@ -78,6 +80,11 @@ import type {
   CharacterUpdateDTO,
   CharacterCreateDTO,
   PsykeProgressionUpdateDTO,
+  PsykeConsoleSuggestionDTO,
+  PsykeConsolePlanRequestDTO,
+  PsykeConsoleCommandPlanDTO,
+  PsykeConsoleExecuteRequestDTO,
+  PsykeConsoleExecutionDTO,
   TimelineEventCreateDTO,
   ThemeScenesDTO,
   AssistantRequestDTO,
@@ -154,6 +161,12 @@ export interface ApiClient {
   closeProject(id: number): Promise<ProjectActionResultDTO>;
   getSettings(id: number): Promise<SettingsDTO>;
   patchSettings(id: number, body: SettingsDTO): Promise<SettingsDTO>;
+  searchProject(
+    p: number,
+    q: string,
+    kinds?: readonly ProjectSearchKind[],
+    signal?: AbortSignal,
+  ): Promise<ProjectSearchResponseDTO>;
 
   // Scenes
   listScenes(p: number): Promise<SceneDTO[]>;
@@ -181,6 +194,9 @@ export interface ApiClient {
   // PSYKE
   listPsyke(p: number): Promise<PsykeEntryDTO[]>;
   searchPsyke(p: number, q: string): Promise<PsykeEntryDTO[]>;
+  getPsykeConsoleSuggestions(p: number, q: string, sceneId?: number | null, signal?: AbortSignal): Promise<PsykeConsoleSuggestionDTO[]>;
+  planPsykeConsoleCommand(p: number, body: PsykeConsolePlanRequestDTO, signal?: AbortSignal): Promise<PsykeConsoleCommandPlanDTO>;
+  executePsykeConsoleCommand(p: number, body: PsykeConsoleExecuteRequestDTO, mutates: boolean): Promise<PsykeConsoleExecutionDTO>;
   createPsyke(p: number, body: PsykeEntryCreateDTO): Promise<PsykeEntryDTO>;
   updatePsyke(p: number, entryId: number, body: PsykeEntryUpdateDTO): Promise<PsykeEntryDTO>;
   deletePsyke(p: number, entryId: number): Promise<DeleteResultDTO>;

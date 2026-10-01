@@ -1,5 +1,6 @@
 import type { CSSProperties, ReactNode } from "react";
 import type { WritingMode } from "@logosforge/ui-contracts";
+import type { WorkspaceCoreState, WorkspaceStatusModel } from "../../status/workspaceStatus";
 import { useWritingMode, useStudio } from "../../adapters/StudioProvider";
 import { useProjects } from "../../hooks";
 import { ShellStyles } from "./ShellStyles";
@@ -26,9 +27,14 @@ export interface WorkspaceShellProps {
   theme?: AppearanceTheme;
   /** Active project name shown in the top-bar switcher. */
   projectTitle?: string;
+  /** @deprecated Use runtimeStatus. Retained for source compatibility. */
   countdown?: string;
+  /** @deprecated Use runtimeStatus. Retained for source compatibility. */
   sync?: string;
   statusCenter?: string;
+  /** Truthful aggregate of local persistence + workspace lifecycle. */
+  runtimeStatus?: WorkspaceStatusModel;
+  coreState?: WorkspaceCoreState;
   /** Dock slots — override the faithful defaults with real panels (T02/T03/T06). */
   navSlot?: ReactNode;
   centerSlot?: ReactNode;
@@ -63,9 +69,7 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
   const { data: projects } = useProjects();
   const realTitle = projects?.find((p) => p.id === projectId)?.title;
   const projectTitle = props.projectTitle ?? realTitle ?? "Untitled Project";
-  const countdown = props.countdown ?? "02:41";
-  const sync = props.sync ?? "99.412";
-  const statusCenter = props.statusCenter ?? "ACT II · SEQUENCE D · SCENE 12 · “OBSERVATION RING”";
+  const statusCenter = props.statusCenter ?? "WORKSPACE";
 
   const root: CSSProperties = {
     position: "relative",
@@ -94,7 +98,7 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
       {isDark && <div style={ambient({ background: "radial-gradient(130% 120% at 50% 50%,transparent 66%,rgba(0,0,0,.42))", zIndex: 1 })} />}
 
       {/* top bar */}
-      <TopBar formatBadge={MODE_FORMATS[mode]} layout={layout} countdown={countdown} onCommandPalette={props.onCommandPalette} onToggleFocus={props.onToggleFocus} />
+      <TopBar formatBadge={MODE_FORMATS[mode]} layout={layout} runtimeStatus={props.runtimeStatus} onCommandPalette={props.onCommandPalette} onToggleFocus={props.onToggleFocus} />
 
       {/* body row */}
       <div style={{ position: "relative", zIndex: 20, display: "flex", flex: 1, minHeight: 0 }}>
@@ -113,7 +117,7 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
       {showDocks && (props.bottomSlot ?? <BottomDock />)}
 
       {/* status bar */}
-      <StatusBar countdown={countdown} sync={sync} statusCenter={statusCenter} />
+      <StatusBar runtimeStatus={props.runtimeStatus} coreState={props.coreState} statusCenter={statusCenter} />
     </div>
   );
 }

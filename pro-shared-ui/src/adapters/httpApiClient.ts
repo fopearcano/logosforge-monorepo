@@ -1,6 +1,6 @@
 import { ROUTES, KNOWN_EVENTS, type EventMessage } from "@logosforge/ui-contracts";
 import type { ApiClient } from "./api";
-import { trackProjectWrite } from "./projectSaveCoordinator";
+import { trackProjectOperation } from "./projectSaveCoordinator";
 import {
   RuntimeDtoValidationError,
   validateAiBehaviorDTO,
@@ -21,6 +21,9 @@ import {
   validateProjectDTO,
   validateProjectActionResultDTO,
   validateProjectListDTO,
+  validateProjectSearchResponseDTO,
+  validatePsykeConsoleCommandPlanDTO,
+  validatePsykeConsoleExecutionDTO,
   validateQuantumResultDTO,
   validateQuantumSettingsDTO,
   validateSceneDTO,
@@ -313,7 +316,7 @@ export function createHttpApiClient(
   const post = <T = any>(p: string, body?: unknown, validate?: RuntimeDtoValidator<T>) =>
     req(p, { method: "POST", body: body == null ? undefined : JSON.stringify(body) }, validate);
   const writePost = <T = any>(p: string, body?: unknown, validate?: RuntimeDtoValidator<T>) =>
-    trackProjectWrite(post(p, body, validate));
+    trackProjectOperation(post(p, body, validate), { persistence: true });
   const patch = <T = any>(p: string, body: unknown, validate?: RuntimeDtoValidator<T>) => {
     // Preserve invocation order for one logical resource. This matters when two
     // mounted controls patch the same settings endpoint (e.g. Adaptive strip +
@@ -326,11 +329,14 @@ export function createHttpApiClient(
     const settled = request.then(() => undefined, () => undefined);
     patchTails.set(p, settled);
     void settled.then(() => { if (patchTails.get(p) === settled) patchTails.delete(p); });
-    return trackProjectWrite(request);
+    return trackProjectOperation(request, { persistence: true });
   };
-  const put = (p: string, body: unknown) => trackProjectWrite(req(p, { method: "PUT", body: JSON.stringify(body) }));
+  const put = (p: string, body: unknown) => trackProjectOperation(
+    req(p, { method: "PUT", body: JSON.stringify(body) }),
+    { persistence: true },
+  );
   const del = <T = any>(p: string, validate?: RuntimeDtoValidator<T>) =>
-    trackProjectWrite(req(p, { method: "DELETE" }, validate));
+    trackProjectOperation(req(p, { method: "DELETE" }, validate), { persistence: true });
 
   /** Polling fallback for live sync when SSE (EventSource) isn't available.
    * Learns the current cursor on the first tick (no replay of history), then
@@ -427,6 +433,15 @@ export function createHttpApiClient(
     closeProject: (id) => post(ROUTES.projectClose(id), undefined, validateProjectActionResultDTO),
     getSettings: (id) => get(ROUTES.projectSettings(id), validateSettingsDTO),
     patchSettings: (id, b) => patch(ROUTES.projectSettings(id), b, validateSettingsDTO),
+    searchProject: (p, q, kinds, signal) => {
+      const params = new URLSearchParams({ q });
+      for (const kind of kinds ?? []) params.append("kinds", kind);
+      return req(
+        `${ROUTES.projectSearch(p)}?${params.toString()}`,
+        { signal },
+        validateProjectSearchResponseDTO,
+      );
+    },
 
     listScenes: (p) => get(ROUTES.scenes(p), validateSceneListDTO),
     createScene: (p, b) => writePost(ROUTES.scenes(p), b, validateSceneDTO),
@@ -452,6 +467,20 @@ export function createHttpApiClient(
 
     listPsyke: (p) => get(ROUTES.psykeEntries(p)),
     searchPsyke: (p, q) => get(`${ROUTES.psykeSearch(p)}?q=${encodeURIComponent(q)}`),
+    getPsykeConsoleSuggestions: (p, q, sceneId, signal) => {
+      const params = new URLSearchParams({ q });
+      if (sceneId != null) params.set("scene_id", String(sceneId));
+      return req(`${ROUTES.psykeConsoleSuggestions(p)}?${params.toString()}`, { signal });
+    },
+    planPsykeConsoleCommand: (p, body, signal) => req(
+      ROUTES.psykeConsolePlan(p),
+      { method: "POST", body: JSON.stringify(body), signal },
+      validatePsykeConsoleCommandPlanDTO,
+    ),
+    executePsykeConsoleCommand: (p, body, mutates) => trackProjectOperation(
+      post(ROUTES.psykeConsoleExecute(p), body, validatePsykeConsoleExecutionDTO),
+      { persistence: mutates },
+    ),
     createPsyke: (p, b) => writePost(ROUTES.psykeEntries(p), b),
     updatePsyke: (p, e, b) => patch(ROUTES.psykeEntry(p, e), b),
     deletePsyke: (p, e) => del(ROUTES.psykeEntry(p, e)),

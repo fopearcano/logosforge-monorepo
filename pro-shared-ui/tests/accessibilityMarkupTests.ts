@@ -135,8 +135,123 @@ for (const marker of [
   "\"Reopen comment\"",
   "Anchor unavailable",
   "navigate(\"Manuscript\", { sceneId })",
+  "button?.scrollIntoView({ block: \"nearest\" })",
+  "button?.focus({ preventScroll: true })",
+  "scheduleThreadFocus(targetId, (focused) => {",
+  "document.activeElement === button",
 ]) {
   if (!commentsPanel.includes(marker)) violations.push(`CommentsPanel is missing ${marker}`);
+}
+
+const notesPanel = fs.readFileSync(path.join(root, "manuscript", "NotesPanel.tsx"), "utf8");
+for (const marker of [
+  'data-note-editor-id={note.id}',
+  '`[data-note-editor-id="${noteId}"]`',
+  "input.focus({ preventScroll: true })",
+  "document.activeElement === input",
+  "scheduleNoteFocus(targetId, (focused) => {",
+]) {
+  if (!notesPanel.includes(marker)) violations.push(`NotesPanel target focus is missing ${marker}`);
+}
+
+const psykeConsole = fs.readFileSync(path.join(root, "shell", "PsykeConsole.tsx"), "utf8");
+for (const marker of [
+  'data-screen-label="PSYKE Console"',
+  'role="combobox"',
+  'aria-autocomplete="list"',
+  'aria-expanded={expanded}',
+  'aria-controls={listId}',
+  'aria-activedescendant={activeId}',
+  'role="listbox"',
+  'role="option"',
+  'aria-selected={index === selectedIndex}',
+  'tabIndex={-1}',
+  'onBlur={() => setExpanded(false)}',
+  'aria-live="polite"',
+  'event.key === "ArrowDown"',
+  'event.key === "ArrowUp"',
+  'event.key === "Enter"',
+  'event.key === "Escape"',
+  'window.setTimeout(() =>',
+  '}, 100)',
+  'requests.isCurrent(token)',
+  'navigate("PSYKE", { psykeEntryId: suggestion.entry_id })',
+  'skipNextQuerySearch.current = true',
+  'skipNextQuerySearch.current = false',
+  'if (nextQuery !== query) skipNextQuerySearch.current = true',
+  'searchTimerRef.current = null',
+  'window.clearTimeout(searchTimerRef.current)',
+  'searchAbortRef.current?.abort()',
+  'controller.signal',
+  'suggestion.category === "entity"',
+  '!suggestion.text.startsWith("/")',
+  'Requested ${suggestion.text} in the PSYKE Bible.',
+  'Complete the command, then press Enter to preview its exact effect.',
+  'role="group"',
+  'aria-labelledby={planTitleId}',
+  'aria-describedby={planDescriptionId}',
+  'aria-busy={executing}',
+  'role="alert"',
+  'CONFIRM & RUN',
+  'CANCEL · ESC',
+  'runButtonRef.current?.focus()',
+  'flushPendingProjectSaves({ commitActiveField: true })',
+  'confirmed: true',
+  'executingRef.current',
+]) {
+  if (!psykeConsole.includes(marker)) violations.push(`PSYKE Console is missing ${marker}`);
+}
+
+const studioOmnibox = fs.readFileSync(path.join(root, "shell", "StudioOmnibox.tsx"), "utf8");
+for (const marker of [
+  "<ModalPortal>",
+  "useModalDialog({",
+  'data-screen-label="Studio Omnibox"',
+  'role="dialog"',
+  'aria-modal="true"',
+  'aria-describedby={descriptionId}',
+  'aria-busy={activating || planning || executing}',
+  'role="combobox"',
+  'aria-autocomplete="list"',
+  'aria-expanded={plan == null && flatItems.length > 0}',
+  'aria-controls={plan == null ? listId : undefined}',
+  'aria-activedescendant={plan == null ? activeOptionId : undefined}',
+  'role="listbox"',
+  'aria-label="Omnibox results"',
+  'role="group"',
+  'aria-labelledby={groupId}',
+  'role="option"',
+  'aria-selected={selected}',
+  'aria-disabled={item.disabled}',
+  'tabIndex={-1}',
+  'aria-labelledby={planTitleId}',
+  'aria-describedby={planDescriptionId}',
+  'aria-busy={executing}',
+  'role="alert"',
+  'role="status"',
+  'aria-live="polite"',
+  'event.key === "ArrowDown"',
+  'event.key === "ArrowUp"',
+  'event.key === "Home"',
+  'event.key === "End"',
+  'event.key === "Enter"',
+  'event.key === "Escape"',
+  "omniboxOptionDomId(idPrefix, item.key)",
+  'scrollIntoView({ block: "nearest" })',
+  "Search commands, panels, scenes, notes, PSYKE entries, comments, and recent projects.",
+]) {
+  if (!studioOmnibox.includes(marker)) violations.push(`Studio Omnibox is missing ${marker}`);
+}
+
+const chrome = fs.readFileSync(path.join(root, "shell", "Chrome.tsx"), "utf8");
+for (const forbidden of ["SYNCED", "AUTOSAVE", "CORE · CONNECTED"]) {
+  if (chrome.includes(forbidden)) violations.push(`Workspace chrome still hard-codes ${forbidden}`);
+}
+for (const marker of ['<details', '<summary', 'aria-label={`Workspace status:', 'aria-atomic="true"', 'runtimeStatus.copy']) {
+  if (!chrome.includes(marker)) violations.push(`Workspace status HUD is missing ${marker}`);
+}
+for (const marker of ['disabled={!available}', 'Command palette is available in the desktop host', 'The browser preview does not host desktop commands']) {
+  if (!chrome.includes(marker)) violations.push(`Host-scoped command palette control is missing ${marker}`);
 }
 
 console.log(`Accessibility markup checks: ${files.length} files · ${buttons} buttons · ${fields} fields`);

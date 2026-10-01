@@ -520,6 +520,33 @@ async function hydrate(options: UseWorkspaceLayoutOptions): Promise<WorkspaceLay
   resetHookRuntime();
 }
 
+// Browser previews use debounceMs=0. The persistence capability must be invoked
+// in the same turn as the edit so pagehide cannot cancel a queued timer and so
+// invalid/future saved payloads remain governed by the hook's recovery policy.
+{
+  resetHookRuntime();
+  let saveStarted = false;
+  let savedLayout: WorkspaceLayout | null = null;
+  const options: UseWorkspaceLayoutOptions = {
+    projectId: 15,
+    platform: platform({
+      loadLayout: async () => null,
+      saveLayout: async (_projectId, value) => {
+        saveStarted = true;
+        savedLayout = value as WorkspaceLayout;
+      },
+    }),
+    allowedPanelIds: PANEL_IDS,
+    debounceMs: 0,
+  };
+  const state = await hydrate(options);
+  state.updateLayout((layout) => setNavigatorCollapsed(layout, true));
+  check("zero-debounce persistence starts in the edit turn", saveStarted);
+  await settle();
+  check("zero-debounce persistence saves the latest layout", savedLayout?.navigator.collapsed === true);
+  resetHookRuntime();
+}
+
 console.log(`Workspace layout persistence tests: ${passed} passed, ${failures.length} failed`);
 for (const failure of failures) console.error(`  FAIL: ${failure}`);
 if (failures.length) throw new Error(`${failures.length} workspace layout persistence test(s) failed`);

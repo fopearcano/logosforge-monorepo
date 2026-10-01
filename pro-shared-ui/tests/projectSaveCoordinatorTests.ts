@@ -2,10 +2,13 @@
 
 import {
   flushPendingProjectSaves,
+  getProjectSaveStatusSnapshot,
+  discardProjectSavePending,
   markProjectSavePending,
   PendingProjectSaveError,
   prepareProjectHandoff,
   registerProjectFlusher,
+  trackProjectOperation,
   trackProjectWrite,
 } from '../src/adapters/projectSaveCoordinator';
 
@@ -25,6 +28,15 @@ const check = (label: string, condition: boolean): void => {
 }
 
 {
+  markProjectSavePending();
+  let caught: unknown = null;
+  try { await flushPendingProjectSaves(); } catch (error) { caught = error; }
+  check('unkeyed pending edit without an owner flusher blocks handoff', caught instanceof PendingProjectSaveError);
+  const off = registerProjectFlusher(async () => true);
+  try { await flushPendingProjectSaves(); } finally { off(); }
+}
+
+{
   const calls: string[] = [];
   const caller = async () => { calls.push('caller'); return true; };
   const peer = async () => { calls.push('peer'); return true; };
@@ -36,10 +48,41 @@ const check = (label: string, condition: boolean): void => {
 }
 
 {
-  const off = registerProjectFlusher(async () => false);
+  let blocked = true;
+  const off = registerProjectFlusher(async () => !blocked);
   let caught: unknown = null;
-  try { await flushPendingProjectSaves(); } catch (error) { caught = error; } finally { off(); }
+  try { await flushPendingProjectSaves(); } catch (error) { caught = error; }
   check('unsaved editor blocks handoff', caught instanceof PendingProjectSaveError);
+  blocked = false;
+  try { await flushPendingProjectSaves(); } finally { off(); }
+}
+
+{
+  const saveKey = 'editor:keyed-noop';
+  markProjectSavePending(saveKey);
+  const off = registerProjectFlusher(async () => true);
+  let caught: unknown = null;
+  try { await flushPendingProjectSaves(); } catch (error) { caught = error; }
+  finally { off(); }
+  check('unrelated successful flusher cannot clear a keyed draft', caught instanceof PendingProjectSaveError);
+  discardProjectSavePending(saveKey);
+}
+
+{
+  const saveKey = 'voice-insert:1:2';
+  await trackProjectWrite(Promise.reject(new Error('insert failed')), { saveKey }).catch(() => undefined);
+  markProjectSavePending(saveKey);
+  const offPeer = registerProjectFlusher(async () => true);
+  let peerDrainPassed = false;
+  try {
+    await flushPendingProjectSaves({ retrySaveKey: saveKey });
+    peerDrainPassed = true;
+  } finally { offPeer(); }
+  check('failed owner can drain peers before its retry write', peerDrainPassed);
+  await trackProjectWrite(Promise.resolve(), { saveKey });
+  let retryCleared = true;
+  try { await flushPendingProjectSaves(); } catch { retryCleared = false; }
+  check('same-owner retry clears its retained failure and dirty revisions', retryCleared);
 }
 
 {
@@ -76,6 +119,42 @@ const check = (label: string, condition: boolean): void => {
   release();
   await flushing;
   check('handoff resumes after in-flight write', done);
+}
+
+{
+  let rejectOlder!: (error: Error) => void;
+  let resolveNewer!: () => void;
+  const saveKey = 'editor:superseded-during-drain';
+  trackProjectWrite(
+    new Promise<void>((_resolve, reject) => { rejectOlder = reject; }),
+    { saveKey },
+  ).catch(() => undefined);
+  trackProjectWrite(
+    new Promise<void>((resolve) => { resolveNewer = resolve; }),
+    { saveKey },
+  );
+  let blocked = false;
+  const flushing = flushPendingProjectSaves().catch(() => { blocked = true; });
+  rejectOlder(new Error('superseded request failed'));
+  resolveNewer();
+  await flushing;
+  const snapshot = getProjectSaveStatusSnapshot();
+  check(
+    'active drain ignores an older keyed failure superseded by newer owner success',
+    !blocked && !snapshot.dirty && snapshot.lastError === null && snapshot.inFlightCount === 0,
+  );
+}
+
+{
+  let release!: () => void;
+  const operation = trackProjectOperation(new Promise<void>((resolve) => { release = resolve; }));
+  let done = false;
+  const flushing = flushPendingProjectSaves().then(() => { done = true; });
+  await Promise.resolve();
+  check('handoff waits for an ownerless barrier operation', !done);
+  release();
+  await Promise.all([operation, flushing]);
+  check('handoff resumes after an ownerless barrier operation', done);
 }
 
 {

@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { NoteDTO, NoteUpdateDTO } from "@logosforge/ui-contracts";
 import { PanelShell, Corners, type PanelProps } from "../shell/PanelShell";
-import { useStudio } from "../../adapters/StudioProvider";
+import { useNoteTarget, useStudio } from "../../adapters/StudioProvider";
 import { useNotes } from "../../hooks";
-import { markProjectSavePending, registerProjectFlusher } from "../../adapters/projectSaveCoordinator";
+import { discardProjectSavePending, markProjectSavePending, registerProjectFlusher, trackProjectWrite } from "../../adapters/projectSaveCoordinator";
 import { createSceneSaveQueue, type SceneSaveQueue } from "./sceneSaveQueue";
 import { ConfirmDeleteButton } from "../common/ConfirmDeleteButton";
 import { useMountedRef } from "../../hooks/useMountedRef";
@@ -64,6 +64,7 @@ type NoteDraft = Required<Pick<NoteUpdateDTO, "title" | "content" | "pinned" | "
 function NoteEditor({ note, onClose, onChanged }: { note: NoteDTO; onClose: () => void; onChanged: () => void }) {
   const { api, projectId } = useStudio();
   const ownerProjectId = useRef(projectId).current;
+  const noteSaveKey = `note-editor:${ownerProjectId ?? "none"}:${note.id}`;
   const [title, setTitle] = useState(note.title);
   const [content, setContent] = useState(note.content);
   const [pinned, setPinned] = useState(note.pinned);
@@ -84,7 +85,10 @@ function NoteEditor({ note, onClose, onChanged }: { note: NoteDTO; onClose: () =
   const writeRef = useRef<(draft: NoteDraft) => Promise<void>>(async () => {});
   writeRef.current = async (draft) => {
     if (ownerProjectId == null) throw new Error("No owning project for this note.");
-    await api.updateNote(ownerProjectId, note.id, draft);
+    await trackProjectWrite(
+      api.updateNote(ownerProjectId, note.id, draft),
+      { saveKey: noteSaveKey },
+    );
     onChangedRef.current();
   };
   const queueRef = useRef<SceneSaveQueue<NoteDraft> | null>(null);
@@ -92,7 +96,7 @@ function NoteEditor({ note, onClose, onChanged }: { note: NoteDTO; onClose: () =
     queueRef.current = createSceneSaveQueue({
       initial: draftRef.current,
       write: (draft) => writeRef.current(draft),
-      onDirty: markProjectSavePending,
+      onDirty: () => markProjectSavePending(noteSaveKey),
       onStatus: (status) => {
         if (!mounted.current) return;
         setSaving(status === "saving");
@@ -222,10 +226,11 @@ function NoteEditor({ note, onClose, onChanged }: { note: NoteDTO; onClose: () =
         </label>
         <div style={{ flex: 1 }} />
         <ConfirmDeleteButton label={note.title || `note ${note.id}`} trigger="DELETE" onConfirm={() => { void remove(); }} disabled={busy || saving} triggerStyle={{ ...btn(), color: "var(--crimson)", borderColor: "var(--crimson)" }} />
-        <button type="button" onClick={() => { queueRef.current!.cancel(); onClose(); }} disabled={busy || saving} style={btn()}>CANCEL</button>
+        <button type="button" onClick={() => { queueRef.current!.cancel(); discardProjectSavePending(noteSaveKey); onClose(); }} disabled={busy || saving} style={btn()}>CANCEL</button>
         <button type="button" onClick={() => void save()} disabled={busy || saving} style={btn(true)}>{saving ? "SAVING…" : "SAVE"}</button>
       </div>
       <input
+        data-note-editor-id={note.id}
         value={title}
         disabled={busy || saving}
         onChange={(e) => { setTitle(e.target.value); patchDraft({ title: e.target.value }); }}
@@ -314,12 +319,77 @@ const message = (text: string) => (
 
 export function NotesPanel(props: PanelProps) {
   const { api, projectId } = useStudio();
+  const noteTarget = useNoteTarget();
   const { data: notes, loading, error, refetch } = useNotes();
   const [editing, setEditing] = useState<NoteDTO | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const consumingTargetRef = useRef<number | null>(null);
+  const clearTargetRef = useRef(noteTarget.clear);
+  const focusFrameRef = useRef<number | null>(null);
+  clearTargetRef.current = noteTarget.clear;
   const count = notes?.length ?? 0;
   const pinned = notes?.filter((n) => n.pinned).length ?? 0;
+
+  const scheduleNoteFocus = useCallback((noteId: number, afterFocus?: (focused: boolean) => void) => {
+    if (focusFrameRef.current != null) window.cancelAnimationFrame(focusFrameRef.current);
+    let remainingAttempts = 120;
+    const attempt = () => {
+      if (remainingAttempts <= 0) {
+        afterFocus?.(false);
+        return;
+      }
+      remainingAttempts -= 1;
+      focusFrameRef.current = window.requestAnimationFrame(() => {
+        focusFrameRef.current = null;
+        const input = document.querySelector<HTMLInputElement>(`[data-note-editor-id="${noteId}"]`);
+        if (!input) {
+          attempt();
+          return;
+        }
+        input.focus({ preventScroll: true });
+        // Modal isolation and workspace commits may still reclaim focus in the
+        // same frame. Confirm that the handoff survives a full frame before
+        // consuming the one-shot navigation target.
+        focusFrameRef.current = window.requestAnimationFrame(() => {
+          focusFrameRef.current = null;
+          if (document.activeElement === input) afterFocus?.(true);
+          else attempt();
+        });
+      });
+    };
+    attempt();
+  }, []);
+
+  useEffect(() => () => {
+    if (focusFrameRef.current != null) window.cancelAnimationFrame(focusFrameRef.current);
+  }, []);
+
+  useEffect(() => {
+    const targetId = noteTarget.noteId;
+    if (targetId == null) {
+      consumingTargetRef.current = null;
+      return undefined;
+    }
+    if (notes === undefined || consumingTargetRef.current === targetId) return undefined;
+    consumingTargetRef.current = targetId;
+    const target = notes.find((note) => note.id === targetId);
+    if (!target) {
+      setActionError(`Note #${targetId} is no longer available in this project.`);
+      clearTargetRef.current();
+      return undefined;
+    }
+
+    // Always open the canonical list object, never the abbreviated search hit.
+    // The key below gives each note its own editor state and save queue.
+    setActionError(null);
+    setEditing(target);
+    scheduleNoteFocus(targetId, (focused) => {
+      if (!focused) setActionError(`Note #${targetId} opened, but its title field could not receive focus.`);
+      clearTargetRef.current();
+    });
+    return undefined;
+  }, [noteTarget.noteId, notes, scheduleNoteFocus]);
 
   const createNote = useCallback(async () => {
     if (projectId == null || busy) return;
@@ -357,7 +427,7 @@ export function NotesPanel(props: PanelProps) {
                   ? message("No notes yet — create one with ＋ NEW NOTE")
                   : notes!.map((n) => <NoteCard key={n.id} note={n} onClick={() => setEditing(n)} />)}
           </div>
-          {editing && <NoteEditor note={editing} onClose={() => setEditing(null)} onChanged={refetch} />}
+          {editing && <NoteEditor key={editing.id} note={editing} onClose={() => setEditing(null)} onChanged={refetch} />}
         </div>
       </div>
     </PanelShell>

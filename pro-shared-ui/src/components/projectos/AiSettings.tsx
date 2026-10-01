@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { AssistantSettingsDTO } from "@logosforge/ui-contracts";
 import { PanelShell, Corners, type PanelProps } from "../shell/PanelShell";
 import { useStudio } from "../../adapters/StudioProvider";
-import { markProjectSavePending, registerProjectFlusher } from "../../adapters/projectSaveCoordinator";
+import { discardProjectSavePending, markProjectSavePending, registerProjectFlusher, trackProjectWrite } from "../../adapters/projectSaveCoordinator";
 
 /**
  * AI Settings — point Billy / Logos / Counterpart / Dexter-Billy at the model
@@ -88,7 +88,7 @@ export function AiSettingsPanel(props: PanelProps) {
     dirtyRef.current = true;
     draftRevisionRef.current += 1;
     setNote(null);
-    markProjectSavePending();
+    markProjectSavePending(`assistant-settings:${projectIdRef.current ?? "none"}`);
   };
   const set = (patch: Partial<AssistantSettingsDTO>) => {
     setS((cur) => (cur ? { ...cur, ...patch } : cur));
@@ -102,6 +102,7 @@ export function AiSettingsPanel(props: PanelProps) {
     if (savedRef.current) setS(savedRef.current);
     setApiKey("");
     dirtyRef.current = false;
+    discardProjectSavePending(`assistant-settings:${projectIdRef.current ?? "none"}`);
     draftRevisionRef.current += 1;
     setErr(null);
     setNote("Unsaved changes reverted.");
@@ -117,7 +118,10 @@ export function AiSettingsPanel(props: PanelProps) {
         provider: s.provider, model: s.model, base_url: s.base_url, timeout: s.timeout,
         ...(apiKey ? { api_key: apiKey } : {}),
       };
-      const request = api.patchAssistantSettings(ownerProjectId, body);
+      const request = trackProjectWrite(
+        api.patchAssistantSettings(ownerProjectId, body),
+        { saveKey: `assistant-settings:${ownerProjectId}` },
+      );
       saveInFlightRef.current = request;
       const saved = await request;
       if (projectIdRef.current !== ownerProjectId) return;

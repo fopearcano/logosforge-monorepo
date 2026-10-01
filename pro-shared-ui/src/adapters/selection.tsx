@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 
 /**
  * The Studio's lightweight cross-panel selection bus. The Manuscript Editor
@@ -34,9 +34,10 @@ const STABLE_NOOP: SelectionContextValue = { selection: EMPTY, setSelection: () 
 
 const SelectionContext = createContext<SelectionContextValue | null>(null);
 
-export function SelectionProvider({ children }: { children: ReactNode }) {
+export function SelectionProvider({ children, resetKey }: { children: ReactNode; resetKey?: unknown }) {
   const [selection, setSel] = useState<StudioSelection>(EMPTY);
   const setSelection = useCallback((s: StudioSelection) => setSel(s), []);
+  useEffect(() => setSel(EMPTY), [resetKey]);
   return <SelectionContext.Provider value={{ selection, setSelection }}>{children}</SelectionContext.Provider>;
 }
 
