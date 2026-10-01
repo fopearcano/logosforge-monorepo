@@ -3,6 +3,7 @@
 Usage:
     db = Database("my_story.db")  # file-based
     db = Database()               # in-memory (for tests)
+    db = Database(":memory:")      # equivalent explicit spelling
 
 UI code should only call the public methods below (e.g. create_character,
 get_all_places). All session management stays inside this module.
@@ -16,6 +17,7 @@ import threading
 import time
 from contextlib import closing
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
@@ -23,12 +25,62 @@ from typing import Optional
 from uuid import uuid4
 
 from sqlalchemy import event, text
+from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
 
 DB_SCHEMA_VERSION = 3
 SQLITE_BUSY_TIMEOUT_MS = 5000
 BACKUP_INSTALL_WAIT_SECONDS = 10.0
+
+
+class InMemoryTransactionReentryError(RuntimeError):
+    """A nested Session tried to reuse the active in-memory SQLite handle."""
+
+
+class _SerializedStaticPool(StaticPool):
+    """StaticPool whose one connection cannot host overlapping transactions.
+
+    Gating at pool checkout covers every SQLAlchemy caller, including modules
+    that use :class:`sqlmodel.Session` directly rather than Database helpers.
+    File-backed databases do not use this pool and retain normal WAL
+    concurrency.
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._logosforge_gate = threading.Lock()
+        self._logosforge_state = threading.Lock()
+        self._logosforge_owner: int | None = None
+
+    def _do_get(self):
+        thread_id = threading.get_ident()
+        with self._logosforge_state:
+            if self._logosforge_owner == thread_id:
+                raise InMemoryTransactionReentryError(
+                    "A nested database transaction cannot reuse the active "
+                    "in-memory SQLite connection"
+                )
+        self._logosforge_gate.acquire()
+        try:
+            with self._logosforge_state:
+                self._logosforge_owner = thread_id
+            return super()._do_get()
+        except BaseException:
+            with self._logosforge_state:
+                self._logosforge_owner = None
+            self._logosforge_gate.release()
+            raise
+
+    def _do_return_conn(self, record) -> None:
+        with self._logosforge_state:
+            owner = self._logosforge_owner
+            self._logosforge_owner = None
+        if owner is None:
+            raise RuntimeError(
+                "In-memory SQLite connection returned without a checkout owner"
+            )
+        self._logosforge_gate.release()
 
 
 class UnsupportedDatabaseVersionError(RuntimeError):
@@ -335,6 +387,25 @@ class CommentRevisionConflict(RuntimeError):
         self.current = current
 
 
+@dataclass(frozen=True)
+class ManuscriptReadSnapshot:
+    """One coherent manuscript read detached from its SQLite transaction.
+
+    Scene rows and every association that contributes to ``SceneDTO`` or its
+    optimistic-concurrency revision are captured together.  Tuples/frozensets
+    make the returned value safe to pass through serializers after the read
+    transaction has closed.
+    """
+
+    project: Project
+    scenes: tuple[Scene, ...]
+    valid_character_ids: frozenset[int]
+    valid_place_ids: frozenset[int]
+    character_ids_by_scene: dict[int, tuple[int, ...]]
+    place_ids_by_scene: dict[int, tuple[int, ...]]
+    character_states_by_scene: dict[int, tuple[tuple[int, str], ...]]
+
+
 # Inverse mapping for PSYKE typed relations. A "payoff" from A→B is stored as
 # a "supports_setup" on B→A so direction is preserved when traversing.
 _INVERSE_RELATION_TYPE: dict[str, str] = {
@@ -372,8 +443,6 @@ class Database:
         # ``check_same_thread=False`` lets FastAPI's threadpool use pooled
         # connections. WAL permits concurrent readers; busy_timeout gives a
         # competing writer time to finish instead of surfacing a transient lock.
-        from sqlalchemy.pool import StaticPool
-
         file_based = bool(path and path != ":memory:")
         if file_based:
             db_path = Path(path)
@@ -392,7 +461,8 @@ class Database:
                         DB_SCHEMA_VERSION,
                     )
             _prepare_migration_backup(db_path)
-        if path:
+        if file_based:
+            assert path is not None
             Path(path).parent.mkdir(parents=True, exist_ok=True)
             url = f"sqlite:///{path}"
             self._engine = create_engine(
@@ -400,14 +470,14 @@ class Database:
                 connect_args={"check_same_thread": False, "timeout": 5.0},
             )
         else:
-            # An in-memory DB lives inside a single connection, so a StaticPool
-            # (one shared connection) is required for it to be visible across
-            # threads — otherwise each thread sees an empty database.
+            # Both Database() and Database(":memory:") use one shared connection.
+            # A serialized StaticPool keeps it visible across threads without
+            # allowing overlapping transactions on the same sqlite3 handle.
             url = "sqlite://"
             self._engine = create_engine(
                 url, echo=False,
                 connect_args={"check_same_thread": False},
-                poolclass=StaticPool,
+                poolclass=_SerializedStaticPool,
             )
 
         @event.listens_for(self._engine, "connect")
@@ -1745,6 +1815,115 @@ class Database:
                     if any(t.strip().lower() == tag_lower for t in s.tags.split(","))
                 ]
             return scenes
+
+    def read_manuscript_snapshot(
+        self, project_id: int,
+    ) -> ManuscriptReadSnapshot | None:
+        """Read a project's full manuscript DTO inputs in one transaction.
+
+        SQLite's legacy driver does not necessarily open a transaction for a
+        plain ``SELECT``, so issue ``BEGIN`` explicitly before the first read.
+        The scene rows, project mode, valid project-owned character/place ids,
+        links, and character states therefore all come from one database
+        snapshot even if another connection commits while serialization is in
+        progress.  No ORM object returned here remains attached to the Session.
+        """
+        with Session(self._engine, expire_on_commit=False) as session:
+            # ``session.connection()`` checks out the handle only after the
+            # in-memory guard is held; BEGIN then creates a real SQLite read
+            # transaction rather than only SQLAlchemy's logical transaction.
+            session.connection().exec_driver_sql("BEGIN")
+            try:
+                project = session.get(Project, project_id)
+                if project is None:
+                    return None
+
+                scenes = list(session.exec(
+                    select(Scene)
+                    .where(Scene.project_id == project_id)
+                    .order_by(Scene.sort_order, Scene.id)
+                ).all())
+                scene_ids = [scene.id for scene in scenes]
+
+                valid_character_ids = frozenset(int(value) for value in session.exec(
+                    select(Character.id)
+                    .where(Character.project_id == project_id)
+                    .order_by(Character.id)
+                ).all())
+                valid_place_ids = frozenset(int(value) for value in session.exec(
+                    select(Place.id)
+                    .where(Place.project_id == project_id)
+                    .order_by(Place.id)
+                ).all())
+
+                character_ids_by_scene: dict[int, list[int]] = {
+                    int(scene_id): [] for scene_id in scene_ids
+                }
+                place_ids_by_scene: dict[int, list[int]] = {
+                    int(scene_id): [] for scene_id in scene_ids
+                }
+                character_states_by_scene: dict[int, list[tuple[int, str]]] = {
+                    int(scene_id): [] for scene_id in scene_ids
+                }
+
+                if scene_ids:
+                    character_links = session.exec(
+                        select(SceneCharacterLink)
+                        .where(SceneCharacterLink.scene_id.in_(scene_ids))
+                        .order_by(
+                            SceneCharacterLink.scene_id,
+                            SceneCharacterLink.character_id,
+                        )
+                    ).all()
+                    for link in character_links:
+                        character_ids_by_scene[link.scene_id].append(link.character_id)
+
+                    place_links = session.exec(
+                        select(ScenePlaceLink)
+                        .where(ScenePlaceLink.scene_id.in_(scene_ids))
+                        .order_by(ScenePlaceLink.scene_id, ScenePlaceLink.place_id)
+                    ).all()
+                    for link in place_links:
+                        place_ids_by_scene[link.scene_id].append(link.place_id)
+
+                    character_states = session.exec(
+                        select(SceneCharacterState)
+                        .where(SceneCharacterState.scene_id.in_(scene_ids))
+                        .order_by(
+                            SceneCharacterState.scene_id,
+                            SceneCharacterState.character_id,
+                            SceneCharacterState.id,
+                        )
+                    ).all()
+                    for state in character_states:
+                        character_states_by_scene[state.scene_id].append(
+                            (state.character_id, state.state)
+                        )
+
+                # Detach loaded Project/Scene rows before the read transaction
+                # is rolled back and the pooled connection is released.
+                session.expunge_all()
+                snapshot = ManuscriptReadSnapshot(
+                    project=project,
+                    scenes=tuple(scenes),
+                    valid_character_ids=valid_character_ids,
+                    valid_place_ids=valid_place_ids,
+                    character_ids_by_scene={
+                        scene_id: tuple(values)
+                        for scene_id, values in character_ids_by_scene.items()
+                    },
+                    place_ids_by_scene={
+                        scene_id: tuple(values)
+                        for scene_id, values in place_ids_by_scene.items()
+                    },
+                    character_states_by_scene={
+                        scene_id: tuple(values)
+                        for scene_id, values in character_states_by_scene.items()
+                    },
+                )
+            finally:
+                session.rollback()
+        return snapshot
 
     def get_scene_chapters(self, project_id: int) -> list[str]:
         """Distinct non-empty Chapter labels for the project, in first-seen
@@ -4882,14 +5061,30 @@ class Database:
 
     def delete_outline_node(self, node_id: int) -> None:
         with Session(self._engine) as session:
-            children = session.exec(
-                select(OutlineNode).where(OutlineNode.parent_id == node_id)
-            ).all()
-            for child in children:
-                self.delete_outline_node(child.id)
-            node = session.get(OutlineNode, node_id)
-            if node:
+            # Collect the subtree in this Session rather than recursively
+            # opening nested Sessions. Besides being cheaper, this preserves
+            # the single-transaction guarantee of in-memory Database instances.
+            pending = [node_id]
+            seen: set[int] = set()
+            nodes: list[OutlineNode] = []
+            while pending:
+                current_id = pending.pop()
+                if current_id in seen:
+                    continue
+                seen.add(current_id)
+                node = session.get(OutlineNode, current_id)
+                if node is None:
+                    continue
+                nodes.append(node)
+                children = session.exec(
+                    select(OutlineNode.id).where(
+                        OutlineNode.parent_id == current_id
+                    )
+                ).all()
+                pending.extend(int(child_id) for child_id in children)
+            for node in reversed(nodes):
                 session.delete(node)
+            if nodes:
                 session.commit()
 
     def delete_all_outline_nodes(self, project_id: int) -> None:

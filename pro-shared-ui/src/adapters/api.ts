@@ -50,6 +50,7 @@ import type {
   SettingsDTO,
   WritingModesResponseDTO,
   SceneDTO,
+  ManuscriptSnapshotDTO,
   StoryStructureDTO,
   SceneCreateDTO,
   SceneUpdateDTO,
@@ -171,6 +172,8 @@ export interface ApiClient {
 
   // Scenes
   listScenes(p: number): Promise<SceneDTO[]>;
+  /** Full revisioned scenes in one core-owned canonical manuscript order. */
+  getManuscriptSnapshot(p: number): Promise<ManuscriptSnapshotDTO>;
   /** Canonical, core-owned Act -> Chapter -> Scene projection for navigation. */
   getStoryStructure(p: number): Promise<StoryStructureDTO>;
   createScene(p: number, body: SceneCreateDTO): Promise<SceneDTO>;

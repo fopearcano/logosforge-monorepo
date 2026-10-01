@@ -39,13 +39,14 @@ function scene(
   title: string,
   content: string,
   sortOrder = id,
+  orderIndex = sortOrder,
 ): SceneDTO {
   return {
     id,
     title,
     content,
     sort_order: sortOrder,
-    order_index: sortOrder,
+    order_index: orderIndex,
     summary: "",
     synopsis: "",
     goal: "",
@@ -349,18 +350,39 @@ function proseDoc(lines: string[]) {
   );
 }
 
-// Stable scene ids make ranges independent of input order; sort_order determines
-// manuscript order. A newly inserted field is included in the live range.
+// Stable scene ids make ranges independent of input order. A positive canonical
+// order_index from the manuscript snapshot takes precedence over the legacy
+// sort_order, while non-positive values retain sort_order/id fallback behavior.
 {
-  const first = scene(20, "First", "start edge", 10);
-  const inserted = scene(25, "Inserted", "middle", 20);
-  const last = scene(30, "Last", "end edge", 30);
+  const first = scene(20, "First", "start edge", 30, 1);
+  const inserted = scene(25, "Inserted", "middle", 10, 2);
+  const last = scene(30, "Last", "end edge", 20, 3);
   const value = comment(12, anchor(20, "content", 0, 30, "content", 3), "start edge\nend");
   const spans = commentSpans(value, [last, inserted, first]);
   equal(
-    "scene order derives from sort_order, not caller order",
+    "positive canonical order_index wins over conflicting sort_order",
     spans.map((s) => [s.sceneId, s.field]),
     [[20, "content"], [25, "title"], [25, "content"], [30, "title"], [30, "content"]],
+  );
+
+  const legacyFirst = scene(40, "Legacy first", "start edge", 10, 0);
+  const legacyInserted = scene(45, "Legacy inserted", "middle", 20, -1);
+  const legacyLast = scene(50, "Legacy last", "end edge", 30, 0);
+  const legacyValue = comment(19, anchor(40, "content", 0, 50, "content", 3), "start edge\nend");
+  equal(
+    "non-positive order_index falls back to sort_order",
+    commentSpans(legacyValue, [legacyLast, legacyInserted, legacyFirst]).map((s) => [s.sceneId, s.field]),
+    [[40, "content"], [45, "title"], [45, "content"], [50, "title"], [50, "content"]],
+  );
+
+  const idFirst = scene(60, "ID first", "start edge", 10, 0);
+  const idMiddle = scene(65, "ID middle", "middle", 10, -1);
+  const idLast = scene(70, "ID last", "end edge", 10, 0);
+  const idValue = comment(20, anchor(60, "content", 0, 70, "content", 3), "start edge\nend");
+  equal(
+    "legacy sort_order ties fall back to scene id",
+    commentSpans(idValue, [idLast, idMiddle, idFirst]).map((s) => [s.sceneId, s.field]),
+    [[60, "content"], [65, "title"], [65, "content"], [70, "title"], [70, "content"]],
   );
 }
 

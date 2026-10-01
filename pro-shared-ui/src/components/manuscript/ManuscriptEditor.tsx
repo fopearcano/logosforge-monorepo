@@ -3,7 +3,7 @@ import type { CommentReplyDTO, InlineCommentDTO, SceneDTO } from "@logosforge/ui
 import { PanelShell, Corners, type PanelProps } from "../shell/PanelShell";
 import { useStudio, useManuscriptTarget, useNavigate } from "../../adapters/StudioProvider";
 import { useSelection } from "../../adapters/selection";
-import { useComments, useScenes } from "../../hooks";
+import { useComments, useManuscriptSnapshot } from "../../hooks";
 import { classifyLines, renderLineText, fountainLineStyle } from "../../format/fountain";
 import { ProseEditor, type ProseCommentHighlight, type ProseSelectionRange } from "./ProseEditor";
 import { TitleCommentInput, type TitleCommentHighlight } from "./TitleCommentInput";
@@ -40,6 +40,12 @@ import {
 import { ApiRequestError } from "../../adapters/httpApiClient";
 import { useMountedRef } from "../../hooks/useMountedRef";
 import { pruneSceneIds, pruneSceneRecord, touchWarmSceneIds } from "./manuscriptViewport";
+import {
+  canMoveBySortOrder,
+  isNeighborInMoveDirection,
+  rawIndexForScene,
+  rawSceneRanks,
+} from "./manuscriptOrdering";
 
 /**
  * The Studio's genuine writing surface — a continuous, inline-editable manuscript.
@@ -216,7 +222,7 @@ function SceneStaticProse({
 // --------------------------------------------------------------- Scene editor
 function SceneEditor({
   scene, index, showAct, formatted, mode, busy, onWords, onContent, onStatus, onActive, registerFlush,
-  onDelete, onMoveUp, onMoveDown, isFirst, isLast, renderProse, registerSceneNode, onRequestEdit,
+  onDelete, onMoveUp, onMoveDown, canMoveUp, canMoveDown, renderProse, registerSceneNode, onRequestEdit,
   commentSpans, comments, openCommentIds, onOpenComments, onCommentsChanged, onCommentCreated, onLiveText,
   activeCommentDraftSceneId, onCommentDraftOwnership, externalCommentDraft, onExternalCommentDraftConsumed,
 }: {
@@ -227,7 +233,7 @@ function SceneEditor({
   onActive: (id: number) => void;
   registerFlush: (id: number, h: FlushHandlers | null) => void;
   onDelete: () => void; onMoveUp: () => void; onMoveDown: () => void;
-  isFirst: boolean; isLast: boolean;
+  canMoveUp: boolean; canMoveDown: boolean;
   renderProse: boolean;
   registerSceneNode: (id: number, node: HTMLDivElement | null) => void;
   onRequestEdit: (id: number) => void;
@@ -378,7 +384,7 @@ function SceneEditor({
     const localAtStart = draftRef.current;
     setResolvingConflict(true);
     try {
-      const latest = (await api.listScenes(ownerProjectId)).find((item) => item.id === scene.id);
+      const latest = (await api.getManuscriptSnapshot(ownerProjectId)).scenes.find((item) => item.id === scene.id);
       if (!latest) throw new Error("The scene no longer exists.");
       if (draftRef.current !== localAtStart) {
         throw new Error("The local draft changed while reloading. Review it and choose again.");
@@ -827,8 +833,8 @@ function SceneEditor({
         ) : (
           <span style={{ display: "flex", gap: 2, alignItems: "center", flex: "none" }}>
             <button type="button" aria-label="Scene details" title="Act / chapter / summary" onClick={() => setShowDetails((v) => !v)} style={{ ...iconBtn, color: showDetails ? "var(--accent)" : "var(--txt3)" }}>⋮</button>
-            <button type="button" aria-label="Move scene up" disabled={isFirst || busy} onClick={onMoveUp} style={{ ...iconBtn, opacity: isFirst || busy ? 0.25 : 1 }}>↑</button>
-            <button type="button" aria-label="Move scene down" disabled={isLast || busy} onClick={onMoveDown} style={{ ...iconBtn, opacity: isLast || busy ? 0.25 : 1 }}>↓</button>
+            <button type="button" aria-label="Move scene up" title={canMoveUp ? "Move up within this Act and Chapter" : "Reordering is available only between adjacent scenes in the same Act and Chapter"} disabled={!canMoveUp || busy} onClick={onMoveUp} style={{ ...iconBtn, opacity: !canMoveUp || busy ? 0.25 : 1 }}>↑</button>
+            <button type="button" aria-label="Move scene down" title={canMoveDown ? "Move down within this Act and Chapter" : "Reordering is available only between adjacent scenes in the same Act and Chapter"} disabled={!canMoveDown || busy} onClick={onMoveDown} style={{ ...iconBtn, opacity: !canMoveDown || busy ? 0.25 : 1 }}>↓</button>
             <button type="button" aria-label="Delete scene" onClick={() => setConfirmDel(true)} style={iconBtn}>✕</button>
           </span>
         )}
@@ -1196,10 +1202,18 @@ export function ManuscriptEditor(props: PanelProps) {
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
   const projectKey = projectId ?? null;
-  const { data: scenes, loading, error, refetch } = useScenes();
+  const { data: loadedSnapshot, loading, error, refetch } = useManuscriptSnapshot();
+  // `useResource` clears old data in an effect. Guard synchronously as well so
+  // a project switch can never mount the previous project's scenes under the
+  // new project's save ownership, even for one render.
+  const snapshot = loadedSnapshot?.project_id === projectId ? loadedSnapshot : undefined;
+  const scenes = snapshot?.scenes;
   const { data: commentData, loading: commentsLoading, error: commentsError, refetch: refetchComments } = useComments();
   const [hideResolvedComments, setHideResolvedComments] = useHideResolvedPreference();
-  const sorted = useMemo(() => [...(scenes ?? [])].sort((a, b) => a.sort_order - b.sort_order), [scenes]);
+  // The core has already flattened the canonical Act -> Chapter -> Scene tree.
+  // Preserve that snapshot order; `sort_order` remains raw persistence metadata.
+  const ordered = useMemo(() => scenes ?? [], [scenes]);
+  const rawRanks = useMemo(() => rawSceneRanks(ordered), [ordered]);
   const isScript = SCRIPT_MODES.has(String(writingMode ?? ""));
 
   const [focus, setFocus] = useState(false);
@@ -1323,9 +1337,9 @@ export function ManuscriptEditor(props: PanelProps) {
     };
   }, [projectId]);
 
-  const sceneIdsKey = sorted.map((scene) => scene.id).join(",");
+  const sceneIdsKey = ordered.map((scene) => scene.id).join(",");
   useEffect(() => {
-    const valid = new Set(sorted.map((scene) => scene.id));
+    const valid = new Set(ordered.map((scene) => scene.id));
     setWordsById((current) => pruneSceneRecord(current, valid));
     setStatusById((current) => pruneSceneRecord(current, valid));
     if (statusGuardRef.current.projectId === projectKey) {
@@ -1341,7 +1355,7 @@ export function ManuscriptEditor(props: PanelProps) {
       return next.size === current.size ? current : next;
     });
     setActiveId((current) => {
-      const next = current != null && valid.has(current) ? current : sorted[0]?.id ?? null;
+      const next = current != null && valid.has(current) ? current : ordered[0]?.id ?? null;
       return next;
     });
   }, [projectKey, sceneIdsKey]);
@@ -1352,11 +1366,11 @@ export function ManuscriptEditor(props: PanelProps) {
 
   const comments = commentData ?? [];
   const liveSceneText = liveSceneTextStore.projectId === projectKey ? liveSceneTextStore.byScene : {};
-  const liveScenesReady = sorted.every((scene) => liveSceneText[scene.id] != null);
-  const commentScenes = useMemo(() => sorted.map((scene) => {
+  const liveScenesReady = ordered.every((scene) => liveSceneText[scene.id] != null);
+  const commentScenes = useMemo(() => ordered.map((scene) => {
     const live = liveSceneText[scene.id];
     return live ? { ...scene, title: live.title, content: live.content } : scene;
-  }), [liveSceneText, sorted]);
+  }), [liveSceneText, ordered]);
   const consumeExternalCommentDraft = useCallback((requestId: number) => {
     setExternalCommentDraft((current) => current?.requestId === requestId ? null : current);
   }, []);
@@ -1437,13 +1451,13 @@ export function ManuscriptEditor(props: PanelProps) {
       bottom: event.clientY,
     });
   }, [captureCrossSceneCommentSelection, publishCrossSceneCommentDraft]);
-  const commentSaveBlocked = sorted.some((scene) => {
+  const commentSaveBlocked = ordered.some((scene) => {
     const status = statusById[scene.id];
     return status === "dirty" || status === "saving" || status === "error";
   });
   const commentMutationsSafe = projectId != null
     && !loading && !commentsLoading && !error && !commentsError
-    && scenes != null && commentData != null && liveScenesReady && !commentSaveBlocked;
+    && snapshot != null && commentData != null && liveScenesReady && !commentSaveBlocked;
   commentMutationGuardRef.current = {
     projectId: projectKey,
     safe: commentMutationsSafe,
@@ -1578,13 +1592,13 @@ export function ManuscriptEditor(props: PanelProps) {
     return () => window.clearTimeout(timer);
   }, [api, commentData, commentMutationsSafe, commentScenes, projectId, refetchComments]);
 
-  const total = useMemo(() => sorted.reduce((n, s) => n + (wordsById[s.id] ?? wordCount(s.content)), 0), [sorted, wordsById]);
-  const statuses = useMemo(() => sorted.map((s) => statusById[s.id]).filter(Boolean) as SaveStatus[], [sorted, statusById]);
+  const total = useMemo(() => ordered.reduce((n, s) => n + (wordsById[s.id] ?? wordCount(s.content)), 0), [ordered, wordsById]);
+  const statuses = useMemo(() => ordered.map((s) => statusById[s.id]).filter(Boolean) as SaveStatus[], [ordered, statusById]);
   const saveLabel = statuses.includes("saving") ? "SAVING…" : statuses.some((s) => s === "dirty" || s === "error") ? "UNSAVED" : "ALL SAVED";
   const saveColor = saveLabel === "SAVING…" ? "var(--accent)" : saveLabel === "UNSAVED" ? "var(--amber)" : "var(--green)";
 
-  const effectiveActiveId = activeId ?? sorted[0]?.id ?? null;
-  const activeScene = sorted.find((s) => s.id === effectiveActiveId) ?? sorted[0];
+  const effectiveActiveId = activeId ?? ordered[0]?.id ?? null;
+  const activeScene = ordered.find((s) => s.id === effectiveActiveId) ?? ordered[0];
   const previewContent = activeScene ? (activeContent?.id === activeScene.id ? activeContent.content : activeScene.content) : "";
 
   const jump = useCallback((id: number, focusProse = true) => {
@@ -1601,16 +1615,16 @@ export function ManuscriptEditor(props: PanelProps) {
   }, [onActive]);
 
   useEffect(() => {
-    if (focusAfter.current != null && sorted.some((s) => s.id === focusAfter.current)) {
+    if (focusAfter.current != null && ordered.some((s) => s.id === focusAfter.current)) {
       jump(focusAfter.current); focusAfter.current = null;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sorted.map((s) => s.id).join(",")]);
+  }, [ordered.map((s) => s.id).join(",")]);
 
   // Cross-panel nav: another panel asked to open a specific scene → jump to it.
   const { sceneId: navTarget, clear: clearNavTarget } = useManuscriptTarget();
   useEffect(() => {
-    if (navTarget != null && sorted.some((s) => s.id === navTarget)) {
+    if (navTarget != null && ordered.some((s) => s.id === navTarget)) {
       // wait a tick so the scene DOM exists after a panel switch, THEN jump and
       // clear. Clearing must happen inside the timeout: clearing synchronously
       // flips navTarget→null, which re-runs this effect and its cleanup would
@@ -1621,14 +1635,14 @@ export function ManuscriptEditor(props: PanelProps) {
     }
     return undefined;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navTarget, sorted.map((s) => s.id).join(",")]);
+  }, [navTarget, ordered.map((s) => s.id).join(",")]);
 
   const addScene = async () => {
     if (projectId == null || busy) return;
     setBusy(true);
     setActionError(null);
     try {
-      const created = await trackProjectWrite(api.createScene(projectId, { title: `Scene ${sorted.length + 1}` }));
+      const created = await trackProjectWrite(api.createScene(projectId, { title: `Scene ${ordered.length + 1}` }));
       focusAfter.current = created.id; refetch();
     } catch (error) {
       setActionError(`Couldn't create the scene — ${error instanceof Error ? error.message : String(error)}`);
@@ -1653,16 +1667,35 @@ export function ManuscriptEditor(props: PanelProps) {
       setActionError(`Couldn't delete the scene — ${error instanceof Error ? error.message : String(error)}`);
     } finally { setBusy(false); }
   };
-  const moveScene = async (id: number, toIndex: number) => {
-    if (projectId == null || busy || toIndex < 0 || toIndex >= sorted.length) return;
+  const moveScene = async (
+    id: number,
+    neighborId: number,
+    direction: "up" | "down",
+  ) => {
+    if (projectId == null || busy) return;
     setBusy(true);
     setActionError(null);
     try {
       await flushPendingProjectSaves();
-      const target = (await api.listScenes(projectId)).find((scene) => scene.id === id);
+      const latest = await api.getManuscriptSnapshot(projectId);
+      if (latest.project_id !== projectId) throw new Error("The manuscript snapshot belongs to another project.");
+      const target = latest.scenes.find((scene) => scene.id === id);
+      const neighbor = latest.scenes.find((scene) => scene.id === neighborId);
       if (!target) throw new Error("The scene no longer exists.");
+      const latestRawRanks = rawSceneRanks(latest.scenes);
+      if (
+        !isNeighborInMoveDirection(latest.scenes, id, neighborId, direction)
+        || !canMoveBySortOrder(latestRawRanks, neighbor, target)
+      ) {
+        throw new Error("Only adjacent scenes in the same Act and Chapter can be reordered here.");
+      }
+      const rawNeighborIndex = rawIndexForScene(latest.scenes, neighbor!.id);
+      if (rawNeighborIndex < 0) throw new Error("The adjacent scene no longer exists.");
       await trackProjectWrite(api.updateScene(projectId, id, {
-        sort_order: toIndex,
+        // The mutation endpoint accepts an index in raw persisted order. The
+        // adjacent canonical sibling's raw array index is the correct insertion
+        // point for both directions (persisted sort_order values may have gaps).
+        sort_order: rawNeighborIndex,
         ...(target.revision ? { expected_revision: target.revision } : {}),
       }));
       refetch();
@@ -1700,7 +1733,7 @@ export function ManuscriptEditor(props: PanelProps) {
         <Corners br />
         <div style={{ height: 44, flex: "none", display: "flex", alignItems: "center", gap: 14, padding: "0 18px", borderBottom: "1px solid var(--line)", background: "var(--tint)" }}>
           <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 14, letterSpacing: ".14em", color: "var(--strong)" }}>MANUSCRIPT</span>
-          <span style={{ fontSize: 10, color: "var(--txt2)" }}>{total.toLocaleString()} <span style={{ color: "var(--txt3)" }}>WORDS</span> · {sorted.length} SCENES</span>
+          <span style={{ fontSize: 10, color: "var(--txt2)" }}>{total.toLocaleString()} <span style={{ color: "var(--txt3)" }}>WORDS</span> · {ordered.length} SCENES</span>
           <div style={{ display: "flex", alignItems: "center", gap: 6, height: 20, padding: "0 9px", border: `1px solid ${saveColor}`, color: saveColor, fontSize: 9, letterSpacing: ".14em" }}>
             <span style={{ width: 5, height: 5, borderRadius: "50%", background: saveColor }} />{saveLabel}
           </div>
@@ -1740,20 +1773,23 @@ export function ManuscriptEditor(props: PanelProps) {
               {projectId == null ? message("Open a project to start writing.")
                 : loading ? message("Loading manuscript…")
                 : error ? message(`Couldn't load manuscript — ${error}`)
-                : sorted.length === 0 ? (
+                : ordered.length === 0 ? (
                   <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14, padding: "60px 0", color: "var(--txt3)" }}>
                     <div style={{ fontSize: 12, letterSpacing: ".04em" }}>No scenes yet — this manuscript is empty.</div>
                     <button type="button" onClick={addScene} disabled={busy} style={{ ...linkBtn, fontSize: 11, letterSpacing: ".16em", color: "var(--accent)", border: "1px solid var(--line-cy,#2b6f8f)", padding: "8px 16px" }}>＋ WRITE THE FIRST SCENE</button>
                   </div>
                 )
-                : sorted.map((s, i) => (
+                : ordered.map((s, i) => (
                   <SceneEditor
                     key={`${projectKey ?? "none"}:${s.id}`} scene={s} index={i}
-                    showAct={i === 0 || sorted[i - 1]!.act !== s.act}
+                    showAct={i === 0 || ordered[i - 1]!.act !== s.act}
                     formatted={isScript && format} mode={String(writingMode ?? "")} busy={busy}
                     onWords={onWords} onContent={onContent} onStatus={onStatus} onActive={onActive} registerFlush={registerFlush}
-                    onDelete={() => removeScene(s.id)} onMoveUp={() => moveScene(s.id, i - 1)} onMoveDown={() => moveScene(s.id, i + 1)}
-                    isFirst={i === 0} isLast={i === sorted.length - 1}
+                    onDelete={() => removeScene(s.id)}
+                    onMoveUp={() => ordered[i - 1] && moveScene(s.id, ordered[i - 1]!.id, "up")}
+                    onMoveDown={() => ordered[i + 1] && moveScene(s.id, ordered[i + 1]!.id, "down")}
+                    canMoveUp={canMoveBySortOrder(rawRanks, ordered[i - 1], s)}
+                    canMoveDown={canMoveBySortOrder(rawRanks, ordered[i + 1], s)}
                     renderProse={!intersectionSupported || s.id === effectiveActiveId || nearSceneIds.has(s.id) || warmSceneIds.includes(s.id)}
                     registerSceneNode={registerSceneNode} onRequestEdit={jump}
                     commentSpans={commentSpansByScene.get(s.id) ?? []}
@@ -1771,10 +1807,10 @@ export function ManuscriptEditor(props: PanelProps) {
                 ))}
             </div>
           </div>
-          {!focus && sorted.length > 0 && (
+          {!focus && ordered.length > 0 && (
             showFormat
               ? <FormatPreview scene={activeScene} content={previewContent} />
-              : <ManuscriptRail scenes={sorted} wordsById={wordsById} statusById={statusById} total={total} onJump={jump} activeId={effectiveActiveId} />
+              : <ManuscriptRail scenes={ordered} wordsById={wordsById} statusById={statusById} total={total} onJump={jump} activeId={effectiveActiveId} />
           )}
         </div>
       </div>

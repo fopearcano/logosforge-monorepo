@@ -591,6 +591,16 @@ class SceneDTO(BaseModel):
     revision: str = ""
 
 
+class ManuscriptSnapshotDTO(BaseModel):
+    """One atomic, canonically ordered full-scene manuscript projection."""
+
+    project_id: int
+    chapter_level: bool = False
+    scene_count: int = 0
+    orphan_count: int = 0
+    scenes: list[SceneDTO] = Field(default_factory=list)
+
+
 class SceneCreateDTO(BaseModel):
     title: str
     summary: str = ""

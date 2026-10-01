@@ -11,7 +11,7 @@ import json
 
 from logosforge.api import schemas
 from logosforge.comment_revision import comment_revision
-from logosforge.db import Database
+from logosforge.db import Database, ManuscriptReadSnapshot
 
 
 def _split_csv(value: str | None) -> list[str]:
@@ -55,8 +55,9 @@ def scene_revision(
     db: Database,
     scene,
     *,
-    character_ids: list[int] | None = None,
-    place_ids: list[int] | None = None,
+    character_ids: list[int] | tuple[int, ...] | None = None,
+    place_ids: list[int] | tuple[int, ...] | None = None,
+    character_states: list[tuple[int, str]] | tuple[tuple[int, str], ...] | None = None,
 ) -> str:
     """Content-addressed revision for optimistic Scene updates.
 
@@ -68,13 +69,15 @@ def scene_revision(
         character_ids = db.get_scene_character_ids(scene.id)
     if place_ids is None:
         place_ids = db.get_scene_place_ids(scene.id)
+    if character_states is None:
+        character_states = db.get_scene_character_states(scene.id)
     payload = {
         "scene": scene.model_dump(),
         "character_ids": sorted(int(value) for value in character_ids),
         "place_ids": sorted(int(value) for value in place_ids),
         "character_states": sorted(
             (int(character_id), str(state))
-            for character_id, state in db.get_scene_character_states(scene.id)
+            for character_id, state in character_states
         ),
     }
     encoded = json.dumps(
@@ -88,8 +91,11 @@ def scene_to_dto(
     scene,
     order_index: int = 0,
     *,
-    valid_character_ids: set[int] | None = None,
-    valid_place_ids: set[int] | None = None,
+    valid_character_ids: set[int] | frozenset[int] | None = None,
+    valid_place_ids: set[int] | frozenset[int] | None = None,
+    character_ids: list[int] | tuple[int, ...] | None = None,
+    place_ids: list[int] | tuple[int, ...] | None = None,
+    character_states: list[tuple[int, str]] | tuple[tuple[int, str], ...] | None = None,
 ) -> schemas.SceneDTO:
     if valid_character_ids is None:
         valid_character_ids = {
@@ -97,14 +103,18 @@ def scene_to_dto(
         }
     if valid_place_ids is None:
         valid_place_ids = {place.id for place in db.get_all_places(scene.project_id)}
+    if character_ids is None:
+        character_ids = db.get_scene_character_ids(scene.id)
+    if place_ids is None:
+        place_ids = db.get_scene_place_ids(scene.id)
     character_ids = [
         character_id
-        for character_id in db.get_scene_character_ids(scene.id)
+        for character_id in character_ids
         if character_id in valid_character_ids
     ]
     place_ids = [
         place_id
-        for place_id in db.get_scene_place_ids(scene.id)
+        for place_id in place_ids
         if place_id in valid_place_ids
     ]
     return schemas.SceneDTO(
@@ -128,7 +138,11 @@ def scene_to_dto(
         place_ids=place_ids,
         who_knows_what=getattr(scene, "who_knows_what", "") or "",
         revision=scene_revision(
-            db, scene, character_ids=character_ids, place_ids=place_ids,
+            db,
+            scene,
+            character_ids=character_ids,
+            place_ids=place_ids,
+            character_states=character_states,
         ),
     )
 
@@ -150,6 +164,46 @@ def scenes_to_dtos(db: Database, scenes) -> list[schemas.SceneDTO]:
         )
         for index, scene in enumerate(scenes)
     ]
+
+
+def manuscript_snapshot_to_dto(
+    db: Database, snapshot: ManuscriptReadSnapshot,
+) -> schemas.ManuscriptSnapshotDTO:
+    """Serialize one transactional manuscript read without further queries."""
+    from logosforge import story_structure
+    from logosforge.project_compat import get_project_narrative_engine
+
+    tree = story_structure.build_structure_tree_from_scenes(snapshot.scenes)
+    ordered_scenes = [
+        scene
+        for _act_name, chapter_rows in tree
+        for _chapter_name, scene_rows in chapter_rows
+        for scene in scene_rows
+    ]
+    scene_dtos = [
+        scene_to_dto(
+            db,
+            scene,
+            index + 1,
+            valid_character_ids=snapshot.valid_character_ids,
+            valid_place_ids=snapshot.valid_place_ids,
+            character_ids=snapshot.character_ids_by_scene.get(scene.id, ()),
+            place_ids=snapshot.place_ids_by_scene.get(scene.id, ()),
+            character_states=snapshot.character_states_by_scene.get(scene.id, ()),
+        )
+        for index, scene in enumerate(ordered_scenes)
+    ]
+    return schemas.ManuscriptSnapshotDTO(
+        project_id=snapshot.project.id,
+        chapter_level=(
+            get_project_narrative_engine(snapshot.project) == "novel"
+        ),
+        scene_count=len(scene_dtos),
+        orphan_count=sum(
+            1 for scene in ordered_scenes if story_structure.is_orphan_scene(scene)
+        ),
+        scenes=scene_dtos,
+    )
 
 
 # -- Canonical story structure ----------------------------------------------

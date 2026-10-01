@@ -34,7 +34,7 @@ Whiteboard is alpha software. Its current core is **0.9.0-alpha**.
   AppImage release targets.
 
 The app's status bar reports `Backend: Connecting…`, `Connected`, or
-`Unavailable`. A healthy release reports **API v1.1.0 · core 0.9.0-alpha**.
+`Unavailable`. A healthy release reports **API v1.2.0 · core 0.9.0-alpha**.
 
 ## Architecture
 

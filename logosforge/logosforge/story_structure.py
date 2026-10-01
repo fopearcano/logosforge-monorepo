@@ -75,15 +75,20 @@ def _ordered(names: list[str], unassigned: str) -> list[str]:
     return named + ([unassigned] if unassigned in names else [])
 
 
-def build_structure_tree(
-    db: Database, project_id: int,
+def build_structure_tree_from_scenes(
+    scenes,
 ) -> list[tuple[str, list[tuple[str, list]]]]:
-    """Canonical ``[(act, [(chapter, [scene, ...]), ...]), ...]``.
+    """Build the canonical tree from one already-ordered Scene snapshot.
 
-    Acts/Chapters are grouped by label (deduped) in first-seen ``sort_order``;
-    the "Unassigned" bucket for label-less scenes always sorts last.
+    Keeping this transformation pure lets callers that need a coherent read
+    (notably the HTTP manuscript snapshot) load rows and associations inside a
+    single database transaction, then apply the exact same grouping rule
+    without issuing a second Scene query.
+
+    ``scenes`` must be in the raw manuscript order (``sort_order``, then id),
+    which is the order returned by :meth:`Database.get_all_scenes` and
+    :meth:`Database.read_manuscript_snapshot`.
     """
-    scenes = db.get_all_scenes(project_id)
     act_order: list[str] = []
     chapter_order: dict[str, list[str]] = {}
     grouped: dict[str, dict[str, list]] = {}
@@ -105,6 +110,17 @@ def build_structure_tree(
         chapters = _ordered(chapter_order[act], UNASSIGNED_CHAPTER)
         tree.append((act, [(ch, grouped[act][ch]) for ch in chapters]))
     return tree
+
+
+def build_structure_tree(
+    db: Database, project_id: int,
+) -> list[tuple[str, list[tuple[str, list]]]]:
+    """Canonical ``[(act, [(chapter, [scene, ...]), ...]), ...]``.
+
+    Acts/Chapters are grouped by label (deduped) in first-seen ``sort_order``;
+    the "Unassigned" bucket for label-less scenes always sorts last.
+    """
+    return build_structure_tree_from_scenes(db.get_all_scenes(project_id))
 
 
 # Back-compat alias: the Outline planner historically called this build_plan_tree.
@@ -433,4 +449,3 @@ def create_scene(
         a = a or da
         c = c or dc
     return db.create_scene(project_id, title=title, act=a, chapter=c, **kwargs)
-

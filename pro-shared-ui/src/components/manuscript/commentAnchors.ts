@@ -71,11 +71,17 @@ function orderValue(value: number): number {
   return Number.isFinite(value) ? value : Number.MAX_SAFE_INTEGER;
 }
 
+function canonicalSceneOrder(scene: SceneDTO): number {
+  return Number.isFinite(scene.order_index) && scene.order_index > 0
+    ? scene.order_index
+    : orderValue(scene.sort_order);
+}
+
 /** Build the canonical manuscript field order without mutating the caller's list. */
 function fieldSlots(scenes: readonly SceneDTO[]): FieldSlot[] {
   const ordered = [...scenes].sort((left, right) => (
-    orderValue(left.sort_order) - orderValue(right.sort_order)
-    || orderValue(left.order_index) - orderValue(right.order_index)
+    canonicalSceneOrder(left) - canonicalSceneOrder(right)
+    || orderValue(left.sort_order) - orderValue(right.sort_order)
     || left.id - right.id
   ));
   const slots: FieldSlot[] = [];

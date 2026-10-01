@@ -28,6 +28,7 @@ export const ROUTES = {
   // Per-project domains (p = project id)
   scenes: (p: number) => `/api/projects/${p}/scenes`,
   scene: (p: number, sceneId: number) => `/api/projects/${p}/scenes/${sceneId}`,
+  manuscriptSnapshot: (p: number) => `/api/projects/${p}/manuscript-snapshot`,
   storyStructure: (p: number) => `/api/projects/${p}/story-structure`,
   sceneContinuity: (p: number, sceneId: number) => `/api/projects/${p}/scenes/${sceneId}/continuity`,
   sceneContinuityItem: (p: number, sceneId: number, memoryId: number) => `/api/projects/${p}/scenes/${sceneId}/continuity/${memoryId}`,

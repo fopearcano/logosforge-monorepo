@@ -93,6 +93,15 @@ const storyStructure = (sceneOverrides: Record<string, unknown> = {}, overrides:
   ...overrides,
 });
 
+const manuscriptSnapshot = (sceneOverrides: Record<string, unknown> = {}, overrides: Record<string, unknown> = {}) => ({
+  project_id: 1,
+  chapter_level: true,
+  scene_count: 1,
+  orphan_count: 0,
+  scenes: [scene({ order_index: 1, ...sceneOverrides })],
+  ...overrides,
+});
+
 const inlineCommentAnchor = (overrides: Record<string, unknown> = {}) => ({
   start_scene_id: 2,
   start_field: "content",
@@ -476,6 +485,55 @@ try {
     "GET",
     "/api/projects/1/scenes",
     "$[0].tags[1]",
+  );
+  await expectValid(
+    "manuscript snapshots validate full revisioned canonical scenes",
+    () => client.getManuscriptSnapshot(1),
+    manuscriptSnapshot(),
+    (value) => value.scenes[0]?.content === "Opening line",
+  );
+  await expectInvalid(
+    "manuscript snapshots reject a malformed nested scene",
+    () => client.getManuscriptSnapshot(1),
+    json(manuscriptSnapshot({ character_ids: ["2"] })),
+    "GET",
+    "/api/projects/1/manuscript-snapshot",
+    "$.scenes[0].character_ids[0]",
+  );
+  await expectInvalid(
+    "manuscript snapshots require optimistic revisions",
+    () => client.getManuscriptSnapshot(1),
+    json(manuscriptSnapshot({ revision: "" })),
+    "GET",
+    "/api/projects/1/manuscript-snapshot",
+    "$.scenes[0].revision",
+  );
+  await expectInvalid(
+    "manuscript snapshots reject a count that disagrees with the array",
+    () => client.getManuscriptSnapshot(1),
+    json(manuscriptSnapshot({}, { scene_count: 2 })),
+    "GET",
+    "/api/projects/1/manuscript-snapshot",
+    "$.scene_count",
+  );
+  await expectInvalid(
+    "manuscript snapshots reject non-canonical order indexes",
+    () => client.getManuscriptSnapshot(1),
+    json(manuscriptSnapshot({ order_index: 2 })),
+    "GET",
+    "/api/projects/1/manuscript-snapshot",
+    "$.scenes[0].order_index",
+  );
+  await expectInvalid(
+    "manuscript snapshots reject duplicate scene ids",
+    () => client.getManuscriptSnapshot(1),
+    json(manuscriptSnapshot({}, {
+      scene_count: 2,
+      scenes: [scene({ order_index: 1 }), scene({ order_index: 2 })],
+    })),
+    "GET",
+    "/api/projects/1/manuscript-snapshot",
+    "$.scenes[1].id",
   );
   await expectValid("scene creation validates its response", () =>
     client.createScene(1, { title: "Scene" }), scene());

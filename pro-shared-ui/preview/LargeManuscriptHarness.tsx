@@ -30,6 +30,13 @@ const largeScenes: SceneDTO[] = Array.from({ length: 180 }, (_, index) => ({
 const api: ApiClient = {
   ...baseApi,
   listScenes: async () => largeScenes.map((scene) => ({ ...scene })),
+  getManuscriptSnapshot: async () => ({
+    project_id: 1,
+    chapter_level: true,
+    scene_count: largeScenes.length,
+    orphan_count: 0,
+    scenes: largeScenes.map((scene, index) => ({ ...scene, order_index: index + 1 })),
+  }),
 };
 const platform: PlatformAdapter = {
   isDesktop: false,

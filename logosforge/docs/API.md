@@ -102,7 +102,7 @@ GET  /api/health → { status, service, mode, version, api_version, core_version
 `core_version` is the Logosforge build (e.g. `0.9.0-alpha`). Clients (Electron
 desktop and Web/PWA) read these to verify they're talking to a compatible
 backend. `version` mirrors `api_version` for backward compatibility.
-The current additive contract version is **1.1.0**.
+The current additive contract version is **1.2.0**.
 
 ### Packaged-desktop live context
 ```
@@ -167,11 +167,21 @@ resolution fields are present only for comment matches.
 ### Scenes / manuscript
 ```
 GET    /api/projects/{project_id}/scenes
+GET    /api/projects/{project_id}/manuscript-snapshot
 POST   /api/projects/{project_id}/scenes
 GET    /api/projects/{project_id}/scenes/{scene_id}
 PATCH  /api/projects/{project_id}/scenes/{scene_id}
 DELETE /api/projects/{project_id}/scenes/{scene_id}
 ```
+
+`manuscript-snapshot` is the editor-facing read model. It returns
+`{ project_id, chapter_level, scene_count, orphan_count, scenes }`, where
+`scenes` are full `SceneDTO` records in the canonical core-owned manuscript
+order. The core captures the Scene rows, character/place links, and character
+states inside one explicit SQLite read transaction, so every revision and
+association belongs to the same committed database snapshot. `order_index`
+reflects canonical Act/Chapter grouping; `sort_order` remains the persisted raw
+order. The legacy `scenes` list remains available for compatible clients.
 
 Every `SceneDTO` includes a content-addressed `revision`. Send it back as
 `expected_revision` in a PATCH to reject stale writes with

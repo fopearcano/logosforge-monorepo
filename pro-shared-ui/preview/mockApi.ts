@@ -19,6 +19,7 @@ import type {
   ManuscriptImportResultDTO,
   WritingModesResponseDTO,
   SceneDTO,
+  ManuscriptSnapshotDTO,
   StoryStructureDTO,
   OutlineNodeDTO,
   PsykeEntryDTO,
@@ -485,6 +486,23 @@ export function createMockApiClient(): ApiClient {
     });
     return { project_id: projectId, chapter_level: chapterLevel, scene_count: orderIndex, orphan_count: orphanCount, acts };
   };
+  const manuscriptSnapshotFor = (projectId: number): ManuscriptSnapshotDTO => {
+    const structure = storyStructureFor(projectId);
+    const byId = new Map(scenesFor(projectId).map((sceneRow) => [sceneRow.id, sceneRow]));
+    const scenes = structure.acts.flatMap((act) => act.chapters.flatMap((chapter) => (
+      chapter.scenes.map((reference) => ({
+        ...cloneScene(byId.get(reference.id)!),
+        order_index: reference.order_index,
+      }))
+    )));
+    return {
+      project_id: projectId,
+      chapter_level: structure.chapter_level,
+      scene_count: structure.scene_count,
+      orphan_count: structure.orphan_count,
+      scenes,
+    };
+  };
   const fixtureRowsFor = <T>(projectId: number, rows: readonly T[]): readonly T[] => (
     projectId === fixtureProjectId ? rows : []
   );
@@ -498,8 +516,8 @@ export function createMockApiClient(): ApiClient {
         service: "logosforge-api",
         instance_nonce: "preview-mock",
         mode: "preview-mock",
-        version: "1.1.0",
-        api_version: "1.1.0",
+        version: "1.2.0",
+        api_version: "1.2.0",
         core_version: "preview",
       };
     },
@@ -762,6 +780,7 @@ export function createMockApiClient(): ApiClient {
     async getThemeScenes(_p: number, entryId: number) { await delay(140); return { entry_id: entryId, scene_ids: [...(MOCK_THEME_SCENES[entryId] ?? [])] }; },
     async setThemeScenes(_p: number, entryId: number, sceneIds: number[]) { await delay(160); MOCK_THEME_SCENES[entryId] = [...sceneIds]; return { entry_id: entryId, scene_ids: [...sceneIds] }; },
     async listScenes(p: number) { await delay(); return scenesFor(p).map(cloneScene); },
+    async getManuscriptSnapshot(p: number) { await delay(); return manuscriptSnapshotFor(p); },
     async getStoryStructure(p: number) { await delay(); return storyStructureFor(p); },
     async updateScene(_p: number, sceneId: number, patch: Record<string, unknown>) {
       await delay(120);

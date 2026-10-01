@@ -22,6 +22,8 @@ requireMarkers("adapters/httpApiClient.ts", ["if (timer) clearTimeout(timer)", "
 requireMarkers("adapters/httpApiClient.ts", ["ApiRequestTimeoutError", "const timeoutOptions = { ...options }", "clientAbort.abort", "activeAbort?.abort", "getInflight.clear()", "cloneTransportValue", "streams.clear()", "dispose: () =>"]);
 requireMarkers("adapters/clientLifetime.ts", ["queueMicrotask", "leases.get(value) !== 0", "dispose(value)"]);
 requireMarkers("hooks/resources.ts", [
+  "export function useManuscriptSnapshot()",
+  "api.getManuscriptSnapshot(projectId as number)",
   "export function useStoryStructure()",
   "api.getStoryStructure(projectId as number)",
   '["scene_changed", "scenes_changed", "project_data_changed"]',
@@ -66,7 +68,11 @@ const manuscript = requireMarkers("components/manuscript/ManuscriptEditor.tsx", 
   "contentVisibility: commentOverlayActive ? \"visible\" : \"auto\"",
   "jump(next.location.sceneId, false)",
   'setSelection({ sceneId: id, text: "", section: "Manuscript" })',
+  "useManuscriptSnapshot()",
+  "loadedSnapshot?.project_id === projectId",
+  "sort_order: rawNeighborIndex",
 ]);
+if (manuscript.includes("useScenes()") || manuscript.includes("api.listScenes")) failures.push("ManuscriptEditor bypasses the canonical manuscript snapshot");
 if ((manuscript.match(/<ProseEditor/g) ?? []).length !== 1) failures.push("ManuscriptEditor must keep one conditional ProseEditor render site");
 if (manuscript.includes("contentById")) failures.push("ManuscriptEditor duplicates the whole manuscript in parent content state");
 requireMarkers("components/manuscript/ManuscriptEditor.tsx", ["sceneObserverRef.current !== observer", "status === \"dirty\"", "status === \"saving\"", "status === \"error\""]);

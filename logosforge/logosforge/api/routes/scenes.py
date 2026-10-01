@@ -31,6 +31,22 @@ def _place_or_404(db: Database, project_id: int, place_id: int):
     return place
 
 
+@router.get(
+    "/projects/{project_id}/manuscript-snapshot",
+    response_model=schemas.ManuscriptSnapshotDTO,
+)
+def get_manuscript_snapshot(
+    project=Depends(get_project), db: Database = Depends(get_db),
+):
+    """Return full Scene DTOs in one atomic core-owned canonical order."""
+    snapshot = db.read_manuscript_snapshot(project.id)
+    if snapshot is None:
+        # Defensive against a project deletion between dependency resolution
+        # and the transactional read.
+        raise not_found(f"Project {project.id} not found")
+    return serializers.manuscript_snapshot_to_dto(db, snapshot)
+
+
 @router.get("/projects/{project_id}/scenes", response_model=list[schemas.SceneDTO])
 def list_scenes(project=Depends(get_project), db: Database = Depends(get_db)):
     return serializers.scenes_to_dtos(db, db.get_all_scenes(project.id))

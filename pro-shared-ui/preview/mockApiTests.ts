@@ -26,7 +26,7 @@ check(typeof api.planPsykeConsoleCommand === "function", "preview mock must impl
 check(typeof api.executePsykeConsoleCommand === "function", "preview mock must implement PSYKE command execution");
 
 const health = await api.health();
-check(health.status === "ok" && health.api_version === "1.1.0", "preview health must satisfy the core contract");
+check(health.status === "ok" && health.api_version === "1.2.0", "preview health must satisfy the core contract");
 const previewStructure = await api.getStoryStructure(1);
 check(
   previewStructure.project_id === 1
@@ -39,6 +39,16 @@ check(
 check(
   !("content" in (previewStructure.acts[0]?.chapters[0]?.scenes[0] ?? {})),
   "preview story structure scene references must stay compact",
+);
+const previewManuscript = await api.getManuscriptSnapshot(1);
+const previewStructureOrder = previewStructure.acts.flatMap((act) =>
+  act.chapters.flatMap((chapter) => chapter.scenes.map((scene) => scene.id)));
+check(
+  previewManuscript.project_id === 1
+    && previewManuscript.scene_count === previewManuscript.scenes.length
+    && previewManuscript.scenes.map((scene) => scene.id).join(",") === previewStructureOrder.join(",")
+    && previewManuscript.scenes.every((scene, index) => scene.order_index === index + 1 && Boolean(scene.revision)),
+  "preview manuscript snapshot must preserve canonical structure order and revisioned full scenes",
 );
 const writingModes = await api.writingModes();
 check(writingModes.default_mode === "novel" && writingModes.modes.length === 5,

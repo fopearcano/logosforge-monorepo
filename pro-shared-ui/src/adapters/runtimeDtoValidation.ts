@@ -27,6 +27,7 @@ import type {
   QuantumResultDTO,
   RelationProposalDTO,
   SceneDTO,
+  ManuscriptSnapshotDTO,
   StoryStructureActDTO,
   StoryStructureChapterDTO,
   StoryStructureDTO,
@@ -280,6 +281,41 @@ function scene(value: unknown, path: string): SceneDTO {
   integerArray(requireField(dto, "place_ids", path), fieldPath(path, "place_ids"));
   optional(dto.revision, fieldPath(path, "revision"), stringValue);
   return value as SceneDTO;
+}
+
+function manuscriptSnapshot(value: unknown, path: string): ManuscriptSnapshotDTO {
+  const dto = record(value, path);
+  integerValue(requireField(dto, "project_id", path), fieldPath(path, "project_id"));
+  booleanValue(requireField(dto, "chapter_level", path), fieldPath(path, "chapter_level"));
+  const sceneCountPath = fieldPath(path, "scene_count");
+  const sceneCount = integerValue(requireField(dto, "scene_count", path), sceneCountPath);
+  const orphanCountPath = fieldPath(path, "orphan_count");
+  const orphanCount = integerValue(requireField(dto, "orphan_count", path), orphanCountPath);
+  const scenesPath = fieldPath(path, "scenes");
+  const scenes = requireField(dto, "scenes", path);
+  if (!Array.isArray(scenes)) fail(scenesPath, "an array", scenes);
+  if (sceneCount !== scenes.length) {
+    fail(sceneCountPath, `equal to scenes.length (${scenes.length})`, sceneCount);
+  }
+  if (orphanCount < 0 || orphanCount > sceneCount) {
+    fail(orphanCountPath, `between 0 and scene_count (${sceneCount})`, orphanCount);
+  }
+  const sceneIds = new Set<number>();
+  scenes.forEach((item, index) => {
+    const itemPath = `${scenesPath}[${index}]`;
+    const validated = scene(item, itemPath);
+    if (typeof validated.revision !== "string" || validated.revision.length === 0) {
+      fail(fieldPath(itemPath, "revision"), "a non-empty string", validated.revision);
+    }
+    if (validated.order_index !== index + 1) {
+      fail(fieldPath(itemPath, "order_index"), `canonical position ${index + 1}`, validated.order_index);
+    }
+    if (sceneIds.has(validated.id)) {
+      fail(fieldPath(itemPath, "id"), "a unique scene id", validated.id);
+    }
+    sceneIds.add(validated.id);
+  });
+  return value as ManuscriptSnapshotDTO;
 }
 
 function storyStructureScene(value: unknown, path: string): StoryStructureSceneDTO {
@@ -650,6 +686,8 @@ export const validateWhiteboardImportResultDTO: RuntimeDtoValidator<WhiteboardIm
 export const validateSceneDTO: RuntimeDtoValidator<SceneDTO> = (value) => scene(value, "$");
 export const validateSceneListDTO: RuntimeDtoValidator<SceneDTO[]> = (value) =>
   arrayOf(value, "$", scene);
+export const validateManuscriptSnapshotDTO: RuntimeDtoValidator<ManuscriptSnapshotDTO> = (value) =>
+  manuscriptSnapshot(value, "$");
 export const validateStoryStructureDTO: RuntimeDtoValidator<StoryStructureDTO> = (value) =>
   storyStructure(value, "$");
 export const validateSettingsDTO: RuntimeDtoValidator<SettingsDTO> = (value) => settings(value, "$");

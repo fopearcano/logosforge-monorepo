@@ -2201,9 +2201,26 @@ async function verifyProSceneNavigator(session, importedProjectId, bodyMarker) {
   const projectId = Number(importedProjectId);
   assert.ok(Number.isSafeInteger(projectId) && projectId > 0, 'Pro scene-navigator project id is invalid');
 
-  const importedResult = await localServiceRequest(session, `/api/projects/${projectId}/scenes`);
+  let importedResult = await localServiceRequest(session, `/api/projects/${projectId}/scenes`);
   assert.ok(Array.isArray(importedResult.data), 'Pro scene-navigator imported scene response is invalid');
   assert.ok(importedResult.data.length >= 2, 'Pro scene-navigator test requires at least two imported scenes');
+  if (importedResult.data.length === 2) {
+    const created = await localServiceRequest(session, `/api/projects/${projectId}/scenes`, {
+      method: 'POST',
+      body: {
+        title: 'Snapshot Third Scene',
+        content: 'The third packaged scene proves canonical manuscript ordering.',
+      },
+    });
+    assert.equal(created.status, 201, 'Pro manuscript-snapshot third-scene fixture creation failed');
+    assert.ok(
+      Number.isSafeInteger(Number(created.data?.id)) && Number(created.data.id) > 0,
+      'Pro manuscript-snapshot third-scene fixture has no valid id',
+    );
+    importedResult = await localServiceRequest(session, `/api/projects/${projectId}/scenes`);
+    assert.ok(Array.isArray(importedResult.data), 'Pro manuscript-snapshot refreshed scene response is invalid');
+  }
+  assert.ok(importedResult.data.length >= 3, 'Pro manuscript-snapshot test requires at least three scenes');
   const importedScenes = [...importedResult.data]
     .sort((left, right) => left.sort_order - right.sort_order || left.id - right.id);
   const knownScene = importedScenes.find((scene) => scene?.title === 'Chapter One');
@@ -2212,6 +2229,138 @@ async function verifyProSceneNavigator(session, importedProjectId, bodyMarker) {
   const otherSceneId = Number(otherScene?.id);
   assert.ok(Number.isSafeInteger(knownSceneId) && knownSceneId > 0, 'Pro scene navigator lost Chapter One');
   assert.ok(Number.isSafeInteger(otherSceneId) && otherSceneId > 0, 'Pro scene navigator has no second scene fixture');
+
+  // Persist A1, B1, A2 in that deliberately divergent raw order. The core's
+  // canonical hierarchy groups the two Chapter A scenes together, so both the
+  // atomic manuscript snapshot and the rendered Manuscript must instead read
+  // A1, A2, B1. Extra fixture scenes remain in their own later groups.
+  const divergentFixtures = importedScenes.map((scene, index) => ({
+    scene,
+    act: index < 3
+      ? 'Snapshot Acceptance Act'
+      : `Snapshot Extra Act ${String(index + 1).padStart(4, '0')}`,
+    chapter: index === 0 || index === 2
+      ? 'Snapshot Chapter A'
+      : index === 1
+        ? 'Snapshot Chapter B'
+        : `Snapshot Extra Chapter ${String(index + 1).padStart(4, '0')}`,
+  }));
+  for (const fixture of divergentFixtures) {
+    const patched = await localServiceRequest(
+      session,
+      `/api/projects/${projectId}/scenes/${fixture.scene.id}`,
+      { method: 'PATCH', body: { act: fixture.act, chapter: fixture.chapter } },
+    );
+    assert.equal(patched.status, 200, `Pro manuscript-snapshot scene ${fixture.scene.id} PATCH failed`);
+  }
+
+  const rawScenesResult = await localServiceRequest(session, `/api/projects/${projectId}/scenes`);
+  assert.equal(rawScenesResult.status, 200, 'Pro raw scene list returned the wrong status');
+  assert.ok(Array.isArray(rawScenesResult.data), 'Pro raw scene list response is invalid');
+  const rawScenes = [...rawScenesResult.data]
+    .sort((left, right) => left.sort_order - right.sort_order || left.id - right.id);
+  const rawSceneIds = rawScenes.map((scene) => Number(scene.id));
+  assert.deepEqual(
+    rawSceneIds.slice(0, 3),
+    importedScenes.slice(0, 3).map((scene) => Number(scene.id)),
+    'Pro raw scene list no longer preserves the A1, B1, A2 fixture order',
+  );
+
+  const divergentStructureResult = await localServiceRequest(
+    session,
+    `/api/projects/${projectId}/story-structure`,
+  );
+  assert.equal(
+    divergentStructureResult.status,
+    200,
+    'Pro divergent story-structure endpoint returned the wrong status',
+  );
+  const divergentStructureIds = divergentStructureResult.data.acts.flatMap((act) =>
+    act.chapters.flatMap((chapter) => chapter.scenes.map((scene) => Number(scene.id))));
+  const expectedCanonicalIds = [
+    Number(importedScenes[0].id),
+    Number(importedScenes[2].id),
+    Number(importedScenes[1].id),
+    ...importedScenes.slice(3).map((scene) => Number(scene.id)),
+  ];
+  assert.deepEqual(
+    divergentStructureIds,
+    expectedCanonicalIds,
+    'Pro divergent story structure did not canonically flatten A1, B1, A2 as A1, A2, B1',
+  );
+  assert.notDeepEqual(
+    divergentStructureIds,
+    rawSceneIds,
+    'Pro manuscript-snapshot fixture did not diverge from persisted raw order',
+  );
+
+  const snapshotResult = await localServiceRequest(
+    session,
+    `/api/projects/${projectId}/manuscript-snapshot`,
+  );
+  assert.equal(snapshotResult.status, 200, 'Pro manuscript-snapshot endpoint returned the wrong status');
+  assert.equal(snapshotResult.data?.project_id, projectId, 'Pro manuscript snapshot has the wrong project id');
+  assert.equal(
+    snapshotResult.data?.chapter_level,
+    divergentStructureResult.data?.chapter_level,
+    'Pro manuscript snapshot disagrees with story structure about chapter mode',
+  );
+  assert.equal(
+    snapshotResult.data?.scene_count,
+    divergentStructureResult.data?.scene_count,
+    'Pro manuscript snapshot disagrees with story structure about scene count',
+  );
+  assert.equal(
+    snapshotResult.data?.orphan_count,
+    divergentStructureResult.data?.orphan_count,
+    'Pro manuscript snapshot disagrees with story structure about orphan count',
+  );
+  assert.ok(Array.isArray(snapshotResult.data?.scenes), 'Pro manuscript snapshot has no scene array');
+  const snapshotSceneIds = snapshotResult.data.scenes.map((scene) => Number(scene.id));
+  assert.deepEqual(
+    snapshotSceneIds,
+    divergentStructureIds,
+    'Pro manuscript snapshot IDs do not equal the flattened story-structure IDs',
+  );
+  const rawSceneById = new Map(rawScenes.map((scene) => [Number(scene.id), scene]));
+  for (const [index, scene] of snapshotResult.data.scenes.entries()) {
+    const rawScene = rawSceneById.get(Number(scene.id));
+    assert.ok(rawScene, `Pro manuscript snapshot contains unknown scene ${scene.id}`);
+    assert.equal(
+      scene.content,
+      rawScene.content,
+      `Pro manuscript snapshot scene ${scene.id} does not contain the full manuscript body`,
+    );
+    assert.equal(
+      scene.revision,
+      rawScene.revision,
+      `Pro manuscript snapshot scene ${scene.id} does not contain its current revision`,
+    );
+    assert.ok(
+      typeof scene.revision === 'string' && scene.revision.trim().length > 0,
+      `Pro manuscript snapshot scene ${scene.id} has an empty revision`,
+    );
+    assert.equal(
+      Number(scene.order_index),
+      index + 1,
+      `Pro manuscript snapshot scene ${scene.id} has the wrong canonical order index`,
+    );
+    assert.equal(
+      Number(scene.sort_order),
+      Number(rawScene.sort_order),
+      `Pro manuscript snapshot scene ${scene.id} lost its persisted raw sort order`,
+    );
+  }
+
+  const divergentManuscript = await selectProPanel(page, 'Manuscript', 'Manuscript Editor');
+  const manuscriptScenes = divergentManuscript.locator('[data-manuscript-scroll] [data-scene-id]');
+  await waitFor(
+    async () => JSON.stringify(await manuscriptScenes.evaluateAll((elements) =>
+      elements.map((element) => Number(element.getAttribute('data-scene-id')))))
+      === JSON.stringify(snapshotSceneIds),
+    'Pro Manuscript DOM to match the atomic canonical manuscript snapshot',
+    STARTUP_TIMEOUT_MS,
+  );
 
   // The hierarchy is scene-derived in the core. Give every imported scene a
   // deterministic, distinct Act/Chapter path so this packaged journey proves
@@ -2313,10 +2462,10 @@ async function verifyProSceneNavigator(session, importedProjectId, bodyMarker) {
       actGroup.locator(':scope > button[data-scene-group-toggle="act"]'),
       `Pro Scene Navigator Act ${fixture.actNumber} toggle`,
     );
-    assert.equal(
-      await actToggle.getAttribute('aria-label'),
-      `Act ${fixture.actNumber}: ${fixture.act}, 1 scene`,
-      `Pro Scene Navigator Act ${fixture.actNumber} has the wrong accessible label`,
+    const expectedActLabel = `Act ${fixture.actNumber}: ${fixture.act}, 1 scene`;
+    await waitFor(
+      async () => await actToggle.getAttribute('aria-label') === expectedActLabel,
+      `Pro Scene Navigator Act ${fixture.actNumber} to render the restored structure`,
     );
     assert.match(
       String(await actToggle.getAttribute('aria-expanded')),
@@ -2335,10 +2484,10 @@ async function verifyProSceneNavigator(session, importedProjectId, bodyMarker) {
     const chapterToggle = chapterGroup.locator(
       ':scope > button[data-scene-group-toggle="chapter"]',
     ).first();
-    assert.equal(
-      await chapterToggle.getAttribute('aria-label'),
-      `Chapter ${fixture.chapterNumber}: ${fixture.chapter}, 1 scene`,
-      `Pro Scene Navigator Chapter ${fixture.chapterNumber} has the wrong accessible label`,
+    const expectedChapterLabel = `Chapter ${fixture.chapterNumber}: ${fixture.chapter}, 1 scene`;
+    await waitFor(
+      async () => await chapterToggle.getAttribute('aria-label') === expectedChapterLabel,
+      `Pro Scene Navigator Chapter ${fixture.chapterNumber} to render the restored structure`,
     );
     assert.match(
       String(await chapterToggle.getAttribute('aria-expanded')),

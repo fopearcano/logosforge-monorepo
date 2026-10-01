@@ -520,6 +520,19 @@ export interface StoryStructureDTO {
   acts: StoryStructureActDTO[];
 }
 
+/**
+ * One coherent, revisioned manuscript read. `scenes` is already flattened in
+ * the core's canonical Act -> Chapter -> Scene order; consumers must preserve
+ * the array order rather than sorting again by the persisted `sort_order`.
+ */
+export interface ManuscriptSnapshotDTO {
+  project_id: number;
+  chapter_level: boolean;
+  scene_count: number;
+  orphan_count: number;
+  scenes: SceneDTO[];
+}
+
 /** A continuity note pinned to a scene (memory_type "continuity_<kind>"). */
 /** Consecutive scenes sharing the same (target, kind) form a graph "continuity" edge. */
 export interface ContinuityMemoryDTO {
