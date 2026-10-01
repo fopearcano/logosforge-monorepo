@@ -483,6 +483,43 @@ export interface SceneUpdateDTO {
   offstage_events?: string;
 }
 
+/** Compact scene reference in the canonical manuscript hierarchy. */
+export interface StoryStructureSceneDTO {
+  id: number;
+  title: string;
+  beat: string;
+  number: string;
+  order_index: number;
+  is_orphan: boolean;
+}
+
+/** One scene-derived chapter in canonical first-seen order. */
+export interface StoryStructureChapterDTO {
+  name: string;
+  number: string;
+  unassigned: boolean;
+  scene_count: number;
+  scenes: StoryStructureSceneDTO[];
+}
+
+/** One scene-derived act in canonical first-seen order. */
+export interface StoryStructureActDTO {
+  name: string;
+  number: string;
+  unassigned: boolean;
+  scene_count: number;
+  chapters: StoryStructureChapterDTO[];
+}
+
+/** Authoritative Act -> Chapter -> Scene manuscript projection. */
+export interface StoryStructureDTO {
+  project_id: number;
+  chapter_level: boolean;
+  scene_count: number;
+  orphan_count: number;
+  acts: StoryStructureActDTO[];
+}
+
 /** A continuity note pinned to a scene (memory_type "continuity_<kind>"). */
 /** Consecutive scenes sharing the same (target, kind) form a graph "continuity" edge. */
 export interface ContinuityMemoryDTO {

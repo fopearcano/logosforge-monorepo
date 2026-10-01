@@ -196,7 +196,7 @@ On a clean or isolated test account for each platform:
 
 1. Install or launch the artifact. For Linux, run
    `chmod +x "LogosForge.Whiteboard-X.Y.Z-x86_64.AppImage"` first.
-2. Confirm the status reaches `Connected` and shows API v1.0.0 with core
+2. Confirm the status reaches `Connected` and shows API v1.1.0 with core
    0.9.0-alpha.
 3. Confirm the stable per-user MCP companion and private descriptor exist while
    the GUI is running. From a local MCP client, discover exactly the 28

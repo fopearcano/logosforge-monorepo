@@ -64,6 +64,35 @@ const scene = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+const storyStructure = (sceneOverrides: Record<string, unknown> = {}, overrides: Record<string, unknown> = {}) => ({
+  project_id: 1,
+  chapter_level: true,
+  scene_count: 1,
+  orphan_count: 0,
+  acts: [{
+    name: "Act One",
+    number: "1",
+    unassigned: false,
+    scene_count: 1,
+    chapters: [{
+      name: "Chapter One",
+      number: "1.1",
+      unassigned: false,
+      scene_count: 1,
+      scenes: [{
+        id: 2,
+        title: "Scene",
+        beat: "Opening Image",
+        number: "1.1.1",
+        order_index: 1,
+        is_orphan: false,
+        ...sceneOverrides,
+      }],
+    }],
+  }],
+  ...overrides,
+});
+
 const inlineCommentAnchor = (overrides: Record<string, unknown> = {}) => ({
   start_scene_id: 2,
   start_field: "content",
@@ -456,6 +485,20 @@ try {
     ok: true,
     deleted: 2,
   });
+  await expectValid(
+    "story structure validates its compact nested projection",
+    () => client.getStoryStructure(1),
+    storyStructure(),
+    (value) => value.acts[0]?.chapters[0]?.scenes[0]?.number === "1.1.1",
+  );
+  await expectInvalid(
+    "story structure reports a malformed deeply nested scene",
+    () => client.getStoryStructure(1),
+    json(storyStructure({ is_orphan: "false" })),
+    "GET",
+    "/api/projects/1/story-structure",
+    "$.acts[0].chapters[0].scenes[0].is_orphan",
+  );
 
   await expectValid(
     "inline comment lists validate cross-field anchors and ordered replies",

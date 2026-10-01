@@ -152,6 +152,71 @@ def scenes_to_dtos(db: Database, scenes) -> list[schemas.SceneDTO]:
     ]
 
 
+# -- Canonical story structure ----------------------------------------------
+
+
+def story_structure_to_dto(
+    db: Database, project_id: int,
+) -> schemas.StoryStructureDTO:
+    """Serialize the core-owned Act -> Chapter -> Scene projection.
+
+    The nested array order and structural numbers come exclusively from
+    :mod:`logosforge.story_structure`.  This intentionally returns compact
+    scene references rather than ``SceneDTO`` records so navigation reads do
+    not transfer manuscript prose or optimistic-concurrency revisions.
+    """
+    from logosforge import story_structure
+
+    tree = story_structure.get_ordered_structure(db, project_id)
+    chapter_level = story_structure.is_novel_project(db, project_id)
+    numbers = story_structure.compute_structural_numbers(tree, chapter_level)
+    acts: list[schemas.StoryStructureActDTO] = []
+    order_index = 0
+    orphan_count = 0
+
+    for act_name, chapter_rows in tree:
+        chapters: list[schemas.StoryStructureChapterDTO] = []
+        act_scene_count = 0
+        for chapter_name, scene_rows in chapter_rows:
+            scenes: list[schemas.StoryStructureSceneDTO] = []
+            for scene in scene_rows:
+                order_index += 1
+                orphan = story_structure.is_orphan_scene(scene)
+                if orphan:
+                    orphan_count += 1
+                scenes.append(schemas.StoryStructureSceneDTO(
+                    id=scene.id,
+                    title=scene.title or "",
+                    beat=scene.beat or "",
+                    number=numbers["scenes"].get(scene.id, ""),
+                    order_index=order_index,
+                    is_orphan=orphan,
+                ))
+            act_scene_count += len(scenes)
+            chapters.append(schemas.StoryStructureChapterDTO(
+                name=chapter_name,
+                number=numbers["chapters"].get((act_name, chapter_name), ""),
+                unassigned=(chapter_name == story_structure.UNASSIGNED_CHAPTER),
+                scene_count=len(scenes),
+                scenes=scenes,
+            ))
+        acts.append(schemas.StoryStructureActDTO(
+            name=act_name,
+            number=numbers["acts"].get(act_name, ""),
+            unassigned=(act_name == story_structure.UNASSIGNED_ACT),
+            scene_count=act_scene_count,
+            chapters=chapters,
+        ))
+
+    return schemas.StoryStructureDTO(
+        project_id=project_id,
+        chapter_level=chapter_level,
+        scene_count=order_index,
+        orphan_count=orphan_count,
+        acts=acts,
+    )
+
+
 # -- Outline -----------------------------------------------------------------
 
 

@@ -21,6 +21,26 @@ requireMarkers("components/common/useRuntimeFaultReporter.ts", ["for (const time
 requireMarkers("adapters/httpApiClient.ts", ["if (timer) clearTimeout(timer)", "es.close()"]);
 requireMarkers("adapters/httpApiClient.ts", ["ApiRequestTimeoutError", "const timeoutOptions = { ...options }", "clientAbort.abort", "activeAbort?.abort", "getInflight.clear()", "cloneTransportValue", "streams.clear()", "dispose: () =>"]);
 requireMarkers("adapters/clientLifetime.ts", ["queueMicrotask", "leases.get(value) !== 0", "dispose(value)"]);
+requireMarkers("hooks/resources.ts", [
+  "export function useStoryStructure()",
+  "api.getStoryStructure(projectId as number)",
+  '["scene_changed", "scenes_changed", "project_data_changed"]',
+]);
+const sceneNavigator = requireMarkers("components/shell/StudioSceneNavigator.tsx", [
+  "useStoryStructure()",
+  "filterStudioStoryStructure",
+  "activationRef.current !== token",
+  "projectIdRef.current !== ownerProjectId",
+  'scrollIntoView?.({ block: "nearest" })',
+  "initializedProjectRef.current = null",
+]);
+if (sceneNavigator.includes("useScenes()")) failures.push("StudioSceneNavigator must not reconstruct groups from useScenes");
+const structurePanel = requireMarkers("components/manuscript/StructurePanel.tsx", [
+  "useStoryStructure()",
+  'data-structure-source="core"',
+  "structure?.chapter_level",
+]);
+if (structurePanel.includes("groupByActChapter")) failures.push("StructurePanel must not reconstruct core story groups locally");
 requireMarkers("workspace/useWorkspaceLayout.ts", [
   "loadGenerationRef",
   "registerProjectFlusher(flushLayout)",

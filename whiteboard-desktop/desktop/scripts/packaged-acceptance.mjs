@@ -2196,7 +2196,7 @@ async function importAndVerifyInPro(session, bundlePath, bundle, bodyMarker) {
   return { ...destination, ...commentDestination };
 }
 
-async function verifyProSceneNavigator(session, importedProjectId) {
+async function verifyProSceneNavigator(session, importedProjectId, bodyMarker) {
   const { page } = session;
   const projectId = Number(importedProjectId);
   assert.ok(Number.isSafeInteger(projectId) && projectId > 0, 'Pro scene-navigator project id is invalid');
@@ -2212,6 +2212,71 @@ async function verifyProSceneNavigator(session, importedProjectId) {
   const otherSceneId = Number(otherScene?.id);
   assert.ok(Number.isSafeInteger(knownSceneId) && knownSceneId > 0, 'Pro scene navigator lost Chapter One');
   assert.ok(Number.isSafeInteger(otherSceneId) && otherSceneId > 0, 'Pro scene navigator has no second scene fixture');
+
+  // The hierarchy is scene-derived in the core. Give every imported scene a
+  // deterministic, distinct Act/Chapter path so this packaged journey proves
+  // the core-owned grouping and structural numbers rather than a renderer
+  // projection of the flat scene list.
+  const structureFixtures = importedScenes.map((scene, index) => ({
+    scene,
+    act: `Acceptance Act ${String(index + 1).padStart(4, '0')}`,
+    chapter: `Acceptance Chapter ${String(index + 1).padStart(4, '0')}`,
+    actNumber: String(index + 1),
+    chapterNumber: `${index + 1}.1`,
+    sceneNumber: `${index + 1}.1.1`,
+  }));
+  for (const fixture of structureFixtures) {
+    const patched = await localServiceRequest(
+      session,
+      `/api/projects/${projectId}/scenes/${fixture.scene.id}`,
+      { method: 'PATCH', body: { act: fixture.act, chapter: fixture.chapter } },
+    );
+    assert.equal(patched.status, 200, `Pro scene ${fixture.scene.id} structure PATCH failed`);
+    assert.equal(patched.data?.act, fixture.act, `Pro scene ${fixture.scene.id} lost its Act path`);
+    assert.equal(patched.data?.chapter, fixture.chapter, `Pro scene ${fixture.scene.id} lost its Chapter path`);
+  }
+
+  const structureResult = await localServiceRequest(
+    session,
+    `/api/projects/${projectId}/story-structure`,
+  );
+  assert.equal(structureResult.status, 200, 'Pro story-structure endpoint returned the wrong status');
+  const expectedStructure = {
+    project_id: projectId,
+    chapter_level: true,
+    scene_count: structureFixtures.length,
+    orphan_count: 0,
+    acts: structureFixtures.map((fixture, index) => ({
+      name: fixture.act,
+      number: fixture.actNumber,
+      unassigned: false,
+      scene_count: 1,
+      chapters: [{
+        name: fixture.chapter,
+        number: fixture.chapterNumber,
+        unassigned: false,
+        scene_count: 1,
+        scenes: [{
+          id: Number(fixture.scene.id),
+          title: fixture.scene.title,
+          beat: fixture.scene.beat ?? '',
+          number: fixture.sceneNumber,
+          order_index: index + 1,
+          is_orphan: false,
+        }],
+      }],
+    })),
+  };
+  assert.deepEqual(
+    structureResult.data,
+    expectedStructure,
+    'Pro story-structure endpoint did not return the exact canonical Act/Chapter/Scene tree',
+  );
+  const structurePayload = JSON.stringify(structureResult.data);
+  assert.ok(!structurePayload.includes(bodyMarker), 'Pro story-structure leaked the manuscript marker');
+  assert.ok(!structurePayload.includes(FIRST_SCENE_BODY), 'Pro story-structure leaked manuscript prose');
+  assert.ok(!structurePayload.includes('"content"'), 'Pro story-structure exposed a content field');
+  assert.ok(!structurePayload.includes('"revision"'), 'Pro story-structure exposed a revision field');
 
   const navigator = await waitVisible(proSceneNavigator(page), 'Pro live Scene Navigator');
   const accessibleRegion = await waitVisible(
@@ -2232,30 +2297,219 @@ async function verifyProSceneNavigator(session, importedProjectId) {
     async () => (await rows.count()) === importedScenes.length,
     'all imported scenes to appear in the Pro Scene Navigator',
   );
-  for (const scene of importedScenes) {
-    const sceneId = Number(scene.id);
-    const title = scene.title?.trim() || 'Untitled scene';
-    const row = await waitVisible(
-      navigator.locator(`button[data-scene-id="${sceneId}"]`),
-      `Pro Scene Navigator row ${sceneId}`,
+  const hierarchyLocators = new Map();
+  for (const fixture of structureFixtures) {
+    const sceneId = Number(fixture.scene.id);
+    const title = fixture.scene.title?.trim() || 'Untitled scene';
+    const actGroups = navigator.locator(
+      `[data-structure-level="act"][data-structure-number="${fixture.actNumber}"]`,
     );
-    await waitText(row, title, `Pro Scene Navigator title ${title}`);
+    await waitFor(
+      async () => (await actGroups.count()) === 1,
+      `one Pro Scene Navigator Act ${fixture.actNumber}`,
+    );
+    const actGroup = actGroups.first();
+    const actToggle = await waitVisible(
+      actGroup.locator(':scope > button[data-scene-group-toggle="act"]'),
+      `Pro Scene Navigator Act ${fixture.actNumber} toggle`,
+    );
+    assert.equal(
+      await actToggle.getAttribute('aria-label'),
+      `Act ${fixture.actNumber}: ${fixture.act}, 1 scene`,
+      `Pro Scene Navigator Act ${fixture.actNumber} has the wrong accessible label`,
+    );
+    assert.match(
+      String(await actToggle.getAttribute('aria-expanded')),
+      /^(true|false)$/,
+      `Pro Scene Navigator Act ${fixture.actNumber} has no native expansion state`,
+    );
+
+    const chapterGroups = actGroup.locator(
+      `[data-structure-level="chapter"][data-structure-number="${fixture.chapterNumber}"]`,
+    );
+    await waitFor(
+      async () => (await chapterGroups.count()) === 1,
+      `one Pro Scene Navigator Chapter ${fixture.chapterNumber} under Act ${fixture.actNumber}`,
+    );
+    const chapterGroup = chapterGroups.first();
+    const chapterToggle = chapterGroup.locator(
+      ':scope > button[data-scene-group-toggle="chapter"]',
+    ).first();
+    assert.equal(
+      await chapterToggle.getAttribute('aria-label'),
+      `Chapter ${fixture.chapterNumber}: ${fixture.chapter}, 1 scene`,
+      `Pro Scene Navigator Chapter ${fixture.chapterNumber} has the wrong accessible label`,
+    );
+    assert.match(
+      String(await chapterToggle.getAttribute('aria-expanded')),
+      /^(true|false)$/,
+      `Pro Scene Navigator Chapter ${fixture.chapterNumber} has no native expansion state`,
+    );
+
+    const sceneRows = chapterGroup.locator(`button[data-scene-id="${sceneId}"]`);
+    await waitFor(
+      async () => (await sceneRows.count()) === 1,
+      `one Pro Scene Navigator row ${sceneId} under Chapter ${fixture.chapterNumber}`,
+    );
+    const row = sceneRows.first();
+    assert.ok(
+      ((await row.textContent()) ?? '').includes(title),
+      `Pro Scene Navigator row ${sceneId} lost its title`,
+    );
+    assert.equal(
+      await row.getAttribute('data-structure-level'),
+      'scene',
+      `Pro Scene Navigator row ${sceneId} lost its scene level`,
+    );
+    assert.equal(
+      await row.getAttribute('data-structure-number'),
+      fixture.sceneNumber,
+      `Pro Scene Navigator row ${sceneId} has the wrong structural number`,
+    );
+    assert.equal(
+      await row.getAttribute('aria-label'),
+      `Open scene ${fixture.sceneNumber}: ${title}`,
+      `Pro Scene Navigator row ${sceneId} has the wrong accessible structural path`,
+    );
+    hierarchyLocators.set(sceneId, {
+      actGroup,
+      actToggle,
+      chapterGroup,
+      chapterToggle,
+      row,
+    });
   }
+
+  // Native hierarchy controls must independently hide and restore both levels.
+  const firstHierarchy = hierarchyLocators.get(Number(structureFixtures[0].scene.id));
+  assert.ok(firstHierarchy, 'Pro Scene Navigator lost its first hierarchy fixture');
+  if ((await firstHierarchy.actToggle.getAttribute('aria-expanded')) !== 'true') {
+    await firstHierarchy.actToggle.click();
+  }
+  await waitFor(
+    async () => (await firstHierarchy.actToggle.getAttribute('aria-expanded')) === 'true',
+    'Pro Scene Navigator first Act preparation',
+  );
+  if ((await firstHierarchy.chapterToggle.getAttribute('aria-expanded')) !== 'true') {
+    await firstHierarchy.chapterToggle.click();
+  }
+  await waitFor(
+    async () => (await firstHierarchy.chapterToggle.getAttribute('aria-expanded')) === 'true'
+      && await firstHierarchy.row.isVisible(),
+    'Pro Scene Navigator first Chapter preparation',
+  );
+  await firstHierarchy.actToggle.click();
+  await waitFor(
+    async () => (await firstHierarchy.actToggle.getAttribute('aria-expanded')) === 'false'
+      && !(await firstHierarchy.row.isVisible()),
+    'Pro Scene Navigator collapsed Act branch',
+  );
+  await firstHierarchy.actToggle.click();
+  await waitFor(
+    async () => (await firstHierarchy.actToggle.getAttribute('aria-expanded')) === 'true'
+      && await firstHierarchy.row.isVisible(),
+    'Pro Scene Navigator restored Act branch',
+  );
+  await firstHierarchy.chapterToggle.click();
+  await waitFor(
+    async () => (await firstHierarchy.chapterToggle.getAttribute('aria-expanded')) === 'false'
+      && !(await firstHierarchy.row.isVisible()),
+    'Pro Scene Navigator collapsed Chapter branch',
+  );
+  await firstHierarchy.chapterToggle.click();
+  await waitFor(
+    async () => (await firstHierarchy.chapterToggle.getAttribute('aria-expanded')) === 'true'
+      && await firstHierarchy.row.isVisible(),
+    'Pro Scene Navigator restored Chapter branch',
+  );
+
+  // Filtering force-opens the matching ancestry without mutating the writer's
+  // saved collapse choices. Prove both the leaf match and the group-label match.
+  const otherFixture = structureFixtures.find(
+    (fixture) => Number(fixture.scene.id) === otherSceneId,
+  );
+  const otherHierarchy = hierarchyLocators.get(otherSceneId);
+  assert.ok(otherFixture && otherHierarchy, 'Pro Scene Navigator lost its second hierarchy fixture');
+  if ((await otherHierarchy.actToggle.getAttribute('aria-expanded')) !== 'true') {
+    await otherHierarchy.actToggle.click();
+  }
+  await waitFor(
+    async () => (await otherHierarchy.actToggle.getAttribute('aria-expanded')) === 'true',
+    'Pro Scene Navigator second Act preparation before filtering',
+  );
+  if ((await otherHierarchy.chapterToggle.getAttribute('aria-expanded')) === 'true') {
+    await otherHierarchy.chapterToggle.click();
+  }
+  await waitFor(
+    async () => (await otherHierarchy.chapterToggle.getAttribute('aria-expanded')) === 'false',
+    'Pro Scene Navigator second Chapter collapse before filtering',
+  );
+  await otherHierarchy.actToggle.click();
+  await waitFor(
+    async () => (await otherHierarchy.actToggle.getAttribute('aria-expanded')) === 'false',
+    'Pro Scene Navigator second Act collapse before filtering',
+  );
 
   await search.fill(otherScene.title);
   await waitFor(
     async () => (await rows.count()) === 1
-      && (await rows.first().getAttribute('data-scene-id')) === String(otherSceneId),
-    'Pro Scene Navigator filtered scene result',
+      && (await rows.first().getAttribute('data-scene-id')) === String(otherSceneId)
+      && await otherHierarchy.actGroup.isVisible()
+      && await otherHierarchy.chapterGroup.isVisible()
+      && (await otherHierarchy.actToggle.getAttribute('aria-expanded')) === 'true'
+      && (await otherHierarchy.chapterToggle.getAttribute('aria-expanded')) === 'true',
+    'Pro Scene Navigator filtered scene with its Act and Chapter ancestry',
+  );
+  await search.fill(otherFixture.act);
+  await waitFor(
+    async () => (await rows.count()) === 1
+      && (await rows.first().getAttribute('data-scene-id')) === String(otherSceneId)
+      && await otherHierarchy.row.isVisible(),
+    'Pro Scene Navigator Act-label filter to retain its descendant scene',
   );
   await search.fill('');
   await waitFor(
-    async () => (await rows.count()) === importedScenes.length,
-    'Pro Scene Navigator imported rows after clearing its search',
+    async () => (await rows.count()) === importedScenes.length
+      && (await otherHierarchy.actToggle.getAttribute('aria-expanded')) === 'false'
+      && !(await otherHierarchy.row.isVisible()),
+    'Pro Scene Navigator collapse state after clearing its search',
+  );
+  await otherHierarchy.actToggle.click();
+  await waitFor(
+    async () => (await otherHierarchy.actToggle.getAttribute('aria-expanded')) === 'true',
+    'Pro Scene Navigator second Act restoration after filtering',
+  );
+  assert.equal(
+    await otherHierarchy.chapterToggle.getAttribute('aria-expanded'),
+    'false',
+    'Pro Scene Navigator filter mutated the stored Chapter collapse state',
+  );
+  await otherHierarchy.chapterToggle.click();
+  await waitFor(
+    async () => (await otherHierarchy.chapterToggle.getAttribute('aria-expanded')) === 'true'
+      && await otherHierarchy.row.isVisible(),
+    'Pro Scene Navigator second Chapter restoration after filtering',
   );
 
   // Start elsewhere so the rail row has to open Manuscript as well as target
   // the requested scene.
+  const knownHierarchy = hierarchyLocators.get(knownSceneId);
+  assert.ok(knownHierarchy, 'Pro Scene Navigator lost the Chapter One hierarchy fixture');
+  if ((await knownHierarchy.actToggle.getAttribute('aria-expanded')) !== 'true') {
+    await knownHierarchy.actToggle.click();
+  }
+  await waitFor(
+    async () => (await knownHierarchy.actToggle.getAttribute('aria-expanded')) === 'true',
+    'Pro Scene Navigator Chapter One Act preparation',
+  );
+  if ((await knownHierarchy.chapterToggle.getAttribute('aria-expanded')) !== 'true') {
+    await knownHierarchy.chapterToggle.click();
+  }
+  await waitFor(
+    async () => (await knownHierarchy.chapterToggle.getAttribute('aria-expanded')) === 'true'
+      && await knownHierarchy.row.isVisible(),
+    'Pro Scene Navigator Chapter One row preparation',
+  );
   await selectProPanel(page, 'Outline', 'Outline Panel');
   const knownRow = navigator.locator(`button[data-scene-id="${knownSceneId}"]`);
   await knownRow.click();
@@ -2358,9 +2612,15 @@ async function verifyProSceneNavigator(session, importedProjectId) {
     projectsResult.data.find((project) => Number(project?.id) !== projectId)?.id,
   );
   assert.ok(Number.isSafeInteger(starterId) && starterId > 0, 'Pro Scene Navigator found no starter project');
-  const starterResult = await localServiceRequest(session, `/api/projects/${starterId}/scenes`);
-  assert.ok(Array.isArray(starterResult.data), 'Pro scene-navigator starter scene response is invalid');
-  const starterSceneIds = starterResult.data.map((scene) => Number(scene.id)).sort((a, b) => a - b);
+  const starterResult = await localServiceRequest(
+    session,
+    `/api/projects/${starterId}/story-structure`,
+  );
+  assert.equal(starterResult.status, 200, 'Pro scene-navigator starter structure response is invalid');
+  assert.ok(Array.isArray(starterResult.data?.acts), 'Pro scene-navigator starter Act response is invalid');
+  const starterSceneIds = starterResult.data.acts.flatMap((act) =>
+    act.chapters.flatMap((chapter) => chapter.scenes.map((scene) => Number(scene.id))))
+    .sort((a, b) => a - b);
   const importedSceneIds = importedScenes.map((scene) => Number(scene.id)).sort((a, b) => a - b);
   const projectSelect = proProjectSelect(page);
   const projectsButton = page.locator('aside.rail nav')
@@ -2385,6 +2645,13 @@ async function verifyProSceneNavigator(session, importedProjectId) {
     importedSceneIds,
   );
   assert.equal(staleImportedRows, 0, 'Pro Scene Navigator leaked imported-project scenes into the starter project');
+  const starterText = (await navigator.textContent()) ?? '';
+  for (const fixture of structureFixtures) {
+    assert.ok(
+      !starterText.includes(fixture.act) && !starterText.includes(fixture.chapter),
+      `Pro Scene Navigator leaked ${fixture.act}/${fixture.chapter} into the starter project`,
+    );
+  }
 
   await projectSelect.selectOption(String(projectId));
   await waitFor(
@@ -2398,7 +2665,18 @@ async function verifyProSceneNavigator(session, importedProjectId) {
     'Pro Scene Navigator imported rows after project restoration',
     STARTUP_TIMEOUT_MS,
   );
-  record('journey', 'Pro live Scene Navigator visibility, search, guarded activation, and project isolation verified');
+  for (const fixture of structureFixtures) {
+    await waitVisible(
+      navigator.locator(
+        `[data-structure-level="act"][data-structure-number="${fixture.actNumber}"]`,
+      ),
+      `restored Pro Scene Navigator Act ${fixture.actNumber}`,
+    );
+  }
+  record(
+    'journey',
+    'Pro core-owned Scene Navigator hierarchy, filtering, guarded activation, and project isolation verified',
+  );
 }
 
 async function verifyProOmniboxNavigation(session, destination) {
@@ -3093,7 +3371,7 @@ async function runProJourney({ electron, exePath, root, bundlePath, bundle, mark
     dialogs: { open: [bundlePath], save: [markdownPath] },
   });
   const expectedDestination = await importAndVerifyInPro(first, bundlePath, bundle, bodyMarker);
-  await verifyProSceneNavigator(first, expectedDestination.projectId);
+  await verifyProSceneNavigator(first, expectedDestination.projectId, bodyMarker);
   await verifyProOmniboxNavigation(first, expectedDestination);
   await verifyProOmniboxCommandReview(first, expectedDestination.projectId);
   await configureProAiAndChat(first.page);

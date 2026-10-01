@@ -28,6 +28,7 @@ import {
   validateQuantumSettingsDTO,
   validateSceneDTO,
   validateSceneListDTO,
+  validateStoryStructureDTO,
   validateSettingsDTO,
   validateVoiceBillyProposalDTO,
   validateWhiteboardImportResultDTO,
@@ -444,6 +445,7 @@ export function createHttpApiClient(
     },
 
     listScenes: (p) => get(ROUTES.scenes(p), validateSceneListDTO),
+    getStoryStructure: (p) => get(ROUTES.storyStructure(p), validateStoryStructureDTO),
     createScene: (p, b) => writePost(ROUTES.scenes(p), b, validateSceneDTO),
     updateScene: (p, s, b) => patch(ROUTES.scene(p, s), b, validateSceneDTO),
     deleteScene: (p, s) => del(ROUTES.scene(p, s), validateDeleteResultDTO),

@@ -102,6 +102,7 @@ GET  /api/health → { status, service, mode, version, api_version, core_version
 `core_version` is the Logosforge build (e.g. `0.9.0-alpha`). Clients (Electron
 desktop and Web/PWA) read these to verify they're talking to a compatible
 backend. `version` mirrors `api_version` for backward compatibility.
+The current additive contract version is **1.1.0**.
 
 ### Packaged-desktop live context
 ```
@@ -177,6 +178,18 @@ Every `SceneDTO` includes a content-addressed `revision`. Send it back as
 `409 scene_conflict`. Omitting the token preserves legacy last-write-wins
 behaviour and is also the explicit overwrite path. The token is derived from
 the scene and its replaceable associations, so no database migration is needed.
+
+### Story structure (canonical, scene-derived)
+```
+GET    /api/projects/{project_id}/story-structure
+```
+
+Returns a compact `StoryStructureDTO` hierarchy of Acts, Chapters, and scene
+references. Ordering, structural numbers, the final Unassigned buckets, and
+orphan detection come from the core's canonical `story_structure` service.
+Scene references deliberately omit manuscript content and revision tokens.
+`chapter_level` is true for Novel projects; other modes retain their canonical
+chapter grouping but use flat Act.Scene numbering.
 
 ### Outline (hierarchical)
 ```

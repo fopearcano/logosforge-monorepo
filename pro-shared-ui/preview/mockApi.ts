@@ -19,6 +19,7 @@ import type {
   ManuscriptImportResultDTO,
   WritingModesResponseDTO,
   SceneDTO,
+  StoryStructureDTO,
   OutlineNodeDTO,
   PsykeEntryDTO,
   PsykeRelationDTO,
@@ -420,6 +421,70 @@ export function createMockApiClient(): ApiClient {
     }
     return values;
   };
+  const storyStructureFor = (projectId: number): StoryStructureDTO => {
+    const chapterLevel = projects.find((project) => project.id === projectId)?.narrative_engine === "novel";
+    const ordered = [...scenesFor(projectId)].sort((left, right) => left.sort_order - right.sort_order || left.id - right.id);
+    const grouped = new Map<string, Map<string, SceneDTO[]>>();
+    for (const sceneRow of ordered) {
+      const actName = sceneRow.act.trim() || "Unassigned";
+      const chapterName = sceneRow.chapter.trim() || "Unassigned";
+      const chapters = grouped.get(actName) ?? new Map<string, SceneDTO[]>();
+      const scenes = chapters.get(chapterName) ?? [];
+      scenes.push(sceneRow);
+      chapters.set(chapterName, scenes);
+      grouped.set(actName, chapters);
+    }
+    const orderedEntries = <T,>(entries: Array<[string, T]>): Array<[string, T]> => [
+      ...entries.filter(([name]) => name !== "Unassigned"),
+      ...entries.filter(([name]) => name === "Unassigned"),
+    ];
+    let orderIndex = 0;
+    let orphanCount = 0;
+    let actNumber = 0;
+    const acts = orderedEntries([...grouped.entries()]).map(([actName, chapterMap]) => {
+      const unassigned = actName === "Unassigned";
+      const number = unassigned ? "" : String(++actNumber);
+      let chapterNumber = 0;
+      let flatSceneNumber = 0;
+      const chapters = orderedEntries([...chapterMap.entries()]).map(([chapterName, sceneRows]) => {
+        const chapterUnassigned = chapterName === "Unassigned";
+        const chapterRef = chapterUnassigned ? "" : `${number}.${++chapterNumber}`;
+        const scenes = sceneRows.map((sceneRow, sceneIndex) => {
+          orderIndex += 1;
+          const isOrphan = !sceneRow.act.trim() || !sceneRow.chapter.trim();
+          if (isOrphan) orphanCount += 1;
+          flatSceneNumber += 1;
+          return {
+            id: sceneRow.id,
+            title: sceneRow.title,
+            beat: sceneRow.beat,
+            number: unassigned
+              ? ""
+              : chapterLevel && !chapterUnassigned
+                ? `${chapterRef}.${sceneIndex + 1}`
+                : `${number}.${chapterLevel ? sceneIndex + 1 : flatSceneNumber}`,
+            order_index: orderIndex,
+            is_orphan: isOrphan,
+          };
+        });
+        return {
+          name: chapterName,
+          number: chapterRef,
+          unassigned: chapterUnassigned,
+          scene_count: scenes.length,
+          scenes,
+        };
+      });
+      return {
+        name: actName,
+        number,
+        unassigned,
+        scene_count: chapters.reduce((count, chapter) => count + chapter.scene_count, 0),
+        chapters,
+      };
+    });
+    return { project_id: projectId, chapter_level: chapterLevel, scene_count: orderIndex, orphan_count: orphanCount, acts };
+  };
   const fixtureRowsFor = <T>(projectId: number, rows: readonly T[]): readonly T[] => (
     projectId === fixtureProjectId ? rows : []
   );
@@ -433,8 +498,8 @@ export function createMockApiClient(): ApiClient {
         service: "logosforge-api",
         instance_nonce: "preview-mock",
         mode: "preview-mock",
-        version: "1.0.0",
-        api_version: "1.0.0",
+        version: "1.1.0",
+        api_version: "1.1.0",
         core_version: "preview",
       };
     },
@@ -697,6 +762,7 @@ export function createMockApiClient(): ApiClient {
     async getThemeScenes(_p: number, entryId: number) { await delay(140); return { entry_id: entryId, scene_ids: [...(MOCK_THEME_SCENES[entryId] ?? [])] }; },
     async setThemeScenes(_p: number, entryId: number, sceneIds: number[]) { await delay(160); MOCK_THEME_SCENES[entryId] = [...sceneIds]; return { entry_id: entryId, scene_ids: [...sceneIds] }; },
     async listScenes(p: number) { await delay(); return scenesFor(p).map(cloneScene); },
+    async getStoryStructure(p: number) { await delay(); return storyStructureFor(p); },
     async updateScene(_p: number, sceneId: number, patch: Record<string, unknown>) {
       await delay(120);
       const projectScenes = scenesFor(_p);

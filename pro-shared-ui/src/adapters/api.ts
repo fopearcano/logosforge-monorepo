@@ -50,6 +50,7 @@ import type {
   SettingsDTO,
   WritingModesResponseDTO,
   SceneDTO,
+  StoryStructureDTO,
   SceneCreateDTO,
   SceneUpdateDTO,
   ContinuityMemoryDTO,
@@ -170,6 +171,8 @@ export interface ApiClient {
 
   // Scenes
   listScenes(p: number): Promise<SceneDTO[]>;
+  /** Canonical, core-owned Act -> Chapter -> Scene projection for navigation. */
+  getStoryStructure(p: number): Promise<StoryStructureDTO>;
   createScene(p: number, body: SceneCreateDTO): Promise<SceneDTO>;
   updateScene(p: number, sceneId: number, body: SceneUpdateDTO): Promise<SceneDTO>;
   deleteScene(p: number, sceneId: number): Promise<DeleteResultDTO>;

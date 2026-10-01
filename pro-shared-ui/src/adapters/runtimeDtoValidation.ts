@@ -27,6 +27,10 @@ import type {
   QuantumResultDTO,
   RelationProposalDTO,
   SceneDTO,
+  StoryStructureActDTO,
+  StoryStructureChapterDTO,
+  StoryStructureDTO,
+  StoryStructureSceneDTO,
   SceneExtractionDTO,
   SettingsDTO,
   VoiceBillyProposalDTO,
@@ -276,6 +280,58 @@ function scene(value: unknown, path: string): SceneDTO {
   integerArray(requireField(dto, "place_ids", path), fieldPath(path, "place_ids"));
   optional(dto.revision, fieldPath(path, "revision"), stringValue);
   return value as SceneDTO;
+}
+
+function storyStructureScene(value: unknown, path: string): StoryStructureSceneDTO {
+  const dto = record(value, path);
+  integerValue(requireField(dto, "id", path), fieldPath(path, "id"));
+  for (const key of ["title", "beat", "number"]) {
+    stringValue(requireField(dto, key, path), fieldPath(path, key));
+  }
+  integerValue(requireField(dto, "order_index", path), fieldPath(path, "order_index"));
+  booleanValue(requireField(dto, "is_orphan", path), fieldPath(path, "is_orphan"));
+  return value as StoryStructureSceneDTO;
+}
+
+function storyStructureChapter(value: unknown, path: string): StoryStructureChapterDTO {
+  const dto = record(value, path);
+  for (const key of ["name", "number"]) {
+    stringValue(requireField(dto, key, path), fieldPath(path, key));
+  }
+  booleanValue(requireField(dto, "unassigned", path), fieldPath(path, "unassigned"));
+  integerValue(requireField(dto, "scene_count", path), fieldPath(path, "scene_count"));
+  const scenesPath = fieldPath(path, "scenes");
+  const scenes = requireField(dto, "scenes", path);
+  if (!Array.isArray(scenes)) fail(scenesPath, "an array", scenes);
+  scenes.forEach((item, index) => storyStructureScene(item, `${scenesPath}[${index}]`));
+  return value as StoryStructureChapterDTO;
+}
+
+function storyStructureAct(value: unknown, path: string): StoryStructureActDTO {
+  const dto = record(value, path);
+  for (const key of ["name", "number"]) {
+    stringValue(requireField(dto, key, path), fieldPath(path, key));
+  }
+  booleanValue(requireField(dto, "unassigned", path), fieldPath(path, "unassigned"));
+  integerValue(requireField(dto, "scene_count", path), fieldPath(path, "scene_count"));
+  const chaptersPath = fieldPath(path, "chapters");
+  const chapters = requireField(dto, "chapters", path);
+  if (!Array.isArray(chapters)) fail(chaptersPath, "an array", chapters);
+  chapters.forEach((item, index) => storyStructureChapter(item, `${chaptersPath}[${index}]`));
+  return value as StoryStructureActDTO;
+}
+
+function storyStructure(value: unknown, path: string): StoryStructureDTO {
+  const dto = record(value, path);
+  integerValue(requireField(dto, "project_id", path), fieldPath(path, "project_id"));
+  booleanValue(requireField(dto, "chapter_level", path), fieldPath(path, "chapter_level"));
+  integerValue(requireField(dto, "scene_count", path), fieldPath(path, "scene_count"));
+  integerValue(requireField(dto, "orphan_count", path), fieldPath(path, "orphan_count"));
+  const actsPath = fieldPath(path, "acts");
+  const acts = requireField(dto, "acts", path);
+  if (!Array.isArray(acts)) fail(actsPath, "an array", acts);
+  acts.forEach((item, index) => storyStructureAct(item, `${actsPath}[${index}]`));
+  return value as StoryStructureDTO;
 }
 
 function settings(value: unknown, path: string): SettingsDTO {
@@ -594,6 +650,8 @@ export const validateWhiteboardImportResultDTO: RuntimeDtoValidator<WhiteboardIm
 export const validateSceneDTO: RuntimeDtoValidator<SceneDTO> = (value) => scene(value, "$");
 export const validateSceneListDTO: RuntimeDtoValidator<SceneDTO[]> = (value) =>
   arrayOf(value, "$", scene);
+export const validateStoryStructureDTO: RuntimeDtoValidator<StoryStructureDTO> = (value) =>
+  storyStructure(value, "$");
 export const validateSettingsDTO: RuntimeDtoValidator<SettingsDTO> = (value) => settings(value, "$");
 export const validatePsykeConsoleCommandPlanDTO: RuntimeDtoValidator<PsykeConsoleCommandPlanDTO> = (value) =>
   psykeConsoleCommandPlan(value, "$");

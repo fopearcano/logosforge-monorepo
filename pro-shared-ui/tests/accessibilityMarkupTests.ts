@@ -254,6 +254,26 @@ for (const marker of ['disabled={!available}', 'Command palette is available in 
   if (!chrome.includes(marker)) violations.push(`Host-scoped command palette control is missing ${marker}`);
 }
 
+const sceneNavigator = fs.readFileSync(path.join(root, "shell", "StudioSceneNavigator.tsx"), "utf8");
+for (const marker of [
+  'aria-label="Project structure"',
+  'data-structure-level="act"',
+  'data-structure-level="chapter"',
+  'data-structure-level="scene"',
+  'data-scene-group-toggle="act"',
+  'data-scene-group-toggle="chapter"',
+  'aria-expanded={actExpanded}',
+  'aria-expanded={chapterExpanded}',
+  'aria-controls={actControls}',
+  'aria-controls={chapterControls}',
+  'aria-label="Filter project scenes"',
+  'event.key === "Escape"',
+  'aria-label="Clear scene filter"',
+  'aria-current={active ? "location" : undefined}',
+]) {
+  if (!sceneNavigator.includes(marker)) violations.push(`StudioSceneNavigator is missing ${marker}`);
+}
+
 console.log(`Accessibility markup checks: ${files.length} files · ${buttons} buttons · ${fields} fields`);
 for (const violation of violations) console.error(`  FAIL: ${violation}`);
 if (violations.length) throw new Error(`${violations.length} accessibility markup violation(s)`);

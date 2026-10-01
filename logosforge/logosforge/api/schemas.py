@@ -636,6 +636,47 @@ class SceneUpdateDTO(BaseModel):
     expected_revision: str | None = Field(default=None, max_length=64)
 
 
+class StoryStructureSceneDTO(BaseModel):
+    """Compact scene reference in the canonical manuscript hierarchy."""
+
+    id: int
+    title: str
+    beat: str = ""
+    number: str = ""
+    order_index: int = 0
+    is_orphan: bool = False
+
+
+class StoryStructureChapterDTO(BaseModel):
+    """One scene-derived chapter in canonical first-seen order."""
+
+    name: str
+    number: str = ""
+    unassigned: bool = False
+    scene_count: int = 0
+    scenes: list[StoryStructureSceneDTO] = Field(default_factory=list)
+
+
+class StoryStructureActDTO(BaseModel):
+    """One scene-derived act in canonical first-seen order."""
+
+    name: str
+    number: str = ""
+    unassigned: bool = False
+    scene_count: int = 0
+    chapters: list[StoryStructureChapterDTO] = Field(default_factory=list)
+
+
+class StoryStructureDTO(BaseModel):
+    """Authoritative Act -> Chapter -> Scene manuscript projection."""
+
+    project_id: int
+    chapter_level: bool = False
+    scene_count: int = 0
+    orphan_count: int = 0
+    acts: list[StoryStructureActDTO] = Field(default_factory=list)
+
+
 class ContinuityMemoryDTO(BaseModel):
     """A continuity note pinned to a scene (stored as memory_type 'continuity_<kind>').
     Two consecutive scenes sharing the same (target, kind) form a graph 'continuity'

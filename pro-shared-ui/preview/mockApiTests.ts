@@ -26,7 +26,20 @@ check(typeof api.planPsykeConsoleCommand === "function", "preview mock must impl
 check(typeof api.executePsykeConsoleCommand === "function", "preview mock must implement PSYKE command execution");
 
 const health = await api.health();
-check(health.status === "ok" && health.api_version === "1.0.0", "preview health must satisfy the core contract");
+check(health.status === "ok" && health.api_version === "1.1.0", "preview health must satisfy the core contract");
+const previewStructure = await api.getStoryStructure(1);
+check(
+  previewStructure.project_id === 1
+    && previewStructure.chapter_level === false
+    && previewStructure.scene_count === 7
+    && previewStructure.acts[0]?.number === "1"
+    && previewStructure.acts[0]?.chapters[0]?.scenes[0]?.number === "1.1",
+  "preview story structure must mirror the core-owned mode-aware hierarchy",
+);
+check(
+  !("content" in (previewStructure.acts[0]?.chapters[0]?.scenes[0] ?? {})),
+  "preview story structure scene references must stay compact",
+);
 const writingModes = await api.writingModes();
 check(writingModes.default_mode === "novel" && writingModes.modes.length === 5,
   "preview writing-mode catalog must expose all five canonical modes");
