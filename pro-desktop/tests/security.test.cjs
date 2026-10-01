@@ -4,7 +4,7 @@ const {
   requireProjectId,
   resolveCoreHost,
 } = require('../dist-electron/security.js');
-const { CoreManager } = require('../dist-electron/core-manager.js');
+const { CoreManager, liveContextEndpoint } = require('../dist-electron/core-manager.js');
 
 let passed = 0;
 function check(label, condition) {
@@ -40,6 +40,14 @@ check('stale core nonce rejected', !isExpectedCoreHealth({
 check('production host defaults to loopback', resolveCoreHost(undefined, true) === '127.0.0.1');
 check('production ignores a LAN host override', resolveCoreHost('0.0.0.0', true) === '127.0.0.1');
 check('source development retains a LAN host override', resolveCoreHost('0.0.0.0', false) === '0.0.0.0');
+check(
+  'live context follows a concrete development LAN bind',
+  liveContextEndpoint('http://192.168.1.25:8765') === 'http://192.168.1.25:8765/api/live-context',
+);
+check(
+  'live context maps a wildcard bind to loopback',
+  liveContextEndpoint('http://0.0.0.0:8765') === 'http://127.0.0.1:8765/api/live-context',
+);
 
 const previousHost = process.env.LOGOSFORGE_HOST;
 process.env.LOGOSFORGE_HOST = '192.168.1.25';

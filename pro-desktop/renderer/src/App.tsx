@@ -51,6 +51,8 @@ import {
   subscribeProjectSaveStatus,
   parseRecentProjectIds,
   rememberRecentProject,
+  LiveContextPublishController,
+  useSelection,
 } from '@logosforge/pro-shared-ui';
 import { WRITING_MODES, type WritingMode, type ProjectDTO } from '@logosforge/ui-contracts';
 import { desktop, platform, type CoreStatus } from './platform';
@@ -90,6 +92,44 @@ function CoreBadge({ status }: { status: CoreStatus }) {
       {status.managed ? ' · MANAGED' : ''}
     </div>
   );
+}
+
+/** Publishes only transient Studio focus/selection state to the desktop host. */
+function ProLiveContextPublisher({
+  projectId,
+  activePanelId,
+}: {
+  projectId: number | undefined;
+  activePanelId: string;
+}) {
+  const { selection } = useSelection();
+  const controllerRef = useRef<LiveContextPublishController | null>(null);
+
+  useEffect(() => {
+    const bridge = desktop;
+    if (!bridge?.publishLiveContext || !bridge.clearLiveContext) return undefined;
+    const controller = new LiveContextPublishController({
+      publishLiveContext: (snapshot) => bridge.publishLiveContext(snapshot),
+      clearLiveContext: () => bridge.clearLiveContext(),
+    });
+    controllerRef.current = controller;
+    return () => {
+      controllerRef.current = null;
+      controller.dispose();
+    };
+  }, []);
+
+  useEffect(() => {
+    controllerRef.current?.update({
+      projectId: projectId ?? null,
+      activePanelId,
+      activeSceneId: selection.sceneId,
+      selectionSection: selection.section ?? '',
+      selection: selection.text,
+    });
+  }, [activePanelId, projectId, selection.sceneId, selection.section, selection.text]);
+
+  return null;
 }
 
 export function App() {
@@ -975,6 +1015,7 @@ export function App() {
           },
         }}
       >
+        <ProLiveContextPublisher projectId={projectId} activePanelId={focusedPanelId} />
         <WorkspaceShell
           writingMode={mode}
           layout={workspaceLayout.preset}

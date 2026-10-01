@@ -33,6 +33,13 @@ private runtime descriptor containing the dynamic loopback port and
 per-process token. The descriptor is created only after nonce-bound core
 health succeeds and is removed during normal shutdown.
 
+That descriptor bearer authenticates ordinary API/MCP requests. It is not the
+separate live-context publication capability, which is shared only between
+Electron main and its core API process and never appears in the descriptor,
+renderer, health response, or MCP configuration. MCP clients can read validated
+live connector results but cannot publish snapshots or choose their source and
+revision.
+
 Launch that companion from an MCP client. The descriptor, both owning process
 ids, and the live core identity are revalidated before MCP starts. No API
 token or temporary package-extraction path belongs in client configuration.
@@ -149,8 +156,16 @@ responsibility rather than exposing arbitrary HTTP requests. Gateway version
   threads, and returns the revision for every thread.
 - Story intelligence reads: PSYKE entries, characters, relations,
   progressions, and diagnostics.
-- Desktop-aware reads: live context, current scene, and current selection.
-  These report unavailable when the standalone API has no desktop context.
+- Desktop-aware reads: live panel/context, current scene, and current selection.
+  Packaged Pro publishes authenticated, revision-ordered snapshots; they report
+  unavailable (or a safe no-fresh-scene error for current scene) when no
+  matching update arrived within 30 seconds, after project close, when no scene
+  is open, or when the selected MCP project differs. Selection text is capped
+  at 20,000 characters
+  and must be treated as untrusted project content. A bare
+  `python -m logosforge.api` has no editor publisher, so these reads remain
+  unavailable unless the API is hosted by the legacy embedded desktop or an
+  authorized desktop publisher.
 - Focused proposals: create a project or scene; patch a revisioned scene;
   create/patch outline nodes, PSYKE entries, relations, progressions, and
   notes; reply to a comment as `MCP assistant`; or Resolve/Reopen a comment.

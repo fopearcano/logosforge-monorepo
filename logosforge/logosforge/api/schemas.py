@@ -50,6 +50,42 @@ class HealthDTO(BaseModel):
     core_version: str
 
 
+class LiveContextUpdateDTO(BaseModel):
+    """One ordered snapshot published by the packaged desktop shell."""
+
+    source_id: str = Field(min_length=1, max_length=256)
+    revision: int = Field(ge=0)
+    # Required even when null so an ordered clear is always explicit.
+    project_id: int | None = Field(ge=1)
+    active_panel_id: str | None = Field(default=None, max_length=128)
+    active_scene_id: int | None = Field(default=None, ge=1)
+    selection_section: str | None = Field(default=None, max_length=128)
+    selection: str = Field(default="", max_length=20_000)
+
+    @model_validator(mode="after")
+    def validate_ordered_clear(self) -> LiveContextUpdateDTO:
+        if self.project_id is None and (
+            self.active_panel_id is not None
+            or self.active_scene_id is not None
+            or self.selection_section is not None
+            or self.selection
+        ):
+            raise ValueError(
+                "a live-context clear must omit panel, scene, section, and selection"
+            )
+        return self
+
+
+class LiveContextUpdateResultDTO(BaseModel):
+    ok: bool = True
+    revision: int
+    available: bool
+    project_id: int | None = None
+    active_panel_id: str | None = None
+    active_scene_id: int | None = None
+    selection_length: int = Field(ge=0, le=20_000)
+
+
 class ProjectActionResultDTO(BaseModel):
     ok: bool
     project_id: int

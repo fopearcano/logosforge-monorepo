@@ -84,31 +84,33 @@ register(ActionDef(
     params=[],
 ))
 
-# -- LIVE editor context (only meaningful when the API runs in-process) -------
+# -- LIVE editor context (legacy in-process or packaged-desktop heartbeat) -----
 
 register(ActionDef(
     name="get_live_context",
     description="Get the desktop's live editing context: current project id, "
-                "the scene currently open in the editor, and whether text is "
-                "selected. 'available' is false when the API is not running "
-                "inside the desktop app.",
+                "active workspace panel, scene, and whether text is selected. "
+                "'available' is false when no matching desktop heartbeat has "
+                "arrived within 30 seconds.",
     category="read",
     params=[],
 ))
 
 register(ActionDef(
     name="get_current_selection",
-    description="Get the text currently selected in the manuscript editor "
-                "(live). Empty when nothing is selected or the API is not "
-                "running inside the desktop app.",
+    description="Get text currently selected on a Studio writing or planning "
+                "surface (live and capped at 20,000 characters). Empty when "
+                "nothing is selected or the desktop heartbeat is unavailable "
+                "or stale.",
     category="read",
     params=[],
 ))
 
 register(ActionDef(
     name="get_active_scene",
-    description="Get the scene the user currently has open in the editor "
-                "(live), with all structured fields.",
+    description="Get the persisted metadata summary for the scene the user "
+                "currently has open in the editor. Fails closed when the "
+                "desktop heartbeat is stale or belongs to another project.",
     category="read",
     params=[],
 ))
@@ -285,53 +287,76 @@ def _handle_list_available_actions(db: Database, project_id: int, **kwargs) -> l
     return describe_all_actions()
 
 
-def _handle_get_live_context(db: Database, project_id: int, **kwargs) -> dict:
+def _live_context_for_project(db: Database, project_id: int):
+    """Return fresh context only when all persisted ownership checks pass."""
     ctx = get_live_context()
     if not ctx.available or ctx.project_id != project_id:
+        return None
+    if db.get_project_by_id(project_id) is None:
+        return None
+    if ctx.active_scene_id is not None:
+        scene = db.get_scene_by_id(ctx.active_scene_id)
+        if scene is None or scene.project_id != project_id:
+            return None
+    return ctx
+
+
+def _handle_get_live_context(db: Database, project_id: int, **kwargs) -> dict:
+    ctx = _live_context_for_project(db, project_id)
+    if ctx is None:
         # The store is process-global because it mirrors the one desktop editor.
         # Treat another project's context exactly like no live context so callers
         # cannot infer its active scene or selection state.
         return {
             "available": False,
             "project_id": None,
+            "active_panel_id": None,
             "active_scene_id": None,
             "has_selection": False,
             "selection_length": 0,
+            "selection_section": None,
+            "revision": None,
         }
     return {
         "available": ctx.available,
         "project_id": ctx.project_id,
+        "active_panel_id": ctx.active_panel_id,
         "active_scene_id": ctx.active_scene_id,
         "has_selection": ctx.has_selection,
         "selection_length": len(ctx.selection),
+        "selection_section": ctx.selection_section,
+        "revision": ctx.revision,
     }
 
 
 def _handle_get_current_selection(db: Database, project_id: int, **kwargs) -> dict:
-    ctx = get_live_context()
-    if not ctx.available or ctx.project_id != project_id:
+    ctx = _live_context_for_project(db, project_id)
+    if ctx is None:
         return {
             "available": False,
             "selection": "",
             "length": 0,
+            "selection_section": None,
+            "active_panel_id": None,
+            "revision": None,
         }
     return {
         "available": ctx.available,
         "selection": ctx.selection,
         "length": len(ctx.selection),
+        "selection_section": ctx.selection_section,
+        "active_panel_id": ctx.active_panel_id,
+        "revision": ctx.revision,
     }
 
 
 def _handle_get_active_scene(db: Database, project_id: int, **kwargs) -> dict:
-    ctx = get_live_context()
-    if (
-        not ctx.available
-        or ctx.project_id != project_id
-        or ctx.active_scene_id is None
-    ):
+    ctx = _live_context_for_project(db, project_id)
+    if ctx is None or ctx.active_scene_id is None:
         return {
-            "error": "No active scene. The API may not be running inside the "
-                     "desktop app, or no scene is currently open.",
+            "error": "No fresh active scene is available for this project. "
+                     "The desktop may be disconnected, its context may have "
+                     "expired, or no scene is currently open.",
         }
     # Reuse the validated get_scene serializer (also checks project ownership).
     return _handle_get_scene(db, project_id, scene_id=ctx.active_scene_id)

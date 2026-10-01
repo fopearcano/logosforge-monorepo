@@ -54,14 +54,18 @@ Configuration comes from `API_*` environment variables (CLI flags win):
 | `API_ALLOWED_ORIGINS`  | *(empty)*     | Comma-separated CORS origins (lan/remote).         |
 | `API_AUTH_TOKEN`       | *(empty)*     | If set, all `/api/*` routes (except health) require `Authorization: Bearer <token>`. |
 | `API_INSTANCE_NONCE`   | *(empty)*     | Optional process identity echoed by health; Electron sets a random value per launch. |
+| `API_LIVE_CONTEXT_TOKEN` | *(empty)*   | Internal desktop publication capability; Electron generates it in the main process and never exposes it to renderer or MCP clients. |
 | `LOGOSFORGE_DB_PATH` | `logosforge.db` | SQLite project DB the API serves.              |
 
 **CORS / security**
 
 * **desktop** — any `http://localhost:*` / `http://127.0.0.1:*` origin is
   allowed (Electron/Vite pick a free port). Bind to `127.0.0.1` only. Pro
-  Electron generates `API_AUTH_TOKEN` and `API_INSTANCE_NONCE` in memory for
-  every launch; they are never written to settings or project files.
+  Electron generates `API_AUTH_TOKEN`, `API_INSTANCE_NONCE`, and
+  `API_LIVE_CONTEXT_TOKEN` in memory for every launch; they are never written
+  to settings or project files. The bearer is available to the renderer and
+  private MCP descriptor, and the nonce is health-visible; the separate live
+  publication capability is omitted from all of those surfaces.
 * **lan / remote** — only origins in `API_ALLOWED_ORIGINS` are allowed. Set
   `API_AUTH_TOKEN` before exposing the API beyond localhost. Authentication is
   a single clean hook (`require_auth`) ready to grow into real auth.
@@ -80,6 +84,7 @@ Configuration comes from `API_*` environment variables (CLI flags win):
   ```
 
   Codes: `not_found` (404), `bad_request` (400), `forbidden` (403),
+  `conflict` (409; some routes use a more specific conflict code),
   `not_implemented` (501), `validation_error` (422), `assistant_error` (502).
 * Internal ORM rows are never returned — only the DTOs in
   `logosforge/api/schemas.py`.
@@ -90,13 +95,42 @@ Configuration comes from `API_*` environment variables (CLI flags win):
 
 ### Health
 ```
-GET  /api/health → { status, service, mode, version, api_version, core_version }
+GET  /api/health → { status, service, mode, version, api_version, core_version, instance_nonce }
 ```
 `api_version` is the stable HTTP DTO/action **contract** version (also the
 `info.version` in `/openapi.json`, used to generate the shared React client).
 `core_version` is the Logosforge build (e.g. `0.9.0-alpha`). Clients (Electron
 desktop and Web/PWA) read these to verify they're talking to a compatible
 backend. `version` mirrors `api_version` for backward compatibility.
+
+### Packaged-desktop live context
+```
+PUT /api/live-context
+```
+
+This endpoint is reserved for a desktop shell that owns the API process. It is
+disabled in LAN/remote modes and unless all three checks match:
+
+* `Authorization: Bearer …` matches `API_AUTH_TOKEN`;
+* `X-LogosForge-Live-Context` matches `API_LIVE_CONTEXT_TOKEN`; and
+* body `source_id` matches `API_INSTANCE_NONCE`.
+
+Packaged Pro generates all three in Electron's main process and passes the
+publication verifier only to its core API process. It is not returned by
+health, shared with the renderer, written to the MCP runtime descriptor, or
+accepted from renderer input. Electron main owns `source_id` and the strictly
+increasing `revision`; the rest of the body carries the active
+project/panel/scene and at most 20,000 characters of selected text.
+`project_id: null` is an ordered clear. Credential, mode, or source failures
+return 403; missing/foreign project or scene ids return 404; stale revisions
+return 409; malformed or oversized bodies return 422.
+
+Snapshots expire 30 seconds after the last update using a monotonic clock. A
+clear or expiry does not reset the source's revision ledger, so delayed network
+requests cannot resurrect an earlier project or selection. Project existence
+and scene ownership are checked before publication. The connector/MCP live
+tools additionally fail closed if the selected MCP project differs or the
+snapshot becomes stale.
 
 ### Projects
 ```

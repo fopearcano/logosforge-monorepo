@@ -61,7 +61,9 @@ jobs:
             pro-desktop/core/logosforge-core.spec \
             pro-desktop/core/logosforge-mcp.spec \
             pro-desktop/core/mcp_entry.py \
+            pro-desktop/scripts/live-context-core-manager-driver.cjs \
             pro-desktop/scripts/smoke-frozen-mcp.py \
+            pro-desktop/scripts/smoke-live-context-bridge.py \
             pro-desktop/scripts/smoke-packaged-mcp.py \
             whiteboard-desktop/backend/requirements.txt \
             whiteboard-desktop/backend/logosforge-whiteboard-backend.spec \
@@ -114,7 +116,9 @@ jobs:
             whiteboard-desktop/backend/smoke-packaged-mcp.py \
             pro-desktop/core \
             pro-desktop/scripts/smoke-frozen-mcp.py \
+            pro-desktop/scripts/smoke-live-context-bridge.py \
             pro-desktop/scripts/smoke-packaged-mcp.py
+          node --check pro-desktop/scripts/live-context-core-manager-driver.cjs
           ./acceptance-venv/Scripts/python.exe -m pip check
 
       - name: Test, build, and audit Whiteboard sources
@@ -192,6 +196,12 @@ jobs:
           ./acceptance-venv/Scripts/python.exe pro-desktop/scripts/smoke-frozen-mcp.py
           pro-desktop/core/dist/logosforge-core/logosforge-core.exe
           --mcp-executable pro-desktop/core/dist/logosforge-mcp.exe
+
+      - name: Exercise real CoreManager live context through connector and MCP
+        run: >-
+          ./acceptance-venv/Scripts/python.exe pro-desktop/scripts/smoke-live-context-bridge.py
+          --core pro-desktop/core/dist/logosforge-core/logosforge-core.exe
+          --mcp pro-desktop/core/dist/logosforge-mcp.exe
 
       - name: Package unpacked Whiteboard app
         working-directory: whiteboard-desktop/desktop

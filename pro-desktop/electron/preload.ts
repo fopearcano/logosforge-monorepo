@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 
-import type { CoreStatus } from './core-manager';
+import type { CoreStatus, RendererLiveContextPayload } from './core-manager';
 import type { DialogFilter, LayoutSaveOptions, OpenFileResult, SaveFileResult } from './file-manager';
 
 /**
@@ -14,6 +14,8 @@ export interface LogosForgeDesktop {
   coreBaseUrl(): Promise<string>;
   getCoreStatus(): Promise<CoreStatus>;
   onCoreStatus(cb: (status: CoreStatus) => void): () => void;
+  publishLiveContext(context: RendererLiveContextPayload): Promise<void>;
+  clearLiveContext(): Promise<void>;
 
   openFile(filters?: DialogFilter[]): Promise<OpenFileResult>;
   saveFile(payload: { suggestedName?: string; content?: string; contentBase64?: string; mimeType?: string }): Promise<SaveFileResult>;
@@ -39,6 +41,8 @@ const api: LogosForgeDesktop = {
   coreBaseUrl: () => ipcRenderer.invoke('core:base-url'),
   getCoreStatus: () => ipcRenderer.invoke('core:get-status'),
   onCoreStatus: (cb) => subscribe<CoreStatus>('core:status', cb),
+  publishLiveContext: (context) => ipcRenderer.invoke('live-context:publish', context),
+  clearLiveContext: () => ipcRenderer.invoke('live-context:clear'),
 
   openFile: (filters) => ipcRenderer.invoke('file:open', { filters }),
   saveFile: (payload) => ipcRenderer.invoke('file:save', payload),

@@ -13,6 +13,7 @@ from logosforge.api.routes import (
     grammar,
     imports,
     intelligence,
+    live_context,
     logos,
     notes,
     outline,
@@ -31,6 +32,7 @@ from logosforge.api.routes import (
 # Ordered list of every router mounted under the /api prefix.
 ALL_ROUTERS = [
     projects.router,
+    live_context.router,
     search.router,
     scenes.router,
     outline.router,

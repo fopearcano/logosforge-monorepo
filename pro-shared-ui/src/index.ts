@@ -21,6 +21,8 @@ export * from "./hooks";
 export * from "./theme/tokens";
 export * from "./theme/accent";
 export * from "./status/workspaceStatus";
+export * from "./status/liveContextPublisher";
+export * from "./adapters/selection";
 export * from "./commands";
 export * from "./workspace";
 export * from "./components";

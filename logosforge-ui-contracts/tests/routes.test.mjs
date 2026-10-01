@@ -38,6 +38,10 @@ if (projectSearchRoute !== '/api/projects/42/search') {
   throw new Error(`project search route mismatch: ${projectSearchRoute}`);
 }
 
+if (ROUTES.liveContext !== '/api/live-context') {
+  throw new Error(`live context route mismatch: ${ROUTES.liveContext}`);
+}
+
 const psykeCommandRoutes = [
   ROUTES.psykeConsolePlan(42),
   ROUTES.psykeConsoleExecute(42),
@@ -50,7 +54,7 @@ if (JSON.stringify(psykeCommandRoutes) !== JSON.stringify(expectedPsykeCommandRo
   throw new Error(`PSYKE command route mismatch: ${psykeCommandRoutes}`);
 }
 
-console.log('Contract route/event tests: 6 passed, 0 failed');
+console.log('Contract route/event tests: 7 passed, 0 failed');
 
 const pythonSchemas = readFileSync('../logosforge/logosforge/api/schemas.py', 'utf8');
 const typescriptSchemas = readFileSync('src/types.ts', 'utf8');

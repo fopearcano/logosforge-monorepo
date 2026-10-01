@@ -11,6 +11,7 @@ export const API_PREFIX = "/api";
 
 export const ROUTES = {
   health: "/api/health",
+  liveContext: "/api/live-context",
   writingModes: "/api/writing-modes",
   whiteboardImport: "/api/import/whiteboard",
   manuscriptImport: "/api/import/manuscript",

@@ -34,6 +34,27 @@ export interface HealthDTO {
   api_version: string;
   core_version: string;
 }
+/** Ordered, ephemeral editor snapshot published only by the packaged desktop. */
+export interface LiveContextUpdateDTO {
+  source_id: string;
+  revision: number;
+  /** null is an ordered clear; all other context fields must then be empty. */
+  project_id: number | null;
+  active_panel_id?: string | null;
+  active_scene_id?: number | null;
+  selection_section?: string | null;
+  /** At most 20,000 characters. */
+  selection?: string;
+}
+export interface LiveContextUpdateResultDTO {
+  ok: boolean;
+  revision: number;
+  available: boolean;
+  project_id: number | null;
+  active_panel_id: string | null;
+  active_scene_id: number | null;
+  selection_length: number;
+}
 export interface ProjectActionResultDTO { ok: boolean; project_id: number }
 export interface DeleteResultDTO { ok: boolean; deleted: number | string }
 export interface RemovedResultDTO { ok: boolean; removed: number }

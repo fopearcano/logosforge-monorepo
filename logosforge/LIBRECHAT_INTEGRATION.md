@@ -183,45 +183,51 @@ The named MCP surface is preferred to registering the full OpenAPI surface as
 an agent action: its schemas are narrower, it separates review from mutation,
 and it keeps pending proposal state inside the gateway process.
 
-### In-process API hosting + LIVE context
+### Desktop API hosting + LIVE context
 
-To give the agent the user's **live** editing state — not just persisted data —
-LogosForge can host the FastAPI server **inside the desktop process**. This is
-optional and **off by default** (setting `api_embedded_enabled`); when off,
-nothing changes and startup is byte-for-byte identical.
-
-When on, `MainWindow` starts `logosforge/api/embedded.py::EmbeddedApiServer`
-in a **daemon thread**, handing it the desktop's *own* `Database` instance
-(`check_same_thread=False` + per-request sessions make this safe across the Qt
-thread and the uvicorn worker thread — no second connection). A low-cadence
-(750 ms) GUI-thread timer **pushes** plain values — current project id, active
-scene id, current selection — into a lock-protected registry
-(`logosforge/live_context.py`); the API worker thread only ever **reads** that
-plain data, so it never touches Qt cross-thread. The server is bound to
-`127.0.0.1` (desktop CORS) and shut down cleanly on exit (only the instance
-LogosForge started).
-
-This adds three **read-only** connector actions (and matching MCP tools), so the
-agent can ask about live state through the same safe layer:
+The three read-only connector actions (and matching MCP tools) can expose the
+user's current editing state in addition to persisted project data:
 
 | Connector action | MCP tool | Returns |
 |---|---|---|
-| `get_live_context` | `logosforge_get_live_context` | project id · active scene id · has-selection |
-| `get_current_selection` | `logosforge_get_current_selection` | the selected text (live) |
-| `get_active_scene` | `logosforge_get_current_scene` | the scene open in the editor (live) |
+| `get_live_context` | `logosforge_get_live_context` | project · panel · scene · selection section/length · publication revision when available |
+| `get_current_selection` | `logosforge_get_current_selection` | selected text · panel · selection section · publication revision when available |
+| `get_active_scene` | `logosforge_get_current_scene` | persisted metadata summary for the scene currently open in the editor |
 
-When the API runs as a *separate* process (`python -m logosforge.api`) the
-registry is empty, so these report `available: false` and the agent falls back
-to persisted data — no error, no special-casing.
+There are two supported desktop publication paths:
 
-**Settings:** `api_embedded_enabled` (default `false`) and `api_embedded_port`
-(default `8765`, matching the MCP server's default URL). Takes effect on app
-start. If you also run the standalone API on the same port, they conflict —
-use one or the other.
+* **Packaged Electron Pro** launches the bundled API as a separate process.
+  Electron main sends authenticated, revision-ordered snapshots when the
+  project, Studio panel, scene, or selection changes, refreshes them with a
+  heartbeat, and sends an ordered clear when the project/window closes.
+  Selected text is capped at 20,000 characters and snapshots expire after 30
+  seconds without a refresh. A dedicated publication capability is shared only
+  between Electron main and its core API process; it is omitted from the
+  renderer, health response, MCP runtime descriptor, and MCP client config.
+* **Legacy Qt desktop** can enable the optional in-process API with
+  `api_embedded_enabled` (default `false`). `MainWindow` starts
+  `logosforge/api/embedded.py::EmbeddedApiServer` in a daemon thread with the
+  desktop's own `Database` instance. A 750 ms GUI-thread timer pushes plain
+  current-project, scene, and selection values into the lock-protected
+  registry; the API thread only reads those values and never touches Qt.
 
-**Net:** turn on `api_embedded_enabled`, point the MCP server at
-`http://127.0.0.1:8765`, and the agent gets persisted data, safe writes **and**
-the user's live project / scene / selection — all through the one safe layer.
+In both cases the connector fails closed if the MCP-selected project differs,
+the active scene does not belong to that project, or the snapshot expires.
+The context and selection tools return `available: false`; the current-scene
+tool returns a safe no-fresh-scene error. An agent can then fall back to
+persisted project data. Packaged Electron results carry an ordered revision;
+the legacy Qt publisher is revisionless and returns `revision: null`.
+
+A bare standalone API (`python -m logosforge.api`) does not invent editor
+state. Without a valid owning desktop publisher its live registry remains
+empty, so the context and selection tools report unavailable and current-scene
+reports no fresh scene. The packaged publication capability is intentionally
+not part of normal MCP or standalone API configuration.
+
+For the legacy Qt path, `api_embedded_port` defaults to `8765` and changes take
+effect on app start. Do not run the standalone API on the same port. Both
+desktop paths bind their production API to loopback and shut down only the
+process/server they started.
 
 ---
 

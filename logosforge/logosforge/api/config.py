@@ -39,6 +39,9 @@ class ApiConfig:
     db_path: str | None = None
     auth_token: str = ""
     instance_nonce: str = ""
+    # Separate from the renderer/MCP bearer: only the Electron main process
+    # receives this capability, so renderer code cannot forge revision order.
+    live_context_token: str = ""
 
     # -- Derived helpers ---------------------------------------------------
 
@@ -70,7 +73,8 @@ class ApiConfig:
 
         Recognised variables:
             API_HOST, API_PORT, API_MODE, API_ALLOWED_ORIGINS (comma list),
-            API_AUTH_TOKEN, API_INSTANCE_NONCE, LOGOSFORGE_DB_PATH.
+            API_AUTH_TOKEN, API_INSTANCE_NONCE, API_LIVE_CONTEXT_TOKEN,
+            LOGOSFORGE_DB_PATH.
         Keyword *overrides* win over the environment.
         """
         mode = os.environ.get("API_MODE", "desktop").strip() or "desktop"
@@ -90,6 +94,9 @@ class ApiConfig:
             db_path=os.environ.get("LOGOSFORGE_DB_PATH") or None,
             auth_token=os.environ.get("API_AUTH_TOKEN", "").strip(),
             instance_nonce=os.environ.get("API_INSTANCE_NONCE", "").strip(),
+            live_context_token=os.environ.get(
+                "API_LIVE_CONTEXT_TOKEN", ""
+            ).strip(),
         )
         for key, value in overrides.items():
             setattr(cfg, key, value)

@@ -38,6 +38,8 @@ const core = new CoreManager({ production: isProd, bundledCorePath, dbPath, mcpR
 let allowClose = false;
 let isQuitting = false;
 let closeInProgress = false;
+let shutdownPrepared = false;
+let shutdownInProgress = false;
 let nextCloseAttemptId = 1;
 let pendingCloseResult: { attemptId: number; finish: (saved: boolean) => void } | null = null;
 
@@ -94,15 +96,42 @@ async function handleCloseRequest(): Promise<void> {
       return;
     }
   }
-  closeInProgress = false;
-  if (mainWindow !== win) return;
-  allowClose = true;
-  if (isQuitting) app.quit();
-  else win.close();
+  if (mainWindow !== win) {
+    closeInProgress = false;
+    return;
+  }
+  if (isQuitting) {
+    await core.stop();
+    shutdownPrepared = true;
+    closeInProgress = false;
+    allowClose = true;
+    app.quit();
+  } else {
+    await core.suspendLiveContext();
+    if (mainWindow !== win) {
+      closeInProgress = false;
+      return;
+    }
+    // Cmd+Q may arrive while the ordered live-context clear is in flight.
+    // before-quit records that intent but cannot start a second close flow, so
+    // promote this ordinary window close to a full app shutdown here.
+    if (isQuitting) {
+      await core.stop();
+      shutdownPrepared = true;
+      closeInProgress = false;
+      allowClose = true;
+      app.quit();
+      return;
+    }
+    closeInProgress = false;
+    allowClose = true;
+    win.close();
+  }
 }
 
 async function createWindow(): Promise<void> {
   allowClose = false;
+  core.resumeLiveContext();
   mainWindow = new BrowserWindow({
     width: 1480,
     height: 920,
@@ -138,6 +167,9 @@ async function createWindow(): Promise<void> {
   mainWindow.on('closed', () => {
     pendingCloseResult?.finish(false);
     mainWindow = null;
+    // Fallback for renderer crashes / forced destruction. The normal close
+    // path already awaited its ordered clear before the window disappeared.
+    if (!allowClose) void core.suspendLiveContext();
   });
 }
 
@@ -149,6 +181,14 @@ function registerIpc(): void {
   ipcMain.handle('core:get-status', (event) => {
     requireMainRenderer(event);
     return core.getStatus();
+  });
+  ipcMain.handle('live-context:publish', (event, payload: unknown) => {
+    requireMainRenderer(event);
+    return core.publishLiveContext(payload);
+  });
+  ipcMain.handle('live-context:clear', (event) => {
+    requireMainRenderer(event);
+    return core.clearLiveContextFromRenderer();
   });
   ipcMain.handle('file:open', (event, p: { filters?: DialogFilter[] }) => {
     requireMainRenderer(event);
@@ -221,14 +261,26 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', (event) => {
-  if (allowClose || !mainWindow) return;
+  if (shutdownPrepared) return;
   event.preventDefault();
   isQuitting = true;
-  void handleCloseRequest();
+  if (mainWindow && !allowClose) {
+    void handleCloseRequest();
+    return;
+  }
+  if (shutdownInProgress) return;
+  shutdownInProgress = true;
+  void core.stop().finally(() => {
+    shutdownPrepared = true;
+    shutdownInProgress = false;
+    app.quit();
+  });
 });
 
 app.on('will-quit', () => {
-  core.stop();
+  // before-quit normally awaited this. Keep an idempotent fallback for host
+  // shutdown paths that do not complete the ordinary window-close protocol.
+  void core.stop();
   rendererServer?.close();
   rendererServer = null;
 });

@@ -288,7 +288,7 @@ jobs:
           set -euo pipefail
           test "$RUNNER_OS" = "Windows" && test "$RUNNER_ARCH" = "X64"
           test "$(git rev-parse HEAD)" = "${{ needs.metadata.outputs.source_sha }}"
-          for path in logosforge/pyproject.toml logosforge-ui-contracts/package.json pro-shared-ui/package.json pro-desktop/package.json pro-desktop/core/logosforge-core.spec pro-desktop/core/logosforge-mcp.spec; do
+          for path in logosforge/pyproject.toml logosforge-ui-contracts/package.json pro-shared-ui/package.json pro-desktop/package.json pro-desktop/core/logosforge-core.spec pro-desktop/core/logosforge-mcp.spec pro-desktop/scripts/live-context-core-manager-driver.cjs pro-desktop/scripts/smoke-live-context-bridge.py; do
             test -e "$path" || { echo "::error::Missing required monorepo path: $path"; exit 1; }
           done
 
@@ -316,7 +316,8 @@ jobs:
           ./build-venv/Scripts/python.exe -m pip install "./logosforge[export,voice,mcp]" httpx "pyinstaller==6.22.2"
           ./build-venv/Scripts/python.exe -m pip check
           ./build-venv/Scripts/python.exe -c "import ctranslate2, faster_whisper, sounddevice; print('voice imports OK', ctranslate2.__version__)"
-          ./build-venv/Scripts/python.exe -m compileall -q logosforge/logosforge pro-desktop/core
+          ./build-venv/Scripts/python.exe -m compileall -q logosforge/logosforge pro-desktop/core pro-desktop/scripts/smoke-live-context-bridge.py
+          node --check pro-desktop/scripts/live-context-core-manager-driver.cjs
           ./build-venv/Scripts/python.exe - <<'PY'
           import os
           from fastapi.testclient import TestClient
@@ -432,6 +433,12 @@ jobs:
           cd logosforge-ui-contracts && npm ci && npm test && npm audit --audit-level=moderate
           cd ../pro-shared-ui && npm ci && npm test && npm run build && npm audit --audit-level=moderate
           cd ../pro-desktop && npm ci && npm test && npm audit --audit-level=moderate
+
+      - name: Exercise real CoreManager live context through connector and MCP
+        run: >-
+          ./build-venv/Scripts/python.exe pro-desktop/scripts/smoke-live-context-bridge.py
+          --core pro-desktop/core/dist/logosforge-core/logosforge-core.exe
+          --mcp pro-desktop/core/dist/logosforge-mcp.exe
 
       - name: Package Windows installer and portable app
         working-directory: pro-desktop
@@ -595,7 +602,7 @@ jobs:
           set -euo pipefail
           test "$RUNNER_OS" = "Linux" && test "$RUNNER_ARCH" = "X64"
           test "$(git rev-parse HEAD)" = "${{ needs.metadata.outputs.source_sha }}"
-          for path in logosforge/pyproject.toml logosforge-ui-contracts/package.json pro-shared-ui/package.json pro-desktop/package.json pro-desktop/core/logosforge-core.spec pro-desktop/core/logosforge-mcp.spec; do
+          for path in logosforge/pyproject.toml logosforge-ui-contracts/package.json pro-shared-ui/package.json pro-desktop/package.json pro-desktop/core/logosforge-core.spec pro-desktop/core/logosforge-mcp.spec pro-desktop/scripts/live-context-core-manager-driver.cjs pro-desktop/scripts/smoke-live-context-bridge.py; do
             test -e "$path" || { echo "::error::Missing required monorepo path: $path"; exit 1; }
           done
           ldd --version | head -n 1
@@ -629,7 +636,8 @@ jobs:
           ./build-venv/bin/python -m pip install "./logosforge[export,voice,mcp]" httpx "pyinstaller==6.22.2"
           ./build-venv/bin/python -m pip check
           ./build-venv/bin/python -c "import ctranslate2, faster_whisper, sounddevice; print('voice imports OK', ctranslate2.__version__)"
-          ./build-venv/bin/python -m compileall -q logosforge/logosforge pro-desktop/core
+          ./build-venv/bin/python -m compileall -q logosforge/logosforge pro-desktop/core pro-desktop/scripts/smoke-live-context-bridge.py
+          node --check pro-desktop/scripts/live-context-core-manager-driver.cjs
           ./build-venv/bin/python - <<'PY'
           import os
           from fastapi.testclient import TestClient
@@ -729,6 +737,12 @@ jobs:
           cd logosforge-ui-contracts && npm ci && npm test && npm audit --audit-level=moderate
           cd ../pro-shared-ui && npm ci && npm test && npm run build && npm audit --audit-level=moderate
           cd ../pro-desktop && npm ci && npm test && npm audit --audit-level=moderate
+
+      - name: Exercise real CoreManager live context through connector and MCP
+        run: >-
+          ./build-venv/bin/python pro-desktop/scripts/smoke-live-context-bridge.py
+          --core pro-desktop/core/dist/logosforge-core/logosforge-core
+          --mcp pro-desktop/core/dist/logosforge-mcp
 
       - name: Package Linux x64 AppImage
         working-directory: pro-desktop
@@ -1018,7 +1032,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "${{ needs.metadata.outputs.source_sha }}"
-          for path in logosforge/pyproject.toml logosforge-ui-contracts/package.json pro-shared-ui/package.json pro-desktop/package.json pro-desktop/core/logosforge-core.spec pro-desktop/core/logosforge-mcp.spec whiteboard-desktop/scripts/check-macos-deployment-targets.py; do
+          for path in logosforge/pyproject.toml logosforge-ui-contracts/package.json pro-shared-ui/package.json pro-desktop/package.json pro-desktop/core/logosforge-core.spec pro-desktop/core/logosforge-mcp.spec pro-desktop/scripts/live-context-core-manager-driver.cjs pro-desktop/scripts/smoke-live-context-bridge.py whiteboard-desktop/scripts/check-macos-deployment-targets.py; do
             test -e "$path" || { echo "::error::Missing required monorepo path: $path"; exit 1; }
           done
 
@@ -1046,7 +1060,8 @@ jobs:
           ./build-venv/bin/python -m pip install "./logosforge[export,voice,mcp]" httpx "pyinstaller==6.22.2"
           ./build-venv/bin/python -m pip check
           ./build-venv/bin/python -c "import ctranslate2, faster_whisper, sounddevice; print('voice imports OK', ctranslate2.__version__)"
-          ./build-venv/bin/python -m compileall -q logosforge/logosforge pro-desktop/core
+          ./build-venv/bin/python -m compileall -q logosforge/logosforge pro-desktop/core pro-desktop/scripts/smoke-live-context-bridge.py
+          node --check pro-desktop/scripts/live-context-core-manager-driver.cjs
           ./build-venv/bin/python - <<'PY'
           import os
           from fastapi.testclient import TestClient
@@ -1146,6 +1161,12 @@ jobs:
           cd logosforge-ui-contracts && npm ci && npm test && npm audit --audit-level=moderate
           cd ../pro-shared-ui && npm ci && npm test && npm run build && npm audit --audit-level=moderate
           cd ../pro-desktop && npm ci && npm test && npm audit --audit-level=moderate
+
+      - name: Exercise real CoreManager live context through connector and MCP
+        run: >-
+          ./build-venv/bin/python pro-desktop/scripts/smoke-live-context-bridge.py
+          --core pro-desktop/core/dist/logosforge-core/logosforge-core
+          --mcp pro-desktop/core/dist/logosforge-mcp
 
       - name: Package unsigned macOS Intel DMG
         working-directory: pro-macos-source/pro-desktop

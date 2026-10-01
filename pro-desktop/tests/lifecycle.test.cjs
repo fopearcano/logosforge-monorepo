@@ -140,15 +140,40 @@ for (const marker of [
   "win.webContents.send('app:save-before-close', attemptId)",
   'pendingCloseResult?.attemptId !== attemptId',
   "win.webContents.send('app:close-cancelled')",
+  "ipcMain.handle('live-context:publish'",
+  "ipcMain.handle('live-context:clear'",
+  'requireMainRenderer(event);\n    return core.publishLiveContext(payload);',
+  'requireMainRenderer(event);\n    return core.clearLiveContextFromRenderer();',
+  'await core.suspendLiveContext();',
+  'await core.stop();',
+  'core.resumeLiveContext();',
+  'if (!allowClose) void core.suspendLiveContext();',
 ]) {
   if (!main.includes(marker)) failures.push(`Main close protocol missing ${marker}`);
+}
+const suspendIndex = main.indexOf('await core.suspendLiveContext();');
+const postSuspendQuitIndex = main.indexOf('if (isQuitting) {', suspendIndex);
+const ordinaryWindowCloseIndex = main.indexOf('win.close();', suspendIndex);
+if (
+  suspendIndex < 0 ||
+  postSuspendQuitIndex <= suspendIndex ||
+  ordinaryWindowCloseIndex <= postSuspendQuitIndex
+) {
+  failures.push('Main close protocol does not preserve Cmd+Q during live-context suspension');
 }
 for (const marker of [
   "subscribe<number>('app:save-before-close', cb)",
   "subscribe<void>('app:close-cancelled', () => cb())",
   "ipcRenderer.send('app:close-result', attemptId, saved)",
+  "ipcRenderer.invoke('live-context:publish', context)",
+  "ipcRenderer.invoke('live-context:clear')",
 ]) {
   if (!preload.includes(marker)) failures.push(`Preload close protocol missing ${marker}`);
+}
+for (const forbidden of ['source_id', 'sourceId', 'revision:']) {
+  if (preload.includes(forbidden)) {
+    failures.push(`Preload exposes main-owned live-context authority: ${forbidden}`);
+  }
 }
 
 console.log('Desktop lifecycle checks');

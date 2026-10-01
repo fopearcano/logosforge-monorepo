@@ -2191,17 +2191,30 @@ async function verifyProOmniboxNavigation(session, destination) {
 
 async function previewProOmniboxCommand(page, command) {
   const { dialog, input } = await openProOmnibox(page);
-  await input.fill(command);
-  const preview = await proOmniboxOption(dialog, 'COMMANDS', `Preview ${command}`);
-  await waitFor(
-    async () => (await preview.getAttribute('aria-selected')) === 'true',
-    'Pro Studio omnibox command-preview keyboard selection',
-  );
-  await page.keyboard.press('Enter');
-  const review = await waitVisible(
-    dialog.getByRole('group', { name: 'PROJECT CHANGE · CONFIRMATION REQUIRED', exact: true }),
-    'Pro Studio omnibox mutating-command review',
-  );
+  const preview = dialog
+    .getByRole('group', { name: 'COMMANDS', exact: true })
+    .getByRole('option')
+    .filter({ hasText: `Preview ${command}` })
+    .first();
+  const review = dialog.getByRole('group', { name: 'PROJECT CHANGE · CONFIRMATION REQUIRED', exact: true });
+  await waitFor(async () => {
+    // The dialog's focus/reset effect may land just after it becomes visible.
+    // Re-apply the query until both the controlled input and its async preview
+    // are stable, then activate the exact option in the same retry. This also
+    // avoids a delayed reset racing a second command preview after cancellation.
+    if (await review.isVisible().catch(() => false)) return true;
+    if ((await input.inputValue()) !== command) await input.fill(command);
+    if ((await input.inputValue()) !== command
+        || !(await preview.isVisible().catch(() => false))
+        || !(await preview.isEnabled().catch(() => false))) return false;
+    try {
+      await preview.click({ timeout: 1_000 });
+    } catch {
+      return false;
+    }
+    return review.isVisible().catch(() => false);
+  }, 'stable Pro Studio omnibox command-preview review');
+  await waitVisible(review, 'Pro Studio omnibox mutating-command review');
   await waitText(review, command, 'Pro Studio omnibox normalized command');
   await waitVisible(
     review.getByRole('button', { name: 'CANCEL · ESC', exact: true }),
@@ -2335,7 +2348,81 @@ async function configureProAiAndChat(page) {
   record('journey', 'Pro AI settings and controlled-provider chat complete');
 }
 
-async function editProManuscript(page, bodyMarker, proMarker) {
+async function verifyProLiveContextBridge(session, projectId, sceneId, proMarker, editor) {
+  const selectedMarker = await editor.evaluate((root, marker) => {
+    root.focus();
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let node = walker.nextNode();
+    while (node) {
+      const offset = node.textContent?.indexOf(marker) ?? -1;
+      if (offset >= 0) {
+        const range = document.createRange();
+        range.setStart(node, offset);
+        range.setEnd(node, offset + marker.length);
+        const selection = window.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+        document.dispatchEvent(new Event('selectionchange', { bubbles: true }));
+        return selection?.toString() === marker;
+      }
+      node = walker.nextNode();
+    }
+    return false;
+  }, proMarker);
+  assert.equal(selectedMarker, true, 'Could not select the exact Pro marker for the live-context bridge');
+
+  let liveContext = null;
+  let currentSelection = null;
+  let activeScene = null;
+  try {
+    await waitFor(async () => {
+      const contextResponse = await localServiceRequest(
+        session,
+        `/api/projects/${projectId}/connector/execute`,
+        { method: 'POST', body: { action: 'get_live_context', args: {} } },
+      );
+      const selectionResponse = await localServiceRequest(
+        session,
+        `/api/projects/${projectId}/connector/execute`,
+        { method: 'POST', body: { action: 'get_current_selection', args: {} } },
+      );
+      const activeSceneResponse = await localServiceRequest(
+        session,
+        `/api/projects/${projectId}/connector/execute`,
+        { method: 'POST', body: { action: 'get_active_scene', args: {} } },
+      );
+      liveContext = contextResponse.data?.result ?? null;
+      currentSelection = selectionResponse.data?.result ?? null;
+      activeScene = activeSceneResponse.data?.result ?? null;
+      return liveContext?.available === true
+        && liveContext?.project_id === projectId
+        && liveContext?.active_panel_id === 'manuscript'
+        && liveContext?.active_scene_id === sceneId
+        && liveContext?.selection_section === 'Manuscript'
+        && currentSelection?.available === true
+        && currentSelection?.selection === proMarker
+        && currentSelection?.selection_section === 'Manuscript'
+        && currentSelection?.active_panel_id === 'manuscript'
+        && activeScene?.id === sceneId;
+    }, 'packaged Pro renderer-to-core live context bridge');
+  } catch (error) {
+    throw new Error(
+      `${errorText(error)} Last connector payloads: ${JSON.stringify({ liveContext, currentSelection, activeScene })}`,
+    );
+  }
+
+  assert.equal(liveContext?.selection_length, proMarker.length, 'Pro live context reported the wrong selection length');
+  assert.equal(currentSelection?.length, proMarker.length, 'Pro live selection reported the wrong selection length');
+  assert.ok(Number.isSafeInteger(liveContext?.revision), 'Pro live context omitted its ordered revision');
+  assert.ok(Number.isSafeInteger(currentSelection?.revision), 'Pro live selection omitted its ordered revision');
+  assert.equal(activeScene?.title, 'Chapter One', 'Pro active-scene live read returned the wrong scene');
+  assert.ok(activeScene?.content_length >= proMarker.length,
+    'Pro active-scene live read returned an invalid persisted content length');
+  record('journey', 'Pro renderer selection and active scene reached all bundled-core live connector reads');
+}
+
+async function editProManuscript(session, projectId, bodyMarker, proMarker) {
+  const { page } = session;
   // The Billy exercise opens the dock again before this edit step.
   await collapseProAiDock(page);
   const manuscript = await selectProPanel(page, 'Manuscript', 'Manuscript Editor');
@@ -2423,6 +2510,18 @@ async function editProManuscript(page, bodyMarker, proMarker) {
   const reopenedManuscript = await selectProPanel(page, 'Manuscript', 'Manuscript Editor');
   await waitText(reopenedManuscript, proMarker, 'Pro marker after dirty omnibox handoff');
   await waitText(reopenedManuscript, 'ALL SAVED', 'Pro manuscript omnibox save barrier', { timeoutMs: UI_TIMEOUT_MS });
+  const reopenedScene = reopenedManuscript.locator(`[data-scene-id="${sceneId}"]`);
+  await waitVisible(reopenedScene, 'reopened Pro live-context scene');
+  let reopenedEditor = reopenedScene.locator('[data-prose][contenteditable="true"]');
+  if (!(await reopenedEditor.isVisible().catch(() => false))) {
+    await waitVisible(reopenedScene.locator('[data-prose-static]'), 'reopened Pro static prose');
+    await reopenedScene.locator('[data-prose-static]').click();
+    reopenedEditor = await waitVisible(
+      reopenedScene.locator('[data-prose][contenteditable="true"]'),
+      'reopened Pro live prose editor',
+    );
+  }
+  await verifyProLiveContextBridge(session, projectId, sceneId, proMarker, reopenedEditor);
   record('journey', 'Pro manuscript dirty-save barrier and keyboard edit persistence complete');
 }
 
@@ -2509,7 +2608,7 @@ async function runProJourney({ electron, exePath, root, bundlePath, bundle, mark
     path.join(first.dirs.home, '.logosforge', 'settings.json'),
     'isolated Pro core settings',
   );
-  await editProManuscript(first.page, bodyMarker, proMarker);
+  await editProManuscript(first, expectedDestination.projectId, bodyMarker, proMarker);
   await exportProMarkdown(first, markdownPath, bodyMarker, proMarker);
   await captureScreenshot(first, 'markdown-exported');
   const proDbPath = path.join(first.runtime.userData, 'logosforge.db');
