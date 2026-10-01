@@ -1,10 +1,14 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const app = fs.readFileSync(path.join(process.cwd(), 'renderer', 'src', 'App.tsx'), 'utf8');
-const palette = fs.readFileSync(path.join(process.cwd(), 'renderer', 'src', 'CommandPalette.tsx'), 'utf8');
-const main = fs.readFileSync(path.join(process.cwd(), 'electron', 'main.ts'), 'utf8');
-const preload = fs.readFileSync(path.join(process.cwd(), 'electron', 'preload.ts'), 'utf8');
+const readSource = (...segments) => fs
+  .readFileSync(path.join(process.cwd(), ...segments), 'utf8')
+  .replace(/\r\n?/g, '\n');
+
+const app = readSource('renderer', 'src', 'App.tsx');
+const palette = readSource('renderer', 'src', 'CommandPalette.tsx');
+const main = readSource('electron', 'main.ts');
+const preload = readSource('electron', 'preload.ts');
 const failures = [];
 for (const marker of [
   'bootstrapRetryTimerRef',
