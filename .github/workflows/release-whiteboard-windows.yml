@@ -63,6 +63,20 @@ jobs:
         with:
           node-version: "22"
 
+      # workflow_dispatch may repair an older tag whose source tree predates
+      # this policy. Keep the reviewed workflow-revision copy outside the
+      # checkout before the metadata step switches to that tag.
+      - name: Stage trusted dependency audit policy
+        id: audit_policy
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $policyRoot = Join-Path $env:RUNNER_TEMP ("logosforge-whiteboard-release-controls-{0}" -f [guid]::NewGuid().ToString("N"))
+          New-Item -ItemType Directory -Path $policyRoot | Out-Null
+          $policyPath = Join-Path $policyRoot "npm-audit-policy.mjs"
+          Copy-Item -LiteralPath ".github/npm-audit-policy.mjs" -Destination $policyPath
+          "path=$policyPath" >> $env:GITHUB_OUTPUT
+
       - name: Resolve and verify Whiteboard release metadata
         id: release
         env:
@@ -413,11 +427,13 @@ jobs:
         # renderer is self-contained (no file: deps), so this is the only install.
         run: npm ci
 
-      - name: Test renderer and audit runtime dependencies
+      - name: Test renderer and enforce dependency audit policy
         working-directory: whiteboard-desktop/desktop
+        env:
+          NPM_AUDIT_POLICY: ${{ steps.audit_policy.outputs.path }}
         run: |
           npm test
-          npm audit --audit-level=moderate
+          node "$NPM_AUDIT_POLICY"
 
       - name: Build renderer + main, then package (NSIS + portable)
         working-directory: whiteboard-desktop/desktop

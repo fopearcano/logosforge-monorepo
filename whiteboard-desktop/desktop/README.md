@@ -137,7 +137,7 @@ Run these from `whiteboard-desktop/desktop`:
 ```bash
 npm test
 npm run build
-npm audit --audit-level=moderate
+node ../../.github/npm-audit-policy.mjs
 ```
 
 Backend checks run from the monorepo root with the backend venv:

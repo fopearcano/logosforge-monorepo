@@ -106,7 +106,7 @@ cd whiteboard-desktop/desktop
 npm ci
 npm test
 npm run build
-npm audit --audit-level=moderate
+node ../../.github/npm-audit-policy.mjs
 cd ../..
 git diff --check
 git diff --stat

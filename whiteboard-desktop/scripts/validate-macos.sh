@@ -175,8 +175,8 @@ case "$ELECTRON_VERSION" in 43.*) ;; *) die "expected Electron 43.x, found $ELEC
 case "$BUILDER_VERSION" in 26.*) ;; *) die "expected electron-builder 26.x, found $BUILDER_VERSION" ;; esac
 printf 'Electron %s | electron-builder %s\n' "$ELECTRON_VERSION" "$BUILDER_VERSION"
 
-say "7. Run desktop tests, build, and moderate-or-higher audit gate"
-( cd "$DESKTOP" && npm test && npm run build && npm audit --audit-level=moderate )
+say "7. Run desktop tests, build, and dependency audit policy"
+( cd "$DESKTOP" && npm test && npm run build && node "$ROOT/.github/npm-audit-policy.mjs" )
 
 # --- 4. Package and inspect the app ----------------------------------------
 PACKAGE_VERSION="$(cd "$DESKTOP" && node -p 'require("./package.json").version')"

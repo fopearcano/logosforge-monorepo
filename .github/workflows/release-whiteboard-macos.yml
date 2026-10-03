@@ -36,6 +36,7 @@ on:
     tags:
       - "whiteboard-v*"
     paths:
+      - ".github/npm-audit-policy.mjs"
       - ".github/workflows/release-whiteboard-macos.yml"
       - "whiteboard-desktop/backend/*.spec"
       - "whiteboard-desktop/backend/requirements.txt"
@@ -163,6 +164,7 @@ jobs:
           echo "controls_root=$controls_root" >> "$GITHUB_OUTPUT"
 
           for script in \
+            .github/npm-audit-policy.mjs \
             whiteboard-desktop/scripts/check-macos-deployment-targets.py \
             whiteboard-desktop/scripts/publish-github-release-asset.py
           do
@@ -509,11 +511,13 @@ jobs:
         working-directory: ${{ steps.checkout.outputs.source_root }}/whiteboard-desktop/desktop
         run: npm ci
 
-      - name: Test renderer and audit runtime dependencies
+      - name: Test renderer and enforce dependency audit policy
         working-directory: ${{ steps.checkout.outputs.source_root }}/whiteboard-desktop/desktop
+        env:
+          CONTROLS_ROOT: ${{ steps.controls.outputs.controls_root }}
         run: |
           npm test
-          npm audit --audit-level=moderate
+          node "$CONTROLS_ROOT/npm-audit-policy.mjs"
 
       - name: Build renderer + main, then package (DMG)
         working-directory: ${{ steps.checkout.outputs.source_root }}/whiteboard-desktop/desktop
