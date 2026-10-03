@@ -10,6 +10,7 @@ get_all_places). All session management stays inside this module.
 """
 
 import hmac
+import json
 import os
 import shutil
 import sqlite3
@@ -411,6 +412,31 @@ class StoryStructureEpisodeNotFound(LookupError):
     """The requested Series Episode is absent from the scoped project."""
 
 
+class TimelineRevisionConflict(RuntimeError):
+    """Raised when a Timeline command targets an older board state."""
+
+    def __init__(self, expected: str, current: str) -> None:
+        super().__init__("timeline revision does not match")
+        self.expected = expected
+        self.current = current
+
+
+class TimelineCommandError(ValueError):
+    """A requested Timeline mutation is invalid or ambiguous."""
+
+
+class TimelineProjectNotFound(LookupError):
+    """The path-scoped Project disappeared before the transaction began."""
+
+
+class TimelineSceneNotFound(LookupError):
+    """The requested Scene is absent from the path-scoped Project."""
+
+
+class TimelineLaneNotFound(LookupError):
+    """The requested lane is absent from the path-scoped Project."""
+
+
 @dataclass(frozen=True)
 class ManuscriptReadSnapshot:
     """One coherent manuscript read detached from its SQLite transaction.
@@ -457,6 +483,38 @@ class StoryStructureCommandResult:
     affected_scene_ids: tuple[int, ...] = ()
 
 
+@dataclass(frozen=True)
+class TimelineReadSnapshot:
+    """One coherent, detached read of every input to the Timeline board."""
+
+    project: Project
+    scenes: tuple[Scene, ...]
+    lanes: tuple[TimelineLane, ...]
+    settings: dict
+    character_names_by_id: dict[int, str]
+    character_states_by_scene: dict[int, tuple[tuple[int, str], ...]]
+    revision: str
+
+
+@dataclass(frozen=True)
+class TimelineCommandResult:
+    """Committed Timeline state plus focused invalidation metadata."""
+
+    snapshot: TimelineReadSnapshot
+    changed: bool
+    affected_scene_ids: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
+class PlotBlockUpdateResult:
+    """One committed Plot block mutation and its invalidation metadata."""
+
+    scene_ids: tuple[int, ...]
+    changed_scene_ids: tuple[int, ...]
+    new_name: str
+    timeline_changed: bool
+
+
 # Inverse mapping for PSYKE typed relations. A "payoff" from A→B is stored as
 # a "supports_setup" on B→A so direction is preserved when traversing.
 _INVERSE_RELATION_TYPE: dict[str, str] = {
@@ -491,6 +549,8 @@ class Database:
         self._comment_write_lock = threading.RLock()
         self._scene_locks_guard = threading.RLock()
         self._scene_write_locks: dict[int, threading.RLock] = {}
+        self._plot_locks_guard = threading.RLock()
+        self._plot_write_locks: dict[int, threading.RLock] = {}
         self._structure_locks_guard = threading.RLock()
         self._structure_write_locks: dict[int, threading.RLock] = {}
         # ``check_same_thread=False`` lets FastAPI's threadpool use pooled
@@ -553,6 +613,22 @@ class Database:
         key = int(scene_id)
         with self._scene_locks_guard:
             lock = self._scene_write_locks.setdefault(key, threading.RLock())
+        with lock:
+            yield
+
+    @contextmanager
+    def plot_write_lock(self, project_id: int):
+        """Serialize writers that can change Plot/Timeline lane membership.
+
+        The global nesting order is Scene -> Plot topology -> project structure
+        -> project settings.  Group mutations (Plot or Timeline lane renames)
+        start at this project-scoped lock; single-Scene writers take their Scene
+        lock first.  Keeping the group lock independent of member Scene locks
+        avoids lock-set discovery races and multi-Scene deadlocks.
+        """
+        key = int(project_id)
+        with self._plot_locks_guard:
+            lock = self._plot_write_locks.setdefault(key, threading.RLock())
         with lock:
             yield
 
@@ -1930,6 +2006,495 @@ class Database:
                 session.rollback()
         return snapshot
 
+    def _timeline_snapshot_in_session(
+        self, session: Session, project_id: int,
+    ) -> TimelineReadSnapshot | None:
+        """Build one Timeline snapshot without opening a nested Session."""
+        from logosforge.timeline import parse_project_settings, timeline_revision
+
+        project = session.get(Project, project_id)
+        if project is None:
+            return None
+        scenes = list(session.exec(
+            select(Scene)
+            .where(Scene.project_id == project_id)
+            .order_by(Scene.sort_order, Scene.id)
+        ).all())
+        lanes = list(session.exec(
+            select(TimelineLane)
+            .where(TimelineLane.project_id == project_id)
+            .order_by(TimelineLane.order_index, TimelineLane.id)
+        ).all())
+        characters = list(session.exec(
+            select(Character)
+            .where(Character.project_id == project_id)
+            .order_by(Character.id)
+        ).all())
+        character_names = {int(row.id): row.name for row in characters}
+        states_by_scene: dict[int, list[tuple[int, str]]] = {
+            int(scene.id): [] for scene in scenes
+        }
+        scene_ids = list(states_by_scene)
+        if scene_ids:
+            states = session.exec(
+                select(SceneCharacterState)
+                .where(SceneCharacterState.scene_id.in_(scene_ids))
+                .order_by(
+                    SceneCharacterState.scene_id,
+                    SceneCharacterState.character_id,
+                    SceneCharacterState.id,
+                )
+            ).all()
+            for row in states:
+                # Ignore corrupt/foreign character links at the API boundary.
+                if row.character_id in character_names:
+                    states_by_scene[int(row.scene_id)].append(
+                        (int(row.character_id), row.state or "")
+                    )
+        settings = parse_project_settings(project.settings_json)
+        return TimelineReadSnapshot(
+            project=project,
+            scenes=tuple(scenes),
+            lanes=tuple(lanes),
+            settings=settings,
+            character_names_by_id=character_names,
+            character_states_by_scene={
+                scene_id: tuple(rows)
+                for scene_id, rows in states_by_scene.items()
+            },
+            revision=timeline_revision(project, scenes, lanes, settings),
+        )
+
+    def read_timeline_snapshot(
+        self, project_id: int,
+    ) -> TimelineReadSnapshot | None:
+        """Read every Timeline projection input in one SQLite snapshot."""
+        with Session(self._engine, expire_on_commit=False) as session:
+            session.connection().exec_driver_sql("BEGIN")
+            try:
+                snapshot = self._timeline_snapshot_in_session(session, project_id)
+                if snapshot is not None:
+                    session.expunge_all()
+            finally:
+                session.rollback()
+        return snapshot
+
+    def update_plot_block(
+        self,
+        project_id: int,
+        block_id: str,
+        *,
+        plotline: str | None = None,
+        color_label: str | None = None,
+    ) -> PlotBlockUpdateResult | None:
+        """Atomically update a scene-derived Plot block and its persisted lane.
+
+        Plot block ids are the trimmed ``Scene.plotline`` projection used by the
+        API.  A matching persisted Timeline lane is name-keyed metadata for the
+        same logical block, so a rename must move both in one transaction.  If
+        the destination lane already exists, the blocks merge and its metadata
+        wins; obsolete source lane rows are removed.
+
+        Timeline settings contain Scene ids rather than lane names, so no JSON
+        key migration is required.  The settings lock is still taken last to
+        serialize this revision-changing write with Timeline commands.
+        """
+
+        def block_name(value: str | None) -> str:
+            return (value or "").strip() or "Unassigned"
+
+        requested_name = plotline.strip() if plotline is not None else None
+        with (
+            self.plot_write_lock(project_id),
+            self.structure_write_lock(project_id),
+            self._settings_lock,
+        ):
+            with Session(self._engine, expire_on_commit=False) as session:
+                session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+                try:
+                    members = list(session.exec(
+                        select(Scene)
+                        .where(Scene.project_id == project_id)
+                        .order_by(Scene.sort_order, Scene.id)
+                    ).all())
+                    members = [
+                        scene for scene in members
+                        if block_name(scene.plotline) == block_id
+                    ]
+                    if not members:
+                        session.rollback()
+                        return None
+
+                    lanes = list(session.exec(
+                        select(TimelineLane)
+                        .where(TimelineLane.project_id == project_id)
+                        .order_by(TimelineLane.order_index, TimelineLane.id)
+                    ).all())
+                    source_lanes = [
+                        lane for lane in lanes
+                        if block_name(lane.name) == block_id
+                    ]
+                    changed_scene_ids: list[int] = []
+                    lane_changed = False
+                    removed_lane_ids: set[int] = set()
+                    new_name = block_id
+
+                    if requested_name is not None:
+                        persisted_name = requested_name
+                        if requested_name:
+                            source_ids = {int(lane.id) for lane in source_lanes}
+                            destination = next(
+                                (
+                                    lane for lane in lanes
+                                    if int(lane.id) not in source_ids
+                                    and (lane.name or "").strip().casefold()
+                                    == requested_name.casefold()
+                                ),
+                                None,
+                            )
+                            if destination is not None:
+                                # Timeline lane names are case-insensitively
+                                # unique at the command boundary.  Preserve the
+                                # destination's canonical spelling on a merge.
+                                persisted_name = (destination.name or "").strip()
+                                for lane in source_lanes:
+                                    session.delete(lane)
+                                    removed_lane_ids.add(int(lane.id))
+                                    lane_changed = True
+                            elif source_lanes:
+                                primary, *duplicates = source_lanes
+                                if primary.name != persisted_name:
+                                    primary.name = persisted_name
+                                    lane_changed = True
+                                for lane in duplicates:
+                                    session.delete(lane)
+                                    removed_lane_ids.add(int(lane.id))
+                                    lane_changed = True
+                        else:
+                            # An empty plotline means the virtual Unassigned
+                            # block; it has no persisted TimelineLane row.
+                            for lane in source_lanes:
+                                session.delete(lane)
+                                removed_lane_ids.add(int(lane.id))
+                                lane_changed = True
+
+                        for scene in members:
+                            if (scene.plotline or "") != persisted_name:
+                                scene.plotline = persisted_name
+                                changed_scene_ids.append(int(scene.id))
+                        new_name = block_name(persisted_name)
+
+                    if color_label is not None:
+                        normalized_color = color_label or ""
+                        for scene in members:
+                            if (scene.color_label or "") != normalized_color:
+                                scene.color_label = normalized_color
+                                changed_scene_ids.append(int(scene.id))
+
+                    if removed_lane_ids:
+                        remaining_lanes = [
+                            lane for lane in lanes
+                            if int(lane.id) not in removed_lane_ids
+                        ]
+                        for index, lane in enumerate(remaining_lanes):
+                            lane.order_index = index
+
+                    changed_scene_ids = list(dict.fromkeys(changed_scene_ids))
+                    session.commit()
+                    return PlotBlockUpdateResult(
+                        scene_ids=tuple(int(scene.id) for scene in members),
+                        changed_scene_ids=tuple(changed_scene_ids),
+                        new_name=new_name,
+                        timeline_changed=bool(changed_scene_ids or lane_changed),
+                    )
+                except Exception:
+                    session.rollback()
+                    raise
+
+    def execute_timeline_command(
+        self,
+        project_id: int,
+        *,
+        kind: str,
+        expected_revision: str,
+        **fields,
+    ) -> TimelineCommandResult:
+        """Apply one revision-guarded Timeline command atomically.
+
+        The Scene lock (when one Scene is targeted), Plot topology lock,
+        project structure lock, and settings lock are acquired in the same
+        global order used by Scene PATCH and story-structure commands.
+        ``BEGIN IMMEDIATE`` then precedes the guarded read, so revision
+        comparison and every related row/settings mutation belong to one
+        SQLite transaction.
+        """
+        from logosforge.timeline import project_timeline
+
+        supported = {
+            "create_lane",
+            "update_lane",
+            "delete_lane",
+            "place_event",
+            "remove_event",
+            "set_order_mode",
+        }
+        if kind not in supported:
+            raise TimelineCommandError(f"Unsupported Timeline command: {kind!r}")
+
+        scene_id = fields.get("scene_id")
+        scene_guard = (
+            self.scene_write_lock(int(scene_id))
+            if kind in {"place_event", "remove_event"} and scene_id is not None
+            else nullcontext()
+        )
+
+        # Scene -> Plot topology -> structure -> settings is the global order.
+        with (
+            scene_guard,
+            self.plot_write_lock(project_id),
+            self.structure_write_lock(project_id),
+            self._settings_lock,
+        ):
+            with Session(self._engine, expire_on_commit=False) as session:
+                session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+                try:
+                    current = self._timeline_snapshot_in_session(session, project_id)
+                    if current is None:
+                        raise TimelineProjectNotFound(project_id)
+                    if expected_revision != current.revision:
+                        raise TimelineRevisionConflict(
+                            expected_revision, current.revision,
+                        )
+
+                    project = current.project
+                    scenes = list(current.scenes)
+                    lanes = list(current.lanes)
+                    settings = dict(current.settings)
+                    affected_scene_ids: list[int] = []
+
+                    def scene_or_error(value) -> Scene:
+                        if isinstance(value, bool) or not isinstance(value, int):
+                            raise TimelineCommandError("scene_id must be an integer")
+                        scene = next((row for row in scenes if row.id == value), None)
+                        if scene is None:
+                            raise TimelineSceneNotFound(value)
+                        return scene
+
+                    def lane_or_error(value) -> TimelineLane:
+                        if isinstance(value, bool) or not isinstance(value, int):
+                            raise TimelineCommandError("lane_id must be an integer")
+                        lane = next((row for row in lanes if row.id == value), None)
+                        if lane is None:
+                            raise TimelineLaneNotFound(value)
+                        return lane
+
+                    def checked_index(value, maximum: int, label: str) -> int:
+                        if isinstance(value, bool) or not isinstance(value, int):
+                            raise TimelineCommandError(f"{label} must be an integer")
+                        if value < 0 or value > maximum:
+                            raise TimelineCommandError(
+                                f"{label} is outside the available range"
+                            )
+                        return value
+
+                    def checked_name(value) -> str:
+                        if not isinstance(value, str) or not value.strip():
+                            raise TimelineCommandError("Lane name cannot be empty")
+                        return value.strip()
+
+                    def duplicate_lane(name: str, exclude_id: int | None = None):
+                        key = name.casefold()
+                        return next(
+                            (
+                                lane for lane in lanes
+                                if lane.id != exclude_id
+                                and (lane.name or "").strip().casefold() == key
+                            ),
+                            None,
+                        )
+
+                    def dense_lane_order(ordered_lanes: list[TimelineLane]) -> None:
+                        for index, lane in enumerate(ordered_lanes):
+                            lane.order_index = index
+
+                    if kind == "create_lane":
+                        name = checked_name(fields.get("name"))
+                        if duplicate_lane(name) is not None:
+                            raise TimelineCommandError(
+                                f"A Timeline lane named {name!r} already exists"
+                            )
+                        lane = TimelineLane(
+                            project_id=project_id,
+                            name=name,
+                            color_label=str(fields.get("color_label", "") or ""),
+                            order_index=len(lanes),
+                            collapsed=False,
+                        )
+                        session.add(lane)
+                        session.flush()
+                        insertion = fields.get("index")
+                        if insertion is None:
+                            insertion = len(lanes)
+                        insertion = checked_index(
+                            insertion, len(lanes), "Lane index",
+                        )
+                        lanes.insert(insertion, lane)
+                        dense_lane_order(lanes)
+
+                    elif kind == "update_lane":
+                        lane = lane_or_error(fields.get("lane_id"))
+                        updates = {
+                            key for key in ("name", "color_label", "collapsed", "index")
+                            if key in fields
+                        }
+                        if not updates:
+                            raise TimelineCommandError(
+                                "update_lane must change at least one field"
+                            )
+                        if "name" in updates:
+                            name = checked_name(fields["name"])
+                            if duplicate_lane(name, int(lane.id)) is not None:
+                                raise TimelineCommandError(
+                                    f"A Timeline lane named {name!r} already exists"
+                                )
+                            old_name = lane.name
+                            if name != old_name:
+                                lane.name = name
+                                old_key = (old_name or "").strip()
+                                for scene in scenes:
+                                    if (scene.plotline or "").strip() == old_key:
+                                        scene.plotline = name
+                                        affected_scene_ids.append(int(scene.id))
+                        if "color_label" in updates:
+                            value = fields["color_label"]
+                            if not isinstance(value, str):
+                                raise TimelineCommandError(
+                                    "color_label must be a string"
+                                )
+                            lane.color_label = value
+                        if "collapsed" in updates:
+                            value = fields["collapsed"]
+                            if not isinstance(value, bool):
+                                raise TimelineCommandError(
+                                    "collapsed must be a boolean"
+                                )
+                            lane.collapsed = value
+                        if "index" in updates:
+                            ordered = [row for row in lanes if row.id != lane.id]
+                            insertion = checked_index(
+                                fields["index"], len(ordered), "Lane index",
+                            )
+                            ordered.insert(insertion, lane)
+                            lanes = ordered
+                        dense_lane_order(lanes)
+
+                    elif kind == "delete_lane":
+                        lane = lane_or_error(fields.get("lane_id"))
+                        projection = project_timeline(scenes, settings)
+                        explicit_ids = set(projection.explicit_event_ids)
+                        lane_key = (lane.name or "").strip()
+                        for scene in scenes:
+                            if (scene.plotline or "").strip() == lane_key:
+                                explicit_ids.add(int(scene.id))
+                                scene.plotline = ""
+                                affected_scene_ids.append(int(scene.id))
+                        settings["timeline_event_ids"] = sorted(explicit_ids)
+                        session.delete(lane)
+                        lanes = [row for row in lanes if row.id != lane.id]
+                        dense_lane_order(lanes)
+
+                    elif kind == "place_event":
+                        scene = scene_or_error(fields.get("scene_id"))
+                        if "lane_id" not in fields:
+                            raise TimelineCommandError(
+                                "place_event requires lane_id (null means Unassigned)"
+                            )
+                        lane_id = fields.get("lane_id")
+                        lane = None if lane_id is None else lane_or_error(lane_id)
+                        projection = project_timeline(scenes, settings)
+                        explicit_ids = set(projection.explicit_event_ids)
+                        explicit_ids.add(int(scene.id))
+                        settings["timeline_event_ids"] = sorted(explicit_ids)
+                        desired_plotline = lane.name if lane is not None else ""
+                        if (scene.plotline or "") != desired_plotline:
+                            scene.plotline = desired_plotline
+                            affected_scene_ids.append(int(scene.id))
+
+                        after_membership = project_timeline(scenes, settings)
+                        current_order = list(after_membership.effective_order)
+                        insertion = fields.get("index")
+                        if insertion is not None:
+                            remaining = [
+                                value for value in current_order
+                                if value != int(scene.id)
+                            ]
+                            insertion = checked_index(
+                                insertion, len(remaining), "Event index",
+                            )
+                            requested_order = list(remaining)
+                            requested_order.insert(insertion, int(scene.id))
+                            # Supplying an index is an explicit request to own
+                            # Timeline order, even when that index currently
+                            # matches the structural projection.
+                            settings["timeline_order_mode"] = "custom"
+                            settings["timeline_order"] = requested_order
+                        elif after_membership.order_mode == "custom":
+                            # Persist the effective appended order so subsequent
+                            # additions cannot resurrect stale legacy positions.
+                            settings["timeline_order"] = current_order
+
+                    elif kind == "remove_event":
+                        scene = scene_or_error(fields.get("scene_id"))
+                        projection = project_timeline(scenes, settings)
+                        explicit_ids = set(projection.explicit_event_ids)
+                        explicit_ids.discard(int(scene.id))
+                        settings["timeline_event_ids"] = sorted(explicit_ids)
+                        settings["timeline_order"] = [
+                            value for value in projection.stored_custom_order
+                            if value != int(scene.id)
+                        ]
+                        if scene.plotline:
+                            scene.plotline = ""
+                            affected_scene_ids.append(int(scene.id))
+
+                    elif kind == "set_order_mode":
+                        order_mode = fields.get("mode")
+                        if order_mode not in {"structural", "custom"}:
+                            raise TimelineCommandError(
+                                "mode must be 'structural' or 'custom'"
+                            )
+                        projection = project_timeline(scenes, settings)
+                        settings["timeline_order_mode"] = order_mode
+                        if order_mode == "custom" and projection.order_mode != "custom":
+                            settings["timeline_order"] = list(
+                                projection.effective_order
+                            )
+
+                    project.settings_json = json.dumps(
+                        settings, ensure_ascii=False, sort_keys=True,
+                    )
+                    session.flush()
+                    updated = self._timeline_snapshot_in_session(session, project_id)
+                    assert updated is not None
+                    if updated.revision == current.revision:
+                        session.expunge_all()
+                        session.rollback()
+                        return TimelineCommandResult(
+                            snapshot=current,
+                            changed=False,
+                        )
+
+                    session.commit()
+                    session.expunge_all()
+                    return TimelineCommandResult(
+                        snapshot=updated,
+                        changed=True,
+                        affected_scene_ids=tuple(dict.fromkeys(affected_scene_ids)),
+                    )
+                except Exception:
+                    session.rollback()
+                    raise
+
     def place_scene_in_structure(
         self,
         project_id: int,
@@ -2229,7 +2794,11 @@ class Database:
             if kind == "delete_scene" and scene_id is not None
             else nullcontext()
         )
-        settings_guard = self._settings_lock if kind in group_kinds else nullcontext()
+        settings_guard = (
+            self._settings_lock
+            if kind in group_kinds | {"delete_scene"}
+            else nullcontext()
+        )
         # Lock order is always Scene -> project structure -> project settings.
         # Settings-only writers take just the final lock, so a rename cannot
         # lose its name-keyed metadata migration to a concurrent settings PATCH.
@@ -2986,7 +3555,14 @@ class Database:
         place_ids: list[int] | None = None,
         character_states: list[tuple[int, str]] | None = None,
     ) -> Scene:
-        with self._structure_write_session(project_id) as session:
+        # A non-empty plotline joins Plot/Timeline topology at creation time.
+        # The Plot lock gives creation and block/lane renames one total order;
+        # an explicit create that begins later may still intentionally recreate
+        # a previously used plotline name.
+        with (
+            self.plot_write_lock(project_id),
+            self._structure_write_session(project_id) as session,
+        ):
             # Assign next sort_order
             from sqlalchemy import func
 
@@ -3111,20 +3687,22 @@ class Database:
         place_ids: list[int] | None = None,
         character_states: list[tuple[int, str]] | None = None,
     ) -> Scene:
-        structural_write = act is not _UNSET or chapter is not _UNSET
-        if structural_write:
-            with Session(self._engine) as read_session:
-                current = read_session.get(Scene, scene_id)
-                if current is None:
-                    return None
-                project_id = current.project_id
-            session_context = self._structure_write_session(project_id)
-        else:
-            session_context = Session(self._engine)
+        # ``update_scene`` always writes the merged plotline value, even when
+        # the caller changed only prose or metadata.  Resolve the owning project
+        # while the decorator's Scene lock is held, then follow the global lock
+        # order so a lane rename cannot be overwritten by a stale merge.
+        with Session(self._engine) as read_session:
+            current = read_session.get(Scene, scene_id)
+            if current is None:
+                return None
+            project_id = current.project_id
 
-        with session_context as session:
+        with (
+            self.plot_write_lock(project_id),
+            self._structure_write_session(project_id) as session,
+        ):
             scene = session.get(Scene, scene_id)
-            if scene is None:
+            if scene is None or scene.project_id != project_id:
                 return None
             scene.title = title
             scene.summary = summary
@@ -3249,6 +3827,49 @@ class Database:
         scene = session.get(Scene, scene_id)
         if scene is None:
             return ()
+
+        # Timeline membership and custom order are stored outside the Scene
+        # table. SQLite may reuse a deleted maximum row id, so leaving either
+        # reference behind could silently place an unrelated future Scene on
+        # the Timeline. Preserve unrelated/legacy settings while removing
+        # every numeric representation of this exact Scene id.
+        project = session.get(Project, scene.project_id)
+        if project is not None:
+            try:
+                settings = json.loads(project.settings_json or "{}")
+            except (json.JSONDecodeError, TypeError):
+                settings = {}
+            if not isinstance(settings, dict):
+                settings = {}
+
+            settings_changed = False
+            for key in ("timeline_event_ids", "timeline_order"):
+                raw_ids = settings.get(key)
+                if not isinstance(raw_ids, list):
+                    continue
+                scrubbed_ids = []
+                for raw_id in raw_ids:
+                    # ``bool`` is an ``int`` subclass in Python, but it is not
+                    # a Scene id. Preserve it (and all other malformed legacy
+                    # values) while removing only numeric representations of
+                    # this exact id.
+                    if isinstance(raw_id, bool):
+                        scrubbed_ids.append(raw_id)
+                        continue
+                    try:
+                        referenced_id = int(raw_id)
+                    except (TypeError, ValueError):
+                        scrubbed_ids.append(raw_id)
+                        continue
+                    if referenced_id != scene_id:
+                        scrubbed_ids.append(raw_id)
+                if scrubbed_ids != raw_ids:
+                    settings[key] = scrubbed_ids
+                    settings_changed = True
+            if settings_changed:
+                project.settings_json = json.dumps(
+                    settings, ensure_ascii=False, sort_keys=True,
+                )
 
         # setup_payoff_links is legacy CSV storage. Remove only exact numeric
         # tokens so deleting Scene 2 never corrupts Scene 20 or free-text notes.
@@ -3397,13 +4018,26 @@ class Database:
             if scene is None:
                 return ()
             project_id = scene.project_id
-        with self._structure_write_session(project_id) as session:
-            scene = session.get(Scene, scene_id)
-            if scene is None or scene.project_id != project_id:
-                return ()
-            scrubbed_scene_ids = self._delete_scene_rows(session, scene_id)
-            session.commit()
-            return scrubbed_scene_ids
+        # Lock order remains Scene (decorator) -> structure -> settings, matching
+        # guarded structure and Timeline commands. Timeline settings cleanup and
+        # Scene deletion then commit as one SQLite transaction.
+        with (
+            self.structure_write_lock(project_id),
+            self._settings_lock,
+            Session(self._engine) as session,
+        ):
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                scene = session.get(Scene, scene_id)
+                if scene is None or scene.project_id != project_id:
+                    session.rollback()
+                    return ()
+                scrubbed_scene_ids = self._delete_scene_rows(session, scene_id)
+                session.commit()
+                return scrubbed_scene_ids
+            except Exception:
+                session.rollback()
+                raise
 
     @_scene_locked
     def move_scene_up(self, scene_id: int) -> None:
@@ -3483,9 +4117,17 @@ class Database:
 
     @_scene_locked
     def update_scene_plotline(self, scene_id: int, plotline: str) -> None:
-        with Session(self._engine) as session:
+        with Session(self._engine) as read_session:
+            current = read_session.get(Scene, scene_id)
+            if current is None:
+                return
+            project_id = current.project_id
+        with (
+            self.plot_write_lock(project_id),
+            self._structure_write_session(project_id) as session,
+        ):
             scene = session.get(Scene, scene_id)
-            if scene is None:
+            if scene is None or scene.project_id != project_id:
                 return
             scene.plotline = plotline
             session.commit()
@@ -3505,7 +4147,10 @@ class Database:
         self, project_id: int, name: str, color_label: str = "",
         order_index: int | None = None,
     ) -> "TimelineLane":
-        with Session(self._engine) as session:
+        with (
+            self.plot_write_lock(project_id),
+            self._structure_write_session(project_id) as session,
+        ):
             if order_index is None:
                 from sqlalchemy import func
                 max_order = session.exec(
@@ -3539,7 +4184,10 @@ class Database:
         backward-compatible."""
         from sqlalchemy import func
 
-        with Session(self._engine) as session:
+        with (
+            self.plot_write_lock(project_id),
+            self._structure_write_session(project_id) as session,
+        ):
             # Canonical display name per case-insensitive key. Existing lanes
             # win the casing so we never rename what the user already created.
             existing_lanes = session.exec(
@@ -3583,9 +4231,17 @@ class Database:
 
     def rename_timeline_lane(self, lane_id: int, name: str) -> None:
         """Rename a lane and re-point its member scenes' plotline to match."""
-        with Session(self._engine) as session:
+        with Session(self._engine) as read_session:
+            current = read_session.get(TimelineLane, lane_id)
+            if current is None:
+                return
+            project_id = current.project_id
+        with (
+            self.plot_write_lock(project_id),
+            self._structure_write_session(project_id) as session,
+        ):
             lane = session.get(TimelineLane, lane_id)
-            if lane is None:
+            if lane is None or lane.project_id != project_id:
                 return
             old_name = lane.name
             lane.name = name
@@ -3593,32 +4249,56 @@ class Database:
                 scenes = session.exec(
                     select(Scene)
                     .where(Scene.project_id == lane.project_id)
-                    .where(Scene.plotline == old_name)
                 ).all()
                 for s in scenes:
-                    s.plotline = name
+                    if (s.plotline or "").strip() == (old_name or "").strip():
+                        s.plotline = name
             session.commit()
 
     def set_timeline_lane_color(self, lane_id: int, color_label: str) -> None:
-        with Session(self._engine) as session:
+        with Session(self._engine) as read_session:
+            current = read_session.get(TimelineLane, lane_id)
+            if current is None:
+                return
+            project_id = current.project_id
+        with (
+            self.plot_write_lock(project_id),
+            self._structure_write_session(project_id) as session,
+        ):
             lane = session.get(TimelineLane, lane_id)
-            if lane is None:
+            if lane is None or lane.project_id != project_id:
                 return
             lane.color_label = color_label or ""
             session.commit()
 
     def set_timeline_lane_collapsed(self, lane_id: int, collapsed: bool) -> None:
-        with Session(self._engine) as session:
+        with Session(self._engine) as read_session:
+            current = read_session.get(TimelineLane, lane_id)
+            if current is None:
+                return
+            project_id = current.project_id
+        with (
+            self.plot_write_lock(project_id),
+            self._structure_write_session(project_id) as session,
+        ):
             lane = session.get(TimelineLane, lane_id)
-            if lane is None:
+            if lane is None or lane.project_id != project_id:
                 return
             lane.collapsed = bool(collapsed)
             session.commit()
 
     def reorder_timeline_lane(self, lane_id: int, new_index: int) -> None:
-        with Session(self._engine) as session:
+        with Session(self._engine) as read_session:
+            current = read_session.get(TimelineLane, lane_id)
+            if current is None:
+                return
+            project_id = current.project_id
+        with (
+            self.plot_write_lock(project_id),
+            self._structure_write_session(project_id) as session,
+        ):
             lane = session.get(TimelineLane, lane_id)
-            if lane is None:
+            if lane is None or lane.project_id != project_id:
                 return
             lanes = list(session.exec(
                 select(TimelineLane)
@@ -3638,17 +4318,25 @@ class Database:
     def delete_timeline_lane(self, lane_id: int) -> None:
         """Delete a lane row. Member scenes are NOT deleted — they are simply
         unassigned (plotline cleared) so no story content is ever lost."""
-        with Session(self._engine) as session:
+        with Session(self._engine) as read_session:
+            current = read_session.get(TimelineLane, lane_id)
+            if current is None:
+                return
+            project_id = current.project_id
+        with (
+            self.plot_write_lock(project_id),
+            self._structure_write_session(project_id) as session,
+        ):
             lane = session.get(TimelineLane, lane_id)
-            if lane is None:
+            if lane is None or lane.project_id != project_id:
                 return
             scenes = session.exec(
                 select(Scene)
                 .where(Scene.project_id == lane.project_id)
-                .where(Scene.plotline == lane.name)
             ).all()
             for s in scenes:
-                s.plotline = ""
+                if (s.plotline or "").strip() == (lane.name or "").strip():
+                    s.plotline = ""
             session.delete(lane)
             session.commit()
 

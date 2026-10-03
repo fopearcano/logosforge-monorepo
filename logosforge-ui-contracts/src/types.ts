@@ -740,31 +740,110 @@ export interface TimelineCharacterStateDTO {
 export interface TimelineEventDTO {
   /** scene id (timeline events are scene-derived). */
   id: number;
+  /** One-based position in the effective Timeline order. */
   order_index: number;
   title: string;
+  /** Canonical Act/Chapter/Scene number from the manuscript structure. */
+  structural_number: string;
   act: string;
   chapter: string;
+  /** Timeline lane membership remains scene-derived through Scene.plotline. */
+  plotline: string;
+  color_label: string;
+  /** Persisted lane id, or null for the virtual Unassigned row. */
+  lane_id: number | null;
   time_of_day: string;
   location: string;
   duration_minutes: number;
   character_states: TimelineCharacterStateDTO[];
 }
-export interface TimelineEventCreateDTO {
-  title: string;
-  act?: string;
-  chapter?: string;
-  time_of_day?: string;
-  location?: string;
-  duration_minutes?: number;
+
+export interface TimelineLaneDTO {
+  id: number;
+  name: string;
+  color_label: string;
+  /** Zero-based, dense lane position. */
+  order_index: number;
+  collapsed: boolean;
+  event_count: number;
 }
-export interface TimelineEventUpdateDTO {
-  title?: string;
-  act?: string;
-  chapter?: string;
-  time_of_day?: string;
-  location?: string;
-  duration_minutes?: number;
-  sort_order?: number;
+
+export interface TimelineOffTimelineSceneDTO {
+  id: number;
+  title: string;
+  structural_number: string;
+  act: string;
+  chapter: string;
+}
+
+export type TimelineOrderMode = "structural" | "custom";
+
+/** Coherent project Timeline projection guarded by one content revision. */
+export interface TimelineSnapshotDTO {
+  project_id: number;
+  revision: string;
+  order_mode: TimelineOrderMode;
+  lanes: TimelineLaneDTO[];
+  events: TimelineEventDTO[];
+  off_timeline: TimelineOffTimelineSceneDTO[];
+}
+
+interface TimelineCommandBase {
+  expected_revision: string;
+}
+
+export interface TimelineCreateLaneCommandDTO extends TimelineCommandBase {
+  kind: "create_lane";
+  name: string;
+  color_label?: string;
+  index?: number | null;
+}
+
+export interface TimelineUpdateLaneCommandDTO extends TimelineCommandBase {
+  kind: "update_lane";
+  lane_id: number;
+  name?: string;
+  color_label?: string;
+  collapsed?: boolean;
+  index?: number;
+}
+
+export interface TimelineDeleteLaneCommandDTO extends TimelineCommandBase {
+  kind: "delete_lane";
+  lane_id: number;
+}
+
+export interface TimelinePlaceEventCommandDTO extends TimelineCommandBase {
+  kind: "place_event";
+  scene_id: number;
+  /** Null places the event in the virtual Unassigned row. */
+  lane_id: number | null;
+  /** Omission preserves effective order; an explicit index enters Custom order. */
+  index?: number | null;
+}
+
+export interface TimelineRemoveEventCommandDTO extends TimelineCommandBase {
+  kind: "remove_event";
+  scene_id: number;
+}
+
+export interface TimelineSetOrderModeCommandDTO extends TimelineCommandBase {
+  kind: "set_order_mode";
+  mode: TimelineOrderMode;
+}
+
+export type TimelineCommandDTO =
+  | TimelineCreateLaneCommandDTO
+  | TimelineUpdateLaneCommandDTO
+  | TimelineDeleteLaneCommandDTO
+  | TimelinePlaceEventCommandDTO
+  | TimelineRemoveEventCommandDTO
+  | TimelineSetOrderModeCommandDTO;
+
+export interface TimelineCommandResultDTO {
+  timeline: TimelineSnapshotDTO;
+  changed: boolean;
+  affected_scene_ids: number[];
 }
 
 // ── PSYKE (the story bible) ────────────────────────────────────────────────

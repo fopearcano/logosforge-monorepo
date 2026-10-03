@@ -32,6 +32,10 @@ import type {
   PsykeConsoleExecutionDTO,
   PsykeConsolePlanRequestDTO,
   TimelineEventDTO,
+  TimelineLaneDTO,
+  TimelineSnapshotDTO,
+  TimelineCommandDTO,
+  TimelineCommandResultDTO,
   PlotBlockDTO,
   PlotSceneDTO,
   ExportRequestDTO,
@@ -146,6 +150,7 @@ const MOCK_PERSISTENT_METHODS = new Set([
   "voiceUndo",
   "cancelExtractJob",
   "executeStoryStructureCommand",
+  "executeTimelineCommand",
 ]);
 
 function mockMethodPersists(name: string): boolean {
@@ -262,16 +267,24 @@ const PROGRESSIONS: PsykeProgressionDTO[] = [
 ];
 
 const tEvent = (e: Partial<TimelineEventDTO>): TimelineEventDTO => ({
-  id: 0, order_index: 0, title: "", act: "", chapter: "", time_of_day: "", location: "", duration_minutes: 0, character_states: [], ...e,
+  id: 0, order_index: 0, title: "", structural_number: "", act: "", chapter: "",
+  plotline: "", color_label: "", lane_id: null, time_of_day: "", location: "",
+  duration_minutes: 0, character_states: [], ...e,
 });
 
+const TIMELINE_LANES: TimelineLaneDTO[] = [
+  { id: 1, name: "MAIN · Marlow", color_label: "cyan", order_index: 0, collapsed: false, event_count: 3 },
+  { id: 2, name: "SUBPLOT · Vesper", color_label: "green", order_index: 1, collapsed: false, event_count: 2 },
+  { id: 3, name: "THREAT · Warden", color_label: "crimson", order_index: 2, collapsed: false, event_count: 1 },
+];
+
 const TIMELINE: TimelineEventDTO[] = [
-  tEvent({ id: 1, order_index: 1, title: "Cold Open", act: "ACT I", chapter: "1.1", time_of_day: "DAWN", location: "Helios-9 · corridor", duration_minutes: 3, character_states: [{ character: "MARLOW", state: "alone, waking" }] }),
-  tEvent({ id: 2, order_index: 2, title: "Distress Loop", act: "ACT I", chapter: "1.2", time_of_day: "DAY", location: "Comms", duration_minutes: 5, character_states: [{ character: "VESPER", state: "recognizes the voice" }] }),
-  tEvent({ id: 12, order_index: 5, title: "Observation Ring", act: "ACT II", chapter: "2.4", time_of_day: "NIGHT", location: "Observation deck", duration_minutes: 8, character_states: [{ character: "MARLOW", state: "pressing" }, { character: "VESPER", state: "deflecting" }] }),
-  tEvent({ id: 14, order_index: 6, title: "The Confession", act: "ACT II", chapter: "2.5", character_states: [{ character: "VESPER", state: "half-truth" }] }),
-  tEvent({ id: 21, order_index: 9, title: "All Is Lost", act: "ACT II", chapter: "2.7", time_of_day: "NIGHT", location: "Reactor", character_states: [{ character: "VESPER", state: "goes silent" }, { character: "THE WARDEN", state: "counts" }] }),
-  tEvent({ id: 22, order_index: 10, title: "Break Into Three", act: "ACT III", chapter: "3.1", character_states: [{ character: "MARLOW", state: "opens the box" }] }),
+  tEvent({ id: 1, order_index: 1, title: "Cold Open", structural_number: "1.1", act: "ACT I", chapter: "1.1", plotline: "MAIN · Marlow", lane_id: 1, time_of_day: "DAWN", location: "Helios-9 · corridor", duration_minutes: 3, character_states: [{ character: "MARLOW", state: "alone, waking" }] }),
+  tEvent({ id: 2, order_index: 2, title: "Distress Loop", structural_number: "1.2", act: "ACT I", chapter: "1.2", plotline: "SUBPLOT · Vesper", lane_id: 2, time_of_day: "DAY", location: "Comms", duration_minutes: 5, character_states: [{ character: "VESPER", state: "recognizes the voice" }] }),
+  tEvent({ id: 12, order_index: 3, title: "Observation Ring", structural_number: "2.1", act: "ACT II", chapter: "2.4", plotline: "MAIN · Marlow", lane_id: 1, time_of_day: "NIGHT", location: "Observation deck", duration_minutes: 8, character_states: [{ character: "MARLOW", state: "pressing" }, { character: "VESPER", state: "deflecting" }] }),
+  tEvent({ id: 14, order_index: 4, title: "The Confession", structural_number: "2.2", act: "ACT II", chapter: "2.5", plotline: "SUBPLOT · Vesper", lane_id: 2, character_states: [{ character: "VESPER", state: "half-truth" }] }),
+  tEvent({ id: 21, order_index: 5, title: "All Is Lost", structural_number: "2.3", act: "ACT II", chapter: "2.7", plotline: "THREAT · Warden", lane_id: 3, time_of_day: "NIGHT", location: "Reactor", character_states: [{ character: "VESPER", state: "goes silent" }, { character: "THE WARDEN", state: "counts" }] }),
+  tEvent({ id: 22, order_index: 6, title: "Break Into Three", structural_number: "3.1", act: "ACT III", chapter: "3.1", plotline: "MAIN · Marlow", lane_id: 1, character_states: [{ character: "MARLOW", state: "opens the box" }] }),
 ];
 
 const pScene = (s: Partial<PlotSceneDTO>): PlotSceneDTO => ({ scene_id: null, title: "", act: "", summary: "", beat: "", color_label: "", order_index: 0, ...s });
@@ -417,6 +430,13 @@ export function createMockApiClient(): ApiClient {
       project.id === 1 ? SCENE_FIXTURES.map(cloneScene) : [],
     ]),
   );
+  const fixtureTimelineById = new Map(TIMELINE.map((event) => [event.id, event]));
+  for (const sceneRow of scenesByProject.get(PROJECTS[0]!.id) ?? []) {
+    const event = fixtureTimelineById.get(sceneRow.id);
+    if (!event) continue;
+    sceneRow.plotline = event.plotline;
+    sceneRow.color_label = event.color_label;
+  }
   const episodesByProject = new Map<number, Map<number, number | null>>(
     [...scenesByProject.entries()].map(([projectId, projectScenes]) => [
       projectId,
@@ -442,6 +462,61 @@ export function createMockApiClient(): ApiClient {
   };
   const episodeFor = (projectId: number, sceneId: number): number | null =>
     episodesFor(projectId).get(sceneId) ?? null;
+  interface MockTimelineDetails {
+    time_of_day: string;
+    location: string;
+    slugline: string;
+    estimated_duration_minutes: number;
+    performance_duration_minutes: number;
+    character_states: TimelineEventDTO["character_states"];
+  }
+  interface MockTimelineState {
+    lanes: TimelineLaneDTO[];
+    explicitEventIds: Set<number>;
+    customOrder: number[];
+    orderMode: "structural" | "custom";
+    details: Map<number, MockTimelineDetails>;
+  }
+  const emptyTimelineState = (): MockTimelineState => ({
+    lanes: [],
+    explicitEventIds: new Set(),
+    customOrder: [],
+    orderMode: "structural",
+    details: new Map(),
+  });
+  const timelineStates = new Map<number, MockTimelineState>(projects.map((project) => [
+    project.id,
+    project.id === PROJECTS[0]!.id
+      ? {
+          lanes: TIMELINE_LANES.map((lane) => ({ ...lane })),
+          explicitEventIds: new Set<number>(),
+          customOrder: TIMELINE.map((event) => event.id),
+          orderMode: "structural" as const,
+          details: new Map(TIMELINE.map((event) => [event.id, {
+            time_of_day: event.time_of_day,
+            location: event.location,
+            slugline: "",
+            estimated_duration_minutes: event.duration_minutes,
+            performance_duration_minutes: 0,
+            character_states: event.character_states.map((state) => ({ ...state })),
+          }])),
+        }
+      : emptyTimelineState(),
+  ]));
+  const timelineStateFor = (projectId: number): MockTimelineState => {
+    let state = timelineStates.get(projectId);
+    if (!state) {
+      state = emptyTimelineState();
+      timelineStates.set(projectId, state);
+    }
+    return state;
+  };
+  const scrubTimelineScene = (projectId: number, sceneId: number): void => {
+    const state = timelineStateFor(projectId);
+    state.explicitEventIds.delete(sceneId);
+    state.customOrder = state.customOrder.filter((id) => id !== sceneId);
+    state.details.delete(sceneId);
+  };
   const structureRevisionFor = (projectId: number): string => {
     const payload = {
       project_id: projectId,
@@ -838,12 +913,325 @@ export function createMockApiClient(): ApiClient {
       });
       scenesFor(projectId).splice(0, scenesFor(projectId).length, ...canonical);
       episodesByProject.set(projectId, candidateEpisodes);
+      if (command.kind === "delete_scene") {
+        scrubTimelineScene(projectId, command.scene_id);
+      }
     }
     return {
       structure: storyStructureFor(projectId),
       changed,
       created_scene_id: createdSceneId,
       affected_scene_ids: affectedSceneIds,
+    };
+  };
+  const timelineSnapshotFrom = (
+    projectId: number,
+    state = timelineStateFor(projectId),
+    projectScenes = scenesFor(projectId),
+  ): TimelineSnapshotDTO => {
+    const structure = storyStructureFor(projectId);
+    const structureRefs = structure.acts.flatMap((act) => act.chapters.flatMap((chapter) => (
+      chapter.scenes.map((sceneRef) => ({
+        id: sceneRef.id,
+        structuralNumber: sceneRef.number,
+      }))
+    )));
+    const structuralOrder = structureRefs.map((sceneRef) => sceneRef.id);
+    const structuralNumberById = new Map(
+      structureRefs.map((sceneRef) => [sceneRef.id, sceneRef.structuralNumber]),
+    );
+    const byId = new Map(projectScenes.map((sceneRow) => [sceneRow.id, sceneRow]));
+    const eventIds = new Set(projectScenes
+      .filter((sceneRow) => sceneRow.plotline.trim() || state.explicitEventIds.has(sceneRow.id))
+      .map((sceneRow) => sceneRow.id));
+    const baseOrder = state.orderMode === "custom" ? state.customOrder : structuralOrder;
+    const orderedEventIds = baseOrder.filter((sceneId, index) => (
+      eventIds.has(sceneId) && baseOrder.indexOf(sceneId) === index
+    ));
+    const orderedSet = new Set(orderedEventIds);
+    for (const sceneId of structuralOrder) {
+      if (eventIds.has(sceneId) && !orderedSet.has(sceneId)) {
+        orderedEventIds.push(sceneId);
+        orderedSet.add(sceneId);
+      }
+    }
+    const lanes = [...state.lanes]
+      .sort((left, right) => left.order_index - right.order_index || left.id - right.id)
+      .map((lane, index) => ({ ...lane, order_index: index, event_count: 0 }));
+    const laneByName = new Map(lanes.map((lane) => [lane.name, lane]));
+    const events = orderedEventIds.flatMap((sceneId, index) => {
+      const sceneRow = byId.get(sceneId);
+      if (!sceneRow) return [];
+      const lane = laneByName.get(sceneRow.plotline.trim());
+      if (lane) lane.event_count += 1;
+      const details = state.details.get(sceneId);
+      return [tEvent({
+        id: sceneRow.id,
+        order_index: index + 1,
+        title: sceneRow.title,
+        structural_number: structuralNumberById.get(sceneRow.id) ?? "",
+        act: sceneRow.act,
+        chapter: sceneRow.chapter,
+        plotline: sceneRow.plotline,
+        color_label: sceneRow.color_label,
+        lane_id: lane?.id ?? null,
+        time_of_day: details?.time_of_day ?? "",
+        location: details?.location || details?.slugline || "",
+        duration_minutes: details?.estimated_duration_minutes
+          || details?.performance_duration_minutes
+          || 0,
+        character_states: details?.character_states.map((item) => ({ ...item })) ?? [],
+      })];
+    });
+    const off_timeline = structuralOrder.flatMap((sceneId) => {
+      if (eventIds.has(sceneId)) return [];
+      const sceneRow = byId.get(sceneId);
+      if (!sceneRow) return [];
+      return [{
+        id: sceneRow.id,
+        title: sceneRow.title,
+        structural_number: structuralNumberById.get(sceneRow.id) ?? "",
+        act: sceneRow.act,
+        chapter: sceneRow.chapter,
+      }];
+    });
+    const revisionPayload = {
+      project_id: projectId,
+      narrative_engine: projects.find((project) => project.id === projectId)?.narrative_engine ?? "",
+      order_mode: state.orderMode,
+      lanes: lanes.map(({ event_count: _eventCount, ...lane }) => lane),
+      explicit_event_ids: [...state.explicitEventIds].sort((left, right) => left - right),
+      custom_order: state.customOrder,
+      scenes: projectScenes.map((sceneRow) => [
+        sceneRow.id,
+        sceneRow.act.trim(),
+        sceneRow.chapter.trim(),
+        episodeFor(projectId, sceneRow.id),
+        sceneRow.sort_order,
+        sceneRow.plotline.trim(),
+        sceneRow.color_label,
+      ]),
+    };
+    let hash = 0x811c9dc5;
+    for (const char of JSON.stringify(revisionPayload)) {
+      hash ^= char.charCodeAt(0);
+      hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+    return {
+      project_id: projectId,
+      revision: hash.toString(16).padStart(8, "0").repeat(8),
+      order_mode: state.orderMode,
+      lanes,
+      events,
+      off_timeline,
+    };
+  };
+  const executeTimelineCommand = (
+    projectId: number,
+    command: TimelineCommandDTO,
+  ): TimelineCommandResultDTO => {
+    const path = `/api/projects/${projectId}/timeline/commands`;
+    findMockProject(projects, projectId, "POST", path);
+    const current = timelineSnapshotFrom(projectId);
+    if (command.expected_revision !== current.revision) {
+      throw new ApiRequestError(
+        "POST",
+        path,
+        409,
+        "The Timeline changed after it was loaded.",
+        "timeline_conflict",
+      );
+    }
+    const sourceState = timelineStateFor(projectId);
+    const candidate: MockTimelineState = {
+      lanes: sourceState.lanes.map((lane) => ({ ...lane })),
+      explicitEventIds: new Set(sourceState.explicitEventIds),
+      customOrder: [...sourceState.customOrder],
+      orderMode: sourceState.orderMode,
+      details: new Map([...sourceState.details.entries()].map(([sceneId, details]) => [sceneId, {
+        ...details,
+        character_states: details.character_states.map((state) => ({ ...state })),
+      }])),
+    };
+    const candidateScenes = scenesFor(projectId).map(cloneScene);
+    const reject = (detail: string, status = 400, code = "bad_request"): never => {
+      throw new ApiRequestError("POST", path, status, detail, code);
+    };
+    const laneById = (laneId: number): TimelineLaneDTO => candidate.lanes.find(
+      (lane) => lane.id === laneId,
+    ) ?? reject(`Timeline lane ${laneId} not found.`, 404, "not_found");
+    const sceneById = (sceneId: number): SceneDTO => candidateScenes.find(
+      (sceneRow) => sceneRow.id === sceneId,
+    ) ?? reject(`Scene ${sceneId} not found.`, 404, "not_found");
+    const normalizeLaneOrder = (): void => {
+      candidate.lanes.forEach((lane, index) => { lane.order_index = index; });
+    };
+    const laneName = (value: string): string => {
+      const name = value.trim();
+      return name || reject("Timeline lane name cannot be empty.");
+    };
+    const duplicateLane = (name: string, excludingId?: number): boolean => candidate.lanes.some(
+      (lane) => lane.id !== excludingId
+        && lane.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase(),
+    );
+    const indexIn = (value: number, maximum: number, field = "index"): number => {
+      if (!Number.isSafeInteger(value) || value < 0 || value > maximum) {
+        return reject(`${field} must be between 0 and ${maximum}.`);
+      }
+      return value;
+    };
+    let changed = false;
+    let affectedSceneIds: number[] = [];
+
+    switch (command.kind) {
+      case "create_lane": {
+        const name = laneName(command.name);
+        if (duplicateLane(name)) reject(`A Timeline lane named '${name}' already exists.`);
+        const index = command.index == null
+          ? candidate.lanes.length
+          : indexIn(command.index, candidate.lanes.length);
+        const id = candidate.lanes.reduce((maximum, lane) => Math.max(maximum, lane.id), 0) + 1;
+        candidate.lanes.splice(index, 0, {
+          id,
+          name,
+          color_label: command.color_label ?? "",
+          order_index: index,
+          collapsed: false,
+          event_count: 0,
+        });
+        normalizeLaneOrder();
+        changed = true;
+        break;
+      }
+      case "update_lane": {
+        const lane = laneById(command.lane_id);
+        if (command.name === undefined && command.color_label === undefined
+          && command.collapsed === undefined && command.index === undefined) {
+          reject("update_lane requires at least one changed field.");
+        }
+        if (command.name !== undefined) {
+          const name = laneName(command.name);
+          if (duplicateLane(name, lane.id)) reject(`A Timeline lane named '${name}' already exists.`);
+          if (name !== lane.name) {
+            const oldName = lane.name;
+            lane.name = name;
+            for (const sceneRow of candidateScenes) {
+              if (sceneRow.plotline.trim() !== oldName.trim()) continue;
+              sceneRow.plotline = name;
+              affectedSceneIds.push(sceneRow.id);
+            }
+            changed = true;
+          }
+        }
+        if (command.color_label !== undefined && command.color_label !== lane.color_label) {
+          lane.color_label = command.color_label;
+          changed = true;
+        }
+        if (command.collapsed !== undefined && command.collapsed !== lane.collapsed) {
+          lane.collapsed = command.collapsed;
+          changed = true;
+        }
+        if (command.index !== undefined) {
+          const oldIndex = candidate.lanes.findIndex((item) => item.id === lane.id);
+          const remaining = candidate.lanes.filter((item) => item.id !== lane.id);
+          const index = indexIn(command.index, remaining.length);
+          if (index !== oldIndex) {
+            candidate.lanes.splice(oldIndex, 1);
+            candidate.lanes.splice(index, 0, lane);
+            normalizeLaneOrder();
+            changed = true;
+          }
+        }
+        break;
+      }
+      case "delete_lane": {
+        const lane = laneById(command.lane_id);
+        const laneIndex = candidate.lanes.findIndex((item) => item.id === lane.id);
+        for (const sceneRow of candidateScenes) {
+          if (sceneRow.plotline.trim() !== lane.name.trim()) continue;
+          candidate.explicitEventIds.add(sceneRow.id);
+          sceneRow.plotline = "";
+          affectedSceneIds.push(sceneRow.id);
+        }
+        candidate.lanes.splice(laneIndex, 1);
+        normalizeLaneOrder();
+        changed = true;
+        break;
+      }
+      case "place_event": {
+        const sceneRow = sceneById(command.scene_id);
+        const destination = command.lane_id === null ? null : laneById(command.lane_id);
+        const wasEvent = Boolean(sceneRow.plotline.trim()) || candidate.explicitEventIds.has(sceneRow.id);
+        const wasExplicit = candidate.explicitEventIds.has(sceneRow.id);
+        const nextPlotline = destination?.name ?? "";
+        candidate.explicitEventIds.add(sceneRow.id);
+        if (!wasEvent || !wasExplicit) changed = true;
+        if (sceneRow.plotline !== nextPlotline) {
+          sceneRow.plotline = nextPlotline;
+          changed = true;
+          affectedSceneIds = [sceneRow.id];
+        }
+        if (command.index != null) {
+          const currentOrder = timelineSnapshotFrom(projectId, candidate, candidateScenes)
+            .events.map((event) => event.id);
+          const requestedOrder = currentOrder.filter((sceneId) => sceneId !== sceneRow.id);
+          const index = indexIn(command.index, requestedOrder.length);
+          requestedOrder.splice(index, 0, sceneRow.id);
+          if (candidate.orderMode !== "custom"
+            || requestedOrder.join(",") !== candidate.customOrder.join(",")) {
+            candidate.orderMode = "custom";
+            candidate.customOrder = requestedOrder;
+            changed = true;
+          }
+        } else if (candidate.orderMode === "custom") {
+          const currentOrder = timelineSnapshotFrom(projectId, candidate, candidateScenes)
+            .events.map((event) => event.id);
+          if (currentOrder.join(",") !== candidate.customOrder.join(",")) {
+            candidate.customOrder = currentOrder;
+            changed = true;
+          }
+        }
+        break;
+      }
+      case "remove_event": {
+        const sceneRow = sceneById(command.scene_id);
+        const wasEvent = Boolean(sceneRow.plotline.trim()) || candidate.explicitEventIds.has(sceneRow.id);
+        if (wasEvent) {
+          const changedPlotline = Boolean(sceneRow.plotline);
+          sceneRow.plotline = "";
+          candidate.explicitEventIds.delete(sceneRow.id);
+          candidate.customOrder = candidate.customOrder.filter((sceneId) => sceneId !== sceneRow.id);
+          affectedSceneIds = changedPlotline ? [sceneRow.id] : [];
+          changed = true;
+        }
+        break;
+      }
+      case "set_order_mode": {
+        if (candidate.orderMode !== command.mode) {
+          if (command.mode === "custom") {
+            candidate.customOrder = current.events.map((event) => event.id);
+          }
+          candidate.orderMode = command.mode;
+          changed = true;
+        }
+        break;
+      }
+    }
+
+    if (changed) {
+      affectedSceneIds = [...new Set(affectedSceneIds)];
+      for (const sceneRow of candidateScenes) {
+        if (affectedSceneIds.includes(sceneRow.id)) {
+          sceneRow.revision = `mock-scene-${++MOCK_SCENE_REVISION}`;
+        }
+      }
+      scenesFor(projectId).splice(0, scenesFor(projectId).length, ...candidateScenes);
+      timelineStates.set(projectId, candidate);
+    }
+    return {
+      timeline: timelineSnapshotFrom(projectId),
+      changed,
+      affected_scene_ids: changed ? affectedSceneIds : [],
     };
   };
   const fixtureRowsFor = <T>(projectId: number, rows: readonly T[]): readonly T[] => (
@@ -883,6 +1271,7 @@ export function createMockApiClient(): ApiClient {
       const project = createMockProject(projects, body);
       scenesByProject.set(project.id, []);
       episodesByProject.set(project.id, new Map());
+      timelineStates.set(project.id, emptyTimelineState());
       return project;
     },
     async importWhiteboard(body: WhiteboardImportDTO): Promise<WhiteboardImportResultDTO> {
@@ -975,6 +1364,7 @@ export function createMockApiClient(): ApiClient {
       projects.splice(projects.findIndex((candidate) => candidate.id === id), 1);
       scenesByProject.delete(id);
       episodesByProject.delete(id);
+      timelineStates.delete(id);
       return { ok: true, deleted: id };
     },
     async openProject(id: number) {
@@ -1239,11 +1629,62 @@ export function createMockApiClient(): ApiClient {
           "The scene changed after it was loaded.", "scene_conflict");
       }
       Object.assign(s, writePatch);
+      const hasChronologyPatch = [
+        "time_of_day",
+        "location",
+        "slugline",
+        "estimated_duration_minutes",
+        "performance_duration_minutes",
+      ]
+        .some((field) => Object.prototype.hasOwnProperty.call(writePatch, field));
+      if (hasChronologyPatch) {
+        const state = timelineStateFor(_p);
+        const currentDetails = state.details.get(sceneId) ?? {
+          time_of_day: "",
+          location: "",
+          slugline: "",
+          estimated_duration_minutes: 0,
+          performance_duration_minutes: 0,
+          character_states: [],
+        };
+        state.details.set(sceneId, {
+          time_of_day: Object.prototype.hasOwnProperty.call(writePatch, "time_of_day")
+            ? String(writePatch.time_of_day ?? "")
+            : currentDetails.time_of_day,
+          location: Object.prototype.hasOwnProperty.call(writePatch, "location")
+            ? String(writePatch.location ?? "")
+            : currentDetails.location,
+          slugline: Object.prototype.hasOwnProperty.call(writePatch, "slugline")
+            ? String(writePatch.slugline ?? "")
+            : currentDetails.slugline,
+          estimated_duration_minutes: Object.prototype.hasOwnProperty.call(
+            writePatch,
+            "estimated_duration_minutes",
+          )
+            ? Number(writePatch.estimated_duration_minutes ?? 0)
+            : currentDetails.estimated_duration_minutes,
+          performance_duration_minutes: Object.prototype.hasOwnProperty.call(
+            writePatch,
+            "performance_duration_minutes",
+          )
+            ? Number(writePatch.performance_duration_minutes ?? 0)
+            : currentDetails.performance_duration_minutes,
+          character_states: currentDetails.character_states.map((stateRow) => ({ ...stateRow })),
+        });
+      }
       s.revision = `mock-scene-${++MOCK_SCENE_REVISION}`;
       return { ...s };
     },
     async createScene(_p: number, body: Record<string, unknown>) { await delay(140); const projectScenes = scenesFor(_p); const id = projectScenes.reduce((mx, s) => Math.max(mx, s.id), 0) + 1; const s = scene({ id, title: String((body.title as string) ?? "New Scene"), act: String((body.act as string) ?? ""), chapter: String((body.chapter as string) ?? ""), content: String((body.content as string) ?? ""), sort_order: projectScenes.length + 1, order_index: projectScenes.length + 1 }); projectScenes.push(s); return cloneScene(s); },
-    async deleteScene(_p: number, sceneId: number) { await delay(120); const projectScenes = scenesFor(_p); const i = projectScenes.findIndex((x) => x.id === sceneId); if (i >= 0) projectScenes.splice(i, 1); episodesFor(_p).delete(sceneId); return { ok: true, deleted: sceneId }; },
+    async deleteScene(_p: number, sceneId: number) {
+      await delay(120);
+      const projectScenes = scenesFor(_p);
+      const i = projectScenes.findIndex((x) => x.id === sceneId);
+      if (i >= 0) projectScenes.splice(i, 1);
+      episodesFor(_p).delete(sceneId);
+      scrubTimelineScene(_p, sceneId);
+      return { ok: true, deleted: sceneId };
+    },
     async listLogosActions(_p: number, section?: string) {
       await delay(120);
       const defs: [string, string, string][] = [
@@ -1401,7 +1842,15 @@ export function createMockApiClient(): ApiClient {
     },
     async listRelations() { await delay(); return RELATIONS.map((r) => ({ ...r })); },
     async listProgressions() { await delay(); return PROGRESSIONS.map((p) => ({ ...p })); },
-    async getTimeline() { await delay(); return TIMELINE.map((e) => ({ ...e })); },
+    async getTimeline(p: number) {
+      await delay();
+      findMockProject(projects, p, "GET", `/api/projects/${p}/timeline`);
+      return timelineSnapshotFrom(p);
+    },
+    async executeTimelineCommand(p: number, body: TimelineCommandDTO) {
+      await delay(120);
+      return executeTimelineCommand(p, body);
+    },
     async getPlot() { await delay(); return PLOT.map((b) => ({ ...b })); },
     async getDashboard(p: number) {
       await delay();

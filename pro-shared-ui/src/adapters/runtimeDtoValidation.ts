@@ -34,6 +34,13 @@ import type {
   StoryStructureCommandResultDTO,
   StoryStructureDTO,
   StoryStructureSceneDTO,
+  TimelineCommandDTO,
+  TimelineCommandResultDTO,
+  TimelineEventDTO,
+  TimelineLaneDTO,
+  TimelineOffTimelineSceneDTO,
+  TimelineOrderMode,
+  TimelineSnapshotDTO,
   SceneExtractionDTO,
   SettingsDTO,
   VoiceBillyProposalDTO,
@@ -426,6 +433,215 @@ function storyStructureCommandResult(value: unknown, path: string): StoryStructu
   return value as StoryStructureCommandResultDTO;
 }
 
+function timelineOrderMode(value: unknown, path: string): TimelineOrderMode {
+  return value === "structural" || value === "custom"
+    ? value
+    : fail(path, '"structural" or "custom"', value);
+}
+
+function timelineLane(value: unknown, path: string): TimelineLaneDTO {
+  const dto = record(value, path);
+  integerValue(requireField(dto, "id", path), fieldPath(path, "id"));
+  stringValue(requireField(dto, "name", path), fieldPath(path, "name"));
+  stringValue(requireField(dto, "color_label", path), fieldPath(path, "color_label"));
+  integerValue(requireField(dto, "order_index", path), fieldPath(path, "order_index"));
+  booleanValue(requireField(dto, "collapsed", path), fieldPath(path, "collapsed"));
+  integerValue(requireField(dto, "event_count", path), fieldPath(path, "event_count"));
+  return value as TimelineLaneDTO;
+}
+
+function timelineEvent(value: unknown, path: string): TimelineEventDTO {
+  const dto = record(value, path);
+  integerValue(requireField(dto, "id", path), fieldPath(path, "id"));
+  integerValue(requireField(dto, "order_index", path), fieldPath(path, "order_index"));
+  for (const key of [
+    "title", "structural_number", "act", "chapter", "plotline", "color_label",
+    "time_of_day", "location",
+  ]) {
+    stringValue(requireField(dto, key, path), fieldPath(path, key));
+  }
+  nullable(requireField(dto, "lane_id", path), fieldPath(path, "lane_id"), integerValue);
+  integerValue(requireField(dto, "duration_minutes", path), fieldPath(path, "duration_minutes"));
+  arrayOf(
+    requireField(dto, "character_states", path),
+    fieldPath(path, "character_states"),
+    (item, itemPath) => {
+      const state = record(item, itemPath);
+      stringValue(requireField(state, "character", itemPath), fieldPath(itemPath, "character"));
+      stringValue(requireField(state, "state", itemPath), fieldPath(itemPath, "state"));
+      return item;
+    },
+  );
+  return value as TimelineEventDTO;
+}
+
+function timelineOffTimelineScene(value: unknown, path: string): TimelineOffTimelineSceneDTO {
+  const dto = record(value, path);
+  integerValue(requireField(dto, "id", path), fieldPath(path, "id"));
+  for (const key of ["title", "structural_number", "act", "chapter"]) {
+    stringValue(requireField(dto, key, path), fieldPath(path, key));
+  }
+  return value as TimelineOffTimelineSceneDTO;
+}
+
+function timelineSnapshot(value: unknown, path: string): TimelineSnapshotDTO {
+  const dto = record(value, path);
+  integerValue(requireField(dto, "project_id", path), fieldPath(path, "project_id"));
+  const revision = stringValue(requireField(dto, "revision", path), fieldPath(path, "revision"));
+  if (!/^[0-9a-f]{64}$/.test(revision)) {
+    fail(fieldPath(path, "revision"), "a 64-character lowercase hexadecimal revision", revision);
+  }
+  timelineOrderMode(requireField(dto, "order_mode", path), fieldPath(path, "order_mode"));
+
+  const lanesPath = fieldPath(path, "lanes");
+  const lanes = arrayOf(requireField(dto, "lanes", path), lanesPath, timelineLane);
+  const laneIds = new Set<number>();
+  const laneIdByName = new Map<string, number>();
+  lanes.forEach((lane, index) => {
+    const lanePath = `${lanesPath}[${index}]`;
+    if (lane.id <= 0) fail(fieldPath(lanePath, "id"), "a positive safe integer", lane.id);
+    if (laneIds.has(lane.id)) fail(fieldPath(lanePath, "id"), "a unique lane id", lane.id);
+    if (lane.order_index !== index) {
+      fail(fieldPath(lanePath, "order_index"), `dense lane position ${index}`, lane.order_index);
+    }
+    if (lane.event_count < 0) {
+      fail(fieldPath(lanePath, "event_count"), "zero or greater", lane.event_count);
+    }
+    laneIds.add(lane.id);
+    if (!laneIdByName.has(lane.name)) laneIdByName.set(lane.name, lane.id);
+  });
+
+  const eventsPath = fieldPath(path, "events");
+  const events = arrayOf(requireField(dto, "events", path), eventsPath, timelineEvent);
+  const sceneIds = new Set<number>();
+  const laneCounts = new Map<number, number>();
+  events.forEach((event, index) => {
+    const eventPath = `${eventsPath}[${index}]`;
+    if (event.id <= 0) fail(fieldPath(eventPath, "id"), "a positive safe integer", event.id);
+    if (sceneIds.has(event.id)) fail(fieldPath(eventPath, "id"), "a unique scene id", event.id);
+    if (event.order_index !== index + 1) {
+      fail(fieldPath(eventPath, "order_index"), `effective Timeline position ${index + 1}`, event.order_index);
+    }
+    const matchingLaneId = laneIdByName.get(event.plotline.trim());
+    if (event.lane_id !== null) {
+      if (!laneIds.has(event.lane_id)) {
+        fail(fieldPath(eventPath, "lane_id"), "a lane id present in lanes or null", event.lane_id);
+      }
+      if (matchingLaneId !== event.lane_id) {
+        fail(
+          fieldPath(eventPath, "lane_id"),
+          "the returned lane whose persisted name matches the trimmed plotline",
+          event.lane_id,
+        );
+      }
+      laneCounts.set(event.lane_id, (laneCounts.get(event.lane_id) ?? 0) + 1);
+    } else if (matchingLaneId !== undefined) {
+      fail(
+        fieldPath(eventPath, "lane_id"),
+        `matching lane id ${matchingLaneId} for the trimmed plotline`,
+        event.lane_id,
+      );
+    }
+    sceneIds.add(event.id);
+  });
+  lanes.forEach((lane, index) => {
+    const actual = laneCounts.get(lane.id) ?? 0;
+    if (lane.event_count !== actual) {
+      fail(
+        fieldPath(`${lanesPath}[${index}]`, "event_count"),
+        `the number of returned events in this lane (${actual})`,
+        lane.event_count,
+      );
+    }
+  });
+
+  const offTimelinePath = fieldPath(path, "off_timeline");
+  const offTimeline = arrayOf(
+    requireField(dto, "off_timeline", path),
+    offTimelinePath,
+    timelineOffTimelineScene,
+  );
+  offTimeline.forEach((sceneRef, index) => {
+    const idPath = fieldPath(`${offTimelinePath}[${index}]`, "id");
+    if (sceneRef.id <= 0) fail(idPath, "a positive safe integer", sceneRef.id);
+    if (sceneIds.has(sceneRef.id)) {
+      fail(idPath, "a scene id not already present in events or off_timeline", sceneRef.id);
+    }
+    sceneIds.add(sceneRef.id);
+  });
+  return value as TimelineSnapshotDTO;
+}
+
+function timelineCommandResult(value: unknown, path: string): TimelineCommandResultDTO {
+  const dto = record(value, path);
+  const timeline = timelineSnapshot(
+    requireField(dto, "timeline", path),
+    fieldPath(path, "timeline"),
+  );
+  const changed = booleanValue(requireField(dto, "changed", path), fieldPath(path, "changed"));
+  const idsPath = fieldPath(path, "affected_scene_ids");
+  const ids = integerArray(requireField(dto, "affected_scene_ids", path), idsPath);
+  const returnedSceneIds = new Set([
+    ...timeline.events.map((event) => event.id),
+    ...timeline.off_timeline.map((scene) => scene.id),
+  ]);
+  const seen = new Set<number>();
+  ids.forEach((sceneId, index) => {
+    const idPath = `${idsPath}[${index}]`;
+    if (sceneId <= 0) fail(idPath, "a positive safe integer", sceneId);
+    if (seen.has(sceneId)) fail(idPath, "a unique scene id", sceneId);
+    if (!returnedSceneIds.has(sceneId)) {
+      fail(idPath, "a scene id present in the returned Timeline", sceneId);
+    }
+    seen.add(sceneId);
+  });
+  if (!changed && ids.length !== 0) {
+    fail(idsPath, "an empty array when changed is false", ids);
+  }
+  return value as TimelineCommandResultDTO;
+}
+
+export function validateTimelineCommandResultDTOForRequest(
+  value: unknown,
+  projectId: number,
+  command: TimelineCommandDTO,
+): TimelineCommandResultDTO {
+  const result = timelineCommandResult(value, "$");
+  if (result.timeline.project_id !== projectId) {
+    fail(
+      "$.timeline.project_id",
+      `the requested project id ${projectId}`,
+      result.timeline.project_id,
+    );
+  }
+  if (!result.changed && result.timeline.revision !== command.expected_revision) {
+    fail(
+      "$.timeline.revision",
+      "the command's expected revision when changed is false",
+      result.timeline.revision,
+    );
+  }
+  if (result.changed && result.timeline.revision === command.expected_revision) {
+    fail(
+      "$.timeline.revision",
+      "a new revision when changed is true",
+      result.timeline.revision,
+    );
+  }
+  return result;
+}
+
+export function validateTimelineSnapshotDTOForProject(
+  value: unknown,
+  projectId: number,
+): TimelineSnapshotDTO {
+  const snapshot = timelineSnapshot(value, "$");
+  if (snapshot.project_id !== projectId) {
+    fail("$.project_id", `the requested project id ${projectId}`, snapshot.project_id);
+  }
+  return snapshot;
+}
+
 export function validateStoryStructureCommandResultDTOForRequest(
   value: unknown,
   projectId: number,
@@ -801,6 +1017,10 @@ export const validateStoryStructureDTO: RuntimeDtoValidator<StoryStructureDTO> =
   storyStructure(value, "$");
 export const validateStoryStructureCommandResultDTO: RuntimeDtoValidator<StoryStructureCommandResultDTO> = (value) =>
   storyStructureCommandResult(value, "$");
+export const validateTimelineSnapshotDTO: RuntimeDtoValidator<TimelineSnapshotDTO> = (value) =>
+  timelineSnapshot(value, "$");
+export const validateTimelineCommandResultDTO: RuntimeDtoValidator<TimelineCommandResultDTO> = (value) =>
+  timelineCommandResult(value, "$");
 export const validateSettingsDTO: RuntimeDtoValidator<SettingsDTO> = (value) => settings(value, "$");
 export const validatePsykeConsoleCommandPlanDTO: RuntimeDtoValidator<PsykeConsoleCommandPlanDTO> = (value) =>
   psykeConsoleCommandPlan(value, "$");

@@ -33,9 +33,292 @@ check(typeof api.voiceIntentCancel === "function", "preview mock must implement 
 check(typeof api.voiceBillyCancel === "function", "preview mock must implement Billy preview cancellation");
 check(typeof api.planPsykeConsoleCommand === "function", "preview mock must implement PSYKE command planning");
 check(typeof api.executePsykeConsoleCommand === "function", "preview mock must implement PSYKE command execution");
+check(typeof api.executeTimelineCommand === "function", "preview mock must implement guarded Timeline commands");
 
 const health = await api.health();
 check(health.status === "ok" && health.api_version === "1.4.0", "preview health must satisfy the core contract");
+const timelineApi = createMockApiClient();
+const initialTimeline = await timelineApi.getTimeline(1);
+check(
+  initialTimeline.project_id === 1
+    && initialTimeline.order_mode === "structural"
+    && initialTimeline.lanes.length === 3
+    && initialTimeline.events.length === 6
+    && initialTimeline.off_timeline.map((scene) => scene.id).join(",") === "3",
+  "preview Timeline snapshot must expose opt-in events, real lanes, and off-Timeline scenes",
+);
+const timelineSemanticsApi = createMockApiClient();
+const semanticsStart = await timelineSemanticsApi.getTimeline(1);
+const addedUnassigned = await timelineSemanticsApi.executeTimelineCommand(1, {
+  kind: "place_event",
+  expected_revision: semanticsStart.revision,
+  scene_id: 3,
+  lane_id: null,
+});
+check(
+  addedUnassigned.changed && addedUnassigned.affected_scene_ids.length === 0,
+  "preview membership-only placement must not claim that a Scene row changed",
+);
+const removedUnassigned = await timelineSemanticsApi.executeTimelineCommand(1, {
+  kind: "remove_event",
+  expected_revision: addedUnassigned.timeline.revision,
+  scene_id: 3,
+});
+check(
+  removedUnassigned.changed && removedUnassigned.affected_scene_ids.length === 0,
+  "preview membership-only removal must not claim that a Scene row changed",
+);
+const titleScene = (await timelineSemanticsApi.listScenes(1)).find((scene) => scene.id === 1)!;
+const revisionBeforeTitleEdit = (await timelineSemanticsApi.getTimeline(1)).revision;
+await timelineSemanticsApi.updateScene(1, titleScene.id, {
+  title: `${titleScene.title} revised`,
+  expected_revision: titleScene.revision,
+});
+const afterTitleEdit = await timelineSemanticsApi.getTimeline(1);
+check(
+  afterTitleEdit.revision === revisionBeforeTitleEdit
+    && afterTitleEdit.events.find((event) => event.id === titleScene.id)?.title.endsWith(" revised"),
+  "preview Timeline revisions must ignore title-only edits while snapshots show the latest title",
+);
+const chronologyScene = (await timelineSemanticsApi.listScenes(1))
+  .find((scene) => scene.id === titleScene.id)!;
+await timelineSemanticsApi.updateScene(1, chronologyScene.id, {
+  time_of_day: "DUSK",
+  location: "Docking ring",
+  estimated_duration_minutes: 11,
+  expected_revision: chronologyScene.revision,
+});
+const afterChronologyEdit = await timelineSemanticsApi.getTimeline(1);
+const chronologyEvent = afterChronologyEdit.events.find((event) => event.id === chronologyScene.id);
+check(
+  afterChronologyEdit.revision === afterTitleEdit.revision
+    && chronologyEvent?.time_of_day === "DUSK"
+    && chronologyEvent?.location === "Docking ring"
+    && chronologyEvent?.duration_minutes === 11,
+  "preview Timeline snapshots must expose current Scene chronology without changing topology revision",
+);
+const primaryChronologyScene = (await timelineSemanticsApi.listScenes(1))
+  .find((scene) => scene.id === chronologyScene.id)!;
+await timelineSemanticsApi.updateScene(1, primaryChronologyScene.id, {
+  location: "",
+  slugline: "INT. AIRLOCK",
+  estimated_duration_minutes: 0,
+  performance_duration_minutes: 14,
+  expected_revision: primaryChronologyScene.revision,
+} as Parameters<typeof timelineSemanticsApi.updateScene>[2]);
+const afterFallbackChronologyEdit = await timelineSemanticsApi.getTimeline(1);
+const fallbackChronologyEvent = afterFallbackChronologyEdit.events
+  .find((event) => event.id === primaryChronologyScene.id);
+check(
+  afterFallbackChronologyEdit.revision === afterChronologyEdit.revision
+    && fallbackChronologyEvent?.location === "INT. AIRLOCK"
+    && fallbackChronologyEvent?.duration_minutes === 14,
+  "preview Timeline chronology must fall back from location/duration to slugline/performance duration",
+);
+const whitespaceApi = createMockApiClient();
+const whitespaceProject = await whitespaceApi.createProject({
+  title: "Whitespace lane membership",
+  narrative_engine: "novel",
+});
+const whitespaceSceneDraft = await whitespaceApi.createScene(whitespaceProject.id, {
+  title: "Indented plotline",
+  act: "Act I",
+  chapter: "One",
+});
+const whitespaceScene = await whitespaceApi.updateScene(
+  whitespaceProject.id,
+  whitespaceSceneDraft.id,
+  { plotline: " Main ", expected_revision: whitespaceSceneDraft.revision },
+);
+const whitespaceStart = await whitespaceApi.getTimeline(whitespaceProject.id);
+const whitespaceLane = await whitespaceApi.executeTimelineCommand(whitespaceProject.id, {
+  kind: "create_lane",
+  expected_revision: whitespaceStart.revision,
+  name: "Main",
+});
+const whitespaceRenamed = await whitespaceApi.executeTimelineCommand(whitespaceProject.id, {
+  kind: "update_lane",
+  expected_revision: whitespaceLane.timeline.revision,
+  lane_id: whitespaceLane.timeline.lanes[0]!.id,
+  name: "Renamed",
+});
+check(
+  whitespaceRenamed.affected_scene_ids.join(",") === String(whitespaceScene.id)
+    && whitespaceRenamed.timeline.events[0]?.plotline === "Renamed"
+    && whitespaceRenamed.timeline.events[0]?.lane_id === whitespaceLane.timeline.lanes[0]!.id,
+  "preview lane rename must retain normalized member Scenes",
+);
+const timelinePersistenceApi = createMockApiClient();
+const timelinePersistenceProject = await timelinePersistenceApi.createProject({
+  title: "Timeline persistence",
+  narrative_engine: "novel",
+});
+const firstPersistentScene = await timelinePersistenceApi.createScene(
+  timelinePersistenceProject.id,
+  { title: "A", act: "Act I", chapter: "One" },
+);
+const secondPersistentScene = await timelinePersistenceApi.createScene(
+  timelinePersistenceProject.id,
+  { title: "B", act: "Act I", chapter: "One" },
+);
+const thirdPersistentScene = await timelinePersistenceApi.createScene(
+  timelinePersistenceProject.id,
+  { title: "C", act: "Act I", chapter: "One" },
+);
+const persistenceStart = await timelinePersistenceApi.getTimeline(timelinePersistenceProject.id);
+const persistentFirst = await timelinePersistenceApi.executeTimelineCommand(timelinePersistenceProject.id, {
+  kind: "place_event",
+  expected_revision: persistenceStart.revision,
+  scene_id: firstPersistentScene.id,
+  lane_id: null,
+});
+const persistentCustom = await timelinePersistenceApi.executeTimelineCommand(timelinePersistenceProject.id, {
+  kind: "set_order_mode",
+  expected_revision: persistentFirst.timeline.revision,
+  mode: "custom",
+});
+const persistentThird = await timelinePersistenceApi.executeTimelineCommand(timelinePersistenceProject.id, {
+  kind: "place_event",
+  expected_revision: persistentCustom.timeline.revision,
+  scene_id: thirdPersistentScene.id,
+  lane_id: null,
+  index: 1,
+});
+const persistentSecond = await timelinePersistenceApi.executeTimelineCommand(timelinePersistenceProject.id, {
+  kind: "place_event",
+  expected_revision: persistentThird.timeline.revision,
+  scene_id: secondPersistentScene.id,
+  lane_id: null,
+});
+check(
+  persistentSecond.timeline.events.map((event) => event.id).join(",")
+    === [firstPersistentScene.id, thirdPersistentScene.id, secondPersistentScene.id].join(","),
+  "preview explicit placement must persist a newly opted-in event even when its effective index already matches",
+);
+
+await timelinePersistenceApi.deleteScene(timelinePersistenceProject.id, thirdPersistentScene.id);
+const directReplacement = await timelinePersistenceApi.createScene(
+  timelinePersistenceProject.id,
+  { title: "Direct replacement", act: "Act I", chapter: "One" },
+);
+const afterDirectReuse = await timelinePersistenceApi.getTimeline(timelinePersistenceProject.id);
+check(
+  directReplacement.id === thirdPersistentScene.id
+    && !afterDirectReuse.events.some((event) => event.id === directReplacement.id)
+    && afterDirectReuse.off_timeline.some((scene) => scene.id === directReplacement.id),
+  "preview direct Scene deletion must scrub Timeline membership before an id is reused",
+);
+const directReplacementPlaced = await timelinePersistenceApi.executeTimelineCommand(
+  timelinePersistenceProject.id,
+  {
+    kind: "place_event",
+    expected_revision: afterDirectReuse.revision,
+    scene_id: directReplacement.id,
+    lane_id: null,
+  },
+);
+check(
+  directReplacementPlaced.timeline.events.at(-1)?.id === directReplacement.id,
+  "preview direct Scene deletion must scrub stale custom order before an id is reused",
+);
+
+const structureBeforeDelete = await timelinePersistenceApi.getStoryStructure(timelinePersistenceProject.id);
+await timelinePersistenceApi.executeStoryStructureCommand(timelinePersistenceProject.id, {
+  kind: "delete_scene",
+  expected_revision: structureBeforeDelete.revision,
+  scene_id: directReplacement.id,
+});
+const structureReplacement = await timelinePersistenceApi.createScene(
+  timelinePersistenceProject.id,
+  { title: "Structure replacement", act: "Act I", chapter: "One" },
+);
+const afterStructureReuse = await timelinePersistenceApi.getTimeline(timelinePersistenceProject.id);
+check(
+  structureReplacement.id === directReplacement.id
+    && !afterStructureReuse.events.some((event) => event.id === structureReplacement.id)
+    && afterStructureReuse.off_timeline.some((scene) => scene.id === structureReplacement.id),
+  "preview guarded structure deletion must scrub Timeline state before an id is reused",
+);
+const createdTimelineLane = await timelineApi.executeTimelineCommand(1, {
+  kind: "create_lane",
+  expected_revision: initialTimeline.revision,
+  name: "Memory",
+  color_label: "violet",
+  index: 1,
+});
+check(
+  createdTimelineLane.changed
+    && createdTimelineLane.timeline.revision !== initialTimeline.revision
+    && createdTimelineLane.timeline.lanes[1]?.name === "Memory"
+    && createdTimelineLane.affected_scene_ids.length === 0,
+  "preview Timeline lane creation must be revisioned and preserve dense lane order",
+);
+let staleTimelineError: unknown = null;
+try {
+  await timelineApi.executeTimelineCommand(1, {
+    kind: "create_lane",
+    expected_revision: initialTimeline.revision,
+    name: "Stale lane",
+  });
+} catch (error) {
+  staleTimelineError = error;
+}
+check(
+  staleTimelineError instanceof ApiRequestError
+    && staleTimelineError.status === 409
+    && staleTimelineError.code === "timeline_conflict"
+    && !(await timelineApi.getTimeline(1)).lanes.some((lane) => lane.name === "Stale lane"),
+  "preview Timeline commands must reject stale revisions without partial mutation",
+);
+const memoryLane = createdTimelineLane.timeline.lanes.find((lane) => lane.name === "Memory")!;
+const structureOrderBeforeTimelineMove = (await timelineApi.getStoryStructure(1)).acts
+  .flatMap((act) => act.chapters.flatMap((chapter) => chapter.scenes.map((scene) => scene.id)))
+  .join(",");
+const placedTimelineEvent = await timelineApi.executeTimelineCommand(1, {
+  kind: "place_event",
+  expected_revision: createdTimelineLane.timeline.revision,
+  scene_id: 3,
+  lane_id: memoryLane.id,
+  index: 0,
+});
+check(
+  placedTimelineEvent.timeline.order_mode === "custom"
+    && placedTimelineEvent.timeline.events[0]?.id === 3
+    && placedTimelineEvent.timeline.events[0]?.lane_id === memoryLane.id
+    && placedTimelineEvent.timeline.off_timeline.length === 0,
+  "preview Timeline placement must atomically add, assign, and custom-order an existing Scene",
+);
+const structureOrderAfterTimelineMove = (await timelineApi.getStoryStructure(1)).acts
+  .flatMap((act) => act.chapters.flatMap((chapter) => chapter.scenes.map((scene) => scene.id)))
+  .join(",");
+check(
+  structureOrderAfterTimelineMove === structureOrderBeforeTimelineMove,
+  "preview Timeline custom order must never mutate canonical manuscript order",
+);
+const removedTimelineEvent = await timelineApi.executeTimelineCommand(1, {
+  kind: "remove_event",
+  expected_revision: placedTimelineEvent.timeline.revision,
+  scene_id: 3,
+});
+check(
+  !removedTimelineEvent.timeline.events.some((event) => event.id === 3)
+    && removedTimelineEvent.timeline.off_timeline.some((scene) => scene.id === 3)
+    && (await timelineApi.listScenes(1)).some((scene) => scene.id === 3),
+  "preview Timeline removal must keep the underlying Scene and return it off-Timeline",
+);
+const mainLane = removedTimelineEvent.timeline.lanes.find((lane) => lane.name === "MAIN · Marlow")!;
+const deletedTimelineLane = await timelineApi.executeTimelineCommand(1, {
+  kind: "delete_lane",
+  expected_revision: removedTimelineEvent.timeline.revision,
+  lane_id: mainLane.id,
+});
+check(
+  !deletedTimelineLane.timeline.lanes.some((lane) => lane.id === mainLane.id)
+    && deletedTimelineLane.timeline.events
+      .filter((event) => [1, 12, 22].includes(event.id))
+      .every((event) => event.lane_id === null && event.plotline === ""),
+  "preview Timeline lane deletion must keep its events in the virtual Unassigned row",
+);
 const previewStructure = await api.getStoryStructure(1);
 check(
   previewStructure.project_id === 1

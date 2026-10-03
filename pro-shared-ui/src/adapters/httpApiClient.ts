@@ -31,6 +31,8 @@ import {
   validateManuscriptSnapshotDTO,
   validateStoryStructureDTO,
   validateStoryStructureCommandResultDTOForRequest,
+  validateTimelineSnapshotDTOForProject,
+  validateTimelineCommandResultDTOForRequest,
   validateSettingsDTO,
   validateVoiceBillyProposalDTO,
   validateWhiteboardImportResultDTO,
@@ -471,10 +473,15 @@ export function createHttpApiClient(
 
     getPlot: (p) => get(ROUTES.plot(p)),
     updatePlotBlock: (p, id, b) => patch(ROUTES.plotBlock(p, id), b),
-    getTimeline: (p) => get(ROUTES.timeline(p)),
-    createTimelineEvent: (p, b) => writePost(ROUTES.timelineEvents(p), b),
-    updateTimelineEvent: (p, id, b) => patch(ROUTES.timelineEvent(p, id), b),
-    deleteTimelineEvent: (p, id) => del(ROUTES.timelineEvent(p, id)),
+    getTimeline: (p) => get(
+      ROUTES.timeline(p),
+      (value) => validateTimelineSnapshotDTOForProject(value, p),
+    ),
+    executeTimelineCommand: (p, b) => writePost(
+      ROUTES.timelineCommands(p),
+      b,
+      (value) => validateTimelineCommandResultDTOForRequest(value, p, b),
+    ),
 
     listPsyke: (p) => get(ROUTES.psykeEntries(p)),
     searchPsyke: (p, q) => get(`${ROUTES.psykeSearch(p)}?q=${encodeURIComponent(q)}`),

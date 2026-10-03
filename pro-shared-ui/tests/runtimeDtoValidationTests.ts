@@ -112,6 +112,54 @@ const manuscriptSnapshot = (sceneOverrides: Record<string, unknown> = {}, overri
   ...overrides,
 });
 
+const timelineSnapshot = (
+  eventOverrides: Record<string, unknown> = {},
+  overrides: Record<string, unknown> = {},
+) => ({
+  project_id: 1,
+  revision: "c".repeat(64),
+  order_mode: "structural",
+  lanes: [{
+    id: 4,
+    name: "Main",
+    color_label: "cyan",
+    order_index: 0,
+    collapsed: false,
+    event_count: 1,
+  }],
+  events: [{
+    id: 2,
+    order_index: 1,
+    title: "Scene",
+    structural_number: "1.1.1",
+    act: "Act One",
+    chapter: "Chapter One",
+    plotline: "Main",
+    color_label: "",
+    lane_id: 4,
+    time_of_day: "DAY",
+    location: "Station",
+    duration_minutes: 5,
+    character_states: [{ character: "Marlow", state: "alert" }],
+    ...eventOverrides,
+  }],
+  off_timeline: [{
+    id: 3,
+    title: "Later",
+    structural_number: "1.1.2",
+    act: "Act One",
+    chapter: "Chapter One",
+  }],
+  ...overrides,
+});
+
+const timelineCommandResult = (overrides: Record<string, unknown> = {}) => ({
+  timeline: timelineSnapshot({}, { revision: "d".repeat(64) }),
+  changed: true,
+  affected_scene_ids: [2],
+  ...overrides,
+});
+
 const inlineCommentAnchor = (overrides: Record<string, unknown> = {}) => ({
   start_scene_id: 2,
   start_field: "content",
@@ -768,6 +816,201 @@ try {
     "GET",
     "/api/projects/1/story-structure",
     "$.acts[0].chapters[0].scenes[0].is_orphan",
+  );
+
+  await expectValid(
+    "Timeline snapshots validate lanes, effective order, and off-Timeline refs",
+    () => client.getTimeline(1),
+    timelineSnapshot(),
+    (value) => value.lanes[0]?.event_count === 1 && value.events[0]?.lane_id === 4,
+  );
+  await expectValid(
+    "Timeline durations follow the Core integer contract",
+    () => client.getTimeline(1),
+    timelineSnapshot({ duration_minutes: -1 }),
+    (value) => value.events[0]?.duration_minutes === -1,
+  );
+  await expectInvalid(
+    "Timeline snapshots belong to the requested project",
+    () => client.getTimeline(1),
+    json(timelineSnapshot({}, { project_id: 7 })),
+    "GET",
+    "/api/projects/1/timeline",
+    "$.project_id",
+  );
+  await expectValid(
+    "Timeline commands validate their committed snapshot",
+    () => client.executeTimelineCommand(1, {
+      kind: "place_event",
+      expected_revision: "c".repeat(64),
+      scene_id: 2,
+      lane_id: 4,
+      index: 0,
+    }),
+    timelineCommandResult(),
+    (value) => value.changed && value.timeline.events[0]?.id === 2,
+  );
+  await expectValid(
+    "unchanged Timeline commands retain the guarded revision",
+    () => client.executeTimelineCommand(1, {
+      kind: "set_order_mode",
+      expected_revision: "c".repeat(64),
+      mode: "structural",
+    }),
+    timelineCommandResult({
+      timeline: timelineSnapshot(),
+      changed: false,
+      affected_scene_ids: [],
+    }),
+  );
+  await expectInvalid(
+    "changed Timeline commands require a new revision",
+    () => client.executeTimelineCommand(1, {
+      kind: "create_lane",
+      expected_revision: "c".repeat(64),
+      name: "Subplot",
+    }),
+    json(timelineCommandResult({ timeline: timelineSnapshot() })),
+    "POST",
+    "/api/projects/1/timeline/commands",
+    "$.timeline.revision",
+  );
+  await expectInvalid(
+    "unchanged Timeline commands cannot invent a revision",
+    () => client.executeTimelineCommand(1, {
+      kind: "set_order_mode",
+      expected_revision: "c".repeat(64),
+      mode: "structural",
+    }),
+    json(timelineCommandResult({ changed: false, affected_scene_ids: [] })),
+    "POST",
+    "/api/projects/1/timeline/commands",
+    "$.timeline.revision",
+  );
+  await expectInvalid(
+    "Timeline snapshots require a content revision",
+    () => client.getTimeline(1),
+    json(timelineSnapshot({}, { revision: "stale" })),
+    "GET",
+    "/api/projects/1/timeline",
+    "$.revision",
+  );
+  await expectInvalid(
+    "Timeline snapshots require dense lane indexes",
+    () => client.getTimeline(1),
+    json(timelineSnapshot({}, {
+      lanes: [{
+        id: 4, name: "Main", color_label: "cyan", order_index: 2,
+        collapsed: false, event_count: 1,
+      }],
+    })),
+    "GET",
+    "/api/projects/1/timeline",
+    "$.lanes[0].order_index",
+  );
+  await expectInvalid(
+    "Timeline events must reference a returned lane",
+    () => client.getTimeline(1),
+    json(timelineSnapshot({ lane_id: 99 })),
+    "GET",
+    "/api/projects/1/timeline",
+    "$.events[0].lane_id",
+  );
+  await expectInvalid(
+    "Timeline event lane ids must match the trimmed plotline",
+    () => client.getTimeline(1),
+    json(timelineSnapshot({ plotline: "Other" })),
+    "GET",
+    "/api/projects/1/timeline",
+    "$.events[0].lane_id",
+  );
+  await expectInvalid(
+    "Timeline events cannot be Unassigned when a matching lane is returned",
+    () => client.getTimeline(1),
+    json(timelineSnapshot({ plotline: " Main ", lane_id: null }, {
+      lanes: [{
+        id: 4, name: "Main", color_label: "cyan", order_index: 0,
+        collapsed: false, event_count: 0,
+      }],
+    })),
+    "GET",
+    "/api/projects/1/timeline",
+    "$.events[0].lane_id",
+  );
+  await expectValid(
+    "legacy unmatched Timeline plotlines remain valid as Unassigned",
+    () => client.getTimeline(1),
+    timelineSnapshot({ plotline: "Legacy lane", lane_id: null }, {
+      lanes: [{
+        id: 4, name: "Main", color_label: "cyan", order_index: 0,
+        collapsed: false, event_count: 0,
+      }],
+    }),
+  );
+  await expectInvalid(
+    "Timeline lane counts must match returned events",
+    () => client.getTimeline(1),
+    json(timelineSnapshot({}, {
+      lanes: [{
+        id: 4, name: "Main", color_label: "cyan", order_index: 0,
+        collapsed: false, event_count: 2,
+      }],
+    })),
+    "GET",
+    "/api/projects/1/timeline",
+    "$.lanes[0].event_count",
+  );
+  await expectInvalid(
+    "Timeline off-Timeline refs cannot duplicate events",
+    () => client.getTimeline(1),
+    json(timelineSnapshot({}, {
+      off_timeline: [{
+        id: 2, title: "Scene", structural_number: "1.1.1",
+        act: "Act One", chapter: "Chapter One",
+      }],
+    })),
+    "GET",
+    "/api/projects/1/timeline",
+    "$.off_timeline[0].id",
+  );
+  await expectInvalid(
+    "unchanged Timeline commands carry no affected Scene ids",
+    () => client.executeTimelineCommand(1, {
+      kind: "set_order_mode",
+      expected_revision: "c".repeat(64),
+      mode: "structural",
+    }),
+    json(timelineCommandResult({ changed: false, affected_scene_ids: [2] })),
+    "POST",
+    "/api/projects/1/timeline/commands",
+    "$.affected_scene_ids",
+  );
+  await expectInvalid(
+    "Timeline command affected ids must belong to the returned Timeline",
+    () => client.executeTimelineCommand(1, {
+      kind: "remove_event",
+      expected_revision: "c".repeat(64),
+      scene_id: 99,
+    }),
+    json(timelineCommandResult({ affected_scene_ids: [99] })),
+    "POST",
+    "/api/projects/1/timeline/commands",
+    "$.affected_scene_ids[0]",
+  );
+  await expectInvalid(
+    "Timeline command responses belong to the requested project",
+    () => client.executeTimelineCommand(1, {
+      kind: "create_lane",
+      expected_revision: "c".repeat(64),
+      name: "Subplot",
+    }),
+    json(timelineCommandResult({
+      timeline: timelineSnapshot({}, { project_id: 7 }),
+      affected_scene_ids: [],
+    })),
+    "POST",
+    "/api/projects/1/timeline/commands",
+    "$.timeline.project_id",
   );
 
   await expectValid(

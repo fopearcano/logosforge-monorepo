@@ -22,6 +22,8 @@ requireMarkers("adapters/httpApiClient.ts", ["if (timer) clearTimeout(timer)", "
 requireMarkers("adapters/httpApiClient.ts", ["ApiRequestTimeoutError", "const timeoutOptions = { ...options }", "clientAbort.abort", "activeAbort?.abort", "getInflight.clear()", "cloneTransportValue", "streams.clear()", "dispose: () =>"]);
 requireMarkers("adapters/clientLifetime.ts", ["queueMicrotask", "leases.get(value) !== 0", "dispose(value)"]);
 requireMarkers("hooks/resources.ts", [
+  "export function useTimeline(): Resource<TimelineSnapshotDTO>",
+  '["timeline_changed", "scenes_changed", "scene_changed"]',
   "export function useManuscriptSnapshot()",
   "api.getManuscriptSnapshot(projectId as number)",
   "export function useStoryStructure()",

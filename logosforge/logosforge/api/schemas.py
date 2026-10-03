@@ -950,31 +950,122 @@ class TimelineEventDTO(BaseModel):
     id: int  # scene id (timeline events are scene-derived)
     order_index: int = 0
     title: str
+    structural_number: str = ""
     act: str = ""
     chapter: str = ""
+    plotline: str = ""
+    color_label: str = ""
+    lane_id: int | None = None
     time_of_day: str = ""
     location: str = ""
     duration_minutes: int = 0
     character_states: list[TimelineCharacterStateDTO] = Field(default_factory=list)
 
 
-class TimelineEventCreateDTO(BaseModel):
+class TimelineLaneDTO(BaseModel):
+    id: int
+    name: str
+    color_label: str = ""
+    order_index: int = 0
+    collapsed: bool = False
+    event_count: int = 0
+
+
+class TimelineOffTimelineSceneDTO(BaseModel):
+    id: int
     title: str
+    structural_number: str = ""
     act: str = ""
     chapter: str = ""
-    time_of_day: str = ""
-    location: str = ""
-    duration_minutes: int = 0
 
 
-class TimelineEventUpdateDTO(BaseModel):
-    title: str | None = None
-    act: str | None = None
-    chapter: str | None = None
-    time_of_day: str | None = None
-    location: str | None = None
-    duration_minutes: int | None = None
-    sort_order: int | None = None
+class TimelineSnapshotDTO(BaseModel):
+    project_id: int
+    revision: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    order_mode: Literal["structural", "custom"] = "structural"
+    lanes: list[TimelineLaneDTO] = Field(default_factory=list)
+    events: list[TimelineEventDTO] = Field(default_factory=list)
+    off_timeline: list[TimelineOffTimelineSceneDTO] = Field(default_factory=list)
+
+
+class _TimelineCommandBase(BaseModel):
+    expected_revision: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+
+class TimelineCreateLaneCommandDTO(_TimelineCommandBase):
+    kind: Literal["create_lane"]
+    name: str = Field(min_length=1, max_length=500)
+    color_label: str = Field(default="", max_length=100)
+    index: int | None = Field(default=None, ge=0, strict=True)
+
+
+class TimelineUpdateLaneCommandDTO(_TimelineCommandBase):
+    kind: Literal["update_lane"]
+    lane_id: int = Field(gt=0, strict=True)
+    name: str | None = Field(default=None, min_length=1, max_length=500)
+    color_label: str | None = Field(default=None, max_length=100)
+    collapsed: bool | None = None
+    index: int | None = Field(default=None, ge=0, strict=True)
+
+    @model_validator(mode="after")
+    def _requires_change(self):
+        if not self.model_fields_set.intersection(
+            {"name", "color_label", "collapsed", "index"}
+        ):
+            raise ValueError("update_lane must change at least one field")
+        return self
+
+
+class TimelineDeleteLaneCommandDTO(_TimelineCommandBase):
+    kind: Literal["delete_lane"]
+    lane_id: int = Field(gt=0, strict=True)
+
+
+class TimelinePlaceEventCommandDTO(_TimelineCommandBase):
+    kind: Literal["place_event"]
+    scene_id: int = Field(gt=0, strict=True)
+    # Required but nullable: null means the virtual Unassigned lane.
+    lane_id: int | None = Field(gt=0, strict=True)
+    index: int | None = Field(default=None, ge=0, strict=True)
+
+
+class TimelineRemoveEventCommandDTO(_TimelineCommandBase):
+    kind: Literal["remove_event"]
+    scene_id: int = Field(gt=0, strict=True)
+
+
+class TimelineSetOrderModeCommandDTO(_TimelineCommandBase):
+    kind: Literal["set_order_mode"]
+    mode: Literal["structural", "custom"]
+
+
+_TimelineCommandUnion = Annotated[
+    TimelineCreateLaneCommandDTO
+    | TimelineUpdateLaneCommandDTO
+    | TimelineDeleteLaneCommandDTO
+    | TimelinePlaceEventCommandDTO
+    | TimelineRemoveEventCommandDTO
+    | TimelineSetOrderModeCommandDTO,
+    Field(discriminator="kind"),
+]
+
+
+class TimelineCommandDTO(RootModel[_TimelineCommandUnion]):
+    """Unwrapped discriminated Timeline command request."""
+
+
+class TimelineCommandResultDTO(BaseModel):
+    timeline: TimelineSnapshotDTO
+    changed: bool
+    affected_scene_ids: list[int] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

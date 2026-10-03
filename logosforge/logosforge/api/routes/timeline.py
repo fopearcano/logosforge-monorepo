@@ -1,9 +1,4 @@
-"""Timeline endpoints.
-
-Timeline events are scene-derived (ordered by ``sort_order``), matching the
-desktop Timeline view.  Creating/updating an event therefore creates/updates a
-scene with the relevant chronology fields.
-"""
+"""Revisioned, scene-backed Timeline endpoints."""
 
 from __future__ import annotations
 
@@ -11,111 +6,74 @@ from fastapi import APIRouter, Depends
 
 from logosforge.api import schemas, serializers
 from logosforge.api.deps import get_broker, get_db, get_project
-from logosforge.api.errors import not_found
+from logosforge.api.errors import bad_request, conflict, not_found
 from logosforge.api.events import ApiEventBroker
-from logosforge.db import Database
+from logosforge.db import (
+    Database,
+    TimelineCommandError,
+    TimelineLaneNotFound,
+    TimelineProjectNotFound,
+    TimelineRevisionConflict,
+    TimelineSceneNotFound,
+)
 
 router = APIRouter(tags=["timeline"])
 
 
 @router.get(
     "/projects/{project_id}/timeline",
-    response_model=list[schemas.TimelineEventDTO],
+    response_model=schemas.TimelineSnapshotDTO,
 )
 def get_timeline(project=Depends(get_project), db: Database = Depends(get_db)):
-    return serializers.timeline_events(db, project.id)
+    snapshot = db.read_timeline_snapshot(project.id)
+    if snapshot is None:
+        raise not_found(f"Project {project.id} not found")
+    return serializers.timeline_snapshot_to_dto(snapshot)
 
 
 @router.post(
-    "/projects/{project_id}/timeline/events",
-    response_model=schemas.TimelineEventDTO, status_code=201,
+    "/projects/{project_id}/timeline/commands",
+    response_model=schemas.TimelineCommandResultDTO,
 )
-def create_event(
-    body: schemas.TimelineEventCreateDTO,
+def execute_timeline_command(
+    body: schemas.TimelineCommandDTO,
     project=Depends(get_project),
     db: Database = Depends(get_db),
     broker: ApiEventBroker = Depends(get_broker),
 ):
-    scene = db.create_scene(
-        project.id,
-        title=body.title,
-        act=body.act,
-        chapter=body.chapter,
-        time_of_day=body.time_of_day,
-        location=body.location,
-        estimated_duration_minutes=body.duration_minutes,
+    """Run one optimistic-concurrency guarded Timeline command atomically."""
+    command = body.root
+    payload = command.model_dump(exclude_unset=True)
+    kind = payload.pop("kind")
+    try:
+        result = db.execute_timeline_command(project.id, kind=kind, **payload)
+    except TimelineRevisionConflict as exc:
+        raise conflict(
+            "The Timeline changed after it was loaded. Reload it and retry the command.",
+            code="timeline_conflict",
+        ) from exc
+    except TimelineProjectNotFound as exc:
+        raise not_found(f"Project {project.id} not found") from exc
+    except TimelineSceneNotFound as exc:
+        missing = exc.args[0] if exc.args else payload.get("scene_id")
+        raise not_found(f"Scene {missing} not found") from exc
+    except TimelineLaneNotFound as exc:
+        missing = exc.args[0] if exc.args else payload.get("lane_id")
+        raise not_found(f"Timeline lane {missing} not found") from exc
+    except TimelineCommandError as exc:
+        raise bad_request(str(exc)) from exc
+
+    if result.changed:
+        for scene_id in result.affected_scene_ids:
+            broker.publish(
+                "scene_changed", project_id=project.id, scene_id=scene_id,
+            )
+        if result.affected_scene_ids:
+            broker.publish("plot_changed", project_id=project.id)
+        broker.publish("timeline_changed", project_id=project.id)
+
+    return schemas.TimelineCommandResultDTO(
+        timeline=serializers.timeline_snapshot_to_dto(result.snapshot),
+        changed=result.changed,
+        affected_scene_ids=list(result.affected_scene_ids),
     )
-    broker.publish("timeline_changed", project_id=project.id)
-    broker.publish("scenes_changed", project_id=project.id)
-    return _event_dto(db, project.id, scene.id)
-
-
-@router.patch(
-    "/projects/{project_id}/timeline/events/{event_id}",
-    response_model=schemas.TimelineEventDTO,
-)
-def update_event(
-    event_id: int,
-    body: schemas.TimelineEventUpdateDTO,
-    project=Depends(get_project),
-    db: Database = Depends(get_db),
-    broker: ApiEventBroker = Depends(get_broker),
-):
-    scene = db.get_scene_by_id(event_id)
-    if scene is None or scene.project_id != project.id:
-        raise not_found(f"Timeline event {event_id} not found")
-    patch = body.model_dump(exclude_unset=True)
-    db.update_scene(
-        event_id,
-        title=patch.get("title", scene.title),
-        summary=scene.summary,
-        synopsis=scene.synopsis,
-        goal=scene.goal,
-        conflict=scene.conflict,
-        outcome=scene.outcome,
-        beat=scene.beat,
-        tags=scene.tags,
-        act=patch.get("act", scene.act),
-        content=scene.content,
-        chapter=patch.get("chapter", scene.chapter),
-        plotline=scene.plotline,
-        time_of_day=patch.get("time_of_day"),
-        location=patch.get("location"),
-        estimated_duration_minutes=patch.get("duration_minutes"),
-        # Preserve associations update_scene would otherwise replace.
-        character_ids=db.get_scene_character_ids(event_id),
-        place_ids=db.get_scene_place_ids(event_id),
-        character_states=db.get_scene_character_states(event_id),
-    )
-    if patch.get("sort_order") is not None:
-        db.reorder_scene(event_id, patch["sort_order"])
-    broker.publish("timeline_changed", project_id=project.id)
-    return _event_dto(db, project.id, event_id)
-
-
-@router.delete(
-    "/projects/{project_id}/timeline/events/{event_id}",
-    response_model=schemas.RemovedResultDTO,
-)
-def delete_event(
-    event_id: int,
-    project=Depends(get_project),
-    db: Database = Depends(get_db),
-    broker: ApiEventBroker = Depends(get_broker),
-):
-    """Remove an event from the timeline. Non-destructive — the underlying scene
-    is kept (timeline membership is a project setting); it just stops appearing
-    on the timeline."""
-    scene = db.get_scene_by_id(event_id)
-    if scene is None or scene.project_id != project.id:
-        raise not_found(f"Timeline event {event_id} not found")
-    db.remove_timeline_event(project.id, event_id)
-    broker.publish("timeline_changed", project_id=project.id)
-    return {"ok": True, "removed": event_id}
-
-
-def _event_dto(db: Database, project_id: int, scene_id: int):
-    for event in serializers.timeline_events(db, project_id):
-        if event.id == scene_id:
-            return event
-    raise not_found(f"Timeline event {scene_id} not found")

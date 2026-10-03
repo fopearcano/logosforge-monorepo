@@ -75,6 +75,7 @@ const SCENE_NAVIGATOR_MARKER = `Scene navigator save-barrier probe ${process.pid
 const STRUCTURE_UI_ACT = `Packaged UI Act ${process.pid}`;
 const STRUCTURE_UI_CHAPTER = `Packaged UI Chapter ${process.pid}`;
 const STRUCTURE_UI_SCENE = `Packaged UI Scene ${process.pid}`;
+const TIMELINE_UI_LANE = `Packaged Timeline ${process.pid}`;
 const STARTUP_TIMEOUT_MS = 90_000;
 const UI_TIMEOUT_MS = 30_000;
 const CLOSE_TIMEOUT_MS = 20_000;
@@ -575,6 +576,74 @@ async function placeStoryStructureScene(
   );
   assert.equal(response.status, 200, `${label} returned the wrong status`);
   return assertStoryStructure(response.data, projectId, `${label} result structure`);
+}
+
+function assertTimelineSnapshot(timeline, projectId, label) {
+  assert.equal(timeline?.project_id, projectId, `${label} belongs to another project`);
+  assert.match(
+    timeline?.revision ?? '',
+    /^[0-9a-f]{64}$/,
+    `${label} has no canonical Timeline revision`,
+  );
+  assert.ok(
+    timeline?.order_mode === 'structural' || timeline?.order_mode === 'custom',
+    `${label} has an invalid order mode`,
+  );
+  assert.ok(Array.isArray(timeline?.lanes), `${label} has no lane list`);
+  assert.ok(Array.isArray(timeline?.events), `${label} has no event list`);
+  assert.ok(Array.isArray(timeline?.off_timeline), `${label} has no off-Timeline list`);
+  return timeline;
+}
+
+async function readTimeline(session, projectId, label) {
+  const response = await localServiceRequest(
+    session,
+    `/api/projects/${projectId}/timeline`,
+  );
+  assert.equal(response.status, 200, `${label} returned the wrong status`);
+  return assertTimelineSnapshot(response.data, projectId, label);
+}
+
+async function executeTimelineCommand(
+  session,
+  projectId,
+  timeline,
+  command,
+  label,
+) {
+  assertTimelineSnapshot(timeline, projectId, `${label} preflight Timeline`);
+  const response = await localServiceRequest(
+    session,
+    `/api/projects/${projectId}/timeline/commands`,
+    {
+      method: 'POST',
+      body: { ...command, expected_revision: timeline.revision },
+    },
+  );
+  assert.equal(response.status, 200, `${label} returned the wrong status`);
+  assert.equal(typeof response.data?.changed, 'boolean', `${label} omitted its changed receipt`);
+  assert.ok(Array.isArray(response.data?.affected_scene_ids), `${label} omitted affected Scene ids`);
+  assertTimelineSnapshot(response.data?.timeline, projectId, `${label} result Timeline`);
+  return response.data;
+}
+
+async function performTimelineUiCommand(page, projectId, action, label) {
+  const commandPath = `/api/projects/${projectId}/timeline/commands`;
+  const responsePromise = page.waitForResponse(
+    (response) => {
+      const request = response.request();
+      return request.method() === 'POST' && new URL(response.url()).pathname === commandPath;
+    },
+    { timeout: UI_TIMEOUT_MS },
+  );
+  await action();
+  const response = await responsePromise;
+  assert.equal(response.status(), 200, `${label} request failed`);
+  const request = response.request().postDataJSON();
+  const receipt = await response.json();
+  assert.equal(receipt?.changed, true, `${label} was not acknowledged as a change`);
+  assertTimelineSnapshot(receipt?.timeline, projectId, `${label} receipt`);
+  return { request, receipt };
 }
 
 /**
@@ -2018,6 +2087,335 @@ async function exerciseProTransactionalStructureAuthoring(session, projectId) {
     expectedStructure: cleanedStructure,
     removedSceneId: createdSceneId,
     removedAct: STRUCTURE_UI_ACT,
+  };
+}
+
+async function exerciseProTransactionalTimeline(session, projectId) {
+  const { page } = session;
+  const baselineStructure = await readStoryStructure(
+    session,
+    projectId,
+    'Pro transactional Timeline structure baseline',
+  );
+  const baselineTimeline = await readTimeline(
+    session,
+    projectId,
+    'Pro transactional Timeline baseline',
+  );
+  assert.equal(
+    baselineTimeline.order_mode,
+    'structural',
+    'Imported Whiteboard project did not start in structural Timeline order',
+  );
+  assert.equal(
+    baselineTimeline.events.length,
+    0,
+    'Imported Whiteboard project unexpectedly started with Timeline events',
+  );
+  assert.equal(
+    baselineTimeline.lanes.length,
+    0,
+    'Imported Whiteboard project unexpectedly started with Timeline lanes',
+  );
+  assert.ok(
+    baselineTimeline.off_timeline.length >= 2,
+    'Transactional Timeline acceptance requires at least two imported Scenes',
+  );
+  const firstScene = baselineTimeline.off_timeline[0];
+  const secondScene = baselineTimeline.off_timeline[1];
+  assert.ok(firstScene?.title && secondScene?.title, 'Timeline acceptance Scenes need visible titles');
+
+  const panel = await selectProPanel(page, 'Timeline', 'Plot-Lane Timeline');
+  const laneName = await waitVisible(
+    panel.getByLabel('New Timeline lane name', { exact: true }),
+    'Pro Timeline new-lane field',
+  );
+  await laneName.fill(TIMELINE_UI_LANE);
+  const created = await performTimelineUiCommand(
+    page,
+    projectId,
+    () => panel.getByRole('button', { name: '＋ LANE', exact: true }).click(),
+    'Pro transactional Timeline Create Lane',
+  );
+  assert.deepEqual(
+    {
+      kind: created.request?.kind,
+      name: created.request?.name,
+      expected_revision: created.request?.expected_revision,
+    },
+    {
+      kind: 'create_lane',
+      name: TIMELINE_UI_LANE,
+      expected_revision: baselineTimeline.revision,
+    },
+    'Pro Timeline UI did not submit the canonical revision-guarded Create Lane command',
+  );
+  const lane = created.receipt.timeline.lanes.find((candidate) => candidate.name === TIMELINE_UI_LANE);
+  assert.ok(Number.isSafeInteger(lane?.id) && lane.id > 0, 'Pro Timeline UI created no persisted lane');
+  let current = created.receipt;
+  const primaryLaneName = `${TIMELINE_UI_LANE} Renamed`;
+  const laneEditor = await waitVisible(
+    panel.getByLabel(`Name for lane ${TIMELINE_UI_LANE}`, { exact: true }),
+    'Pro Timeline persisted lane editor',
+  );
+  await laneEditor.fill(primaryLaneName);
+  const renamed = await performTimelineUiCommand(
+    page,
+    projectId,
+    () => panel.getByLabel(`Save lane name ${primaryLaneName}`, { exact: true }).click(),
+    'Pro Timeline lane rename',
+  );
+  assert.deepEqual(
+    {
+      kind: renamed.request?.kind,
+      lane_id: renamed.request?.lane_id,
+      name: renamed.request?.name,
+    },
+    { kind: 'update_lane', lane_id: lane.id, name: primaryLaneName },
+    'Pro Timeline lane rename used the wrong guarded command',
+  );
+  current = renamed.receipt;
+
+  await waitVisible(
+    panel.getByLabel(`Color for lane ${primaryLaneName}`, { exact: true }),
+    'Pro Timeline lane color selector',
+  );
+  const recolored = await performTimelineUiCommand(
+    page,
+    projectId,
+    () => panel.getByLabel(`Color for lane ${primaryLaneName}`, { exact: true }).selectOption('amber'),
+    'Pro Timeline lane color',
+  );
+  assert.equal(recolored.request?.kind, 'update_lane', 'Timeline lane color used the wrong command');
+  assert.equal(recolored.request?.lane_id, lane.id, 'Timeline lane color targeted the wrong lane');
+  assert.equal(recolored.request?.color_label, 'amber', 'Timeline lane color did not persist the selected label');
+  current = recolored.receipt;
+
+  const collapsed = await performTimelineUiCommand(
+    page,
+    projectId,
+    () => panel.getByLabel(`Collapse ${primaryLaneName}`, { exact: true }).click(),
+    'Pro Timeline lane collapse',
+  );
+  assert.equal(collapsed.request?.kind, 'update_lane', 'Timeline collapse used the wrong command');
+  assert.equal(collapsed.request?.collapsed, true, 'Timeline collapse did not persist collapsed state');
+  current = collapsed.receipt;
+  await waitVisible(
+    panel.getByLabel(`Expand ${primaryLaneName}`, { exact: true }),
+    'Pro Timeline collapsed lane control',
+  );
+  const expanded = await performTimelineUiCommand(
+    page,
+    projectId,
+    () => panel.getByLabel(`Expand ${primaryLaneName}`, { exact: true }).click(),
+    'Pro Timeline lane expand',
+  );
+  assert.equal(expanded.request?.collapsed, false, 'Timeline expand did not persist expanded state');
+  current = expanded.receipt;
+
+  const secondaryLaneName = `${TIMELINE_UI_LANE} Secondary`;
+  const newLaneField = await waitVisible(
+    panel.getByLabel('New Timeline lane name', { exact: true }),
+    'Pro Timeline secondary-lane field',
+  );
+  await newLaneField.fill(secondaryLaneName);
+  const secondaryCreated = await performTimelineUiCommand(
+    page,
+    projectId,
+    () => panel.getByRole('button', { name: '＋ LANE', exact: true }).click(),
+    'Pro Timeline secondary lane creation',
+  );
+  const secondaryLane = secondaryCreated.receipt.timeline.lanes.find(
+    (candidate) => candidate.name === secondaryLaneName,
+  );
+  assert.ok(Number.isSafeInteger(secondaryLane?.id) && secondaryLane.id > 0, 'Pro Timeline created no secondary lane');
+  current = secondaryCreated.receipt;
+
+  const movedUp = await performTimelineUiCommand(
+    page,
+    projectId,
+    () => panel.getByLabel(`Move lane ${secondaryLaneName} up`, { exact: true }).click(),
+    'Pro Timeline lane move up',
+  );
+  assert.equal(movedUp.request?.kind, 'update_lane', 'Timeline lane move used the wrong command');
+  assert.equal(movedUp.request?.lane_id, secondaryLane.id, 'Timeline lane move targeted the wrong lane');
+  assert.equal(movedUp.request?.index, 0, 'Timeline lane move up did not target the adjacent position');
+  assert.equal(movedUp.receipt.timeline.lanes[0]?.id, secondaryLane.id, 'Timeline lane move up did not persist');
+  current = movedUp.receipt;
+
+  const movedDown = await performTimelineUiCommand(
+    page,
+    projectId,
+    () => panel.getByLabel(`Move lane ${secondaryLaneName} down`, { exact: true }).click(),
+    'Pro Timeline lane move down',
+  );
+  assert.equal(movedDown.request?.index, 1, 'Timeline lane move down did not target the adjacent position');
+  assert.equal(movedDown.receipt.timeline.lanes[1]?.id, secondaryLane.id, 'Timeline lane move down did not persist');
+  current = movedDown.receipt;
+
+  const secondaryDeleted = await performTimelineUiCommand(
+    page,
+    projectId,
+    async () => {
+      await panel.getByLabel(`Delete lane ${secondaryLaneName}`, { exact: true }).click();
+      await waitVisible(
+        panel.getByLabel(`Confirm deletion of lane ${secondaryLaneName}`, { exact: true }),
+        'Pro Timeline secondary-lane deletion confirmation',
+      );
+      await panel.getByLabel(`Confirm deletion of lane ${secondaryLaneName}`, { exact: true }).click();
+    },
+    'Pro Timeline secondary lane cleanup',
+  );
+  assert.equal(secondaryDeleted.request?.lane_id, secondaryLane.id, 'Timeline deleted the wrong secondary lane');
+  assert.equal(
+    secondaryDeleted.receipt.timeline.lanes.some((candidate) => candidate.id === secondaryLane.id),
+    false,
+    'Timeline secondary lane still exists after deletion',
+  );
+  current = secondaryDeleted.receipt;
+
+  const addScene = async (scene, current, label) => {
+    const picker = await waitVisible(
+      panel.getByLabel('Scene to add to Timeline', { exact: true }),
+      `${label} picker`,
+    );
+    await picker.selectOption(String(scene.id));
+    const placed = await performTimelineUiCommand(
+      page,
+      projectId,
+      () => panel.getByRole('button', { name: 'ADD', exact: true }).click(),
+      `${label} opt-in`,
+    );
+    assert.deepEqual(
+      {
+        kind: placed.request?.kind,
+        scene_id: placed.request?.scene_id,
+        lane_id: placed.request?.lane_id,
+        expected_revision: placed.request?.expected_revision,
+      },
+      {
+        kind: 'place_event',
+        scene_id: scene.id,
+        lane_id: null,
+        expected_revision: current.timeline.revision,
+      },
+      `${label} did not opt in the exact existing Scene against the latest revision`,
+    );
+    await waitVisible(
+      panel.getByLabel(`Lane for ${scene.title}`, { exact: true }),
+      `${label} lane selector`,
+    );
+    return placed;
+  };
+
+  const firstAdded = await addScene(firstScene, current, 'Pro Timeline first Scene');
+  current = firstAdded.receipt;
+  const firstAssigned = await performTimelineUiCommand(
+    page,
+    projectId,
+    () => panel.getByLabel(`Lane for ${firstScene.title}`, { exact: true })
+      .selectOption(String(lane.id)),
+    'Pro Timeline first lane assignment',
+  );
+  assert.equal(firstAssigned.request?.lane_id, lane.id, 'First Timeline Scene targeted the wrong lane');
+  current = firstAssigned.receipt;
+
+  const secondAdded = await addScene(secondScene, current, 'Pro Timeline second Scene');
+  current = secondAdded.receipt;
+  const secondAssigned = await performTimelineUiCommand(
+    page,
+    projectId,
+    () => panel.getByLabel(`Lane for ${secondScene.title}`, { exact: true })
+      .selectOption(String(lane.id)),
+    'Pro Timeline second lane assignment',
+  );
+  assert.equal(secondAssigned.request?.lane_id, lane.id, 'Second Timeline Scene targeted the wrong lane');
+  current = secondAssigned.receipt;
+
+  const reordered = await performTimelineUiCommand(
+    page,
+    projectId,
+    () => panel.getByLabel(`Move ${secondScene.title} earlier`, { exact: true }).click(),
+    'Pro Timeline independent reorder',
+  );
+  assert.equal(reordered.request?.kind, 'place_event', 'Timeline reorder did not use place_event');
+  assert.equal(reordered.request?.scene_id, secondScene.id, 'Timeline reordered the wrong Scene');
+  assert.equal(reordered.request?.index, 0, 'Timeline earlier action did not target the preceding index');
+  assert.equal(reordered.receipt.timeline.order_mode, 'custom', 'Timeline reorder did not enter Custom mode');
+  assert.deepEqual(
+    reordered.receipt.timeline.events.slice(0, 2).map((event) => event.id),
+    [secondScene.id, firstScene.id],
+    'Timeline custom order did not persist independently',
+  );
+  const structureAfterReorder = await readStoryStructure(
+    session,
+    projectId,
+    'Pro structure after Timeline reorder',
+  );
+  assert.deepEqual(
+    structureAfterReorder,
+    baselineStructure,
+    'Timeline custom ordering mutated canonical manuscript structure',
+  );
+
+  const removed = await performTimelineUiCommand(
+    page,
+    projectId,
+    async () => {
+      await panel.getByLabel(`Remove ${firstScene.title} from Timeline`, { exact: true }).click();
+      await waitVisible(
+        panel.getByLabel(`Confirm removal of ${firstScene.title} from Timeline`, { exact: true }),
+        'Pro Timeline destructive-event confirmation',
+      );
+      await panel.getByLabel(`Confirm removal of ${firstScene.title} from Timeline`, { exact: true }).click();
+    },
+    'Pro Timeline non-destructive event removal',
+  );
+  assert.equal(removed.request?.kind, 'remove_event', 'Timeline removal used the wrong command');
+  assert.equal(removed.request?.scene_id, firstScene.id, 'Timeline removal targeted the wrong Scene');
+  assert.ok(
+    removed.receipt.timeline.off_timeline.some((scene) => scene.id === firstScene.id),
+    'Removed Timeline event did not return to the off-Timeline Scene list',
+  );
+
+  const deleted = await performTimelineUiCommand(
+    page,
+    projectId,
+    async () => {
+      await panel.getByLabel(`Delete lane ${primaryLaneName}`, { exact: true }).click();
+      await waitVisible(
+        panel.getByLabel(`Confirm deletion of lane ${primaryLaneName}`, { exact: true }),
+        'Pro Timeline lane-deletion confirmation',
+      );
+      await panel.getByLabel(`Confirm deletion of lane ${primaryLaneName}`, { exact: true }).click();
+    },
+    'Pro Timeline delete lane',
+  );
+  assert.equal(deleted.request?.kind, 'delete_lane', 'Timeline lane deletion used the wrong command');
+  assert.equal(deleted.request?.lane_id, lane.id, 'Timeline lane deletion targeted the wrong lane');
+  const retained = deleted.receipt.timeline.events.find((event) => event.id === secondScene.id);
+  assert.ok(retained, 'Deleting a Timeline lane deleted its remaining event');
+  assert.equal(retained.lane_id, null, 'Deleting a Timeline lane did not preserve its event as Unassigned');
+  assert.equal(retained.plotline, '', 'Deleting a Timeline lane left a dangling plotline');
+  assert.equal(
+    storyStructureSceneRows(await readStoryStructure(
+      session,
+      projectId,
+      'Pro structure after Timeline cleanup staging',
+    )).some(({ scene }) => Number(scene.id) === secondScene.id),
+    true,
+    'Deleting a Timeline lane deleted the underlying manuscript Scene',
+  );
+  record(
+    'journey',
+    'Pro packaged Timeline exercised lane metadata/order, opted in existing Scenes, reordered independently, removed safely, and retained events after lane deletion',
+  );
+  return {
+    baselineTimeline,
+    baselineStructure,
+    persistedTimeline: deleted.receipt.timeline,
+    retainedSceneId: secondScene.id,
+    retainedSceneTitle: secondScene.title,
   };
 }
 
@@ -3890,11 +4288,66 @@ async function exportProMarkdown(session, outputPath, bodyMarker, proMarker) {
   record('journey', 'Pro Markdown export written and verified');
 }
 
+async function verifyProTimelineAfterRestart(session, projectId, lifecycle) {
+  const restarted = await readTimeline(
+    session,
+    projectId,
+    'Pro transactional Timeline after restart',
+  );
+  assert.deepEqual(
+    restarted,
+    lifecycle.persistedTimeline,
+    'Pro transactional Timeline changed across graceful restart',
+  );
+  const panel = await selectProPanel(session.page, 'Timeline', 'Plot-Lane Timeline');
+  const retainedLane = await waitVisible(
+    panel.getByLabel(`Lane for ${lifecycle.retainedSceneTitle}`, { exact: true }),
+    'Pro restarted Unassigned Timeline event',
+  );
+  assert.equal(
+    await retainedLane.inputValue(),
+    '',
+    'Pro restarted Timeline did not retain the lane-deletion event as Unassigned',
+  );
+
+  const removed = await executeTimelineCommand(
+    session,
+    projectId,
+    restarted,
+    { kind: 'remove_event', scene_id: lifecycle.retainedSceneId },
+    'Pro restarted Timeline event cleanup',
+  );
+  const structural = await executeTimelineCommand(
+    session,
+    projectId,
+    removed.timeline,
+    { kind: 'set_order_mode', mode: 'structural' },
+    'Pro restarted Timeline order cleanup',
+  );
+  assert.deepEqual(
+    structural.timeline,
+    lifecycle.baselineTimeline,
+    'Pro restarted Timeline cleanup did not restore the exact imported baseline',
+  );
+  const cleanedStructure = await readStoryStructure(
+    session,
+    projectId,
+    'Pro structure after restarted Timeline cleanup',
+  );
+  assert.deepEqual(
+    cleanedStructure,
+    lifecycle.baselineStructure,
+    'Pro Timeline lifecycle changed canonical manuscript structure across restart',
+  );
+  record('journey', 'Pro transactional Timeline restart persistence and exact cleanup verified');
+}
+
 async function verifyProRestart(
   session,
   bundle,
   expectedDestination,
   structureLifecycle,
+  timelineLifecycle,
   bodyMarker,
   proMarker,
 ) {
@@ -3939,6 +4392,11 @@ async function verifyProRestart(
     false,
     'Pro transactional UI cleanup Act returned after restart',
   );
+  await verifyProTimelineAfterRestart(
+    session,
+    expectedDestination.projectId,
+    timelineLifecycle,
+  );
   const manuscript = await selectProPanel(page, 'Manuscript', 'Manuscript Editor');
   await waitText(manuscript, bodyMarker, 'Whiteboard marker after Pro restart');
   await waitText(manuscript, proMarker, 'Pro marker after Pro restart');
@@ -3982,6 +4440,10 @@ async function runProJourney({ electron, exePath, root, bundlePath, bundle, mark
     expectedDestination.projectId,
     bodyMarker,
   );
+  const timelineLifecycle = await exerciseProTransactionalTimeline(
+    first,
+    expectedDestination.projectId,
+  );
   await verifyProOmniboxNavigation(first, expectedDestination);
   await verifyProOmniboxCommandReview(first, expectedDestination.projectId);
   await configureProAiAndChat(first.page);
@@ -4011,6 +4473,7 @@ async function runProJourney({ electron, exePath, root, bundlePath, bundle, mark
     bundle,
     expectedDestination,
     structureLifecycle,
+    timelineLifecycle,
     bodyMarker,
     proMarker,
   );

@@ -229,29 +229,47 @@ def _plot(db: Database, project_id: int, opts: ExportOptions) -> list[dict]:
 
 
 def _timeline(db: Database, project_id: int, opts: ExportOptions) -> list[dict]:
-    """Chronological scene events — scene-derived, same order as the Timeline
-    view (sort_order then id)."""
-    scenes = db.get_all_scenes(project_id)
-    char_name_by_id = {c.id: c.name for c in db.get_all_characters(project_id)}
+    """Export the authoritative Timeline membership and effective order.
+
+    Timeline is a projection over Scenes plus project settings: not every Scene
+    is an event, and Custom mode deliberately diverges from manuscript order.
+    Read the same coherent snapshot as the API so JSON/Markdown/CSV exports
+    cannot disagree with the board the writer sees.
+    """
+    from logosforge.timeline import project_timeline
+
+    snapshot = db.read_timeline_snapshot(project_id)
+    if snapshot is None:
+        return []
+
+    projection = project_timeline(snapshot.scenes, snapshot.settings)
+    scene_by_id = {int(scene.id): scene for scene in snapshot.scenes}
     events = []
-    for index, scene in enumerate(scenes):
+    for index, scene_id in enumerate(projection.effective_order):
+        scene = scene_by_id[scene_id]
         duration = (
             scene.estimated_duration_minutes
             or getattr(scene, "performance_duration_minutes", 0)
+            or 0
         )
         event: dict = {
             "order_index": index + 1,
             "title": scene.title,
             "act": scene.act,
             "chapter": scene.chapter,
+            "plotline": scene.plotline,
+            "color_label": scene.color_label,
             "time_of_day": scene.time_of_day,
             "location": scene.location or scene.slugline,
             "duration_minutes": duration,
         }
-        states = db.get_scene_character_states(scene.id)
+        states = snapshot.character_states_by_scene.get(int(scene.id), ())
         if states:
             event["character_states"] = [
-                {"character": char_name_by_id.get(cid, str(cid)), "state": state}
+                {
+                    "character": snapshot.character_names_by_id.get(cid, str(cid)),
+                    "state": state,
+                }
                 for cid, state in states
             ]
         if opts.include_ids:

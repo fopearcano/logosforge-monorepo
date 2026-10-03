@@ -65,8 +65,9 @@ import type {
   OutlineGenerateResultDTO,
   PlotBlockDTO,
   PlotBlockUpdateDTO,
-  TimelineEventDTO,
-  TimelineEventUpdateDTO,
+  TimelineSnapshotDTO,
+  TimelineCommandDTO,
+  TimelineCommandResultDTO,
   PsykeEntryDTO,
   PsykeEntryCreateDTO,
   PsykeEntryUpdateDTO,
@@ -90,7 +91,6 @@ import type {
   PsykeConsoleCommandPlanDTO,
   PsykeConsoleExecuteRequestDTO,
   PsykeConsoleExecutionDTO,
-  TimelineEventCreateDTO,
   ThemeScenesDTO,
   AssistantRequestDTO,
   AssistantResponseDTO,
@@ -202,10 +202,12 @@ export interface ApiClient {
   // Plot & timeline
   getPlot(p: number): Promise<PlotBlockDTO[]>;
   updatePlotBlock(p: number, blockId: string, body: PlotBlockUpdateDTO): Promise<PlotBlockDTO>;
-  getTimeline(p: number): Promise<TimelineEventDTO[]>;
-  createTimelineEvent(p: number, body: TimelineEventCreateDTO): Promise<TimelineEventDTO>;
-  updateTimelineEvent(p: number, eventId: number, body: TimelineEventUpdateDTO): Promise<TimelineEventDTO>;
-  deleteTimelineEvent(p: number, eventId: number): Promise<RemovedResultDTO>;
+  getTimeline(p: number): Promise<TimelineSnapshotDTO>;
+  /** Apply one revision-guarded, atomic Timeline mutation. */
+  executeTimelineCommand(
+    p: number,
+    body: TimelineCommandDTO,
+  ): Promise<TimelineCommandResultDTO>;
 
   // PSYKE
   listPsyke(p: number): Promise<PsykeEntryDTO[]>;

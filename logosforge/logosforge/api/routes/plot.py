@@ -37,26 +37,28 @@ def update_plot_block(
     db: Database = Depends(get_db),
     broker: ApiEventBroker = Depends(get_broker),
 ):
-    scenes = [
-        s for s in db.get_all_scenes(project.id)
-        if ((s.plotline or "").strip() or "Unassigned") == block_id
-    ]
-    if not scenes:
+    result = db.update_plot_block(
+        project.id,
+        block_id,
+        plotline=body.plotline,
+        color_label=body.color_label,
+    )
+    if result is None:
         raise not_found(f"Plot block '{block_id}' not found")
 
-    new_name = block_id
-    if body.plotline is not None:
-        new_name = body.plotline
-        for s in scenes:
-            db.update_scene_plotline(s.id, body.plotline)
-    if body.color_label is not None:
-        for s in scenes:
-            db.update_scene_color(s.id, body.color_label)
-
+    for scene_id in result.changed_scene_ids:
+        broker.publish(
+            "scene_changed", project_id=project.id, scene_id=scene_id,
+        )
     broker.publish("plot_changed", project_id=project.id)
+    if result.timeline_changed:
+        broker.publish("timeline_changed", project_id=project.id)
+
     blocks = serializers.plot_blocks(db, project.id)
     for block in blocks:
-        if block.id == new_name:
+        if block.id == result.new_name:
             return block
     # If the block became empty after a rename collision, return a stub.
-    return schemas.PlotBlockDTO(id=new_name, plotline=new_name, scenes=[])
+    return schemas.PlotBlockDTO(
+        id=result.new_name, plotline=result.new_name, scenes=[],
+    )

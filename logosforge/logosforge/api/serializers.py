@@ -15,6 +15,7 @@ from logosforge.db import (
     Database,
     ManuscriptReadSnapshot,
     StoryStructureReadSnapshot,
+    TimelineReadSnapshot,
 )
 
 
@@ -368,35 +369,98 @@ def plot_blocks(db: Database, project_id: int) -> list[schemas.PlotBlockDTO]:
 # -- Timeline ----------------------------------------------------------------
 
 
-def timeline_events(db: Database, project_id: int) -> list[schemas.TimelineEventDTO]:
-    scenes = db.get_all_scenes(project_id)
-    char_name_by_id = {c.id: c.name for c in db.get_all_characters(project_id)}
-    events = []
-    for index, scene in enumerate(scenes):
+def timeline_snapshot_to_dto(
+    snapshot: TimelineReadSnapshot,
+) -> schemas.TimelineSnapshotDTO:
+    """Serialize only values captured by one atomic Timeline read."""
+    from logosforge import story_structure
+    from logosforge.project_compat import get_project_narrative_engine
+    from logosforge.timeline import project_timeline
+
+    projection = project_timeline(snapshot.scenes, snapshot.settings)
+    scene_by_id = {int(scene.id): scene for scene in snapshot.scenes}
+    tree = story_structure.build_structure_tree_from_scenes(snapshot.scenes)
+    chapter_level = get_project_narrative_engine(snapshot.project) == "novel"
+    numbers = story_structure.compute_structural_numbers(tree, chapter_level)["scenes"]
+
+    lane_by_name: dict[str, object] = {}
+    for lane in snapshot.lanes:
+        lane_by_name.setdefault(lane.name or "", lane)
+    event_set = set(projection.event_ids)
+    event_count_by_lane: dict[int, int] = {}
+    for scene_id in event_set:
+        scene = scene_by_id[scene_id]
+        lane = lane_by_name.get((scene.plotline or "").strip())
+        if lane is not None:
+            event_count_by_lane[int(lane.id)] = (
+                event_count_by_lane.get(int(lane.id), 0) + 1
+            )
+
+    lanes = [
+        schemas.TimelineLaneDTO(
+            id=int(lane.id),
+            name=lane.name or "",
+            color_label=lane.color_label or "",
+            order_index=index,
+            collapsed=bool(lane.collapsed),
+            event_count=event_count_by_lane.get(int(lane.id), 0),
+        )
+        for index, lane in enumerate(snapshot.lanes)
+    ]
+
+    events: list[schemas.TimelineEventDTO] = []
+    for order_index, scene_id in enumerate(projection.effective_order, start=1):
+        scene = scene_by_id[scene_id]
+        lane = lane_by_name.get((scene.plotline or "").strip())
         duration = (
             scene.estimated_duration_minutes
             or getattr(scene, "performance_duration_minutes", 0)
+            or 0
         )
-        states = [
-            schemas.TimelineCharacterStateDTO(
-                character=char_name_by_id.get(cid, str(cid)), state=state,
-            )
-            for cid, state in db.get_scene_character_states(scene.id)
-        ]
-        events.append(
-            schemas.TimelineEventDTO(
-                id=scene.id,
-                order_index=index + 1,
-                title=scene.title,
-                act=scene.act or "",
-                chapter=scene.chapter or "",
-                time_of_day=scene.time_of_day or "",
-                location=scene.location or scene.slugline or "",
-                duration_minutes=duration or 0,
-                character_states=states,
-            )
+        events.append(schemas.TimelineEventDTO(
+            id=int(scene.id),
+            order_index=order_index,
+            title=scene.title or "",
+            structural_number=numbers.get(int(scene.id), ""),
+            act=scene.act or "",
+            chapter=scene.chapter or "",
+            plotline=scene.plotline or "",
+            color_label=scene.color_label or "",
+            lane_id=int(lane.id) if lane is not None else None,
+            time_of_day=scene.time_of_day or "",
+            location=scene.location or scene.slugline or "",
+            duration_minutes=int(duration),
+            character_states=[
+                schemas.TimelineCharacterStateDTO(
+                    character=snapshot.character_names_by_id.get(
+                        character_id, str(character_id),
+                    ),
+                    state=state,
+                )
+                for character_id, state in snapshot.character_states_by_scene.get(
+                    int(scene.id), (),
+                )
+            ],
+        ))
+
+    off_timeline = [
+        schemas.TimelineOffTimelineSceneDTO(
+            id=int(scene_id),
+            title=scene_by_id[scene_id].title or "",
+            structural_number=numbers.get(scene_id, ""),
+            act=scene_by_id[scene_id].act or "",
+            chapter=scene_by_id[scene_id].chapter or "",
         )
-    return events
+        for scene_id in projection.off_timeline_ids
+    ]
+    return schemas.TimelineSnapshotDTO(
+        project_id=int(snapshot.project.id),
+        revision=snapshot.revision,
+        order_mode=projection.order_mode,
+        lanes=lanes,
+        events=events,
+        off_timeline=off_timeline,
+    )
 
 
 # -- PSYKE -------------------------------------------------------------------

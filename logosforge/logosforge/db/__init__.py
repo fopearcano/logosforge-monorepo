@@ -11,6 +11,13 @@ from logosforge.db.database import (
     StoryStructureReadSnapshot,
     StoryStructureRevisionConflict,
     StoryStructureSceneNotFound,
+    TimelineCommandError,
+    TimelineCommandResult,
+    TimelineLaneNotFound,
+    TimelineProjectNotFound,
+    TimelineReadSnapshot,
+    TimelineRevisionConflict,
+    TimelineSceneNotFound,
 )
 
 __all__ = [
@@ -26,4 +33,11 @@ __all__ = [
     "StoryStructureReadSnapshot",
     "StoryStructureRevisionConflict",
     "StoryStructureSceneNotFound",
+    "TimelineCommandError",
+    "TimelineCommandResult",
+    "TimelineLaneNotFound",
+    "TimelineProjectNotFound",
+    "TimelineReadSnapshot",
+    "TimelineRevisionConflict",
+    "TimelineSceneNotFound",
 ]

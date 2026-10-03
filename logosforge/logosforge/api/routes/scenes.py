@@ -118,9 +118,11 @@ def update_scene(
             "Use the revision-guarded story-structure placement or command endpoint."
         )
 
-    # The read, revision comparison and write are one process-local critical
-    # section. Database's targeted Scene writers use this same re-entrant lock.
-    with db.scene_write_lock(scene_id):
+    # Keep the read/merge/write behind both the per-Scene lock and the
+    # project-scoped Plot topology lock.  An unrelated Scene edit still writes
+    # the merged plotline value, so allowing a Plot/Timeline lane rename between
+    # this read and write could otherwise restore the stale lane name.
+    with db.scene_write_lock(scene_id), db.plot_write_lock(project.id):
         scene = db.get_scene_by_id(scene_id)
         if scene is None or scene.project_id != project.id:
             raise not_found(f"Scene {scene_id} not found")

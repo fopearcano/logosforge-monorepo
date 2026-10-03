@@ -7,6 +7,8 @@ import threading
 import warnings
 
 import pytest
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 warnings.filterwarnings("ignore")
 
@@ -342,19 +344,207 @@ def test_plot_blocks_and_rename(env):
     assert renamed.json()["plotline"] == "A-Plot"
 
 
-def test_timeline_create_and_update(env):
-    client, _, pid = env
-    ev = client.post(
-        f"/api/projects/{pid}/timeline/events",
-        json={"title": "Dawn", "time_of_day": "DAY", "duration_minutes": 5},
+def test_plot_rename_updates_timeline_lane_settings_and_realtime_events(env):
+    client, db, pid = env
+    first = db.create_scene(pid, "S1", plotline="Main", color_label="blue")
+    second = db.create_scene(pid, "S2", plotline="Main", color_label="blue")
+    lane = db.create_timeline_lane(pid, "Main", "cyan")
+    settings = db.patch_project_settings(pid, {
+        "timeline_order_mode": "custom",
+        "timeline_order": [second.id, first.id],
+        "timeline_event_ids": [],
+        "unrelated": "keep",
+    })
+    before = client.get(f"/api/projects/{pid}/timeline").json()
+    cursor = client.app.state.broker.latest_id()
+
+    response = client.patch(
+        f"/api/projects/{pid}/plot/blocks/Main",
+        json={"plotline": "A-Plot"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["plotline"] == "A-Plot"
+    assert [row.plotline for row in db.get_all_scenes(pid)] == ["A-Plot", "A-Plot"]
+    lanes = db.get_timeline_lanes(pid)
+    assert [(row.id, row.name, row.color_label) for row in lanes] == [
+        (lane.id, "A-Plot", "cyan"),
+    ]
+    assert db.get_project_settings(pid) == settings
+
+    after = client.get(f"/api/projects/{pid}/timeline").json()
+    assert after["revision"] != before["revision"]
+    assert after["lanes"][0]["name"] == "A-Plot"
+    assert [row["lane_id"] for row in after["events"]] == [lane.id, lane.id]
+    assert [(event["event"], event["data"]) for event in
+            client.app.state.broker.events_since(cursor, pid)] == [
+        ("scene_changed", {"scene_id": first.id}),
+        ("scene_changed", {"scene_id": second.id}),
+        ("plot_changed", {}),
+        ("timeline_changed", {}),
+    ]
+
+
+def test_plot_rename_sql_failure_rolls_back_scenes_lane_and_events(env):
+    client, db, pid = env
+    first = db.create_scene(pid, "S1", plotline="Main")
+    second = db.create_scene(pid, "S2", plotline="Main")
+    lane = db.create_timeline_lane(pid, "Main", "cyan")
+    cursor = client.app.state.broker.latest_id()
+
+    with db._engine.begin() as connection:
+        connection.execute(text(f"""
+            CREATE TRIGGER reject_second_plot_rename
+            BEFORE UPDATE OF plotline ON scene
+            WHEN OLD.id = {second.id}
+            BEGIN
+                SELECT RAISE(ABORT, 'forced plot rollback');
+            END;
+        """))
+    try:
+        with pytest.raises(IntegrityError):
+            client.patch(
+                f"/api/projects/{pid}/plot/blocks/Main",
+                json={"plotline": "Renamed"},
+            )
+    finally:
+        with db._engine.begin() as connection:
+            connection.execute(text("DROP TRIGGER reject_second_plot_rename"))
+
+    assert [(row.id, row.plotline) for row in db.get_all_scenes(pid)] == [
+        (first.id, "Main"), (second.id, "Main"),
+    ]
+    assert [(row.id, row.name) for row in db.get_timeline_lanes(pid)] == [
+        (lane.id, "Main"),
+    ]
+    assert client.app.state.broker.events_since(cursor, pid) == []
+
+
+def test_plot_rename_collision_preserves_destination_lane_and_order(env):
+    client, db, pid = env
+    db.create_timeline_lane(pid, "Prelude", "gray")
+    source_lane = db.create_timeline_lane(pid, "Main", "cyan")
+    destination_lane = db.create_timeline_lane(pid, "B-Plot", "amber")
+    db.set_timeline_lane_collapsed(destination_lane.id, True)
+    db.create_timeline_lane(pid, "After", "violet")
+    source = db.create_scene(pid, "Source", plotline="Main")
+    destination = db.create_scene(pid, "Destination", plotline="B-Plot")
+
+    response = client.patch(
+        f"/api/projects/{pid}/plot/blocks/Main",
+        json={"plotline": "B-PLOT"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["plotline"] == "B-Plot"
+    assert [row["scene_id"] for row in response.json()["scenes"]] == [
+        source.id, destination.id,
+    ]
+    lanes = db.get_timeline_lanes(pid)
+    assert [(row.name, row.order_index) for row in lanes] == [
+        ("Prelude", 0), ("B-Plot", 1), ("After", 2),
+    ]
+    canonical = next(row for row in lanes if row.name == "B-Plot")
+    assert canonical.id == destination_lane.id
+    assert canonical.color_label == "amber"
+    assert canonical.collapsed is True
+    assert all(row.id != source_lane.id for row in lanes)
+    assert [row.plotline for row in db.get_all_scenes(pid)] == [
+        "B-Plot", "B-Plot",
+    ]
+
+
+def test_unrelated_scene_patch_cannot_restore_plotline_after_plot_rename(
+    env, monkeypatch,
+):
+    client, db, pid = env
+    scene = db.create_scene(pid, "S1", plotline="Main", content="before")
+    lane = db.create_timeline_lane(pid, "Main", "cyan")
+    scene_write_entered = threading.Event()
+    release_scene_write = threading.Event()
+    plot_write_entered = threading.Event()
+    original_scene_update = db.update_scene
+    original_plot_update = db.update_plot_block
+
+    def delayed_scene_update(*args, **kwargs):
+        scene_write_entered.set()
+        assert release_scene_write.wait(5)
+        return original_scene_update(*args, **kwargs)
+
+    def observed_plot_update(*args, **kwargs):
+        plot_write_entered.set()
+        return original_plot_update(*args, **kwargs)
+
+    monkeypatch.setattr(db, "update_scene", delayed_scene_update)
+    monkeypatch.setattr(db, "update_plot_block", observed_plot_update)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        scene_future = pool.submit(
+            client.patch,
+            f"/api/projects/{pid}/scenes/{scene.id}",
+            json={"content": "after"},
+        )
+        assert scene_write_entered.wait(5)
+        plot_future = pool.submit(
+            client.patch,
+            f"/api/projects/{pid}/plot/blocks/Main",
+            json={"plotline": "Renamed"},
+        )
+        try:
+            assert plot_write_entered.wait(5)
+            assert not plot_future.done()
+        finally:
+            release_scene_write.set()
+        assert scene_future.result(timeout=5).status_code == 200
+        assert plot_future.result(timeout=5).status_code == 200
+
+    current = db.get_scene_by_id(scene.id)
+    assert current.content == "after"
+    assert current.plotline == "Renamed"
+    assert [(row.id, row.name) for row in db.get_timeline_lanes(pid)] == [
+        (lane.id, "Renamed"),
+    ]
+
+
+def test_timeline_snapshot_and_revisioned_commands(env):
+    client, db, pid = env
+    scene = db.create_scene(
+        pid,
+        "Dawn",
+        time_of_day="DAY",
+        estimated_duration_minutes=5,
+    )
+    current = client.get(f"/api/projects/{pid}/timeline").json()
+    assert [row["id"] for row in current["off_timeline"]] == [scene.id]
+
+    lane_result = client.post(
+        f"/api/projects/{pid}/timeline/commands",
+        json={
+            "kind": "create_lane",
+            "expected_revision": current["revision"],
+            "name": "Main",
+        },
     ).json()
-    assert ev["time_of_day"] == "DAY"
-    assert ev["duration_minutes"] == 5
-    upd = client.patch(
-        f"/api/projects/{pid}/timeline/events/{ev['id']}",
-        json={"location": "Castle"},
+    lane_id = lane_result["timeline"]["lanes"][0]["id"]
+    placed = client.post(
+        f"/api/projects/{pid}/timeline/commands",
+        json={
+            "kind": "place_event",
+            "expected_revision": lane_result["timeline"]["revision"],
+            "scene_id": scene.id,
+            "lane_id": lane_id,
+        },
     ).json()
-    assert upd["location"] == "Castle"
+    event = placed["timeline"]["events"][0]
+    assert event["time_of_day"] == "DAY"
+    assert event["duration_minutes"] == 5
+    assert event["lane_id"] == lane_id
+
+    # The old mutator surface is intentionally retired: it bypassed the
+    # revision guard and could split one logical edit across transactions.
+    paths = client.app.openapi()["paths"]
+    assert "/api/projects/{project_id}/timeline/events" not in paths
+    assert "/api/projects/{project_id}/timeline/events/{event_id}" not in paths
 
 
 # -- PSYKE -------------------------------------------------------------------

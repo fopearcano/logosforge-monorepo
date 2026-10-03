@@ -60,6 +60,14 @@ if (manuscriptSnapshotRoute !== '/api/projects/42/manuscript-snapshot') {
   throw new Error(`manuscript snapshot route mismatch: ${manuscriptSnapshotRoute}`);
 }
 
+const timelineCommandsRoute = ROUTES.timelineCommands(42);
+if (timelineCommandsRoute !== '/api/projects/42/timeline/commands') {
+  throw new Error(`timeline commands route mismatch: ${timelineCommandsRoute}`);
+}
+if ('timelineEvents' in ROUTES || 'timelineEvent' in ROUTES) {
+  throw new Error('legacy unguarded Timeline mutation routes must not be advertised');
+}
+
 const psykeCommandRoutes = [
   ROUTES.psykeConsolePlan(42),
   ROUTES.psykeConsoleExecute(42),
@@ -72,7 +80,7 @@ if (JSON.stringify(psykeCommandRoutes) !== JSON.stringify(expectedPsykeCommandRo
   throw new Error(`PSYKE command route mismatch: ${psykeCommandRoutes}`);
 }
 
-console.log('Contract route/event tests: 11 passed, 0 failed');
+console.log('Contract route/event tests: 13 passed, 0 failed');
 
 const pythonSchemas = readFileSync('../logosforge/logosforge/api/schemas.py', 'utf8');
 const typescriptSchemas = readFileSync('src/types.ts', 'utf8');

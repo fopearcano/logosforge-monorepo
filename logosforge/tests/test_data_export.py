@@ -100,6 +100,33 @@ def test_story_elements_default_excludes_scenes_content():
     assert "scenes" not in data  # scenes section off by default
 
 
+def test_story_elements_timeline_uses_authoritative_membership_and_custom_order():
+    db = Database()
+    project = db.create_project("Ordered Timeline", narrative_engine="novel")
+    first = db.create_scene(
+        project.id, "First event", act="Act I", chapter="One", plotline="Main",
+    )
+    second = db.create_scene(
+        project.id, "Explicit event", act="Act I", chapter="One",
+    )
+    db.create_scene(project.id, "Off Timeline", act="Act I", chapter="One")
+    db.create_timeline_lane(project.id, "Main", order_index=0)
+    db.patch_project_settings(project.id, {
+        "timeline_event_ids": [second.id],
+        "timeline_order_mode": "custom",
+        "timeline_order": [second.id, first.id],
+    })
+
+    timeline = build_story_elements(db, project.id)["timeline"]
+
+    assert [event["title"] for event in timeline] == [
+        "Explicit event", "First event",
+    ]
+    assert [event["order_index"] for event in timeline] == [1, 2]
+    assert timeline[0]["plotline"] == ""
+    assert all(event["title"] != "Off Timeline" for event in timeline)
+
+
 def test_relations_point_to_exported_entries():
     db = Database()
     pid = _make_project(db)
@@ -165,6 +192,59 @@ def test_full_project_includes_derived_and_settings():
     assert "plot" in data
     assert "timeline" in data
     assert "settings" in data
+
+
+def test_full_project_roundtrip_preserves_authoritative_timeline_topology():
+    db = Database()
+    project = db.create_project("Timeline Round Trip", narrative_engine="novel")
+    first = db.create_scene(
+        project.id, "Lane event", act="Act I", chapter="One", plotline="Main",
+    )
+    second = db.create_scene(
+        project.id, "Explicit event", act="Act I", chapter="One",
+    )
+    db.create_scene(project.id, "Off Timeline", act="Act I", chapter="One")
+    lane = db.create_timeline_lane(
+        project.id, "Main", color_label="cyan", order_index=0,
+    )
+    db.set_timeline_lane_collapsed(lane.id, True)
+    db.patch_project_settings(project.id, {
+        "timeline_event_ids": [second.id],
+        "timeline_order_mode": "custom",
+        "timeline_order": [second.id, first.id],
+    })
+
+    exported = build_full_export(db, project.id)
+    topology = exported["plot_timeline"]
+    assert topology["order_mode"] == "custom"
+    assert [ref["source_order"] for ref in topology["explicit_events"]] == [2]
+    assert [ref["source_order"] for ref in topology["custom_order"]] == [2, 1]
+
+    serialized = to_json(exported)
+    validated, error = validate_import_data(serialized)
+    assert validated is not None, error
+    db2 = Database()
+    imported_id = import_json(db2, validated)
+    snapshot = db2.read_timeline_snapshot(imported_id)
+    assert snapshot is not None
+    from logosforge.timeline import project_timeline
+
+    projection = project_timeline(snapshot.scenes, snapshot.settings)
+    title_by_id = {scene.id: scene.title for scene in snapshot.scenes}
+    assert projection.order_mode == "custom"
+    assert [title_by_id[scene_id] for scene_id in projection.explicit_event_ids] == [
+        "Explicit event",
+    ]
+    assert [title_by_id[scene_id] for scene_id in projection.effective_order] == [
+        "Explicit event", "Lane event",
+    ]
+    assert [title_by_id[scene_id] for scene_id in projection.off_timeline_ids] == [
+        "Off Timeline",
+    ]
+    imported_lane = db2.get_timeline_lanes(imported_id)[0]
+    assert (imported_lane.name, imported_lane.color_label, imported_lane.collapsed) == (
+        "Main", "cyan", True,
+    )
 
 
 # -- Markdown ----------------------------------------------------------------

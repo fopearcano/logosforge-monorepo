@@ -296,6 +296,65 @@ try {
     throw new Error('Story structure command response was not validated');
   }
 
+  let releaseTimelineCommand!: (response: Response) => void;
+  globalThis.fetch = (input: RequestInfo | URL, init: RequestInit = {}) => {
+    requests.push({ input: String(input), init });
+    return new Promise<Response>((resolve) => { releaseTimelineCommand = resolve; });
+  };
+  const timelineCommandBody = {
+    kind: 'place_event' as const,
+    expected_revision: 'd'.repeat(64),
+    scene_id: 11,
+    lane_id: 4,
+    index: 0,
+  };
+  const pendingTimelineCommand = browser.executeTimelineCommand(7, timelineCommandBody);
+  for (let i = 0; i < 6; i++) await Promise.resolve();
+  const timelineCommandRequest = requests.at(-1);
+  if (timelineCommandRequest?.input !== '/api/projects/7/timeline/commands'
+      || timelineCommandRequest.init.method !== 'POST') {
+    throw new Error('Timeline command used the wrong route or method');
+  }
+  const serializedTimelineCommand = JSON.parse(String(timelineCommandRequest.init.body));
+  if (serializedTimelineCommand.kind !== 'place_event'
+      || serializedTimelineCommand.expected_revision !== 'd'.repeat(64)
+      || serializedTimelineCommand.scene_id !== 11
+      || serializedTimelineCommand.lane_id !== 4
+      || serializedTimelineCommand.index !== 0) {
+    throw new Error('Timeline command did not preserve its discriminated payload');
+  }
+  let timelineBarrierDone = false;
+  const timelineBarrier = flushPendingProjectSaves().then(() => { timelineBarrierDone = true; });
+  for (let i = 0; i < 6; i++) await Promise.resolve();
+  if (timelineBarrierDone) throw new Error('Timeline command escaped the persistence barrier');
+  releaseTimelineCommand(new Response(JSON.stringify({
+    timeline: {
+      project_id: 7,
+      revision: 'e'.repeat(64),
+      order_mode: 'custom',
+      lanes: [{
+        id: 4, name: 'Main', color_label: 'cyan', order_index: 0,
+        collapsed: false, event_count: 1,
+      }],
+      events: [{
+        id: 11, order_index: 1, title: 'Scene', structural_number: '1.1.1',
+        act: 'Act One', chapter: 'Chapter One', plotline: 'Main', color_label: '',
+        lane_id: 4, time_of_day: '', location: '', duration_minutes: 0,
+        character_states: [],
+      }],
+      off_timeline: [],
+    },
+    changed: true,
+    affected_scene_ids: [11],
+  }), { status: 200, headers: { 'content-type': 'application/json' } }));
+  const timelineCommandResult = await pendingTimelineCommand;
+  await timelineBarrier;
+  if (!timelineCommandResult.changed
+      || timelineCommandResult.timeline.order_mode !== 'custom'
+      || timelineCommandResult.affected_scene_ids[0] !== 11) {
+    throw new Error('Timeline command response was not validated');
+  }
+
   let releaseRead!: (response: Response) => void;
   globalThis.fetch = () => new Promise<Response>((resolve) => { releaseRead = resolve; });
   const pendingRead = browser.health();
@@ -345,7 +404,7 @@ try {
   await Promise.all([failedPatch, recoveredPatch]);
   if (failureCalls !== 2) throw new Error('PATCH queue stopped after a rejected request');
 
-  console.log('HTTP API client tests: 24 passed, 0 failed');
+  console.log('HTTP API client tests: 25 passed, 0 failed');
 } finally {
   globalThis.fetch = originalFetch;
 }

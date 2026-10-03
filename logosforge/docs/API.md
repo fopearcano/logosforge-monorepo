@@ -298,9 +298,34 @@ PATCH  /api/projects/{project_id}/plot/blocks/{block_id}          { plotline?, c
 ### Timeline (scene-derived; event id = scene id)
 ```
 GET    /api/projects/{project_id}/timeline
-POST   /api/projects/{project_id}/timeline/events
-PATCH  /api/projects/{project_id}/timeline/events/{event_id}
+POST   /api/projects/{project_id}/timeline/commands
 ```
+
+The read returns one authoritative `TimelineSnapshotDTO` containing
+`project_id`, a SHA-256 `revision`, `order_mode`, persisted lanes, ordered
+events, and `off_timeline` scenes. A scene is on the Timeline when it has a
+non-empty plotline or its id is explicitly present in Timeline membership.
+Structural order follows the canonical manuscript hierarchy; custom order is
+stored independently and never rewrites manuscript `sort_order`.
+
+Every command includes the snapshot's `expected_revision` and is applied in a
+single transaction. A stale revision returns `409` with error code
+`timeline_conflict`; well-formed but invalid commands return `400`, while
+request-schema failures return `422`. Supported command kinds are:
+
+- `create_lane`: `name`, optional `color_label`, optional zero-based `index`
+- `update_lane`: `lane_id` and one or more of `name`, `color_label`,
+  `collapsed`, or zero-based `index`
+- `delete_lane`: `lane_id` (member scenes remain as Unassigned events)
+- `place_event`: `scene_id`, required nullable `lane_id`, optional zero-based
+  `index`
+- `remove_event`: `scene_id` (the underlying scene is preserved)
+- `set_order_mode`: `mode` (`structural` or `custom`)
+
+The former `/timeline/events` POST/PATCH/DELETE endpoints are retired because
+they could mutate scene structure without the Timeline revision guard. Create
+and edit scene prose/metadata through `/scenes`; use Timeline commands for
+membership, lanes, and board order.
 
 ### PSYKE
 ```

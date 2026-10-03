@@ -100,7 +100,8 @@ def import_json(db: Database, data: dict) -> int:
     scenes = data.get("scenes", [])
     scenes.sort(key=lambda s: s.get("order_index", 0))
 
-    for scene_data in scenes:
+    scene_id_by_source_order: dict[int, int] = {}
+    for fallback_order, scene_data in enumerate(scenes, start=1):
         scene_title = scene_data.get("title", "").strip()
         if not scene_title:
             continue
@@ -129,7 +130,7 @@ def import_json(db: Database, data: dict) -> int:
                 if char_name in char_id_by_name and state:
                     character_states.append((char_id_by_name[char_name], state))
 
-        db.create_scene(
+        scene = db.create_scene(
             project_id,
             title=scene_title,
             summary=scene_data.get("summary", ""),
@@ -171,6 +172,11 @@ def import_json(db: Database, data: dict) -> int:
             place_ids=place_ids,
             character_states=character_states,
         )
+        try:
+            source_order = int(scene_data.get("order_index", fallback_order))
+        except (TypeError, ValueError):
+            source_order = fallback_order
+        scene_id_by_source_order.setdefault(source_order, int(scene.id))
 
     # Create PSYKE entries and build name → id mapping
     psyke_id_by_name: dict[str, int] = {}
@@ -300,18 +306,71 @@ def import_json(db: Database, data: dict) -> int:
     timeline = data.get("plot_timeline", {}) or {}
     if not isinstance(timeline, dict):
         timeline = {}
+
+    def _timeline_scene_id(reference) -> int | None:
+        """Resolve an exported, database-independent Timeline Scene reference."""
+        if isinstance(reference, dict):
+            raw_order = reference.get("source_order")
+            if not isinstance(raw_order, bool):
+                try:
+                    resolved = scene_id_by_source_order.get(int(raw_order))
+                except (TypeError, ValueError):
+                    resolved = None
+                if resolved is not None:
+                    return resolved
+            title = reference.get("source_title", "")
+            return scene_id_by_title.get(title) if isinstance(title, str) else None
+        if isinstance(reference, int) and not isinstance(reference, bool):
+            return scene_id_by_source_order.get(reference)
+        if isinstance(reference, str):
+            return scene_id_by_title.get(reference)
+        return None
+
     for lane in timeline.get("lanes", []):
         name = (lane.get("name") or "").strip()
         if not name:
             continue
-        db.create_timeline_lane(
+        created_lane = db.create_timeline_lane(
             project_id, name,
             color_label=lane.get("color_label", ""),
             order_index=lane.get("order_index"),
         )
+        if lane.get("collapsed"):
+            db.set_timeline_lane_collapsed(created_lane.id, True)
+
+    timeline_settings = {}
+    if "explicit_events" in timeline:
+        explicit_references = timeline.get("explicit_events")
+        if not isinstance(explicit_references, list):
+            explicit_references = []
+        timeline_settings["timeline_event_ids"] = list(dict.fromkeys(
+            scene_id
+            for reference in explicit_references
+            if (scene_id := _timeline_scene_id(reference)) is not None
+        ))
+    if "custom_order" in timeline:
+        custom_references = timeline.get("custom_order")
+        if not isinstance(custom_references, list):
+            custom_references = []
+        timeline_settings["timeline_order"] = list(dict.fromkeys(
+            scene_id
+            for reference in custom_references
+            if (scene_id := _timeline_scene_id(reference)) is not None
+        ))
+    if timeline.get("order_mode") in {"structural", "custom"}:
+        timeline_settings["timeline_order_mode"] = timeline["order_mode"]
+    if timeline_settings:
+        db.patch_project_settings(project_id, timeline_settings)
+
     for link in timeline.get("links", []):
-        src = scene_id_by_title.get(link.get("source_title", ""))
-        tgt = scene_id_by_title.get(link.get("target_title", ""))
+        src = _timeline_scene_id({
+            "source_order": link.get("source_order"),
+            "source_title": link.get("source_title", ""),
+        })
+        tgt = _timeline_scene_id({
+            "source_order": link.get("target_order"),
+            "source_title": link.get("target_title", ""),
+        })
         if src is None or tgt is None:
             continue
         db.add_timeline_link(

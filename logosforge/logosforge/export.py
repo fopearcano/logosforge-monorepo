@@ -9,11 +9,33 @@ from logosforge.db import Database
 
 
 def _build_timeline_section(db: Database, project_id: int, scenes: list) -> dict:
-    """Timeline lanes + event links. Event positions/colours are already carried
-    on each scene (order_index/plotline/color_label); links reference scenes by
-    their 1-based export order so they survive re-import."""
+    """Timeline topology in an id-independent, import-compatible shape.
+
+    Scene ids are database-local and change on import.  Event membership and
+    custom ordering therefore use the same source-order/title references as
+    Timeline links.  The projection itself comes from one authoritative read so
+    exported membership and ordering match the API/UI exactly.
+    """
+    from logosforge.timeline import project_timeline
+
     order_by_sid = {s.id: i + 1 for i, s in enumerate(scenes)}
     title_by_sid = {s.id: s.title for s in scenes}
+    snapshot = db.read_timeline_snapshot(project_id)
+    projection = (
+        project_timeline(snapshot.scenes, snapshot.settings)
+        if snapshot is not None
+        else None
+    )
+
+    def scene_ref(scene_id: int) -> dict | None:
+        source_order = order_by_sid.get(scene_id)
+        if source_order is None:
+            return None
+        return {
+            "source_order": source_order,
+            "source_title": title_by_sid.get(scene_id, ""),
+        }
+
     lanes = [
         {
             "name": ln.name,
@@ -21,7 +43,7 @@ def _build_timeline_section(db: Database, project_id: int, scenes: list) -> dict
             "order_index": ln.order_index,
             "collapsed": ln.collapsed,
         }
-        for ln in db.get_timeline_lanes(project_id)
+        for ln in (snapshot.lanes if snapshot is not None else ())
     ]
     links = [
         {
@@ -44,8 +66,27 @@ def _build_timeline_section(db: Database, project_id: int, scenes: list) -> dict
         }
         for sl in db.get_all_timeline_structure_links(project_id)
     ]
-    return {"lanes": lanes, "links": links,
-            "structure_links": structure_links}
+    explicit_events = []
+    custom_order = []
+    if projection is not None:
+        explicit_events = [
+            ref
+            for scene_id in projection.explicit_event_ids
+            if (ref := scene_ref(scene_id)) is not None
+        ]
+        custom_order = [
+            ref
+            for scene_id in projection.stored_custom_order
+            if (ref := scene_ref(scene_id)) is not None
+        ]
+    return {
+        "lanes": lanes,
+        "links": links,
+        "structure_links": structure_links,
+        "explicit_events": explicit_events,
+        "order_mode": projection.order_mode if projection is not None else "structural",
+        "custom_order": custom_order,
+    }
 
 
 def _gather_project_data(db: Database, project_id: int) -> dict:
