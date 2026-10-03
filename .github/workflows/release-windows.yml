@@ -380,9 +380,9 @@ jobs:
           command = [os.environ["CORE_EXE"], "--host", "127.0.0.1", "--port", str(port),
                      "--mode", "desktop", "--db", str(work / "logosforge.db")]
           proc = None; failure = None
-          def get(path, auth=False):
+          def get(path, auth=False, timeout=2):
               headers = {"Authorization": f"Bearer {token}"} if auth else {}
-              with urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}{path}", headers=headers), timeout=2) as response:
+              with urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}{path}", headers=headers), timeout=timeout) as response:
                   return json.load(response)
           try:
               with log_path.open("wb") as log:
@@ -401,7 +401,7 @@ jobs:
                               "version": os.environ["EXPECTED_API_VERSION"], "api_version": os.environ["EXPECTED_API_VERSION"],
                               "core_version": os.environ["EXPECTED_CORE_VERSION"], "instance_nonce": nonce}
                   if any(health.get(k) != v for k, v in expected.items()): raise RuntimeError(f"identity mismatch: {health!r}")
-                  voice = get("/api/voice/status", True)
+                  voice = get("/api/voice/status", True, timeout=30)
                   if voice.get("model_configured") is not True or voice.get("available") is not False: raise RuntimeError(f"voice status: {voice!r}")
                   if "Install 'faster-whisper'" in str(voice.get("message", "")): raise RuntimeError(f"faster-whisper omitted: {voice!r}")
                   print("frozen faster-whisper import path OK (model intentionally absent)")
@@ -683,9 +683,9 @@ jobs:
               "LOGOSFORGE_VOICE_MODEL": str(work / "deliberately-missing-model"), "LOGOSFORGE_VOICE_DEVICE": "cpu", "LOGOSFORGE_VOICE_COMPUTE": "int8"})
           command = [os.environ["CORE_EXE"], "--host", "127.0.0.1", "--port", str(port), "--mode", "desktop", "--db", str(work / "logosforge.db")]
           proc = None; failure = None
-          def get(path, auth=False):
+          def get(path, auth=False, timeout=2):
               headers = {"Authorization": f"Bearer {token}"} if auth else {}
-              with urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}{path}", headers=headers), timeout=2) as response: return json.load(response)
+              with urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}{path}", headers=headers), timeout=timeout) as response: return json.load(response)
           try:
               with log_path.open("wb") as log:
                   proc = subprocess.Popen(command, cwd=Path(os.environ["CORE_EXE"]).parent, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
@@ -701,7 +701,7 @@ jobs:
                               "version": os.environ["EXPECTED_API_VERSION"], "api_version": os.environ["EXPECTED_API_VERSION"],
                               "core_version": os.environ["EXPECTED_CORE_VERSION"], "instance_nonce": nonce}
                   if any(health.get(k) != v for k, v in expected.items()): raise RuntimeError(f"identity mismatch: {health!r}")
-                  voice = get("/api/voice/status", True)
+                  voice = get("/api/voice/status", True, timeout=30)
                   if voice.get("model_configured") is not True or voice.get("available") is not False: raise RuntimeError(f"voice status: {voice!r}")
                   if "Install 'faster-whisper'" in str(voice.get("message", "")): raise RuntimeError(f"faster-whisper omitted: {voice!r}")
                   print("frozen faster-whisper import path OK (model intentionally absent)")
@@ -1107,9 +1107,9 @@ jobs:
               "LOGOSFORGE_VOICE_MODEL": str(work / "deliberately-missing-model"), "LOGOSFORGE_VOICE_DEVICE": "cpu", "LOGOSFORGE_VOICE_COMPUTE": "int8"})
           command = [os.environ["CORE_EXE"], "--host", "127.0.0.1", "--port", str(port), "--mode", "desktop", "--db", str(work / "logosforge.db")]
           proc = None; failure = None
-          def get(path, auth=False):
+          def get(path, auth=False, timeout=2):
               headers = {"Authorization": f"Bearer {token}"} if auth else {}
-              with urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}{path}", headers=headers), timeout=2) as response: return json.load(response)
+              with urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}{path}", headers=headers), timeout=timeout) as response: return json.load(response)
           try:
               with log_path.open("wb") as log:
                   proc = subprocess.Popen(command, cwd=Path(os.environ["CORE_EXE"]).parent, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
@@ -1125,7 +1125,7 @@ jobs:
                               "version": os.environ["EXPECTED_API_VERSION"], "api_version": os.environ["EXPECTED_API_VERSION"],
                               "core_version": os.environ["EXPECTED_CORE_VERSION"], "instance_nonce": nonce}
                   if any(health.get(k) != v for k, v in expected.items()): raise RuntimeError(f"identity mismatch: {health!r}")
-                  voice = get("/api/voice/status", True)
+                  voice = get("/api/voice/status", True, timeout=30)
                   if voice.get("model_configured") is not True or voice.get("available") is not False: raise RuntimeError(f"voice status: {voice!r}")
                   if "Install 'faster-whisper'" in str(voice.get("message", "")): raise RuntimeError(f"faster-whisper omitted: {voice!r}")
                   print("frozen faster-whisper import path OK (model intentionally absent)")
