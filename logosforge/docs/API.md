@@ -102,7 +102,7 @@ GET  /api/health → { status, service, mode, version, api_version, core_version
 `core_version` is the Logosforge build (e.g. `0.9.0-alpha`). Clients (Electron
 desktop and Web/PWA) read these to verify they're talking to a compatible
 backend. `version` mirrors `api_version` for backward compatibility.
-The current additive contract version is **1.2.0**.
+The current additive contract version is **1.3.0**.
 
 ### Packaged-desktop live context
 ```
@@ -192,14 +192,46 @@ the scene and its replaceable associations, so no database migration is needed.
 ### Story structure (canonical, scene-derived)
 ```
 GET    /api/projects/{project_id}/story-structure
+PUT    /api/projects/{project_id}/story-structure/scenes/{scene_id}/placement
 ```
 
 Returns a compact `StoryStructureDTO` hierarchy of Acts, Chapters, and scene
 references. Ordering, structural numbers, the final Unassigned buckets, and
 orphan detection come from the core's canonical `story_structure` service.
-Scene references deliberately omit manuscript content and revision tokens.
+Scene references deliberately omit manuscript content and per-scene write
+revision tokens.
 `chapter_level` is true for Novel projects; other modes retain their canonical
-chapter grouping but use flat Act.Scene numbering.
+chapter grouping but use flat Act.Scene numbering. Each response carries a
+project-level `revision` covering only structural state (mode, scene ids,
+normalized Act/Chapter labels, Series Episode links, and raw order). Series
+scene references expose nullable `episode_id`, because equal Act/Chapter labels
+can legitimately recur in separate Episodes.
+
+`PUT .../placement` performs reorder and optional reparent as one SQLite write
+transaction. Its body is:
+
+```json
+{
+  "expected_revision": "<64-character revision from story-structure>",
+  "act": "Act II",
+  "chapter": "Chapter 4",
+  "index": 0,
+  "episode_id": 12
+}
+```
+
+`index` is zero-based among destination siblings after removing the source.
+The destination Act/Chapter group must already contain a scene unless this is a
+no-op in the source's sole-scene group. `episode_id` is optional: omission
+preserves the current Episode, explicit `null` unassigns a Series scene, and a
+number must identify an Episode owned by the same Series project. Series sibling
+indexes are scoped by Episode as well as Act/Chapter. Labels are trimmed and the
+display sentinel `Unassigned` persists as an empty label; canonical Unassigned
+buckets remain last. A stale token returns `409 structure_conflict`; a missing
+or foreign scene/Episode returns 404; an unrepresentable target/index returns
+400. Successful mutations publish both `scene_changed` and `scenes_changed`;
+failed requests and exact no-ops publish nothing. The response is the coherent,
+committed `StoryStructureDTO` with its new revision.
 
 ### Outline (hierarchical)
 ```

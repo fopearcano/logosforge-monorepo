@@ -270,8 +270,18 @@ for (const marker of [
   'event.key === "Escape"',
   'aria-label="Clear scene filter"',
   'aria-current={active ? "location" : undefined}',
+  'data-scene-move-id={scene.id}',
+  'aria-pressed={keyboardOwner}',
+  'aria-disabled={moveUnavailable || undefined}',
+  'event.key === "ArrowDown"',
+  'event.key === "ArrowUp"',
+  'event.key === "Enter"',
+  'role="status" aria-live="polite"',
 ]) {
   if (!sceneNavigator.includes(marker)) violations.push(`StudioSceneNavigator is missing ${marker}`);
+}
+if (sceneNavigator.includes("aria-grabbed")) {
+  violations.push("StudioSceneNavigator must not expose the deprecated aria-grabbed state");
 }
 
 console.log(`Accessibility markup checks: ${files.length} files · ${buttons} buttons · ${fields} fields`);

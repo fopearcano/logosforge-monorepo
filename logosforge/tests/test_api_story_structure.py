@@ -38,7 +38,9 @@ def test_empty_story_structure_is_typed_and_mode_aware():
     response = client.get(f"/api/projects/{project_id}/story-structure")
 
     assert response.status_code == 200
-    assert response.json() == {
+    body = response.json()
+    assert len(body.pop("revision")) == 64
+    assert body == {
         "project_id": project_id,
         "chapter_level": True,
         "scene_count": 0,
@@ -104,9 +106,10 @@ def test_story_structure_uses_canonical_order_numbers_and_trimmed_groups():
     # Navigation data stays compact: no manuscript body or write revision leaks.
     assert set(flattened[0]) == {
         "id", "title", "beat", "number", "order_index", "is_orphan",
+        "episode_id",
     }
     assert "private" not in response.text
-    assert "revision" not in response.text
+    assert all("revision" not in scene for scene in flattened)
 
 
 def test_non_novel_scene_numbers_flatten_across_canonical_chapter_groups():
@@ -195,4 +198,5 @@ def test_story_structure_reflects_the_next_committed_scene_patch():
         "number": "1.1.1",
         "order_index": 1,
         "is_orphan": False,
+        "episode_id": None,
     }

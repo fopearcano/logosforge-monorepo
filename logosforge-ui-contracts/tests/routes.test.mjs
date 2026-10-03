@@ -46,6 +46,10 @@ const storyStructureRoute = ROUTES.storyStructure(42);
 if (storyStructureRoute !== '/api/projects/42/story-structure') {
   throw new Error(`story structure route mismatch: ${storyStructureRoute}`);
 }
+const scenePlacementRoute = ROUTES.scenePlacement(42, 7);
+if (scenePlacementRoute !== '/api/projects/42/story-structure/scenes/7/placement') {
+  throw new Error(`scene placement route mismatch: ${scenePlacementRoute}`);
+}
 
 const manuscriptSnapshotRoute = ROUTES.manuscriptSnapshot(42);
 if (manuscriptSnapshotRoute !== '/api/projects/42/manuscript-snapshot') {
@@ -64,7 +68,7 @@ if (JSON.stringify(psykeCommandRoutes) !== JSON.stringify(expectedPsykeCommandRo
   throw new Error(`PSYKE command route mismatch: ${psykeCommandRoutes}`);
 }
 
-console.log('Contract route/event tests: 9 passed, 0 failed');
+console.log('Contract route/event tests: 10 passed, 0 failed');
 
 const pythonSchemas = readFileSync('../logosforge/logosforge/api/schemas.py', 'utf8');
 const typescriptSchemas = readFileSync('src/types.ts', 'utf8');

@@ -1,7 +1,8 @@
 import { MessagePort } from "node:worker_threads";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
-import type { EventMessage, StoryStructureDTO } from "@logosforge/ui-contracts";
+import type { EventMessage, StoryStructureDTO, StoryStructurePlacementDTO } from "@logosforge/ui-contracts";
 import type { ApiClient } from "../src/adapters/api";
+import { ApiRequestError } from "../src/adapters/httpApiClient";
 import type { PlatformAdapter } from "../src/adapters/platform";
 import { StudioProvider } from "../src/adapters/StudioProvider";
 import { useSelection } from "../src/adapters/selection";
@@ -34,6 +35,7 @@ function deferred<T>(): Deferred<T> {
 
 const structureA: StoryStructureDTO = {
   project_id: 1,
+  revision: "a".repeat(64),
   chapter_level: true,
   scene_count: 4,
   orphan_count: 0,
@@ -50,8 +52,8 @@ const structureA: StoryStructureDTO = {
           unassigned: false,
           scene_count: 2,
           scenes: [
-            { id: 10, title: "Prelude", beat: "Setup", number: "1.1.1", order_index: 1, is_orphan: false },
-            { id: 20, title: "Opening", beat: "Catalyst", number: "1.1.2", order_index: 2, is_orphan: false },
+            { id: 10, title: "Prelude", beat: "Setup", episode_id: null, number: "1.1.1", order_index: 1, is_orphan: false },
+            { id: 20, title: "Opening", beat: "Catalyst", episode_id: null, number: "1.1.2", order_index: 2, is_orphan: false },
           ],
         },
         {
@@ -60,7 +62,7 @@ const structureA: StoryStructureDTO = {
           unassigned: false,
           scene_count: 1,
           scenes: [
-            { id: 25, title: "Threshold", beat: "Turn", number: "1.2.1", order_index: 3, is_orphan: false },
+            { id: 25, title: "Threshold", beat: "Turn", episode_id: null, number: "1.2.1", order_index: 3, is_orphan: false },
           ],
         },
       ],
@@ -77,7 +79,7 @@ const structureA: StoryStructureDTO = {
           unassigned: false,
           scene_count: 1,
           scenes: [
-            { id: 30, title: "Crossing", beat: "Midpoint", number: "2.1.1", order_index: 4, is_orphan: false },
+            { id: 30, title: "Crossing", beat: "Midpoint", episode_id: 2, number: "2.1.1", order_index: 4, is_orphan: false },
           ],
         },
       ],
@@ -87,6 +89,7 @@ const structureA: StoryStructureDTO = {
 
 const structureB: StoryStructureDTO = {
   project_id: 2,
+  revision: "b".repeat(64),
   chapter_level: false,
   scene_count: 2,
   orphan_count: 1,
@@ -103,7 +106,7 @@ const structureB: StoryStructureDTO = {
           unassigned: false,
           scene_count: 1,
           scenes: [
-            { id: 99, title: "Second project only", beat: "", number: "1.1", order_index: 1, is_orphan: false },
+            { id: 99, title: "Second project only", beat: "", episode_id: null, number: "1.1", order_index: 1, is_orphan: false },
           ],
         },
       ],
@@ -120,7 +123,7 @@ const structureB: StoryStructureDTO = {
           unassigned: true,
           scene_count: 1,
           scenes: [
-            { id: 100, title: "Flat companion", beat: "", number: "", order_index: 2, is_orphan: true },
+            { id: 100, title: "Flat companion", beat: "", episode_id: null, number: "", order_index: 2, is_orphan: true },
           ],
         },
       ],
@@ -163,6 +166,9 @@ let firstRead = true;
 let nextReadError: Error | null = null;
 let structureReads = 0;
 let listSceneReads = 0;
+const placementCalls: Array<{ projectId: number; sceneId: number; body: StoryStructurePlacementDTO }> = [];
+let nextPlacementError: Error | null = null;
+let nextPlacementDeferred: Deferred<StoryStructureDTO> | null = null;
 const api = {
   getStoryStructure: (projectId: number) => {
     structureReads += 1;
@@ -182,6 +188,22 @@ const api = {
   listScenes: () => {
     listSceneReads += 1;
     throw new Error("StudioSceneNavigator must not derive structure from listScenes");
+  },
+  placeScene: async (projectId: number, sceneId: number, body: StoryStructurePlacementDTO) => {
+    placementCalls.push({ projectId, sceneId, body });
+    if (nextPlacementDeferred) {
+      const pending = nextPlacementDeferred;
+      nextPlacementDeferred = null;
+      return pending.promise;
+    }
+    if (nextPlacementError) {
+      const failure = nextPlacementError;
+      nextPlacementError = null;
+      throw failure;
+    }
+    const value = dataByProject.get(projectId);
+    if (!value) throw new Error(`No structure for project ${projectId}`);
+    return structuredClone(value);
   },
   subscribe: (projectId: number, listener: (event: EventMessage) => void) => {
     subscriptions.set(projectId, listener);
@@ -221,14 +243,20 @@ function tree(projectId: number, disabled = false) {
 }
 
 const scrollCalls: number[] = [];
+const moveFocusCalls: number[] = [];
 let renderer!: ReactTestRenderer;
 act(() => {
   renderer = create(tree(1), {
     createNodeMock(element) {
       const sceneId = element.props["data-scene-id"];
-      return element.type === "button" && typeof sceneId === "number"
-        ? { scrollIntoView: () => scrollCalls.push(sceneId) }
-        : {};
+      const moveSceneId = element.props["data-scene-move-id"];
+      if (element.type === "button" && typeof sceneId === "number") {
+        return { scrollIntoView: () => scrollCalls.push(sceneId) };
+      }
+      if (element.type === "button" && typeof moveSceneId === "number") {
+        return { focus: () => moveFocusCalls.push(moveSceneId) };
+      }
+      return {};
     },
   });
 });
@@ -247,6 +275,10 @@ check(listSceneReads === 0, "the navigator must consume the core story-structure
 const sceneButtons = () => renderer.root.findAll(
   (node) => node.type === "button" && typeof node.props["data-scene-id"] === "number",
 );
+const moveHandles = () => renderer.root.findAll(
+  (node) => node.type === "button" && typeof node.props["data-scene-move-id"] === "number",
+);
+const moveHandle = (sceneId: number) => renderer.root.findByProps({ "data-scene-move-id": sceneId });
 const groupToggles = (level: "act" | "chapter") => renderer.root.findAllByProps({
   "data-scene-group-toggle": level,
 });
@@ -276,6 +308,252 @@ check(
   renderer.root.findByProps({ "data-scene-id": 10 }).props["aria-label"] === "Open scene 1.1.1: Prelude",
   "scene actions should announce their core-owned structural number and title",
 );
+check(moveHandles().length === 4, "each canonical scene should expose a separate move handle");
+check(
+  moveHandle(20).props["aria-label"] === "Move scene 1.1.2: Opening"
+    && moveHandle(20).props["aria-pressed"] === false,
+  "the move handle should be independently named and expose its idle keyboard state",
+);
+
+const keyEvent = (key: string) => ({
+  key,
+  preventDefault() {},
+  stopPropagation() {},
+});
+act(() => { moveHandle(20).props.onKeyDown(keyEvent(" ")); });
+check(
+  moveHandle(20).props["aria-pressed"] === true
+    && renderer.root.findAllByProps({ role: "status" }).some((node) => renderedText(node).includes("Use Up and Down")),
+  "Space should lift a scene and announce the keyboard placement controls",
+);
+act(() => { moveHandle(10).props.onKeyDown(keyEvent("Enter")); });
+check(
+  moveHandle(20).props["aria-pressed"] === true
+    && moveHandle(10).props["aria-pressed"] === false,
+  "an aria-disabled non-owner handle must not replace the active keyboard move",
+);
+act(() => { moveHandle(20).props.onKeyDown(keyEvent("ArrowDown")); });
+check(
+  renderer.root.findAllByProps({ role: "status" }).some((node) => renderedText(node).includes("Chapter Beta")),
+  "ArrowDown should stage the adjacent canonical position across a Chapter boundary",
+);
+const heldPlacement = deferred<StoryStructureDTO>();
+nextPlacementDeferred = heldPlacement;
+await act(async () => {
+  moveHandle(20).props.onKeyDown(keyEvent("Enter"));
+  await Promise.resolve();
+  await Promise.resolve();
+});
+check(
+  moveHandle(20).props["aria-disabled"] === true
+    && moveHandle(20).props["aria-pressed"] === true
+    && renderer.root.findAllByProps({ role: "status" }).some((node) => renderedText(node).includes("Saving the new position")),
+  "the move owner should remain visibly locked while its placement transaction is pending",
+);
+act(() => {
+  moveHandle(20).props.onKeyDown(keyEvent("ArrowDown"));
+  moveHandle(20).props.onKeyDown(keyEvent("Escape"));
+  moveHandle(20).props.onKeyDown(keyEvent("Enter"));
+});
+check(
+  placementCalls.length === 1
+    && moveHandle(20).props["aria-pressed"] === true
+    && renderer.root.findAllByProps({ role: "status" }).some((node) => renderedText(node).includes("Saving the new position")),
+  "the aria-disabled move owner must ignore move, cancel, and resubmit keys while its PUT is pending",
+);
+const structureAfterKeyboardMove = structuredClone(structureA);
+structureAfterKeyboardMove.revision = "d".repeat(64);
+const keyboardMovedScene = structureAfterKeyboardMove.acts[0]!.chapters[0]!.scenes.pop()!;
+keyboardMovedScene.number = "1.2.2";
+keyboardMovedScene.order_index = 3;
+structureAfterKeyboardMove.acts[0]!.chapters[0]!.scene_count -= 1;
+structureAfterKeyboardMove.acts[0]!.chapters[1]!.scenes.push(keyboardMovedScene);
+structureAfterKeyboardMove.acts[0]!.chapters[1]!.scene_count += 1;
+structureAfterKeyboardMove.acts[0]!.chapters[1]!.scenes[0]!.order_index = 2;
+dataByProject.set(1, structureAfterKeyboardMove);
+moveFocusCalls.length = 0;
+await act(async () => {
+  heldPlacement.resolve(structuredClone(structureAfterKeyboardMove));
+  await heldPlacement.promise;
+  await Promise.resolve();
+  await Promise.resolve();
+});
+await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1)); });
+check(
+  placementCalls.length === 1
+    && placementCalls[0]?.projectId === 1
+    && placementCalls[0]?.sceneId === 20
+    && placementCalls[0]?.body.expected_revision === structureA.revision
+    && placementCalls[0]?.body.act === "Act One"
+    && placementCalls[0]?.body.chapter === "Chapter Beta"
+    && placementCalls[0]?.body.index === 1
+    && !("episode_id" in placementCalls[0]!.body),
+  "keyboard movement should commit one revision-guarded placement while preserving episode ownership",
+);
+check(
+  groupToggles("chapter")[1]?.props["aria-expanded"] === true
+    && renderer.root.findByProps({ "data-scene-drop-id": 20 }).parent?.props.id === groupToggles("chapter")[1]?.props["aria-controls"],
+  "the placement response should reveal the moved scene in its previously collapsed destination Chapter",
+);
+check(
+  moveFocusCalls.join(",") === "20",
+  "focus should be restored only after the reparented move handle mounts in the refreshed structure",
+);
+
+act(() => { moveHandle(20).props.onKeyDown(keyEvent("Enter")); });
+act(() => { moveHandle(20).props.onKeyDown(keyEvent("ArrowDown")); });
+check(
+  renderer.root.findAllByProps({ role: "status" }).some((node) => renderedText(node).includes("episode boundary"))
+    && placementCalls.length === 1,
+  "keyboard movement should announce and reject a relative move across a Series episode boundary",
+);
+act(() => { moveHandle(20).props.onKeyDown(keyEvent("Escape")); });
+
+const transferStore = new Map<string, string>();
+const dataTransfer = {
+  effectAllowed: "none",
+  dropEffect: "none",
+  setData(type: string, value: string) { transferStore.set(type, value); },
+  getData(type: string) { return transferStore.get(type) ?? ""; },
+};
+act(() => {
+  moveHandle(10).props.onDragStart({ dataTransfer, preventDefault() {} });
+});
+const pointerEvent = () => ({
+  dataTransfer,
+  clientY: 18,
+  currentTarget: { getBoundingClientRect: () => ({ top: 0, height: 20 }) },
+  preventDefault() {},
+});
+act(() => { renderer.root.findByProps({ "data-scene-drop-id": 25 }).props.onDragOver(pointerEvent()); });
+check(
+  renderer.root.findByProps({ "data-scene-drop-id": 25 }).props["data-drop-edge"] === "after",
+  "pointer movement should expose the staged drop edge",
+);
+await act(async () => {
+  renderer.root.findByProps({ "data-scene-drop-id": 25 }).props.onDrop(pointerEvent());
+  moveHandle(10).props.onDragEnd();
+  await Promise.resolve();
+  await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 1));
+});
+check(
+  placementCalls.length === 2
+    && placementCalls[1]?.sceneId === 10
+    && placementCalls[1]?.body.chapter === "Chapter Beta"
+    && placementCalls[1]?.body.index === 1,
+  "pointer movement should commit through the same transactional placement contract",
+);
+check(
+  renderer.root.findAllByProps({ role: "status" }).some((node) => renderedText(node).includes("Moved Prelude")),
+  "the trailing drag-end event must not overwrite a successful placement status with cancellation",
+);
+
+const staleTransferStore = new Map<string, string>();
+const staleDataTransfer = {
+  effectAllowed: "none",
+  dropEffect: "none",
+  setData(type: string, value: string) { staleTransferStore.set(type, value); },
+  getData(type: string) { return staleTransferStore.get(type) ?? ""; },
+};
+act(() => {
+  moveHandle(20).props.onDragStart({ dataTransfer: staleDataTransfer, preventDefault() {} });
+});
+const changedDuringDrag = structuredClone(structureA);
+changedDuringDrag.revision = "c".repeat(64);
+dataByProject.set(1, changedDuringDrag);
+act(() => {
+  subscriptions.get(1)?.({
+    id: 100,
+    event: "scene_changed",
+    project_id: 1,
+    data: { scene_id: 25 },
+    ts: Date.now(),
+  });
+});
+await act(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 140));
+  await Promise.resolve();
+});
+check(
+  renderer.root.findAllByProps({ role: "status" }).some((node) => renderedText(node).includes("cancelled because the story structure changed"))
+    && renderer.root.findByProps({ "data-scene-drop-id": 20 }).props["data-drag-source"] === undefined,
+  "a structure revision change should cancel and announce an in-flight local drag",
+);
+await act(async () => {
+  renderer.root.findByProps({ "data-scene-drop-id": 25 }).props.onDrop({
+    dataTransfer: staleDataTransfer,
+    clientY: 18,
+    currentTarget: { getBoundingClientRect: () => ({ top: 0, height: 20 }) },
+    preventDefault() {},
+  });
+  await Promise.resolve();
+});
+check(
+  placementCalls.length === 2,
+  "a stale drag payload must not silently rebase against the refreshed structure",
+);
+
+const structureAfterConflict = structuredClone(changedDuringDrag);
+structureAfterConflict.revision = "e".repeat(64);
+const externallyMovedScene = structureAfterConflict.acts[0]!.chapters[0]!.scenes.shift()!;
+externallyMovedScene.number = "2.1.1";
+externallyMovedScene.order_index = 3;
+structureAfterConflict.acts[0]!.scene_count -= 1;
+structureAfterConflict.acts[0]!.chapters[0]!.scene_count -= 1;
+structureAfterConflict.acts[1]!.scene_count += 1;
+structureAfterConflict.acts[1]!.chapters[0]!.scene_count += 1;
+structureAfterConflict.acts[1]!.chapters[0]!.scenes[0]!.number = "2.1.2";
+structureAfterConflict.acts[1]!.chapters[0]!.scenes[0]!.order_index = 4;
+structureAfterConflict.acts[1]!.chapters[0]!.scenes.unshift(externallyMovedScene);
+dataByProject.set(1, structureAfterConflict);
+nextPlacementError = new ApiRequestError(
+  "PUT",
+  "/api/projects/1/story-structure/scenes/10/placement",
+  409,
+  "The story structure changed",
+  "structure_conflict",
+);
+moveFocusCalls.length = 0;
+act(() => { moveHandle(10).props.onKeyDown(keyEvent("Enter")); });
+act(() => { moveHandle(10).props.onKeyDown(keyEvent("ArrowDown")); });
+await act(async () => {
+  moveHandle(10).props.onKeyDown(keyEvent("Enter"));
+  await Promise.resolve();
+  await Promise.resolve();
+});
+await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1)); });
+check(
+  renderer.root.findAllByProps({ role: "alert" }).some((node) => renderedText(node).includes("changed before this move could be saved")),
+  "a revision conflict should remain explicit instead of silently retrying the stale intent",
+);
+check(
+  groupToggles("act")[1]?.props["aria-expanded"] === true
+    && groupToggles("chapter")[2]?.props["aria-expanded"] === true
+    && renderer.root.findByProps({ "data-scene-drop-id": 10 }).parent?.props.id === groupToggles("chapter")[2]?.props["aria-controls"],
+  "a conflict refresh should reveal the source scene in its externally changed structural path",
+);
+check(
+  moveFocusCalls.join(",") === "10",
+  `a conflict should restore focus only after the authoritative reparented handle mounts (got ${moveFocusCalls.join(",") || "none"})`,
+);
+
+const restoredAfterConflict = structuredClone(changedDuringDrag);
+restoredAfterConflict.revision = "f".repeat(64);
+dataByProject.set(1, restoredAfterConflict);
+act(() => {
+  subscriptions.get(1)?.({
+    id: 101,
+    event: "scene_changed",
+    project_id: 1,
+    data: { scene_id: 10 },
+    ts: Date.now(),
+  });
+});
+await act(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 140));
+  await Promise.resolve();
+});
 
 act(() => { publishSelection({ sceneId: 20, text: "", section: "Manuscript" }); });
 check(
@@ -300,6 +578,10 @@ act(() => { filter().props.onChange({ currentTarget: { value: "act two" } }); })
 check(
   sceneButtons().map((button) => button.props["data-scene-id"]).join(",") === "30",
   "a matching group should retain all descendant scenes and remove unmatched ancestors",
+);
+check(
+  moveHandle(30).props["aria-disabled"] === true && moveHandle(30).props.draggable === false,
+  "filtered projections should keep move handles focusable but disable structural movement",
 );
 check(
   groupToggles("act")[0]?.props["aria-expanded"] === true

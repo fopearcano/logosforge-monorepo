@@ -655,6 +655,7 @@ class StoryStructureSceneDTO(BaseModel):
     number: str = ""
     order_index: int = 0
     is_orphan: bool = False
+    episode_id: int | None
 
 
 class StoryStructureChapterDTO(BaseModel):
@@ -681,10 +682,34 @@ class StoryStructureDTO(BaseModel):
     """Authoritative Act -> Chapter -> Scene manuscript projection."""
 
     project_id: int
+    revision: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
     chapter_level: bool = False
     scene_count: int = 0
     orphan_count: int = 0
     acts: list[StoryStructureActDTO] = Field(default_factory=list)
+
+
+class StoryStructurePlacementDTO(BaseModel):
+    """Complete destination for one revision-guarded structural move.
+
+    ``index`` is zero-based among destination siblings after the source scene
+    has been removed.  Omitting ``episode_id`` preserves the current Series
+    episode; explicit ``null`` unassigns it.
+    """
+
+    expected_revision: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    act: str = Field(max_length=500)
+    chapter: str = Field(max_length=500)
+    index: int = Field(ge=0)
+    episode_id: int | None = Field(default=None, gt=0)
 
 
 class ContinuityMemoryDTO(BaseModel):

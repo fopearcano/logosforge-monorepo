@@ -17,6 +17,9 @@ bucket is intentionally left unnumbered.
 
 from __future__ import annotations
 
+import hashlib
+import json
+
 from logosforge.db import Database
 
 # Display label for the bucket holding scenes with no Act / no Chapter. Kept in
@@ -48,6 +51,54 @@ BEAT_ORDER = [
     "Finale",
     "Final Image",
 ]
+
+
+def structure_revision_from_scenes(project, scenes) -> str:
+    """Return the optimistic-concurrency token for structural editing.
+
+    Only fields that affect placement participate.  Manuscript prose, titles,
+    beats, and scene associations deliberately do not invalidate a structural
+    drag.  The token is project-scoped and includes the narrative mode because
+    that changes the hierarchy's interpretation.
+
+    ``sort_order`` is intentionally the persisted raw value rather than a
+    derived canonical index.  This detects every concurrent reorder, including
+    legacy writers that still operate on raw scene positions.
+    """
+    from logosforge.project_compat import get_project_narrative_engine
+
+    ordered = sorted(
+        scenes,
+        key=lambda scene: (
+            int(getattr(scene, "sort_order", 0) or 0),
+            int(getattr(scene, "id", 0) or 0),
+        ),
+    )
+    payload = {
+        "project_id": int(getattr(project, "id", 0) or 0),
+        "mode": get_project_narrative_engine(project),
+        "scenes": [
+            [
+                int(scene.id),
+                (getattr(scene, "act", "") or "").strip(),
+                (getattr(scene, "chapter", "") or "").strip(),
+                (
+                    int(scene.episode_id)
+                    if getattr(scene, "episode_id", None) is not None
+                    else None
+                ),
+                int(getattr(scene, "sort_order", 0) or 0),
+            ]
+            for scene in ordered
+        ],
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def act_key(name: str) -> str:

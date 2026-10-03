@@ -2390,8 +2390,14 @@ async function verifyProSceneNavigator(session, importedProjectId, bodyMarker) {
     `/api/projects/${projectId}/story-structure`,
   );
   assert.equal(structureResult.status, 200, 'Pro story-structure endpoint returned the wrong status');
+  assert.match(
+    structureResult.data?.revision ?? '',
+    /^[0-9a-f]{64}$/,
+    'Pro story-structure endpoint did not return its project-wide structure revision',
+  );
   const expectedStructure = {
     project_id: projectId,
+    revision: structureResult.data.revision,
     chapter_level: true,
     scene_count: structureFixtures.length,
     orphan_count: 0,
@@ -2409,6 +2415,7 @@ async function verifyProSceneNavigator(session, importedProjectId, bodyMarker) {
           id: Number(fixture.scene.id),
           title: fixture.scene.title,
           beat: fixture.scene.beat ?? '',
+          episode_id: null,
           number: fixture.sceneNumber,
           order_index: index + 1,
           is_orphan: false,
@@ -2425,7 +2432,11 @@ async function verifyProSceneNavigator(session, importedProjectId, bodyMarker) {
   assert.ok(!structurePayload.includes(bodyMarker), 'Pro story-structure leaked the manuscript marker');
   assert.ok(!structurePayload.includes(FIRST_SCENE_BODY), 'Pro story-structure leaked manuscript prose');
   assert.ok(!structurePayload.includes('"content"'), 'Pro story-structure exposed a content field');
-  assert.ok(!structurePayload.includes('"revision"'), 'Pro story-structure exposed a revision field');
+  assert.ok(
+    structureResult.data.acts.every((act) => act.chapters.every((chapter) =>
+      chapter.scenes.every((scene) => !Object.hasOwn(scene, 'revision')))),
+    'Pro story-structure exposed a per-scene manuscript revision',
+  );
 
   const navigator = await waitVisible(proSceneNavigator(page), 'Pro live Scene Navigator');
   const accessibleRegion = await waitVisible(

@@ -488,6 +488,8 @@ export interface StoryStructureSceneDTO {
   id: number;
   title: string;
   beat: string;
+  /** Series ownership; null for non-Series and unassigned Series scenes. */
+  episode_id: number | null;
   number: string;
   order_index: number;
   is_orphan: boolean;
@@ -514,10 +516,25 @@ export interface StoryStructureActDTO {
 /** Authoritative Act -> Chapter -> Scene manuscript projection. */
 export interface StoryStructureDTO {
   project_id: number;
+  /** Project-wide content-addressed token for optimistic structure mutations. */
+  revision: string;
   chapter_level: boolean;
   scene_count: number;
   orphan_count: number;
   acts: StoryStructureActDTO[];
+}
+
+/**
+ * Atomically move/reparent one scene inside the canonical story structure.
+ * `index` is zero-based among destination siblings after removing the source.
+ * Omitting `episode_id` preserves the existing Series assignment.
+ */
+export interface StoryStructurePlacementDTO {
+  expected_revision: string;
+  act: string;
+  chapter: string;
+  index: number;
+  episode_id?: number | null;
 }
 
 /**

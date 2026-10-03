@@ -11,7 +11,11 @@ import json
 
 from logosforge.api import schemas
 from logosforge.comment_revision import comment_revision
-from logosforge.db import Database, ManuscriptReadSnapshot
+from logosforge.db import (
+    Database,
+    ManuscriptReadSnapshot,
+    StoryStructureReadSnapshot,
+)
 
 
 def _split_csv(value: str | None) -> list[str]:
@@ -219,10 +223,21 @@ def story_structure_to_dto(
     scene references rather than ``SceneDTO`` records so navigation reads do
     not transfer manuscript prose or optimistic-concurrency revisions.
     """
-    from logosforge import story_structure
+    snapshot = db.read_story_structure_snapshot(project_id)
+    if snapshot is None:
+        raise ValueError(f"Project {project_id} not found")
+    return story_structure_snapshot_to_dto(snapshot)
 
-    tree = story_structure.get_ordered_structure(db, project_id)
-    chapter_level = story_structure.is_novel_project(db, project_id)
+
+def story_structure_snapshot_to_dto(
+    snapshot: StoryStructureReadSnapshot,
+) -> schemas.StoryStructureDTO:
+    """Serialize only values captured by one structure transaction."""
+    from logosforge import story_structure
+    from logosforge.project_compat import get_project_narrative_engine
+
+    tree = story_structure.build_structure_tree_from_scenes(snapshot.scenes)
+    chapter_level = get_project_narrative_engine(snapshot.project) == "novel"
     numbers = story_structure.compute_structural_numbers(tree, chapter_level)
     acts: list[schemas.StoryStructureActDTO] = []
     order_index = 0
@@ -245,6 +260,7 @@ def story_structure_to_dto(
                     number=numbers["scenes"].get(scene.id, ""),
                     order_index=order_index,
                     is_orphan=orphan,
+                    episode_id=getattr(scene, "episode_id", None),
                 ))
             act_scene_count += len(scenes)
             chapters.append(schemas.StoryStructureChapterDTO(
@@ -263,7 +279,8 @@ def story_structure_to_dto(
         ))
 
     return schemas.StoryStructureDTO(
-        project_id=project_id,
+        project_id=snapshot.project.id,
+        revision=snapshot.revision,
         chapter_level=chapter_level,
         scene_count=order_index,
         orphan_count=orphan_count,

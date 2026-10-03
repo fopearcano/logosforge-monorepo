@@ -178,6 +178,48 @@ try {
   await Promise.all([pendingWrite, writeBarrier]);
   if (!writeBarrierDone) throw new Error('Save barrier did not resume after the mutating request');
 
+  let releasePlacement!: (response: Response) => void;
+  globalThis.fetch = (input: RequestInfo | URL, init: RequestInit = {}) => {
+    requests.push({ input: String(input), init });
+    return new Promise<Response>((resolve) => { releasePlacement = resolve; });
+  };
+  const expectedStructureRevision = 'a'.repeat(64);
+  const pendingPlacement = browser.placeScene(7, 11, {
+    expected_revision: expectedStructureRevision,
+    act: 'Act Two',
+    chapter: 'Chapter Three',
+    index: 2,
+  });
+  for (let i = 0; i < 6; i++) await Promise.resolve();
+  const placementRequest = requests.at(-1);
+  if (placementRequest?.input !== '/api/projects/7/story-structure/scenes/11/placement'
+      || placementRequest.init.method !== 'PUT') {
+    throw new Error('Scene placement request used the wrong route or method');
+  }
+  const placementBody = JSON.parse(String(placementRequest.init.body));
+  if (placementBody.expected_revision !== expectedStructureRevision
+      || placementBody.act !== 'Act Two'
+      || placementBody.chapter !== 'Chapter Three'
+      || placementBody.index !== 2
+      || 'episode_id' in placementBody) {
+    throw new Error('Scene placement request did not preserve the revision-guarded body');
+  }
+  let placementBarrierDone = false;
+  const placementBarrier = flushPendingProjectSaves().then(() => { placementBarrierDone = true; });
+  for (let i = 0; i < 6; i++) await Promise.resolve();
+  if (placementBarrierDone) throw new Error('Scene placement escaped the persistence barrier');
+  releasePlacement(new Response(JSON.stringify({
+    project_id: 7,
+    revision: 'b'.repeat(64),
+    chapter_level: true,
+    scene_count: 0,
+    orphan_count: 0,
+    acts: [],
+  }), { status: 200, headers: { 'content-type': 'application/json' } }));
+  const placed = await pendingPlacement;
+  await placementBarrier;
+  if (placed.revision !== 'b'.repeat(64)) throw new Error('Scene placement response was not validated');
+
   let releaseRead!: (response: Response) => void;
   globalThis.fetch = () => new Promise<Response>((resolve) => { releaseRead = resolve; });
   const pendingRead = browser.health();
@@ -227,7 +269,7 @@ try {
   await Promise.all([failedPatch, recoveredPatch]);
   if (failureCalls !== 2) throw new Error('PATCH queue stopped after a rejected request');
 
-  console.log('HTTP API client tests: 23 passed, 0 failed');
+  console.log('HTTP API client tests: 24 passed, 0 failed');
 } finally {
   globalThis.fetch = originalFetch;
 }

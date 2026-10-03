@@ -21,6 +21,7 @@ import type {
   SceneDTO,
   ManuscriptSnapshotDTO,
   StoryStructureDTO,
+  StoryStructurePlacementDTO,
   OutlineNodeDTO,
   PsykeEntryDTO,
   PsykeRelationDTO,
@@ -145,7 +146,7 @@ const MOCK_PERSISTENT_METHODS = new Set([
 ]);
 
 function mockMethodPersists(name: string): boolean {
-  return /^(create|update|delete|patch|set|add|link|unlink|import|apply|revert|sync)/.test(name)
+  return /^(create|update|delete|patch|set|add|link|unlink|import|apply|revert|sync|place)/.test(name)
     || MOCK_PERSISTENT_METHODS.has(name);
 }
 
@@ -422,6 +423,22 @@ export function createMockApiClient(): ApiClient {
     }
     return values;
   };
+  const structureRevisionFor = (projectId: number): string => {
+    const payload = [...scenesFor(projectId)]
+      .sort((left, right) => left.sort_order - right.sort_order || left.id - right.id)
+      .map((sceneRow) => [
+        sceneRow.id,
+        sceneRow.act.trim(),
+        sceneRow.chapter.trim(),
+        sceneRow.sort_order,
+      ]);
+    let hash = 0x811c9dc5;
+    for (const char of JSON.stringify(payload)) {
+      hash ^= char.charCodeAt(0);
+      hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+    return hash.toString(16).padStart(8, "0").repeat(8);
+  };
   const storyStructureFor = (projectId: number): StoryStructureDTO => {
     const chapterLevel = projects.find((project) => project.id === projectId)?.narrative_engine === "novel";
     const ordered = [...scenesFor(projectId)].sort((left, right) => left.sort_order - right.sort_order || left.id - right.id);
@@ -459,6 +476,7 @@ export function createMockApiClient(): ApiClient {
             id: sceneRow.id,
             title: sceneRow.title,
             beat: sceneRow.beat,
+            episode_id: null,
             number: unassigned
               ? ""
               : chapterLevel && !chapterUnassigned
@@ -484,7 +502,14 @@ export function createMockApiClient(): ApiClient {
         chapters,
       };
     });
-    return { project_id: projectId, chapter_level: chapterLevel, scene_count: orderIndex, orphan_count: orphanCount, acts };
+    return {
+      project_id: projectId,
+      revision: structureRevisionFor(projectId),
+      chapter_level: chapterLevel,
+      scene_count: orderIndex,
+      orphan_count: orphanCount,
+      acts,
+    };
   };
   const manuscriptSnapshotFor = (projectId: number): ManuscriptSnapshotDTO => {
     const structure = storyStructureFor(projectId);
@@ -516,8 +541,8 @@ export function createMockApiClient(): ApiClient {
         service: "logosforge-api",
         instance_nonce: "preview-mock",
         mode: "preview-mock",
-        version: "1.2.0",
-        api_version: "1.2.0",
+        version: "1.3.0",
+        api_version: "1.3.0",
         core_version: "preview",
       };
     },
@@ -782,6 +807,54 @@ export function createMockApiClient(): ApiClient {
     async listScenes(p: number) { await delay(); return scenesFor(p).map(cloneScene); },
     async getManuscriptSnapshot(p: number) { await delay(); return manuscriptSnapshotFor(p); },
     async getStoryStructure(p: number) { await delay(); return storyStructureFor(p); },
+    async placeScene(p: number, sceneId: number, body: StoryStructurePlacementDTO) {
+      await delay(120);
+      const current = storyStructureFor(p);
+      if (body.expected_revision !== current.revision) {
+        throw new ApiRequestError(
+          "PUT",
+          `/api/projects/${p}/story-structure/scenes/${sceneId}/placement`,
+          409,
+          "The story structure changed after it was loaded.",
+          "structure_conflict",
+        );
+      }
+      const projectScenes = scenesFor(p);
+      const source = projectScenes.find((sceneRow) => sceneRow.id === sceneId);
+      if (!source) throw new Error(`scene ${sceneId} not found`);
+      const act = body.act.trim();
+      const chapter = body.chapter.trim();
+      const canonical = current.acts.flatMap((actRow) => actRow.chapters.flatMap((chapterRow) => (
+        chapterRow.scenes.map((reference) => projectScenes.find((sceneRow) => sceneRow.id === reference.id)!)
+      )));
+      const sourceIndex = canonical.findIndex((sceneRow) => sceneRow.id === sceneId);
+      canonical.splice(sourceIndex, 1);
+      const siblings = canonical.filter((sceneRow) => (
+        sceneRow.act.trim() === act && sceneRow.chapter.trim() === chapter
+      ));
+      const sameParent = source.act.trim() === act && source.chapter.trim() === chapter;
+      if (!siblings.length && !sameParent) throw new Error("The destination group no longer exists.");
+      if (!Number.isInteger(body.index) || body.index < 0 || body.index > siblings.length) {
+        throw new Error("The destination index is outside the destination group.");
+      }
+      source.act = act;
+      source.chapter = chapter;
+      let insertionIndex: number;
+      if (siblings.length === 0) {
+        insertionIndex = Math.max(0, Math.min(sourceIndex, canonical.length));
+      } else if (body.index < siblings.length) {
+        insertionIndex = canonical.indexOf(siblings[body.index]!);
+      } else {
+        insertionIndex = canonical.indexOf(siblings.at(-1)!) + 1;
+      }
+      canonical.splice(insertionIndex, 0, source);
+      canonical.forEach((sceneRow, index) => {
+        sceneRow.sort_order = index;
+        sceneRow.revision = `mock-scene-${++MOCK_SCENE_REVISION}`;
+      });
+      projectScenes.splice(0, projectScenes.length, ...canonical);
+      return storyStructureFor(p);
+    },
     async updateScene(_p: number, sceneId: number, patch: Record<string, unknown>) {
       await delay(120);
       const projectScenes = scenesFor(_p);

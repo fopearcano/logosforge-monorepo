@@ -30,6 +30,7 @@ export const ROUTES = {
   scene: (p: number, sceneId: number) => `/api/projects/${p}/scenes/${sceneId}`,
   manuscriptSnapshot: (p: number) => `/api/projects/${p}/manuscript-snapshot`,
   storyStructure: (p: number) => `/api/projects/${p}/story-structure`,
+  scenePlacement: (p: number, sceneId: number) => `/api/projects/${p}/story-structure/scenes/${sceneId}/placement`,
   sceneContinuity: (p: number, sceneId: number) => `/api/projects/${p}/scenes/${sceneId}/continuity`,
   sceneContinuityItem: (p: number, sceneId: number, memoryId: number) => `/api/projects/${p}/scenes/${sceneId}/continuity/${memoryId}`,
   outline: (p: number) => `/api/projects/${p}/outline`,

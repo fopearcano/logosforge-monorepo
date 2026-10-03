@@ -3,7 +3,7 @@ import type { CommentReplyDTO, InlineCommentDTO, SceneDTO } from "@logosforge/ui
 import { PanelShell, Corners, type PanelProps } from "../shell/PanelShell";
 import { useStudio, useManuscriptTarget, useNavigate } from "../../adapters/StudioProvider";
 import { useSelection } from "../../adapters/selection";
-import { useComments, useManuscriptSnapshot } from "../../hooks";
+import { useComments, useManuscriptSnapshot, useStoryStructure } from "../../hooks";
 import { classifyLines, renderLineText, fountainLineStyle } from "../../format/fountain";
 import { ProseEditor, type ProseCommentHighlight, type ProseSelectionRange } from "./ProseEditor";
 import { TitleCommentInput, type TitleCommentHighlight } from "./TitleCommentInput";
@@ -41,11 +41,12 @@ import { ApiRequestError } from "../../adapters/httpApiClient";
 import { useMountedRef } from "../../hooks/useMountedRef";
 import { pruneSceneIds, pruneSceneRecord, touchWarmSceneIds } from "./manuscriptViewport";
 import {
-  canMoveBySortOrder,
-  isNeighborInMoveDirection,
-  rawIndexForScene,
-  rawSceneRanks,
-} from "./manuscriptOrdering";
+  createScenePlacementDraft,
+  flattenStoryStructure,
+  isImmediateScenePlacementNeighbor,
+  scenePlacementPlan,
+  stepScenePlacementDraft,
+} from "../shell/storyStructurePlacement";
 
 /**
  * The Studio's genuine writing surface — a continuous, inline-editable manuscript.
@@ -833,8 +834,8 @@ function SceneEditor({
         ) : (
           <span style={{ display: "flex", gap: 2, alignItems: "center", flex: "none" }}>
             <button type="button" aria-label="Scene details" title="Act / chapter / summary" onClick={() => setShowDetails((v) => !v)} style={{ ...iconBtn, color: showDetails ? "var(--accent)" : "var(--txt3)" }}>⋮</button>
-            <button type="button" aria-label="Move scene up" title={canMoveUp ? "Move up within this Act and Chapter" : "Reordering is available only between adjacent scenes in the same Act and Chapter"} disabled={!canMoveUp || busy} onClick={onMoveUp} style={{ ...iconBtn, opacity: !canMoveUp || busy ? 0.25 : 1 }}>↑</button>
-            <button type="button" aria-label="Move scene down" title={canMoveDown ? "Move down within this Act and Chapter" : "Reordering is available only between adjacent scenes in the same Act and Chapter"} disabled={!canMoveDown || busy} onClick={onMoveDown} style={{ ...iconBtn, opacity: !canMoveDown || busy ? 0.25 : 1 }}>↓</button>
+            <button type="button" aria-label="Move scene up" title={canMoveUp ? "Move up in the canonical story structure" : "This scene cannot move farther up"} disabled={!canMoveUp || busy} onClick={onMoveUp} style={{ ...iconBtn, opacity: !canMoveUp || busy ? 0.25 : 1 }}>↑</button>
+            <button type="button" aria-label="Move scene down" title={canMoveDown ? "Move down in the canonical story structure" : "This scene cannot move farther down"} disabled={!canMoveDown || busy} onClick={onMoveDown} style={{ ...iconBtn, opacity: !canMoveDown || busy ? 0.25 : 1 }}>↓</button>
             <button type="button" aria-label="Delete scene" onClick={() => setConfirmDel(true)} style={iconBtn}>✕</button>
           </span>
         )}
@@ -1203,17 +1204,29 @@ export function ManuscriptEditor(props: PanelProps) {
   selectionRef.current = selection;
   const projectKey = projectId ?? null;
   const { data: loadedSnapshot, loading, error, refetch } = useManuscriptSnapshot();
+  const { data: loadedStructure, refetch: refetchStructure } = useStoryStructure();
   // `useResource` clears old data in an effect. Guard synchronously as well so
   // a project switch can never mount the previous project's scenes under the
   // new project's save ownership, even for one render.
   const snapshot = loadedSnapshot?.project_id === projectId ? loadedSnapshot : undefined;
+  const structure = loadedStructure?.project_id === projectId ? loadedStructure : undefined;
   const scenes = snapshot?.scenes;
   const { data: commentData, loading: commentsLoading, error: commentsError, refetch: refetchComments } = useComments();
   const [hideResolvedComments, setHideResolvedComments] = useHideResolvedPreference();
   // The core has already flattened the canonical Act -> Chapter -> Scene tree.
   // Preserve that snapshot order; `sort_order` remains raw persistence metadata.
   const ordered = useMemo(() => scenes ?? [], [scenes]);
-  const rawRanks = useMemo(() => rawSceneRanks(ordered), [ordered]);
+  const structureMoveAvailability = useMemo(() => {
+    const availability = new Map<number, { up: boolean; down: boolean }>();
+    const entries = structure ? flattenStoryStructure(structure) : [];
+    entries.forEach((entry, index) => {
+      availability.set(entry.sceneId, {
+        up: index > 0 && entries[index - 1]?.episodeId === entry.episodeId,
+        down: index + 1 < entries.length && entries[index + 1]?.episodeId === entry.episodeId,
+      });
+    });
+    return availability;
+  }, [structure]);
   const isScript = SCRIPT_MODES.has(String(writingMode ?? ""));
 
   const [focus, setFocus] = useState(false);
@@ -1669,7 +1682,7 @@ export function ManuscriptEditor(props: PanelProps) {
   };
   const moveScene = async (
     id: number,
-    neighborId: number,
+    expectedNeighborId: number,
     direction: "up" | "down",
   ) => {
     if (projectId == null || busy) return;
@@ -1677,30 +1690,42 @@ export function ManuscriptEditor(props: PanelProps) {
     setActionError(null);
     try {
       await flushPendingProjectSaves();
-      const latest = await api.getManuscriptSnapshot(projectId);
-      if (latest.project_id !== projectId) throw new Error("The manuscript snapshot belongs to another project.");
-      const target = latest.scenes.find((scene) => scene.id === id);
-      const neighbor = latest.scenes.find((scene) => scene.id === neighborId);
-      if (!target) throw new Error("The scene no longer exists.");
-      const latestRawRanks = rawSceneRanks(latest.scenes);
-      if (
-        !isNeighborInMoveDirection(latest.scenes, id, neighborId, direction)
-        || !canMoveBySortOrder(latestRawRanks, neighbor, target)
-      ) {
-        throw new Error("Only adjacent scenes in the same Act and Chapter can be reordered here.");
+      const latest = await api.getStoryStructure(projectId);
+      if (latest.project_id !== projectId) throw new Error("The story structure belongs to another project.");
+      const latestEntries = flattenStoryStructure(latest);
+      if (!isImmediateScenePlacementNeighbor(
+        latestEntries,
+        id,
+        expectedNeighborId,
+        direction === "up" ? -1 : 1,
+      )) {
+        throw new Error(
+          "The story structure changed before this move started. It has been refreshed; review the new order and try again.",
+        );
       }
-      const rawNeighborIndex = rawIndexForScene(latest.scenes, neighbor!.id);
-      if (rawNeighborIndex < 0) throw new Error("The adjacent scene no longer exists.");
-      await trackProjectWrite(api.updateScene(projectId, id, {
-        // The mutation endpoint accepts an index in raw persisted order. The
-        // adjacent canonical sibling's raw array index is the correct insertion
-        // point for both directions (persisted sort_order values may have gaps).
-        sort_order: rawNeighborIndex,
-        ...(target.revision ? { expected_revision: target.revision } : {}),
-      }));
+      const draft = createScenePlacementDraft(latest, id);
+      if (!draft) throw new Error("The scene no longer exists.");
+      const stepped = stepScenePlacementDraft(draft, direction === "up" ? -1 : 1);
+      if (!stepped.moved) {
+        throw new Error(stepped.reason === "episode_boundary"
+          ? "Scenes cannot cross a Series episode boundary here. Use the Series Navigator to change episodes."
+          : "This scene cannot move farther in that direction.");
+      }
+      const plan = scenePlacementPlan(stepped.draft);
+      if (!plan) throw new Error("The requested placement would not change the structure.");
+      await trackProjectWrite(api.placeScene(projectId, id, plan.body));
       refetch();
+      refetchStructure();
     } catch (error) {
-      setActionError(`Couldn't reorder the scene — ${error instanceof Error ? error.message : String(error)}`);
+      const message = error instanceof ApiRequestError && error.code === "structure_conflict"
+        ? "The story structure changed elsewhere. It has been refreshed; review the new order and try again."
+        : error instanceof Error ? error.message : String(error);
+      // A timed-out mutating request can have committed after the client lost
+      // its response. Refresh on every failure so a retry never starts from an
+      // outcome-unknown manuscript/structure projection.
+      refetch();
+      refetchStructure();
+      setActionError(`Couldn't move the scene — ${message}`);
     } finally { setBusy(false); }
   };
 
@@ -1786,10 +1811,10 @@ export function ManuscriptEditor(props: PanelProps) {
                     formatted={isScript && format} mode={String(writingMode ?? "")} busy={busy}
                     onWords={onWords} onContent={onContent} onStatus={onStatus} onActive={onActive} registerFlush={registerFlush}
                     onDelete={() => removeScene(s.id)}
-                    onMoveUp={() => ordered[i - 1] && moveScene(s.id, ordered[i - 1]!.id, "up")}
-                    onMoveDown={() => ordered[i + 1] && moveScene(s.id, ordered[i + 1]!.id, "down")}
-                    canMoveUp={canMoveBySortOrder(rawRanks, ordered[i - 1], s)}
-                    canMoveDown={canMoveBySortOrder(rawRanks, ordered[i + 1], s)}
+                    onMoveUp={() => { if (ordered[i - 1]) void moveScene(s.id, ordered[i - 1]!.id, "up"); }}
+                    onMoveDown={() => { if (ordered[i + 1]) void moveScene(s.id, ordered[i + 1]!.id, "down"); }}
+                    canMoveUp={structureMoveAvailability.get(s.id)?.up ?? false}
+                    canMoveDown={structureMoveAvailability.get(s.id)?.down ?? false}
                     renderProse={!intersectionSupported || s.id === effectiveActiveId || nearSceneIds.has(s.id) || warmSceneIds.includes(s.id)}
                     registerSceneNode={registerSceneNode} onRequestEdit={jump}
                     commentSpans={commentSpansByScene.get(s.id) ?? []}

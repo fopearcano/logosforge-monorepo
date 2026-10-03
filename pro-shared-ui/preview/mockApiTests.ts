@@ -26,7 +26,7 @@ check(typeof api.planPsykeConsoleCommand === "function", "preview mock must impl
 check(typeof api.executePsykeConsoleCommand === "function", "preview mock must implement PSYKE command execution");
 
 const health = await api.health();
-check(health.status === "ok" && health.api_version === "1.2.0", "preview health must satisfy the core contract");
+check(health.status === "ok" && health.api_version === "1.3.0", "preview health must satisfy the core contract");
 const previewStructure = await api.getStoryStructure(1);
 check(
   previewStructure.project_id === 1
@@ -175,6 +175,38 @@ try {
 }
 check(staleConflict instanceof ApiRequestError && staleConflict.code === "scene_conflict",
   "preview mock should reject a stale scene revision like the core");
+
+const structureBeforeMove = await api.getStoryStructure(1);
+const movedStructure = await api.placeScene(1, 3, {
+  expected_revision: structureBeforeMove.revision,
+  act: "ACT I",
+  chapter: "1.2",
+  index: 1,
+});
+const movedChapter = movedStructure.acts
+  .find((act) => act.name === "ACT I")?.chapters
+  .find((chapter) => chapter.name === "1.2");
+check(
+  movedStructure.revision !== structureBeforeMove.revision
+    && movedChapter?.scenes.map((item) => item.id).join(",") === "2,3",
+  "preview structure placement must atomically reparent, resequence, and advance its revision",
+);
+let staleStructureConflict: unknown = null;
+try {
+  await api.placeScene(1, 3, {
+    expected_revision: structureBeforeMove.revision,
+    act: "ACT I",
+    chapter: "1.2",
+    index: 0,
+  });
+} catch (error) {
+  staleStructureConflict = error;
+}
+check(
+  staleStructureConflict instanceof ApiRequestError
+    && staleStructureConflict.code === "structure_conflict",
+  "preview structure placement must reject a stale project-wide revision",
+);
 
 const initialComments = await api.listComments(1);
 const rootComment = initialComments[0]!;

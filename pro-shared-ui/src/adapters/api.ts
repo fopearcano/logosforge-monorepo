@@ -52,6 +52,7 @@ import type {
   SceneDTO,
   ManuscriptSnapshotDTO,
   StoryStructureDTO,
+  StoryStructurePlacementDTO,
   SceneCreateDTO,
   SceneUpdateDTO,
   ContinuityMemoryDTO,
@@ -176,6 +177,8 @@ export interface ApiClient {
   getManuscriptSnapshot(p: number): Promise<ManuscriptSnapshotDTO>;
   /** Canonical, core-owned Act -> Chapter -> Scene projection for navigation. */
   getStoryStructure(p: number): Promise<StoryStructureDTO>;
+  /** Revision-guarded atomic reorder/reparent in the canonical structure. */
+  placeScene(p: number, sceneId: number, body: StoryStructurePlacementDTO): Promise<StoryStructureDTO>;
   createScene(p: number, body: SceneCreateDTO): Promise<SceneDTO>;
   updateScene(p: number, sceneId: number, body: SceneUpdateDTO): Promise<SceneDTO>;
   deleteScene(p: number, sceneId: number): Promise<DeleteResultDTO>;

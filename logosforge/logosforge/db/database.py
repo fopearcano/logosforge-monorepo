@@ -387,6 +387,31 @@ class CommentRevisionConflict(RuntimeError):
         self.current = current
 
 
+class StoryStructureRevisionConflict(RuntimeError):
+    """Raised when a placement targets an older project structure."""
+
+    def __init__(self, expected: str, current: str) -> None:
+        super().__init__("story-structure revision does not match")
+        self.expected = expected
+        self.current = current
+
+
+class StoryStructurePlacementError(ValueError):
+    """A requested destination cannot be represented without ambiguity."""
+
+
+class StoryStructureSceneNotFound(LookupError):
+    """The source Scene is absent from the path-scoped project."""
+
+
+class StoryStructureProjectNotFound(LookupError):
+    """The path-scoped Project disappeared before the transaction began."""
+
+
+class StoryStructureEpisodeNotFound(LookupError):
+    """The requested Series Episode is absent from the scoped project."""
+
+
 @dataclass(frozen=True)
 class ManuscriptReadSnapshot:
     """One coherent manuscript read detached from its SQLite transaction.
@@ -404,6 +429,23 @@ class ManuscriptReadSnapshot:
     character_ids_by_scene: dict[int, tuple[int, ...]]
     place_ids_by_scene: dict[int, tuple[int, ...]]
     character_states_by_scene: dict[int, tuple[tuple[int, str], ...]]
+
+
+@dataclass(frozen=True)
+class StoryStructureReadSnapshot:
+    """One coherent, detached canonical-structure read."""
+
+    project: Project
+    scenes: tuple[Scene, ...]
+    revision: str
+
+
+@dataclass(frozen=True)
+class StoryStructurePlacementResult:
+    """Committed placement state plus whether any row was changed."""
+
+    snapshot: StoryStructureReadSnapshot
+    changed: bool
 
 
 # Inverse mapping for PSYKE typed relations. A "payoff" from A→B is stored as
@@ -440,6 +482,8 @@ class Database:
         self._comment_write_lock = threading.RLock()
         self._scene_locks_guard = threading.RLock()
         self._scene_write_locks: dict[int, threading.RLock] = {}
+        self._structure_locks_guard = threading.RLock()
+        self._structure_write_locks: dict[int, threading.RLock] = {}
         # ``check_same_thread=False`` lets FastAPI's threadpool use pooled
         # connections. WAL permits concurrent readers; busy_timeout gives a
         # competing writer time to finish instead of surfacing a transient lock.
@@ -508,6 +552,32 @@ class Database:
         """Serialize comment transactions sharing an in-memory SQLite handle."""
         with self._comment_write_lock:
             yield
+
+    @contextmanager
+    def structure_write_lock(self, project_id: int):
+        """Serialize project-structure writers inside this process."""
+        key = int(project_id)
+        with self._structure_locks_guard:
+            lock = self._structure_write_locks.setdefault(key, threading.RLock())
+        with lock:
+            yield
+
+    @contextmanager
+    def _structure_write_session(self, project_id: int):
+        """Open a serialized SQLite write transaction for structural rows.
+
+        ``BEGIN IMMEDIATE`` must precede the caller's first read so a legacy
+        whole-project reorder cannot calculate from a snapshot that another
+        writer changes before the rewrite is flushed.
+        """
+        with self.structure_write_lock(project_id):
+            with Session(self._engine, expire_on_commit=False) as session:
+                session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+                try:
+                    yield session
+                except Exception:
+                    session.rollback()
+                    raise
 
     def _migrate(self) -> None:
         with self._engine.connect() as conn:
@@ -1816,6 +1886,257 @@ class Database:
                 ]
             return scenes
 
+    def read_story_structure_snapshot(
+        self, project_id: int,
+    ) -> StoryStructureReadSnapshot | None:
+        """Read the compact structure inputs and revision atomically."""
+        from logosforge import story_structure
+
+        with Session(self._engine, expire_on_commit=False) as session:
+            session.connection().exec_driver_sql("BEGIN")
+            try:
+                project = session.get(Project, project_id)
+                if project is None:
+                    return None
+                scenes = list(session.exec(
+                    select(Scene)
+                    .where(Scene.project_id == project_id)
+                    .order_by(Scene.sort_order, Scene.id)
+                ).all())
+                revision = story_structure.structure_revision_from_scenes(
+                    project, scenes,
+                )
+                session.expunge_all()
+                snapshot = StoryStructureReadSnapshot(
+                    project=project,
+                    scenes=tuple(scenes),
+                    revision=revision,
+                )
+            finally:
+                session.rollback()
+        return snapshot
+
+    def place_scene_in_structure(
+        self,
+        project_id: int,
+        scene_id: int,
+        *,
+        expected_revision: str,
+        act: str,
+        chapter: str,
+        index: int,
+        episode_id: int | None = None,
+        update_episode: bool = False,
+    ) -> StoryStructurePlacementResult:
+        """Atomically move/reparent one Scene in the canonical hierarchy.
+
+        ``index`` is zero-based among destination siblings *after* removing the
+        source.  For Series projects a sibling also shares the destination
+        Episode.  A cross-parent destination must already contain a sibling;
+        scene-derived empty Acts/Chapters have no stable ordering anchor.
+
+        ``BEGIN IMMEDIATE`` is issued before every project, scene, revision, or
+        destination read.  The optimistic comparison and the dense global
+        ``sort_order`` rewrite therefore share one SQLite write transaction.
+        """
+        from logosforge import story_structure
+        from logosforge.project_compat import (
+            ENGINE_SERIES,
+            get_project_narrative_engine,
+        )
+
+        if index < 0:
+            raise StoryStructurePlacementError(
+                "Destination index must be zero or greater"
+            )
+
+        target_act = story_structure.act_key((act or "").strip())
+        target_chapter = story_structure.chapter_key((chapter or "").strip())
+
+        # Match the HTTP Scene PATCH lock order: the source-scene lock is
+        # outermost.  PATCH reads/merges/writes through multiple Sessions; this
+        # prevents a stale PATCH that began first from restoring old parent
+        # labels after a placement commits.
+        with self.scene_write_lock(scene_id), self.structure_write_lock(project_id):
+            with Session(self._engine, expire_on_commit=False) as session:
+                # This must remain the first database statement.  In WAL mode
+                # it prevents another writer from changing the structure after
+                # the revision check but before our rewrite.
+                session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+                try:
+                    project = session.get(Project, project_id)
+                    if project is None:
+                        raise StoryStructureProjectNotFound(project_id)
+
+                    raw_scenes = list(session.exec(
+                        select(Scene)
+                        .where(Scene.project_id == project_id)
+                        .order_by(Scene.sort_order, Scene.id)
+                    ).all())
+                    current_revision = (
+                        story_structure.structure_revision_from_scenes(
+                            project, raw_scenes,
+                        )
+                    )
+                    if expected_revision != current_revision:
+                        raise StoryStructureRevisionConflict(
+                            expected_revision, current_revision,
+                        )
+
+                    source = next(
+                        (scene for scene in raw_scenes if scene.id == scene_id),
+                        None,
+                    )
+                    if source is None:
+                        # A foreign id is indistinguishable from a missing id.
+                        raise StoryStructureSceneNotFound(scene_id)
+
+                    mode = get_project_narrative_engine(project)
+                    is_series = mode == ENGINE_SERIES
+                    target_episode_id = (
+                        episode_id if update_episode else source.episode_id
+                    )
+
+                    if update_episode and episode_id is not None and not is_series:
+                        raise StoryStructurePlacementError(
+                            "Only Series projects can place a scene in an Episode"
+                        )
+
+                    if is_series and target_episode_id is not None:
+                        episode = session.get(Episode, target_episode_id)
+                        season = (
+                            session.get(Season, episode.season_id)
+                            if episode is not None
+                            else None
+                        )
+                        if (
+                            episode is None
+                            or episode.project_id != project_id
+                            or season is None
+                            or season.project_id != project_id
+                        ):
+                            raise StoryStructureEpisodeNotFound(target_episode_id)
+
+                    current_tree = story_structure.build_structure_tree_from_scenes(
+                        raw_scenes,
+                    )
+                    current_order = [
+                        scene
+                        for _act, chapters in current_tree
+                        for _chapter, scenes in chapters
+                        for scene in scenes
+                    ]
+
+                    def parent_key(scene) -> tuple[str, str, int | None]:
+                        return (
+                            (scene.act or "").strip(),
+                            (scene.chapter or "").strip(),
+                            scene.episode_id if is_series else None,
+                        )
+
+                    source_parent = parent_key(source)
+                    target_parent = (
+                        target_act,
+                        target_chapter,
+                        target_episode_id if is_series else None,
+                    )
+                    current_siblings = [
+                        scene for scene in current_order
+                        if parent_key(scene) == source_parent
+                    ]
+                    current_index = next(
+                        i for i, scene in enumerate(current_siblings)
+                        if scene.id == scene_id
+                    )
+
+                    remaining = [
+                        scene for scene in current_order if scene.id != scene_id
+                    ]
+                    target_siblings = [
+                        scene for scene in remaining
+                        if parent_key(scene) == target_parent
+                    ]
+                    if index > len(target_siblings):
+                        raise StoryStructurePlacementError(
+                            "Destination index is outside the sibling group"
+                        )
+                    if not target_siblings and source_parent != target_parent:
+                        raise StoryStructurePlacementError(
+                            "The destination Act/Chapter group does not exist"
+                        )
+
+                    same_episode = target_episode_id == source.episode_id
+                    no_op = (
+                        source_parent == target_parent
+                        and same_episode
+                        and current_index == index
+                    )
+                    if no_op:
+                        session.expunge_all()
+                        snapshot = StoryStructureReadSnapshot(
+                            project=project,
+                            scenes=tuple(raw_scenes),
+                            revision=current_revision,
+                        )
+                        session.rollback()
+                        return StoryStructurePlacementResult(
+                            snapshot=snapshot,
+                            changed=False,
+                        )
+
+                    # Locate insertion against immutable destination siblings,
+                    # then rebuild through the canonical grouping algorithm so
+                    # Unassigned Acts/Chapters are forced to the end.
+                    if index < len(target_siblings):
+                        anchor = target_siblings[index]
+                        insertion = remaining.index(anchor)
+                    elif target_siblings:
+                        anchor = target_siblings[-1]
+                        insertion = remaining.index(anchor) + 1
+                    else:
+                        # The only valid empty group is the source's own sole-
+                        # sibling group, which was already handled as a no-op.
+                        raise StoryStructurePlacementError(
+                            "The destination group has no ordering anchor"
+                        )
+
+                    source.act = target_act
+                    source.chapter = target_chapter
+                    if update_episode:
+                        source.episode_id = episode_id
+                    remaining.insert(insertion, source)
+
+                    final_tree = story_structure.build_structure_tree_from_scenes(
+                        remaining,
+                    )
+                    final_scenes = [
+                        scene
+                        for _act, chapters in final_tree
+                        for _chapter, scenes in chapters
+                        for scene in scenes
+                    ]
+                    for raw_index, scene in enumerate(final_scenes):
+                        scene.sort_order = raw_index
+
+                    session.flush()
+                    revision = story_structure.structure_revision_from_scenes(
+                        project, final_scenes,
+                    )
+                    session.commit()
+                    session.expunge_all()
+                    snapshot = StoryStructureReadSnapshot(
+                        project=project,
+                        scenes=tuple(final_scenes),
+                        revision=revision,
+                    )
+                    return StoryStructurePlacementResult(
+                        snapshot=snapshot,
+                        changed=True,
+                    )
+                except Exception:
+                    session.rollback()
+                    raise
+
     def read_manuscript_snapshot(
         self, project_id: int,
     ) -> ManuscriptReadSnapshot | None:
@@ -2354,6 +2675,12 @@ class Database:
             if scene is None:
                 return
 
+            project_id = scene.project_id
+
+        with self._structure_write_session(project_id) as session:
+            scene = session.get(Scene, scene_id)
+            if scene is None or scene.project_id != project_id:
+                return
             # Find the scene just before this one
             stmt = (
                 select(Scene)
@@ -2386,6 +2713,12 @@ class Database:
             if scene is None:
                 return
 
+            project_id = scene.project_id
+
+        with self._structure_write_session(project_id) as session:
+            scene = session.get(Scene, scene_id)
+            if scene is None or scene.project_id != project_id:
+                return
             # Find the scene just after this one
             stmt = (
                 select(Scene)
@@ -3152,9 +3485,15 @@ class Database:
             if scene is None:
                 return
 
+            project_id = scene.project_id
+
+        with self._structure_write_session(project_id) as session:
+            scene = session.get(Scene, scene_id)
+            if scene is None or scene.project_id != project_id:
+                return
             stmt = (
                 select(Scene)
-                .where(Scene.project_id == scene.project_id)
+                .where(Scene.project_id == project_id)
                 .order_by(Scene.sort_order, Scene.id)
             )
             all_scenes = list(session.exec(stmt).all())
@@ -3255,7 +3594,7 @@ class Database:
         order *after* the listed ones (defensive against partial input). Only
         ``sort_order`` is written — ids, bodies and labels are untouched.
         """
-        with Session(self._engine) as session:
+        with self._structure_write_session(project_id) as session:
             stmt = (
                 select(Scene)
                 .where(Scene.project_id == project_id)

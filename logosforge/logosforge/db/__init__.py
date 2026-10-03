@@ -3,6 +3,13 @@ from logosforge.db.database import (
     Database,
     InMemoryTransactionReentryError,
     ManuscriptReadSnapshot,
+    StoryStructureEpisodeNotFound,
+    StoryStructurePlacementError,
+    StoryStructurePlacementResult,
+    StoryStructureProjectNotFound,
+    StoryStructureReadSnapshot,
+    StoryStructureRevisionConflict,
+    StoryStructureSceneNotFound,
 )
 
 __all__ = [
@@ -10,4 +17,11 @@ __all__ = [
     "Database",
     "InMemoryTransactionReentryError",
     "ManuscriptReadSnapshot",
+    "StoryStructureEpisodeNotFound",
+    "StoryStructurePlacementError",
+    "StoryStructurePlacementResult",
+    "StoryStructureProjectNotFound",
+    "StoryStructureReadSnapshot",
+    "StoryStructureRevisionConflict",
+    "StoryStructureSceneNotFound",
 ]

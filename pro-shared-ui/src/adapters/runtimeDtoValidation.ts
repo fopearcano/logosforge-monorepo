@@ -321,6 +321,7 @@ function manuscriptSnapshot(value: unknown, path: string): ManuscriptSnapshotDTO
 function storyStructureScene(value: unknown, path: string): StoryStructureSceneDTO {
   const dto = record(value, path);
   integerValue(requireField(dto, "id", path), fieldPath(path, "id"));
+  nullable(requireField(dto, "episode_id", path), fieldPath(path, "episode_id"), integerValue);
   for (const key of ["title", "beat", "number"]) {
     stringValue(requireField(dto, key, path), fieldPath(path, key));
   }
@@ -360,6 +361,10 @@ function storyStructureAct(value: unknown, path: string): StoryStructureActDTO {
 function storyStructure(value: unknown, path: string): StoryStructureDTO {
   const dto = record(value, path);
   integerValue(requireField(dto, "project_id", path), fieldPath(path, "project_id"));
+  const revision = stringValue(requireField(dto, "revision", path), fieldPath(path, "revision"));
+  if (!/^[0-9a-f]{64}$/.test(revision)) {
+    fail(fieldPath(path, "revision"), "a 64-character lowercase hexadecimal revision", revision);
+  }
   booleanValue(requireField(dto, "chapter_level", path), fieldPath(path, "chapter_level"));
   integerValue(requireField(dto, "scene_count", path), fieldPath(path, "scene_count"));
   integerValue(requireField(dto, "orphan_count", path), fieldPath(path, "orphan_count"));

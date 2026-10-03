@@ -66,6 +66,7 @@ const scene = (overrides: Record<string, unknown> = {}) => ({
 
 const storyStructure = (sceneOverrides: Record<string, unknown> = {}, overrides: Record<string, unknown> = {}) => ({
   project_id: 1,
+  revision: "b".repeat(64),
   chapter_level: true,
   scene_count: 1,
   orphan_count: 0,
@@ -83,6 +84,7 @@ const storyStructure = (sceneOverrides: Record<string, unknown> = {}, overrides:
         id: 2,
         title: "Scene",
         beat: "Opening Image",
+        episode_id: null,
         number: "1.1.1",
         order_index: 1,
         is_orphan: false,
@@ -548,6 +550,32 @@ try {
     () => client.getStoryStructure(1),
     storyStructure(),
     (value) => value.acts[0]?.chapters[0]?.scenes[0]?.number === "1.1.1",
+  );
+  await expectValid(
+    "story structure placement validates its refreshed projection",
+    () => client.placeScene(1, 2, {
+      expected_revision: "b".repeat(64),
+      act: "Act One",
+      chapter: "Chapter One",
+      index: 0,
+    }),
+    storyStructure(),
+  );
+  await expectInvalid(
+    "story structure requires its project-wide revision",
+    () => client.getStoryStructure(1),
+    json(storyStructure({}, { revision: "" })),
+    "GET",
+    "/api/projects/1/story-structure",
+    "$.revision",
+  );
+  await expectInvalid(
+    "story structure requires nullable episode ownership",
+    () => client.getStoryStructure(1),
+    json(storyStructure({ episode_id: undefined })),
+    "GET",
+    "/api/projects/1/story-structure",
+    "$.acts[0].chapters[0].scenes[0].episode_id",
   );
   await expectInvalid(
     "story structure reports a malformed deeply nested scene",

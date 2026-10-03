@@ -333,8 +333,8 @@ export function createHttpApiClient(
     void settled.then(() => { if (patchTails.get(p) === settled) patchTails.delete(p); });
     return trackProjectOperation(request, { persistence: true });
   };
-  const put = (p: string, body: unknown) => trackProjectOperation(
-    req(p, { method: "PUT", body: JSON.stringify(body) }),
+  const put = <T = any>(p: string, body: unknown, validate?: RuntimeDtoValidator<T>) => trackProjectOperation(
+    req(p, { method: "PUT", body: JSON.stringify(body) }, validate),
     { persistence: true },
   );
   const del = <T = any>(p: string, validate?: RuntimeDtoValidator<T>) =>
@@ -448,6 +448,7 @@ export function createHttpApiClient(
     listScenes: (p) => get(ROUTES.scenes(p), validateSceneListDTO),
     getManuscriptSnapshot: (p) => get(ROUTES.manuscriptSnapshot(p), validateManuscriptSnapshotDTO),
     getStoryStructure: (p) => get(ROUTES.storyStructure(p), validateStoryStructureDTO),
+    placeScene: (p, s, b) => put(ROUTES.scenePlacement(p, s), b, validateStoryStructureDTO),
     createScene: (p, b) => writePost(ROUTES.scenes(p), b, validateSceneDTO),
     updateScene: (p, s, b) => patch(ROUTES.scene(p, s), b, validateSceneDTO),
     deleteScene: (p, s) => del(ROUTES.scene(p, s), validateDeleteResultDTO),

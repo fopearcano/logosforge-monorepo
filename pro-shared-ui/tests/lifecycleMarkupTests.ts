@@ -32,7 +32,12 @@ const sceneNavigator = requireMarkers("components/shell/StudioSceneNavigator.tsx
   "useStoryStructure()",
   "filterStudioStoryStructure",
   "activationRef.current !== token",
+  "placementRef.current !== token",
   "projectIdRef.current !== ownerProjectId",
+  "flushPendingProjectSaves()",
+  "trackProjectWrite(",
+  "api.placeScene(",
+  'placementFailure.code === "structure_conflict"',
   'scrollIntoView?.({ block: "nearest" })',
   "initializedProjectRef.current = null",
 ]);
@@ -70,7 +75,10 @@ const manuscript = requireMarkers("components/manuscript/ManuscriptEditor.tsx", 
   'setSelection({ sceneId: id, text: "", section: "Manuscript" })',
   "useManuscriptSnapshot()",
   "loadedSnapshot?.project_id === projectId",
-  "sort_order: rawNeighborIndex",
+  "scenePlacementPlan(stepped.draft)",
+  "expectedNeighborId",
+  "isImmediateScenePlacementNeighbor(",
+  "api.placeScene(projectId, id, plan.body)",
 ]);
 if (manuscript.includes("useScenes()") || manuscript.includes("api.listScenes")) failures.push("ManuscriptEditor bypasses the canonical manuscript snapshot");
 if ((manuscript.match(/<ProseEditor/g) ?? []).length !== 1) failures.push("ManuscriptEditor must keep one conditional ProseEditor render site");
