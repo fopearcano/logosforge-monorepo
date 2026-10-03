@@ -1,4 +1,61 @@
 export const WARM_SCENE_LIMIT = 6;
+export const SCENE_FOCUS_RETRY_DELAY_MS = 40;
+export const SCENE_FOCUS_RETRY_ATTEMPTS = 100;
+
+export interface SceneFocusRetryOptions {
+  shouldContinue: () => boolean;
+  tryFocus: () => boolean;
+  schedule: (callback: () => void, delayMs: number) => number;
+  cancel: (handle: number) => void;
+  delayMs?: number;
+  maxAttempts?: number;
+}
+
+/**
+ * Keep a requested scene focus alive while its asynchronously-created editor
+ * mounts. A newer navigation or unmount cancels the returned request.
+ */
+export function startSceneFocusRetry({
+  shouldContinue,
+  tryFocus,
+  schedule,
+  cancel,
+  delayMs = SCENE_FOCUS_RETRY_DELAY_MS,
+  maxAttempts = SCENE_FOCUS_RETRY_ATTEMPTS,
+}: SceneFocusRetryOptions): () => void {
+  const boundedDelay = Number.isFinite(delayMs)
+    ? Math.max(0, Math.floor(delayMs))
+    : SCENE_FOCUS_RETRY_DELAY_MS;
+  const boundedAttempts = Number.isFinite(maxAttempts)
+    ? Math.max(1, Math.floor(maxAttempts))
+    : SCENE_FOCUS_RETRY_ATTEMPTS;
+  let cancelled = false;
+  let attempts = 0;
+  let handle: number | null = null;
+
+  const run = () => {
+    handle = null;
+    if (cancelled || !shouldContinue()) {
+      cancelled = true;
+      return;
+    }
+    attempts += 1;
+    if (tryFocus() || attempts >= boundedAttempts) {
+      cancelled = true;
+      return;
+    }
+    handle = schedule(run, boundedDelay);
+  };
+
+  handle = schedule(run, boundedDelay);
+  return () => {
+    cancelled = true;
+    if (handle != null) {
+      cancel(handle);
+      handle = null;
+    }
+  };
+}
 
 /** Most-recently-used scene ids whose editor history should stay mounted. */
 export function touchWarmSceneIds(current: number[], id: number, limit = WARM_SCENE_LIMIT): number[] {

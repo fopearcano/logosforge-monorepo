@@ -39,7 +39,12 @@ import {
 } from "../../adapters/projectSaveCoordinator";
 import { ApiRequestError } from "../../adapters/httpApiClient";
 import { useMountedRef } from "../../hooks/useMountedRef";
-import { pruneSceneIds, pruneSceneRecord, touchWarmSceneIds } from "./manuscriptViewport";
+import {
+  pruneSceneIds,
+  pruneSceneRecord,
+  startSceneFocusRetry,
+  touchWarmSceneIds,
+} from "./manuscriptViewport";
 import {
   createScenePlacementDraft,
   flattenStoryStructure,
@@ -1248,7 +1253,7 @@ export function ManuscriptEditor(props: PanelProps) {
   const [liveSceneTextStore, setLiveSceneTextStore] = useState<LiveSceneTextStore>({ projectId: null, byScene: {} });
   const flushers = useRef(new Map<number, FlushHandlers>());
   const focusAfter = useRef<number | null>(null);
-  const jumpTimer = useRef<number | null>(null);
+  const cancelJumpFocus = useRef<(() => void) | null>(null);
   const commentNavIndex = useRef(-1);
   const externalCommentDraftId = useRef(0);
   const crossScenePointerStart = useRef<CrossScenePointerStart | null>(null);
@@ -1377,7 +1382,8 @@ export function ManuscriptEditor(props: PanelProps) {
   }, [projectKey, sceneIdsKey]);
 
   useEffect(() => () => {
-    if (jumpTimer.current !== null) window.clearTimeout(jumpTimer.current);
+    cancelJumpFocus.current?.();
+    cancelJumpFocus.current = null;
   }, []);
 
   const comments = commentData ?? [];
@@ -1621,13 +1627,24 @@ export function ManuscriptEditor(props: PanelProps) {
     onActive(id);
     const el = document.getElementById(`ms-scene-${id}`);
     el?.scrollIntoView({ block: "center", behavior: "smooth" });
-    if (jumpTimer.current !== null) window.clearTimeout(jumpTimer.current);
-    jumpTimer.current = window.setTimeout(() => {
-      jumpTimer.current = null;
-      const current = document.getElementById(`ms-scene-${id}`);
-      current?.scrollIntoView({ block: "center", behavior: "smooth" });
-      if (focusProse) (current?.querySelector("[data-prose]") as HTMLElement | null)?.focus({ preventScroll: true });
-    }, 40);
+    cancelJumpFocus.current?.();
+    cancelJumpFocus.current = startSceneFocusRetry({
+      shouldContinue: () => activeIdRef.current === id,
+      tryFocus: () => {
+        const current = document.getElementById(`ms-scene-${id}`);
+        if (!focusProse) {
+          current?.scrollIntoView({ block: "center", behavior: "smooth" });
+          return true;
+        }
+        const prose = current?.querySelector("[data-prose]") as HTMLElement | null;
+        if (!prose) return false;
+        current?.scrollIntoView({ block: "center", behavior: "smooth" });
+        prose.focus({ preventScroll: true });
+        return document.activeElement === prose;
+      },
+      schedule: (callback, delayMs) => window.setTimeout(callback, delayMs),
+      cancel: (handle) => window.clearTimeout(handle),
+    });
   }, [onActive]);
 
   useEffect(() => {
