@@ -53,6 +53,8 @@ import type {
   ManuscriptSnapshotDTO,
   StoryStructureDTO,
   StoryStructurePlacementDTO,
+  StoryStructureCommandDTO,
+  StoryStructureCommandResultDTO,
   SceneCreateDTO,
   SceneUpdateDTO,
   ContinuityMemoryDTO,
@@ -179,6 +181,11 @@ export interface ApiClient {
   getStoryStructure(p: number): Promise<StoryStructureDTO>;
   /** Revision-guarded atomic reorder/reparent in the canonical structure. */
   placeScene(p: number, sceneId: number, body: StoryStructurePlacementDTO): Promise<StoryStructureDTO>;
+  /** Apply one revision-guarded, atomic canonical structure mutation. */
+  executeStoryStructureCommand(
+    p: number,
+    body: StoryStructureCommandDTO,
+  ): Promise<StoryStructureCommandResultDTO>;
   createScene(p: number, body: SceneCreateDTO): Promise<SceneDTO>;
   updateScene(p: number, sceneId: number, body: SceneUpdateDTO): Promise<SceneDTO>;
   deleteScene(p: number, sceneId: number): Promise<DeleteResultDTO>;

@@ -7,6 +7,7 @@ on:
       - "logosforge-ui-contracts/**"
       - "pro-shared-ui/**"
       - "pro-desktop/**"
+      - ".github/npm-audit-policy.mjs"
       - ".github/workflows/ci-core-pro.yml"
       - ".github/workflows/release-windows.yml"
   push:
@@ -17,6 +18,7 @@ on:
       - "logosforge-ui-contracts/**"
       - "pro-shared-ui/**"
       - "pro-desktop/**"
+      - ".github/npm-audit-policy.mjs"
       - ".github/workflows/ci-core-pro.yml"
       - ".github/workflows/release-windows.yml"
   workflow_dispatch:
@@ -119,7 +121,7 @@ jobs:
           npm ci
           npm test
           npm run build
-          npm audit --audit-level=moderate
+          node ../.github/npm-audit-policy.mjs
 
       - name: Typecheck, build, and audit Pro desktop
         working-directory: pro-desktop
@@ -127,4 +129,4 @@ jobs:
           npm ci
           npm test
           npm run build
-          npm audit --audit-level=moderate
+          node ../.github/npm-audit-policy.mjs

@@ -5,6 +5,7 @@ on:
     paths:
       - "logosforge/**"
       - "whiteboard-desktop/**"
+      - ".github/npm-audit-policy.mjs"
       - ".github/workflows/ci-whiteboard.yml"
       - ".github/workflows/release-whiteboard-*.yml"
   push:
@@ -13,6 +14,7 @@ on:
     paths:
       - "logosforge/**"
       - "whiteboard-desktop/**"
+      - ".github/npm-audit-policy.mjs"
       - ".github/workflows/ci-whiteboard.yml"
       - ".github/workflows/release-whiteboard-*.yml"
   workflow_dispatch:
@@ -96,8 +98,8 @@ jobs:
           npm test
           npm run build
 
-      - name: Block moderate-or-higher dependency vulnerabilities
+      - name: Enforce the npm dependency audit policy
         working-directory: whiteboard-desktop/desktop
-        # Electron is a devDependency but becomes the shipped runtime, so the
-        # audit must include build/dev dependencies as well.
-        run: npm audit --audit-level=moderate
+        # The policy audits production and development dependencies, including
+        # Electron, while narrowly documenting unpatched build-tool advisories.
+        run: node ../../.github/npm-audit-policy.mjs

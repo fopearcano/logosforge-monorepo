@@ -37,11 +37,16 @@ const sceneNavigator = requireMarkers("components/shell/StudioSceneNavigator.tsx
   "flushPendingProjectSaves()",
   "trackProjectWrite(",
   "api.placeScene(",
+  "api.getStoryStructure(ownerProjectId)",
+  "api.executeStoryStructureCommand(",
+  "commandRef.current !== token",
+  "pendingCommandFocusRef.current",
   'placementFailure.code === "structure_conflict"',
   'scrollIntoView?.({ block: "nearest" })',
   "initializedProjectRef.current = null",
 ]);
 if (sceneNavigator.includes("useScenes()")) failures.push("StudioSceneNavigator must not reconstruct groups from useScenes");
+if (sceneNavigator.includes("api.updateScene(")) failures.push("StudioSceneNavigator must not mutate structure labels through generic Scene PATCH");
 const structurePanel = requireMarkers("components/manuscript/StructurePanel.tsx", [
   "useStoryStructure()",
   'data-structure-source="core"',
@@ -79,11 +84,22 @@ const manuscript = requireMarkers("components/manuscript/ManuscriptEditor.tsx", 
   "expectedNeighborId",
   "isImmediateScenePlacementNeighbor(",
   "api.placeScene(projectId, id, plan.body)",
+  "planAppendSceneCommand(",
+  "api.executeStoryStructureCommand(",
+  "STRUCTURE EDITS LIVE IN THE NAVIGATOR",
 ]);
 if (manuscript.includes("useScenes()") || manuscript.includes("api.listScenes")) failures.push("ManuscriptEditor bypasses the canonical manuscript snapshot");
+if (manuscript.includes("api.createScene(") || manuscript.includes("api.deleteScene(")) failures.push("ManuscriptEditor bypasses transactional structure commands for create/delete");
 if ((manuscript.match(/<ProseEditor/g) ?? []).length !== 1) failures.push("ManuscriptEditor must keep one conditional ProseEditor render site");
 if (manuscript.includes("contentById")) failures.push("ManuscriptEditor duplicates the whole manuscript in parent content state");
 requireMarkers("components/manuscript/ManuscriptEditor.tsx", ["sceneObserverRef.current !== observer", "status === \"dirty\"", "status === \"saving\"", "status === \"error\""]);
+const storyGrid = requireMarkers("components/manuscript/StoryGrid.tsx", [
+  "useManuscriptSnapshot()",
+  "useStoryStructure()",
+  "planAppendSceneCommand(",
+  "api.executeStoryStructureCommand(",
+]);
+if (storyGrid.includes("useScenes()") || storyGrid.includes("api.createScene(")) failures.push("StoryGrid bypasses canonical transactional structure authoring");
 requireMarkers("components/manuscript/NotesPanel.tsx", [
   "useNoteTarget()",
   "notes.find((note) => note.id === targetId)",

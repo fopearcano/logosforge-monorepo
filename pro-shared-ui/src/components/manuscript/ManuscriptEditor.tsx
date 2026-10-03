@@ -47,6 +47,7 @@ import {
   scenePlacementPlan,
   stepScenePlacementDraft,
 } from "../shell/storyStructurePlacement";
+import { planAppendSceneCommand } from "./structureAuthoring";
 
 /**
  * The Studio's genuine writing surface — a continuous, inline-editable manuscript.
@@ -98,8 +99,6 @@ type SaveStatus = "idle" | "dirty" | "saving" | "saved" | "error";
 interface SceneDraft {
   title: string;
   content: string;
-  act: string;
-  chapter: string;
   plotline: string;
   summary: string;
 }
@@ -260,8 +259,6 @@ function SceneEditor({
   const { setSelection } = useSelection();
   const [title, setTitle] = useState(scene.title ?? "");
   const [content, setContent] = useState(scene.content ?? "");
-  const [act, setAct] = useState(scene.act ?? "");
-  const [chapter, setChapter] = useState(scene.chapter ?? "");
   const [plotline, setPlotline] = useState(scene.plotline ?? "");
   const [summary, setSummary] = useState(scene.summary ?? "");
   const [showDetails, setShowDetails] = useState(false);
@@ -300,7 +297,7 @@ function SceneEditor({
   const setStat = useCallback((s: SaveStatus) => { if (!mounted.current) return; setStatus(s); onStatus(ownerProjectId, scene.id, s); }, [onStatus, ownerProjectId, scene.id]);
   const statusRef = useRef(setStat);
   statusRef.current = setStat;
-  const draftRef = useRef<SceneDraft>({ title, content, act, chapter, plotline, summary });
+  const draftRef = useRef<SceneDraft>({ title, content, plotline, summary });
   const revisionRef = useRef(scene.revision ?? "");
   const forceOverwriteRef = useRef(false);
   const writeRef = useRef<(draft: SceneDraft) => Promise<void>>(async () => {});
@@ -349,18 +346,17 @@ function SceneEditor({
     if (!queue.isDirty()) {
       const next = {
         title: scene.title ?? "", content: scene.content ?? "",
-        act: scene.act ?? "", chapter: scene.chapter ?? "",
         plotline: scene.plotline ?? "", summary: scene.summary ?? "",
       };
       setTitle(scene.title ?? ""); setContent(scene.content ?? "");
-      setAct(scene.act ?? ""); setChapter(scene.chapter ?? ""); setPlotline(scene.plotline ?? ""); setSummary(scene.summary ?? "");
+      setPlotline(scene.plotline ?? ""); setSummary(scene.summary ?? "");
       draftRef.current = next;
       revisionRef.current = scene.revision ?? "";
       setSaveConflict(false); setSaveError("");
       queue.reset(next);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scene.id, scene.title, scene.content, scene.act, scene.chapter, scene.plotline, scene.summary, scene.revision]);
+  }, [scene.id, scene.title, scene.content, scene.plotline, scene.summary, scene.revision]);
 
   const schedule = (patch: Partial<SceneDraft>) => {
     const next = { ...draftRef.current, ...patch };
@@ -392,11 +388,11 @@ function SceneEditor({
       }
       if (timer.current !== null) { clearTimeout(timer.current); timer.current = null; }
       const next: SceneDraft = {
-        title: latest.title ?? "", content: latest.content ?? "", act: latest.act ?? "",
-        chapter: latest.chapter ?? "", plotline: latest.plotline ?? "", summary: latest.summary ?? "",
+        title: latest.title ?? "", content: latest.content ?? "",
+        plotline: latest.plotline ?? "", summary: latest.summary ?? "",
       };
-      setTitle(next.title); setContent(next.content); setAct(next.act);
-      setChapter(next.chapter); setPlotline(next.plotline); setSummary(next.summary);
+      setTitle(next.title); setContent(next.content);
+      setPlotline(next.plotline); setSummary(next.summary);
       draftRef.current = next;
       revisionRef.current = latest.revision ?? "";
       queueRef.current?.reset(next);
@@ -852,14 +848,20 @@ function SceneEditor({
       )}
       {showDetails && (
         <div style={{ display: "flex", gap: 10, margin: "0 0 12px", flexWrap: "wrap", alignItems: "center" }}>
-          {([["ACT", act, setAct, "e.g. Act I", 90], ["CHAPTER", chapter, setChapter, "e.g. 1", 90], ["PLOTLINE", plotline, setPlotline, "e.g. A-plot", 110], ["SUMMARY", summary, setSummary, "one-line scene summary", 300]] as const).map(([label, val, setter, ph, w]) => (
+          {([["ACT", scene.act || "Unassigned"], ["CHAPTER", scene.chapter || "Unassigned"]] as const).map(([label, value]) => (
+            <span key={label} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 8, letterSpacing: ".14em", color: "var(--txt3)" }}>
+              {label}
+              <span style={{ minWidth: 76, border: "1px solid var(--line2)", color: "var(--txt2)", background: "var(--tint)", fontSize: 10, letterSpacing: ".04em", padding: "5px 8px" }}>{value}</span>
+            </span>
+          ))}
+          {([["PLOTLINE", plotline, setPlotline, "e.g. A-plot", 110], ["SUMMARY", summary, setSummary, "one-line scene summary", 300]] as const).map(([label, val, setter, ph, w]) => (
             <label key={label} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 8, letterSpacing: ".14em", color: "var(--txt3)" }}>
               {label}
               <input
                 value={val}
                 onChange={(e) => {
                   setter(e.target.value);
-                  const field = label === "ACT" ? "act" : label === "CHAPTER" ? "chapter" : label === "PLOTLINE" ? "plotline" : "summary";
+                  const field = label === "PLOTLINE" ? "plotline" : "summary";
                   schedule({ [field]: e.target.value });
                 }}
                 onFocus={() => { onActive(scene.id); onContent(scene.id, content); }}
@@ -870,6 +872,7 @@ function SceneEditor({
               />
             </label>
           ))}
+          <span style={{ fontSize: 8, color: "var(--txt3)", letterSpacing: ".08em" }}>STRUCTURE EDITS LIVE IN THE NAVIGATOR</span>
         </div>
       )}
       {keepLiveEditor
@@ -1655,10 +1658,29 @@ export function ManuscriptEditor(props: PanelProps) {
     setBusy(true);
     setActionError(null);
     try {
-      const created = await trackProjectWrite(api.createScene(projectId, { title: `Scene ${ordered.length + 1}` }));
-      focusAfter.current = created.id; refetch();
+      await flushPendingProjectSaves();
+      const latest = await api.getStoryStructure(projectId);
+      if (latest.project_id !== projectId) throw new Error("The story structure belongs to another project.");
+      const result = await trackProjectWrite(api.executeStoryStructureCommand(
+        projectId,
+        planAppendSceneCommand(
+          latest,
+          `Scene ${latest.scene_count + 1}`,
+          String(writingMode ?? "").toLocaleLowerCase() === "series",
+        ),
+      ));
+      focusAfter.current = result.created_scene_id;
+      refetch();
+      refetchStructure();
     } catch (error) {
-      setActionError(`Couldn't create the scene — ${error instanceof Error ? error.message : String(error)}`);
+      // Mutating requests have an outcome-unknown failure mode (for example a
+      // timeout after commit). Always reconcile both authoritative projections.
+      refetch();
+      refetchStructure();
+      const message = error instanceof ApiRequestError && error.code === "structure_conflict"
+        ? "The story structure changed elsewhere. It has been refreshed; review it and try again."
+        : error instanceof Error ? error.message : String(error);
+      setActionError(`Couldn't create the scene — ${message}`);
     } finally { setBusy(false); }
   };
   const removeScene = async (id: number) => {
@@ -1666,9 +1688,17 @@ export function ManuscriptEditor(props: PanelProps) {
     setBusy(true);
     setActionError(null);
     try {
-      const saved = await (flushers.current.get(id)?.flush() ?? Promise.resolve(true));
-      if (!saved) throw new Error("Resolve this scene's save error before deleting it.");
-      await trackProjectWrite(api.deleteScene(projectId, id));
+      await flushPendingProjectSaves();
+      const latest = await api.getStoryStructure(projectId);
+      if (latest.project_id !== projectId) throw new Error("The story structure belongs to another project.");
+      if (!flattenStoryStructure(latest).some((entry) => entry.sceneId === id)) {
+        throw new Error("The scene no longer exists. The manuscript has been refreshed.");
+      }
+      await trackProjectWrite(api.executeStoryStructureCommand(projectId, {
+        kind: "delete_scene",
+        expected_revision: latest.revision,
+        scene_id: id,
+      }));
       // Dispose local edits only after the destructive request succeeds. If the
       // API rejects, the editor remains live and its draft can still autosave.
       flushers.current.get(id)?.cancel();
@@ -1676,8 +1706,14 @@ export function ManuscriptEditor(props: PanelProps) {
         setSelection({ sceneId: null, text: "" });
       }
       refetch();
+      refetchStructure();
     } catch (error) {
-      setActionError(`Couldn't delete the scene — ${error instanceof Error ? error.message : String(error)}`);
+      refetch();
+      refetchStructure();
+      const message = error instanceof ApiRequestError && error.code === "structure_conflict"
+        ? "The story structure changed elsewhere. It has been refreshed; review it and try again."
+        : error instanceof Error ? error.message : String(error);
+      setActionError(`Couldn't delete the scene — ${message}`);
     } finally { setBusy(false); }
   };
   const moveScene = async (

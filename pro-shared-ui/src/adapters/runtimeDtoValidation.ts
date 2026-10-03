@@ -30,6 +30,8 @@ import type {
   ManuscriptSnapshotDTO,
   StoryStructureActDTO,
   StoryStructureChapterDTO,
+  StoryStructureCommandDTO,
+  StoryStructureCommandResultDTO,
   StoryStructureDTO,
   StoryStructureSceneDTO,
   SceneExtractionDTO,
@@ -375,6 +377,108 @@ function storyStructure(value: unknown, path: string): StoryStructureDTO {
   return value as StoryStructureDTO;
 }
 
+function storyStructureCommandResult(value: unknown, path: string): StoryStructureCommandResultDTO {
+  const dto = record(value, path);
+  const structure = storyStructure(requireField(dto, "structure", path), fieldPath(path, "structure"));
+  const changed = booleanValue(requireField(dto, "changed", path), fieldPath(path, "changed"));
+  const createdSceneIdPath = fieldPath(path, "created_scene_id");
+  const createdSceneId = nullable(
+    requireField(dto, "created_scene_id", path),
+    createdSceneIdPath,
+    integerValue,
+  );
+  if (createdSceneId !== null && createdSceneId <= 0) {
+    fail(createdSceneIdPath, "a positive safe integer or null", createdSceneId);
+  }
+  const affectedSceneIdsPath = fieldPath(path, "affected_scene_ids");
+  const affectedSceneIds = integerArray(
+    requireField(dto, "affected_scene_ids", path),
+    affectedSceneIdsPath,
+  );
+  const seen = new Set<number>();
+  affectedSceneIds.forEach((sceneId, index) => {
+    const sceneIdPath = `${affectedSceneIdsPath}[${index}]`;
+    if (sceneId <= 0) fail(sceneIdPath, "a positive safe integer", sceneId);
+    if (seen.has(sceneId)) fail(sceneIdPath, "a unique scene id", sceneId);
+    seen.add(sceneId);
+  });
+  if (!changed) {
+    if (createdSceneId !== null) {
+      fail(createdSceneIdPath, "null when changed is false", createdSceneId);
+    }
+    if (affectedSceneIds.length !== 0) {
+      fail(affectedSceneIdsPath, "an empty array when changed is false", affectedSceneIds);
+    }
+  } else if (affectedSceneIds.length === 0) {
+    fail(affectedSceneIdsPath, "a non-empty array when changed is true", affectedSceneIds);
+  }
+  if (createdSceneId !== null) {
+    if (!seen.has(createdSceneId)) {
+      fail(createdSceneIdPath, "an id included in affected_scene_ids", createdSceneId);
+    }
+    const returnedSceneIds = new Set(structure.acts.flatMap((act) => (
+      act.chapters.flatMap((chapter) => chapter.scenes.map((scene) => scene.id))
+    )));
+    if (!returnedSceneIds.has(createdSceneId)) {
+      fail(createdSceneIdPath, "an id present in the returned structure", createdSceneId);
+    }
+  }
+  return value as StoryStructureCommandResultDTO;
+}
+
+export function validateStoryStructureCommandResultDTOForRequest(
+  value: unknown,
+  projectId: number,
+  command: StoryStructureCommandDTO,
+): StoryStructureCommandResultDTO {
+  const result = storyStructureCommandResult(value, "$");
+  if (result.structure.project_id !== projectId) {
+    fail("$.structure.project_id", `the requested project id ${projectId}`, result.structure.project_id);
+  }
+
+  const returnedSceneIds = new Set(result.structure.acts.flatMap((act) => (
+    act.chapters.flatMap((chapter) => chapter.scenes.map((scene) => scene.id))
+  )));
+  const createsScene = command.kind === "create_scene"
+    || command.kind === "create_act"
+    || command.kind === "create_chapter";
+  if (createsScene && result.changed && result.created_scene_id === null) {
+    fail("$.created_scene_id", `a positive Scene id for ${command.kind}`, result.created_scene_id);
+  }
+  if (!createsScene && result.created_scene_id !== null) {
+    fail("$.created_scene_id", `null for ${command.kind}`, result.created_scene_id);
+  }
+
+  if (command.kind === "delete_scene") {
+    if (!result.affected_scene_ids.includes(command.scene_id)) {
+      fail("$.affected_scene_ids", `an array including deleted Scene ${command.scene_id}`, result.affected_scene_ids);
+    }
+    if (returnedSceneIds.has(command.scene_id)) {
+      fail("$.structure", `a structure without deleted Scene ${command.scene_id}`, result.structure);
+    }
+    result.affected_scene_ids.forEach((sceneId, index) => {
+      if (sceneId !== command.scene_id && !returnedSceneIds.has(sceneId)) {
+        fail(
+          `$.affected_scene_ids[${index}]`,
+          "the id of a surviving Scene present in the returned structure",
+          sceneId,
+        );
+      }
+    });
+  } else {
+    result.affected_scene_ids.forEach((sceneId, index) => {
+      if (!returnedSceneIds.has(sceneId)) {
+        fail(
+          `$.affected_scene_ids[${index}]`,
+          "the id of a surviving Scene present in the returned structure",
+          sceneId,
+        );
+      }
+    });
+  }
+  return result;
+}
+
 function settings(value: unknown, path: string): SettingsDTO {
   const dto = record(value, path);
   record(requireField(dto, "settings", path), fieldPath(path, "settings"));
@@ -695,6 +799,8 @@ export const validateManuscriptSnapshotDTO: RuntimeDtoValidator<ManuscriptSnapsh
   manuscriptSnapshot(value, "$");
 export const validateStoryStructureDTO: RuntimeDtoValidator<StoryStructureDTO> = (value) =>
   storyStructure(value, "$");
+export const validateStoryStructureCommandResultDTO: RuntimeDtoValidator<StoryStructureCommandResultDTO> = (value) =>
+  storyStructureCommandResult(value, "$");
 export const validateSettingsDTO: RuntimeDtoValidator<SettingsDTO> = (value) => settings(value, "$");
 export const validatePsykeConsoleCommandPlanDTO: RuntimeDtoValidator<PsykeConsoleCommandPlanDTO> = (value) =>
   psykeConsoleCommandPlan(value, "$");

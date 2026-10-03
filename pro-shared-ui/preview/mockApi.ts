@@ -21,6 +21,8 @@ import type {
   SceneDTO,
   ManuscriptSnapshotDTO,
   StoryStructureDTO,
+  StoryStructureCommandDTO,
+  StoryStructureCommandResultDTO,
   StoryStructurePlacementDTO,
   OutlineNodeDTO,
   PsykeEntryDTO,
@@ -143,6 +145,7 @@ const MOCK_PERSISTENT_METHODS = new Set([
   "voiceCommit",
   "voiceUndo",
   "cancelExtractJob",
+  "executeStoryStructureCommand",
 ]);
 
 function mockMethodPersists(name: string): boolean {
@@ -414,6 +417,12 @@ export function createMockApiClient(): ApiClient {
       project.id === 1 ? SCENE_FIXTURES.map(cloneScene) : [],
     ]),
   );
+  const episodesByProject = new Map<number, Map<number, number | null>>(
+    [...scenesByProject.entries()].map(([projectId, projectScenes]) => [
+      projectId,
+      new Map(projectScenes.map((sceneRow) => [sceneRow.id, null])),
+    ]),
+  );
   const fixtureProjectId = projects[0]!.id;
   const scenesFor = (projectId: number): SceneDTO[] => {
     let values = scenesByProject.get(projectId);
@@ -423,15 +432,30 @@ export function createMockApiClient(): ApiClient {
     }
     return values;
   };
+  const episodesFor = (projectId: number): Map<number, number | null> => {
+    let values = episodesByProject.get(projectId);
+    if (!values) {
+      values = new Map();
+      episodesByProject.set(projectId, values);
+    }
+    return values;
+  };
+  const episodeFor = (projectId: number, sceneId: number): number | null =>
+    episodesFor(projectId).get(sceneId) ?? null;
   const structureRevisionFor = (projectId: number): string => {
-    const payload = [...scenesFor(projectId)]
-      .sort((left, right) => left.sort_order - right.sort_order || left.id - right.id)
-      .map((sceneRow) => [
-        sceneRow.id,
-        sceneRow.act.trim(),
-        sceneRow.chapter.trim(),
-        sceneRow.sort_order,
-      ]);
+    const payload = {
+      project_id: projectId,
+      narrative_engine: projects.find((project) => project.id === projectId)?.narrative_engine ?? "novel",
+      scenes: [...scenesFor(projectId)]
+        .sort((left, right) => left.sort_order - right.sort_order || left.id - right.id)
+        .map((sceneRow) => [
+          sceneRow.id,
+          sceneRow.act.trim(),
+          sceneRow.chapter.trim(),
+          episodeFor(projectId, sceneRow.id),
+          sceneRow.sort_order,
+        ]),
+    };
     let hash = 0x811c9dc5;
     for (const char of JSON.stringify(payload)) {
       hash ^= char.charCodeAt(0);
@@ -440,7 +464,9 @@ export function createMockApiClient(): ApiClient {
     return hash.toString(16).padStart(8, "0").repeat(8);
   };
   const storyStructureFor = (projectId: number): StoryStructureDTO => {
-    const chapterLevel = projects.find((project) => project.id === projectId)?.narrative_engine === "novel";
+    const narrativeEngine = projects.find((project) => project.id === projectId)?.narrative_engine;
+    const chapterLevel = narrativeEngine === "novel";
+    const requiresChapterParents = chapterLevel || narrativeEngine === "series";
     const ordered = [...scenesFor(projectId)].sort((left, right) => left.sort_order - right.sort_order || left.id - right.id);
     const grouped = new Map<string, Map<string, SceneDTO[]>>();
     for (const sceneRow of ordered) {
@@ -469,14 +495,14 @@ export function createMockApiClient(): ApiClient {
         const chapterRef = chapterUnassigned ? "" : `${number}.${++chapterNumber}`;
         const scenes = sceneRows.map((sceneRow, sceneIndex) => {
           orderIndex += 1;
-          const isOrphan = !sceneRow.act.trim() || !sceneRow.chapter.trim();
+          const isOrphan = !sceneRow.act.trim() || (requiresChapterParents && !sceneRow.chapter.trim());
           if (isOrphan) orphanCount += 1;
           flatSceneNumber += 1;
           return {
             id: sceneRow.id,
             title: sceneRow.title,
             beat: sceneRow.beat,
-            episode_id: null,
+            episode_id: episodeFor(projectId, sceneRow.id),
             number: unassigned
               ? ""
               : chapterLevel && !chapterUnassigned
@@ -528,6 +554,298 @@ export function createMockApiClient(): ApiClient {
       scenes,
     };
   };
+  const executeStructureCommand = (
+    projectId: number,
+    command: StoryStructureCommandDTO,
+  ): StoryStructureCommandResultDTO => {
+    const path = `/api/projects/${projectId}/story-structure/commands`;
+    const project = findMockProject(projects, projectId, "POST", path);
+    const isSeries = project.narrative_engine === "series";
+    const requiresChapterParents = project.narrative_engine === "novel" || isSeries;
+    const current = storyStructureFor(projectId);
+    if (command.expected_revision !== current.revision) {
+      throw new ApiRequestError(
+        "POST",
+        path,
+        409,
+        "The story structure changed after it was loaded.",
+        "structure_conflict",
+      );
+    }
+
+    const reject = (detail: string, code = "bad_request", status = 400): never => {
+      throw new ApiRequestError("POST", path, status, detail, code);
+    };
+    const label = (value: string, field: string): string => {
+      const normalized = value.trim();
+      if (!normalized || normalized.toLocaleLowerCase() === "unassigned") {
+        return reject(`${field} must be a named structure label.`);
+      }
+      return normalized;
+    };
+    const chapterLabel = (value: string, field: string): string => {
+      const normalized = value.trim();
+      if (!normalized && !requiresChapterParents) return "";
+      return label(normalized, field);
+    };
+    const insertionIndex = (value: number, maximum: number, field = "index"): number => {
+      if (!Number.isSafeInteger(value) || value < 0 || value > maximum) {
+        return reject(`${field} must be between 0 and ${maximum}.`);
+      }
+      return value;
+    };
+    const episodeId = (value: number | null | undefined): number | null => {
+      if (value == null) return null;
+      if (!Number.isSafeInteger(value) || value <= 0) {
+        return reject("episode_id must be a positive integer or null.");
+      }
+      if (!isSeries) {
+        return reject("episode_id is only valid for Series projects.");
+      }
+      const ownedEpisode = MOCK_EPISODES.some((episode) => (
+        episode.id === value && episode.project_id === projectId
+      ));
+      if (!ownedEpisode) {
+        return reject(`Episode ${value} does not belong to this project.`, "not_found", 404);
+      }
+      return value;
+    };
+
+    const rawOrdered = [...scenesFor(projectId)]
+      .sort((left, right) => left.sort_order - right.sort_order || left.id - right.id);
+    const rawById = new Map(rawOrdered.map((sceneRow) => [sceneRow.id, sceneRow]));
+    const canonical = isSeries
+      ? rawOrdered.map(cloneScene)
+      : current.acts.flatMap((actRow) => actRow.chapters.flatMap((chapterRow) => (
+          chapterRow.scenes.map((reference) => cloneScene(rawById.get(reference.id)!))
+        )));
+    const candidateEpisodes = new Map(episodesFor(projectId));
+    const inEpisodeScope = (sceneRow: SceneDTO, episode: number | null): boolean => (
+      !isSeries || (candidateEpisodes.get(sceneRow.id) ?? null) === episode
+    );
+    const distinctLabels = (values: string[]): string[] => [...new Set(values.filter(Boolean))];
+    let changed = false;
+    let createdSceneId: number | null = null;
+    let affectedSceneIds: number[] = [];
+
+    const createSeed = (title: string, act: string, chapter: string, episode: number | null): SceneDTO => {
+      let id = 0;
+      for (const projectScenes of scenesByProject.values()) {
+        for (const sceneRow of projectScenes) id = Math.max(id, sceneRow.id);
+      }
+      const created = scene({
+        id: id + 1,
+        title: title.trim() || "Untitled Scene",
+        act,
+        chapter,
+        content: "",
+        sort_order: 0,
+        order_index: 0,
+      });
+      candidateEpisodes.set(created.id, episode);
+      createdSceneId = created.id;
+      affectedSceneIds = [created.id];
+      changed = true;
+      return created;
+    };
+
+    switch (command.kind) {
+      case "create_scene": {
+        const act = label(command.act, "act");
+        const chapter = chapterLabel(command.chapter, "chapter");
+        const episode = episodeId(command.episode_id);
+        const siblings = canonical.filter((sceneRow) => (
+          sceneRow.act.trim() === act
+          && sceneRow.chapter.trim() === chapter
+          && inEpisodeScope(sceneRow, episode)
+        ));
+        if (siblings.length === 0) reject("The destination structure group does not exist.");
+        const index = insertionIndex(command.index, siblings.length);
+        const created = createSeed(command.title ?? "Untitled Scene", act, chapter, episode);
+        const at = index < siblings.length
+          ? canonical.indexOf(siblings[index]!)
+          : canonical.indexOf(siblings.at(-1)!) + 1;
+        canonical.splice(at, 0, created);
+        break;
+      }
+      case "create_act": {
+        const act = label(command.act, "act");
+        const episode = episodeId(command.episode_id);
+        const episodeRows = canonical.filter((sceneRow) => inEpisodeScope(sceneRow, episode));
+        if (episodeRows.some((sceneRow) => sceneRow.act.trim() === act)) {
+          reject(`Act '${act}' already exists.`);
+        }
+        const chapter = chapterLabel(
+          command.chapter ?? (requiresChapterParents ? "Chapter 1" : ""),
+          "chapter",
+        );
+        const namedActs = distinctLabels(episodeRows.map((sceneRow) => sceneRow.act.trim()));
+        const index = insertionIndex(command.index, namedActs.length);
+        const created = createSeed(
+          command.title ?? "Untitled Scene",
+          act,
+          chapter,
+          episode,
+        );
+        let at = canonical.length;
+        if (index < namedActs.length) {
+          at = canonical.findIndex((sceneRow) => (
+            inEpisodeScope(sceneRow, episode) && sceneRow.act.trim() === namedActs[index]
+          ));
+        } else {
+          const looseAct = episodeRows.find((sceneRow) => !sceneRow.act.trim());
+          if (looseAct) at = canonical.indexOf(looseAct);
+          else if (episodeRows.length > 0) at = canonical.indexOf(episodeRows.at(-1)!) + 1;
+        }
+        canonical.splice(at < 0 ? canonical.length : at, 0, created);
+        break;
+      }
+      case "create_chapter": {
+        if (project.narrative_engine !== "novel" && !isSeries) {
+          reject("Chapters can only be created for Novel or Series projects.");
+        }
+        const act = label(command.act, "act");
+        const chapter = label(command.chapter, "chapter");
+        const episode = episodeId(command.episode_id);
+        const actRows = canonical.filter((sceneRow) => (
+          sceneRow.act.trim() === act && inEpisodeScope(sceneRow, episode)
+        ));
+        if (actRows.length === 0) reject(`Act '${act}' does not exist.`);
+        if (actRows.some((sceneRow) => sceneRow.chapter.trim() === chapter)) {
+          reject(`Chapter '${chapter}' already exists in Act '${act}'.`);
+        }
+        const namedChapters = distinctLabels(actRows.map((sceneRow) => sceneRow.chapter.trim()));
+        const index = insertionIndex(command.index, namedChapters.length);
+        const created = createSeed(
+          command.title ?? "Untitled Scene",
+          act,
+          chapter,
+          episode,
+        );
+        let at: number;
+        if (index < namedChapters.length) {
+          at = canonical.findIndex((sceneRow) => (
+            sceneRow.act.trim() === act && sceneRow.chapter.trim() === namedChapters[index]
+            && inEpisodeScope(sceneRow, episode)
+          ));
+        } else {
+          const looseChapter = actRows.find((sceneRow) => !sceneRow.chapter.trim());
+          at = looseChapter
+            ? canonical.indexOf(looseChapter)
+            : canonical.indexOf(actRows.at(-1)!) + 1;
+        }
+        canonical.splice(at, 0, created);
+        break;
+      }
+      case "rename_act": {
+        const act = label(command.act, "act");
+        const newName = label(command.new_name, "new_name");
+        const episode = episodeId(command.episode_id);
+        const matches = canonical.filter((sceneRow) => (
+          sceneRow.act.trim() === act && inEpisodeScope(sceneRow, episode)
+        ));
+        if (matches.length === 0) reject(`Act '${act}' does not exist.`);
+        if (newName === act) break;
+        if (canonical.some((sceneRow) => (
+          sceneRow.act.trim() === newName && inEpisodeScope(sceneRow, episode)
+        ))) {
+          reject(`Act '${newName}' already exists.`);
+        }
+        for (const sceneRow of matches) sceneRow.act = newName;
+        affectedSceneIds = matches.map((sceneRow) => sceneRow.id);
+        changed = true;
+        break;
+      }
+      case "rename_chapter": {
+        const act = label(command.act, "act");
+        const chapter = label(command.chapter, "chapter");
+        const newName = label(command.new_name, "new_name");
+        const episode = episodeId(command.episode_id);
+        const matches = canonical.filter((sceneRow) => (
+          sceneRow.act.trim() === act && sceneRow.chapter.trim() === chapter
+          && inEpisodeScope(sceneRow, episode)
+        ));
+        if (matches.length === 0) reject(`Chapter '${chapter}' does not exist in Act '${act}'.`);
+        if (newName === chapter) break;
+        if (canonical.some((sceneRow) => (
+          sceneRow.act.trim() === act && sceneRow.chapter.trim() === newName
+          && inEpisodeScope(sceneRow, episode)
+        ))) {
+          reject(`Chapter '${newName}' already exists in Act '${act}'.`);
+        }
+        for (const sceneRow of matches) sceneRow.chapter = newName;
+        affectedSceneIds = matches.map((sceneRow) => sceneRow.id);
+        changed = true;
+        break;
+      }
+      case "detach_act": {
+        const act = label(command.act, "act");
+        const episode = episodeId(command.episode_id);
+        const matches = canonical.filter((sceneRow) => (
+          sceneRow.act.trim() === act && inEpisodeScope(sceneRow, episode)
+        ));
+        if (matches.length === 0) reject(`Act '${act}' does not exist.`);
+        for (const sceneRow of matches) sceneRow.act = "";
+        affectedSceneIds = matches.map((sceneRow) => sceneRow.id);
+        changed = true;
+        break;
+      }
+      case "detach_chapter": {
+        const act = label(command.act, "act");
+        const chapter = label(command.chapter, "chapter");
+        const episode = episodeId(command.episode_id);
+        const matches = canonical.filter((sceneRow) => (
+          sceneRow.act.trim() === act && sceneRow.chapter.trim() === chapter
+          && inEpisodeScope(sceneRow, episode)
+        ));
+        if (matches.length === 0) reject(`Chapter '${chapter}' does not exist in Act '${act}'.`);
+        for (const sceneRow of matches) sceneRow.chapter = "";
+        affectedSceneIds = matches.map((sceneRow) => sceneRow.id);
+        changed = true;
+        break;
+      }
+      case "delete_scene": {
+        if (!Number.isSafeInteger(command.scene_id) || command.scene_id <= 0) {
+          reject("scene_id must be a positive integer.");
+        }
+        const at = canonical.findIndex((sceneRow) => sceneRow.id === command.scene_id);
+        if (at < 0) reject(`Scene ${command.scene_id} does not exist.`, "not_found", 404);
+        canonical.splice(at, 1);
+        candidateEpisodes.delete(command.scene_id);
+        affectedSceneIds = [command.scene_id];
+        changed = true;
+        break;
+      }
+      case "repair_orphans": {
+        for (const sceneRow of canonical) {
+          if (sceneRow.act.trim() && (!requiresChapterParents || sceneRow.chapter.trim())) continue;
+          sceneRow.act = sceneRow.act.trim() || "Recovered Act";
+          if (requiresChapterParents) {
+            sceneRow.chapter = sceneRow.chapter.trim() || "Recovered Chapter";
+          }
+          affectedSceneIds.push(sceneRow.id);
+        }
+        changed = affectedSceneIds.length > 0;
+        break;
+      }
+    }
+
+    if (changed) {
+      canonical.forEach((sceneRow, index) => {
+        sceneRow.sort_order = index;
+        sceneRow.order_index = index + 1;
+        sceneRow.revision = `mock-scene-${++MOCK_SCENE_REVISION}`;
+      });
+      scenesFor(projectId).splice(0, scenesFor(projectId).length, ...canonical);
+      episodesByProject.set(projectId, candidateEpisodes);
+    }
+    return {
+      structure: storyStructureFor(projectId),
+      changed,
+      created_scene_id: createdSceneId,
+      affected_scene_ids: affectedSceneIds,
+    };
+  };
   const fixtureRowsFor = <T>(projectId: number, rows: readonly T[]): readonly T[] => (
     projectId === fixtureProjectId ? rows : []
   );
@@ -541,8 +859,8 @@ export function createMockApiClient(): ApiClient {
         service: "logosforge-api",
         instance_nonce: "preview-mock",
         mode: "preview-mock",
-        version: "1.3.0",
-        api_version: "1.3.0",
+        version: "1.4.0",
+        api_version: "1.4.0",
         core_version: "preview",
       };
     },
@@ -564,6 +882,7 @@ export function createMockApiClient(): ApiClient {
       await delay(160);
       const project = createMockProject(projects, body);
       scenesByProject.set(project.id, []);
+      episodesByProject.set(project.id, new Map());
       return project;
     },
     async importWhiteboard(body: WhiteboardImportDTO): Promise<WhiteboardImportResultDTO> {
@@ -655,6 +974,7 @@ export function createMockApiClient(): ApiClient {
       findMockProject(projects, id, "DELETE");
       projects.splice(projects.findIndex((candidate) => candidate.id === id), 1);
       scenesByProject.delete(id);
+      episodesByProject.delete(id);
       return { ok: true, deleted: id };
     },
     async openProject(id: number) {
@@ -809,11 +1129,12 @@ export function createMockApiClient(): ApiClient {
     async getStoryStructure(p: number) { await delay(); return storyStructureFor(p); },
     async placeScene(p: number, sceneId: number, body: StoryStructurePlacementDTO) {
       await delay(120);
+      const path = `/api/projects/${p}/story-structure/scenes/${sceneId}/placement`;
       const current = storyStructureFor(p);
       if (body.expected_revision !== current.revision) {
         throw new ApiRequestError(
           "PUT",
-          `/api/projects/${p}/story-structure/scenes/${sceneId}/placement`,
+          path,
           409,
           "The story structure changed after it was loaded.",
           "structure_conflict",
@@ -821,24 +1142,59 @@ export function createMockApiClient(): ApiClient {
       }
       const projectScenes = scenesFor(p);
       const source = projectScenes.find((sceneRow) => sceneRow.id === sceneId);
-      if (!source) throw new Error(`scene ${sceneId} not found`);
+      if (!source) throw new ApiRequestError("PUT", path, 404, `Scene ${sceneId} not found`, "not_found");
       const act = body.act.trim();
       const chapter = body.chapter.trim();
-      const canonical = current.acts.flatMap((actRow) => actRow.chapters.flatMap((chapterRow) => (
-        chapterRow.scenes.map((reference) => projectScenes.find((sceneRow) => sceneRow.id === reference.id)!)
-      )));
+      const seriesProject = projects.find((project) => project.id === p)?.narrative_engine === "series";
+      if (!seriesProject && body.episode_id != null) {
+        throw new ApiRequestError("PUT", path, 400, "episode_id is only valid for Series projects.", "bad_request");
+      }
+      const updatesEpisode = Object.prototype.hasOwnProperty.call(body, "episode_id");
+      const destinationEpisode = seriesProject
+        ? updatesEpisode
+          ? body.episode_id ?? null
+          : episodeFor(p, sceneId)
+        : null;
+      if (seriesProject && destinationEpisode !== null && !MOCK_EPISODES.some((episode) => (
+        episode.id === destinationEpisode && episode.project_id === p
+      ))) {
+        throw new ApiRequestError(
+          "PUT",
+          path,
+          404,
+          `Episode ${destinationEpisode} does not belong to this project.`,
+          "not_found",
+        );
+      }
+      const canonical = seriesProject
+        ? [...projectScenes].sort((left, right) => left.sort_order - right.sort_order || left.id - right.id)
+        : current.acts.flatMap((actRow) => actRow.chapters.flatMap((chapterRow) => (
+            chapterRow.scenes.map((reference) => projectScenes.find((sceneRow) => sceneRow.id === reference.id)!)
+          )));
       const sourceIndex = canonical.findIndex((sceneRow) => sceneRow.id === sceneId);
       canonical.splice(sourceIndex, 1);
       const siblings = canonical.filter((sceneRow) => (
         sceneRow.act.trim() === act && sceneRow.chapter.trim() === chapter
+        && (!seriesProject || episodeFor(p, sceneRow.id) === destinationEpisode)
       ));
-      const sameParent = source.act.trim() === act && source.chapter.trim() === chapter;
-      if (!siblings.length && !sameParent) throw new Error("The destination group no longer exists.");
+      const sameParent = source.act.trim() === act
+        && source.chapter.trim() === chapter
+        && (!seriesProject || episodeFor(p, source.id) === destinationEpisode);
+      if (!siblings.length && !sameParent) {
+        throw new ApiRequestError("PUT", path, 400, "The destination group no longer exists.", "bad_request");
+      }
       if (!Number.isInteger(body.index) || body.index < 0 || body.index > siblings.length) {
-        throw new Error("The destination index is outside the destination group.");
+        throw new ApiRequestError(
+          "PUT",
+          path,
+          400,
+          "The destination index is outside the destination group.",
+          "bad_request",
+        );
       }
       source.act = act;
       source.chapter = chapter;
+      if (updatesEpisode) episodesFor(p).set(sceneId, destinationEpisode);
       let insertionIndex: number;
       if (siblings.length === 0) {
         insertionIndex = Math.max(0, Math.min(sourceIndex, canonical.length));
@@ -855,34 +1211,39 @@ export function createMockApiClient(): ApiClient {
       projectScenes.splice(0, projectScenes.length, ...canonical);
       return storyStructureFor(p);
     },
+    async executeStoryStructureCommand(p: number, body: StoryStructureCommandDTO) {
+      await delay(120);
+      return executeStructureCommand(p, body);
+    },
     async updateScene(_p: number, sceneId: number, patch: Record<string, unknown>) {
       await delay(120);
+      const path = `/api/projects/${_p}/scenes/${sceneId}`;
+      const structuralFields = ["act", "chapter", "sort_order"]
+        .filter((field) => Object.prototype.hasOwnProperty.call(patch, field))
+        .sort();
+      if (structuralFields.length > 0) {
+        throw new ApiRequestError(
+          "PATCH",
+          path,
+          400,
+          `Scene PATCH cannot change structural field(s): ${structuralFields.join(", ")}. Use the revision-guarded story-structure placement or command endpoint.`,
+          "bad_request",
+        );
+      }
       const projectScenes = scenesFor(_p);
       const s = projectScenes.find((x) => x.id === sceneId);
-      if (!s) return { id: sceneId } as unknown as SceneDTO;
+      if (!s) throw new ApiRequestError("PATCH", path, 404, `Scene ${sceneId} not found`, "not_found");
       const { expected_revision: expectedRevision, ...writePatch } = patch;
       if (expectedRevision && expectedRevision !== s.revision) {
-        throw new ApiRequestError("PATCH", `/api/projects/${_p}/scenes/${sceneId}`, 409,
+        throw new ApiRequestError("PATCH", path, 409,
           "The scene changed after it was loaded.", "scene_conflict");
-      }
-      // mirror the core: sort_order in a PATCH is a 0-based REORDER index — move + resequence
-      if (typeof writePatch.sort_order === "number") {
-        const ordered = [...projectScenes].sort((a, b) => a.sort_order - b.sort_order);
-        const from = ordered.indexOf(s);
-        ordered.splice(from, 1);
-        ordered.splice(Math.max(0, Math.min(ordered.length, writePatch.sort_order as number)), 0, s);
-        ordered.forEach((sc, i) => { sc.sort_order = i; sc.revision = `mock-scene-${++MOCK_SCENE_REVISION}`; }); // 0-based, mirroring the core
-        const { sort_order, ...rest } = writePatch;
-        Object.assign(s, rest);
-        projectScenes.sort((a, b) => a.sort_order - b.sort_order); // listScenes returns ordered, like the core
-        return { ...s };
       }
       Object.assign(s, writePatch);
       s.revision = `mock-scene-${++MOCK_SCENE_REVISION}`;
       return { ...s };
     },
-    async createScene(_p: number, body: Record<string, unknown>) { await delay(140); const projectScenes = scenesFor(_p); const id = projectScenes.reduce((mx, s) => Math.max(mx, s.id), 0) + 1; const s = scene({ id, title: String((body.title as string) ?? "New Scene"), content: "", sort_order: projectScenes.length + 1, order_index: projectScenes.length + 1 }); projectScenes.push(s); return cloneScene(s); },
-    async deleteScene(_p: number, sceneId: number) { await delay(120); const projectScenes = scenesFor(_p); const i = projectScenes.findIndex((x) => x.id === sceneId); if (i >= 0) projectScenes.splice(i, 1); return { ok: true, deleted: sceneId }; },
+    async createScene(_p: number, body: Record<string, unknown>) { await delay(140); const projectScenes = scenesFor(_p); const id = projectScenes.reduce((mx, s) => Math.max(mx, s.id), 0) + 1; const s = scene({ id, title: String((body.title as string) ?? "New Scene"), act: String((body.act as string) ?? ""), chapter: String((body.chapter as string) ?? ""), content: String((body.content as string) ?? ""), sort_order: projectScenes.length + 1, order_index: projectScenes.length + 1 }); projectScenes.push(s); return cloneScene(s); },
+    async deleteScene(_p: number, sceneId: number) { await delay(120); const projectScenes = scenesFor(_p); const i = projectScenes.findIndex((x) => x.id === sceneId); if (i >= 0) projectScenes.splice(i, 1); episodesFor(_p).delete(sceneId); return { ok: true, deleted: sceneId }; },
     async listLogosActions(_p: number, section?: string) {
       await delay(120);
       const defs: [string, string, string][] = [
@@ -1441,8 +1802,8 @@ export function createMockApiClient(): ApiClient {
     async createStageBusiness(_p: number, sceneId: number, b: Record<string, unknown>) { await delay(300); const row = { id: ++MOCK_FD_SEQ, scene_id: sceneId, prop_psyke_entry_id: (b.prop_psyke_entry_id as number) ?? null, character_id: (b.character_id as number) ?? null, stage_action: (b.stage_action as string) || "" }; MOCK_STAGE_BIZ.push(row); return row; },
     async listSeasons() { await delay(); return MOCK_SEASONS.slice(); },
     async createSeason(_p: number, b: Record<string, unknown>) { await delay(300); const row = { id: ++MOCK_FD_SEQ, season_number: (b.season_number as number) || MOCK_SEASONS.length + 1, title: (b.title as string) || "" }; MOCK_SEASONS.push(row); return row; },
-    async listEpisodes() { await delay(); return MOCK_EPISODES.slice(); },
-    async createEpisode(_p: number, seasonId: number, b: Record<string, unknown>) { await delay(300); const row = { id: ++MOCK_FD_SEQ, season_id: seasonId, episode_number: (b.episode_number as number) || MOCK_EPISODES.length + 1, title: (b.title as string) || "", logline: (b.logline as string) || "" }; MOCK_EPISODES.push(row); return row; },
+    async listEpisodes(_p: number) { await delay(); return MOCK_EPISODES.filter((row) => row.project_id === _p); },
+    async createEpisode(_p: number, seasonId: number, b: Record<string, unknown>) { await delay(300); const row = { id: ++MOCK_FD_SEQ, project_id: _p, season_id: seasonId, episode_number: (b.episode_number as number) || MOCK_EPISODES.filter((episode) => episode.project_id === _p).length + 1, title: (b.title as string) || "", logline: (b.logline as string) || "" }; MOCK_EPISODES.push(row); return row; },
     async listSeriesArcs() { await delay(); return MOCK_ARCS.slice(); },
     async createSeriesArc(_p: number, b: Record<string, unknown>) { await delay(300); const row = { id: ++MOCK_FD_SEQ, scope: (b.scope as string) || "series", title: (b.title as string) || "", setup_episode_id: (b.setup_episode_id as number) ?? null, payoff_episode_id: (b.payoff_episode_id as number) ?? null, status: (b.status as string) || "active" }; MOCK_ARCS.push(row); return row; },
     async listEpisodePlotlines(_p: number, episodeId: number) { await delay(); return MOCK_PLOTLINES.filter((x) => x.episode_id === episodeId); },

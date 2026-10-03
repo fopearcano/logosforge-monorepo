@@ -162,7 +162,7 @@ def test_story_structure_is_project_isolated_and_missing_project_is_404():
     assert client.get("/api/projects/999999/story-structure").status_code == 404
 
 
-def test_story_structure_reflects_the_next_committed_scene_patch():
+def test_story_structure_reflects_patch_and_guarded_structure_commands():
     client, _db, project_id = _project()
     created = client.post(
         f"/api/projects/{project_id}/scenes",
@@ -175,17 +175,40 @@ def test_story_structure_reflects_the_next_committed_scene_patch():
         },
     ).json()
 
+    structure_revision = client.get(
+        f"/api/projects/{project_id}/story-structure"
+    ).json()["revision"]
     patched = client.patch(
         f"/api/projects/{project_id}/scenes/{created['id']}",
         json={
             "title": "After",
-            "act": "Act II",
-            "chapter": "Chapter II",
             "beat": "Midpoint",
             "expected_revision": created["revision"],
         },
     )
     assert patched.status_code == 200
+
+    renamed_act = client.post(
+        f"/api/projects/{project_id}/story-structure/commands",
+        json={
+            "kind": "rename_act",
+            "expected_revision": structure_revision,
+            "act": "Act I",
+            "new_name": "Act II",
+        },
+    )
+    assert renamed_act.status_code == 200
+    renamed_chapter = client.post(
+        f"/api/projects/{project_id}/story-structure/commands",
+        json={
+            "kind": "rename_chapter",
+            "expected_revision": renamed_act.json()["structure"]["revision"],
+            "act": "Act II",
+            "chapter": "Chapter I",
+            "new_name": "Chapter II",
+        },
+    )
+    assert renamed_chapter.status_code == 200
 
     body = client.get(f"/api/projects/{project_id}/story-structure").json()
     scene = _flatten(body)[0]

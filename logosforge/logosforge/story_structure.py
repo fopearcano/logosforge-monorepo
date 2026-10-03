@@ -120,6 +120,23 @@ def is_novel_project(db: Database, project_id: int) -> bool:
         return True
 
 
+def project_requires_chapter(db: Database, project_id: int) -> bool:
+    """Whether every Scene requires a named Chapter parent.
+
+    Series is chapter-hierarchical inside each Episode even though the global
+    story-structure DTO keeps flat Act.Scene numbering (`chapter_level=False`).
+    """
+    try:
+        from logosforge.project_compat import get_project_narrative_engine
+        project = db.get_project_by_id(project_id)
+        return (get_project_narrative_engine(project) or "novel") in {
+            "novel",
+            "series",
+        }
+    except Exception:
+        return True
+
+
 def _ordered(names: list[str], unassigned: str) -> list[str]:
     """Named entries in first-seen order, the Unassigned bucket (if any) last."""
     named = [n for n in names if n != unassigned]
@@ -407,15 +424,25 @@ def note_link_label(
 # ---------------------------------------------------------------------------
 
 
-def is_orphan_scene(scene) -> bool:
-    """A scene is orphan if it has no Act or no Chapter label."""
-    return (not (getattr(scene, "act", "") or "").strip()
-            or not (getattr(scene, "chapter", "") or "").strip())
+def is_orphan_scene(scene, chapter_level: bool = True) -> bool:
+    """Whether a scene lacks a required canonical parent.
+
+    Novel and Series require both Act and Chapter. Other flat modes
+    intentionally persist an empty Chapter label for their synthetic grouping
+    bucket, so only Act is a required parent there.
+    """
+    missing_act = not (getattr(scene, "act", "") or "").strip()
+    missing_chapter = not (getattr(scene, "chapter", "") or "").strip()
+    return missing_act or (chapter_level and missing_chapter)
 
 
 def validate_structure(db: Database, project_id: int) -> list[int]:
     """Ids of scenes that violate the Act → Chapter → Scene invariant."""
-    return [s.id for s in db.get_all_scenes(project_id) if is_orphan_scene(s)]
+    requires_chapter = project_requires_chapter(db, project_id)
+    return [
+        s.id for s in db.get_all_scenes(project_id)
+        if is_orphan_scene(s, requires_chapter)
+    ]
 
 
 def ensure_valid_structure(db: Database, project_id: int) -> dict:
@@ -426,13 +453,17 @@ def ensure_valid_structure(db: Database, project_id: int) -> dict:
     Returns ``{"repaired": n}``.
     """
     repaired = 0
+    requires_chapter = project_requires_chapter(db, project_id)
     for s in db.get_all_scenes(project_id):
         act = (s.act or "").strip()
         chapter = (s.chapter or "").strip()
-        if act and chapter:
+        if act and (chapter or not requires_chapter):
             continue
         db.set_scene_structure(
-            s.id, act or RECOVERED_ACT, chapter or RECOVERED_CHAPTER)
+            s.id,
+            act or RECOVERED_ACT,
+            chapter or (RECOVERED_CHAPTER if requires_chapter else ""),
+        )
         repaired += 1
     return {"repaired": repaired}
 

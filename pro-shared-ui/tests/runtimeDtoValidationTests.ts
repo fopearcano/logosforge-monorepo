@@ -95,6 +95,14 @@ const storyStructure = (sceneOverrides: Record<string, unknown> = {}, overrides:
   ...overrides,
 });
 
+const storyStructureCommandResult = (overrides: Record<string, unknown> = {}) => ({
+  structure: storyStructure(),
+  changed: true,
+  created_scene_id: 2,
+  affected_scene_ids: [2],
+  ...overrides,
+});
+
 const manuscriptSnapshot = (sceneOverrides: Record<string, unknown> = {}, overrides: Record<string, unknown> = {}) => ({
   project_id: 1,
   chapter_level: true,
@@ -560,6 +568,182 @@ try {
       index: 0,
     }),
     storyStructure(),
+  );
+  await expectValid(
+    "story structure commands validate their transactional result",
+    () => client.executeStoryStructureCommand(1, {
+      kind: "create_scene",
+      expected_revision: "b".repeat(64),
+      title: "New Scene",
+      act: "Act One",
+      chapter: "Chapter One",
+      index: 1,
+    }),
+    storyStructureCommandResult(),
+    (value) => value.changed && value.created_scene_id === 2 && value.affected_scene_ids[0] === 2,
+  );
+  await expectValid(
+    "unchanged structure commands carry no mutation metadata",
+    () => client.executeStoryStructureCommand(1, {
+      kind: "repair_orphans",
+      expected_revision: "b".repeat(64),
+    }),
+    storyStructureCommandResult({ changed: false, created_scene_id: null, affected_scene_ids: [] }),
+    (value) => !value.changed && value.affected_scene_ids.length === 0,
+  );
+  await expectValid(
+    "delete commands may return their removed id plus surviving dependency updates",
+    () => client.executeStoryStructureCommand(1, {
+      kind: "delete_scene",
+      expected_revision: "b".repeat(64),
+      scene_id: 2,
+    }),
+    storyStructureCommandResult({
+      structure: storyStructure({ id: 3 }),
+      created_scene_id: null,
+      affected_scene_ids: [2, 3],
+    }),
+  );
+  await expectInvalid(
+    "unchanged structure commands reject affected ids",
+    () => client.executeStoryStructureCommand(1, {
+      kind: "repair_orphans",
+      expected_revision: "b".repeat(64),
+    }),
+    json(storyStructureCommandResult({ changed: false, created_scene_id: null, affected_scene_ids: [2] })),
+    "POST",
+    "/api/projects/1/story-structure/commands",
+    "$.affected_scene_ids",
+  );
+  await expectInvalid(
+    "unchanged structure commands reject a created id",
+    () => client.executeStoryStructureCommand(1, {
+      kind: "repair_orphans",
+      expected_revision: "b".repeat(64),
+    }),
+    json(storyStructureCommandResult({ changed: false, affected_scene_ids: [] })),
+    "POST",
+    "/api/projects/1/story-structure/commands",
+    "$.created_scene_id",
+  );
+  await expectInvalid(
+    "changed structure commands require affected ids",
+    () => client.executeStoryStructureCommand(1, {
+      kind: "repair_orphans",
+      expected_revision: "b".repeat(64),
+    }),
+    json(storyStructureCommandResult({ created_scene_id: null, affected_scene_ids: [] })),
+    "POST",
+    "/api/projects/1/story-structure/commands",
+    "$.affected_scene_ids",
+  );
+  await expectInvalid(
+    "created structure scenes must be affected",
+    () => client.executeStoryStructureCommand(1, {
+      kind: "create_scene",
+      expected_revision: "b".repeat(64),
+      act: "Act One",
+      chapter: "Chapter One",
+      index: 1,
+    }),
+    json(storyStructureCommandResult({ affected_scene_ids: [3] })),
+    "POST",
+    "/api/projects/1/story-structure/commands",
+    "$.created_scene_id",
+  );
+  await expectInvalid(
+    "created structure scene ids must be positive",
+    () => client.executeStoryStructureCommand(1, {
+      kind: "create_scene",
+      expected_revision: "b".repeat(64),
+      act: "Act One",
+      chapter: "Chapter One",
+      index: 1,
+    }),
+    json(storyStructureCommandResult({ created_scene_id: 0, affected_scene_ids: [0] })),
+    "POST",
+    "/api/projects/1/story-structure/commands",
+    "$.created_scene_id",
+  );
+  await expectInvalid(
+    "created structure scenes must be present in the refreshed structure",
+    () => client.executeStoryStructureCommand(1, {
+      kind: "create_scene",
+      expected_revision: "b".repeat(64),
+      act: "Act One",
+      chapter: "Chapter One",
+      index: 1,
+    }),
+    json(storyStructureCommandResult({ created_scene_id: 3, affected_scene_ids: [3] })),
+    "POST",
+    "/api/projects/1/story-structure/commands",
+    "$.created_scene_id",
+  );
+  await expectInvalid(
+    "structure command responses must belong to the requested project",
+    () => client.executeStoryStructureCommand(1, {
+      kind: "create_scene",
+      expected_revision: "b".repeat(64),
+      act: "Act One",
+      chapter: "Chapter One",
+      index: 1,
+    }),
+    json(storyStructureCommandResult({ structure: storyStructure({}, { project_id: 7 }) })),
+    "POST",
+    "/api/projects/1/story-structure/commands",
+    "$.structure.project_id",
+  );
+  await expectInvalid(
+    "non-delete affected scenes must survive in the refreshed structure",
+    () => client.executeStoryStructureCommand(1, {
+      kind: "rename_act",
+      expected_revision: "b".repeat(64),
+      act: "Act One",
+      new_name: "Opening",
+    }),
+    json(storyStructureCommandResult({ created_scene_id: null, affected_scene_ids: [3] })),
+    "POST",
+    "/api/projects/1/story-structure/commands",
+    "$.affected_scene_ids[0]",
+  );
+  await expectInvalid(
+    "story structure commands require the nested authoritative projection",
+    () => client.executeStoryStructureCommand(1, {
+      kind: "repair_orphans",
+      expected_revision: "b".repeat(64),
+    }),
+    json(storyStructureCommandResult({
+      structure: storyStructure({}, { revision: "invalid" }),
+    })),
+    "POST",
+    "/api/projects/1/story-structure/commands",
+    "$.structure.revision",
+  );
+  await expectInvalid(
+    "story structure commands require nullable created scene ids",
+    () => client.executeStoryStructureCommand(1, {
+      kind: "create_act",
+      expected_revision: "b".repeat(64),
+      act: "Act Two",
+      index: 1,
+    }),
+    json(storyStructureCommandResult({ created_scene_id: undefined })),
+    "POST",
+    "/api/projects/1/story-structure/commands",
+    "$.created_scene_id",
+  );
+  await expectInvalid(
+    "story structure commands reject duplicate affected scene ids",
+    () => client.executeStoryStructureCommand(1, {
+      kind: "rename_act",
+      expected_revision: "b".repeat(64),
+      act: "Act One",
+      new_name: "Opening",
+    }),
+    json(storyStructureCommandResult({ created_scene_id: null, affected_scene_ids: [2, 2] })),
+    "POST",
+    "/api/projects/1/story-structure/commands",
+    "$.affected_scene_ids[1]",
   );
   await expectInvalid(
     "story structure requires its project-wide revision",

@@ -220,6 +220,82 @@ try {
   await placementBarrier;
   if (placed.revision !== 'b'.repeat(64)) throw new Error('Scene placement response was not validated');
 
+  let releaseStructureCommand!: (response: Response) => void;
+  globalThis.fetch = (input: RequestInfo | URL, init: RequestInit = {}) => {
+    requests.push({ input: String(input), init });
+    return new Promise<Response>((resolve) => { releaseStructureCommand = resolve; });
+  };
+  const commandBody = {
+    kind: 'rename_chapter' as const,
+    expected_revision: 'b'.repeat(64),
+    act: 'Act One',
+    chapter: 'Chapter One',
+    new_name: 'Chapter Prime',
+    episode_id: 12,
+  };
+  const pendingStructureCommand = browser.executeStoryStructureCommand(7, commandBody);
+  for (let i = 0; i < 6; i++) await Promise.resolve();
+  const structureCommandRequest = requests.at(-1);
+  if (structureCommandRequest?.input !== '/api/projects/7/story-structure/commands'
+      || structureCommandRequest.init.method !== 'POST') {
+    throw new Error('Story structure command used the wrong route or method');
+  }
+  const serializedStructureCommand = JSON.parse(String(structureCommandRequest.init.body));
+  if (serializedStructureCommand.kind !== 'rename_chapter'
+      || serializedStructureCommand.expected_revision !== 'b'.repeat(64)
+      || serializedStructureCommand.act !== 'Act One'
+      || serializedStructureCommand.chapter !== 'Chapter One'
+      || serializedStructureCommand.new_name !== 'Chapter Prime'
+      || serializedStructureCommand.episode_id !== 12) {
+    throw new Error('Story structure command did not preserve its discriminated payload');
+  }
+  let structureCommandBarrierDone = false;
+  const structureCommandBarrier = flushPendingProjectSaves().then(() => {
+    structureCommandBarrierDone = true;
+  });
+  for (let i = 0; i < 6; i++) await Promise.resolve();
+  if (structureCommandBarrierDone) throw new Error('Story structure command escaped the persistence barrier');
+  releaseStructureCommand(new Response(JSON.stringify({
+    structure: {
+      project_id: 7,
+      revision: 'c'.repeat(64),
+      chapter_level: true,
+      scene_count: 1,
+      orphan_count: 0,
+      acts: [{
+        name: 'Act One',
+        number: '1',
+        unassigned: false,
+        scene_count: 1,
+        chapters: [{
+          name: 'Chapter Prime',
+          number: '1.1',
+          unassigned: false,
+          scene_count: 1,
+          scenes: [{
+            id: 11,
+            episode_id: null,
+            title: 'Scene',
+            beat: '',
+            number: '1.1.1',
+            order_index: 1,
+            is_orphan: false,
+          }],
+        }],
+      }],
+    },
+    changed: true,
+    created_scene_id: null,
+    affected_scene_ids: [11],
+  }), { status: 200, headers: { 'content-type': 'application/json' } }));
+  const structureCommandResult = await pendingStructureCommand;
+  await structureCommandBarrier;
+  if (!structureCommandResult.changed
+      || structureCommandResult.structure.revision !== 'c'.repeat(64)
+      || structureCommandResult.affected_scene_ids[0] !== 11) {
+    throw new Error('Story structure command response was not validated');
+  }
+
   let releaseRead!: (response: Response) => void;
   globalThis.fetch = () => new Promise<Response>((resolve) => { releaseRead = resolve; });
   const pendingRead = browser.health();

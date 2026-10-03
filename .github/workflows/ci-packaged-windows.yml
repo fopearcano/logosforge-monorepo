@@ -8,6 +8,7 @@ on:
       - "pro-shared-ui/**"
       - "pro-desktop/**"
       - "whiteboard-desktop/**"
+      - ".github/npm-audit-policy.mjs"
       - ".github/workflows/ci-packaged-windows.yml"
       - ".github/workflows/release-whiteboard-windows.yml"
       - ".github/workflows/release-windows.yml"
@@ -20,6 +21,7 @@ on:
       - "pro-shared-ui/**"
       - "pro-desktop/**"
       - "whiteboard-desktop/**"
+      - ".github/npm-audit-policy.mjs"
       - ".github/workflows/ci-packaged-windows.yml"
       - ".github/workflows/release-whiteboard-windows.yml"
       - ".github/workflows/release-windows.yml"
@@ -128,7 +130,7 @@ jobs:
           npm ci
           npm test
           npm run build
-          npm audit --audit-level=moderate
+          node ../../.github/npm-audit-policy.mjs
 
       - name: Test API contracts
         working-directory: logosforge-ui-contracts
@@ -144,7 +146,7 @@ jobs:
           npm ci
           npm test
           npm run build
-          npm audit --audit-level=moderate
+          node ../.github/npm-audit-policy.mjs
 
       - name: Test, build, and audit Pro sources
         working-directory: pro-desktop
@@ -153,7 +155,7 @@ jobs:
           npm ci
           npm test
           npm run build
-          npm audit --audit-level=moderate
+          node ../.github/npm-audit-policy.mjs
 
       - name: Build fresh Whiteboard backend and MCP sidecars
         working-directory: whiteboard-desktop/backend

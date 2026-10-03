@@ -466,7 +466,9 @@ export interface SceneUpdateDTO {
   conflict?: string;
   outcome?: string;
   beat?: string;
+  /** @deprecated Rejected by Scene PATCH; use story-structure placement/commands. */
   act?: string;
+  /** @deprecated Rejected by Scene PATCH; use story-structure placement/commands. */
   chapter?: string;
   plotline?: string;
   color_label?: string;
@@ -474,6 +476,7 @@ export interface SceneUpdateDTO {
   /** Reject the PATCH with 409 when the Scene changed since this token. */
   expected_revision?: string;
   tags?: string[];
+  /** @deprecated Rejected by Scene PATCH; use story-structure placement/commands. */
   sort_order?: number;
   time_of_day?: string;
   location?: string;
@@ -535,6 +538,114 @@ export interface StoryStructurePlacementDTO {
   chapter: string;
   index: number;
   episode_id?: number | null;
+}
+
+/**
+ * Transactional structure commands. Acts and Chapters are scene-derived, so
+ * they are addressed by their canonical labels rather than synthetic ids.
+ * Every command is guarded by the project-wide structure revision.
+ */
+interface StoryStructureCommandBase {
+  expected_revision: string;
+}
+
+export interface StoryStructureCreateSceneCommandDTO extends StoryStructureCommandBase {
+  kind: "create_scene";
+  title?: string;
+  act: string;
+  chapter: string;
+  /** Zero-based position among destination siblings (Episode-local for Series). */
+  index: number;
+  /** Series ownership; omitted/null means unassigned. */
+  episode_id?: number | null;
+}
+
+export interface StoryStructureCreateActCommandDTO extends StoryStructureCommandBase {
+  kind: "create_act";
+  act: string;
+  chapter?: string | null;
+  title?: string;
+  /** Zero-based position among named Acts (Episode-local for Series). */
+  index: number;
+  /** Series ownership for the seeded Scene; omitted/null means unassigned. */
+  episode_id?: number | null;
+}
+
+export interface StoryStructureCreateChapterCommandDTO extends StoryStructureCommandBase {
+  kind: "create_chapter";
+  act: string;
+  chapter: string;
+  title?: string;
+  /** Zero-based position among named Chapters in the destination Act (Episode-local for Series). */
+  index: number;
+  /** Series ownership for the seeded Scene; omitted/null means unassigned. */
+  episode_id?: number | null;
+}
+
+export interface StoryStructureRenameActCommandDTO extends StoryStructureCommandBase {
+  kind: "rename_act";
+  act: string;
+  new_name: string;
+  /** Series group scope; omitted/null means the unassigned Episode bucket. */
+  episode_id?: number | null;
+}
+
+export interface StoryStructureRenameChapterCommandDTO extends StoryStructureCommandBase {
+  kind: "rename_chapter";
+  act: string;
+  chapter: string;
+  new_name: string;
+  /** Series group scope; omitted/null means the unassigned Episode bucket. */
+  episode_id?: number | null;
+}
+
+export interface StoryStructureDetachActCommandDTO extends StoryStructureCommandBase {
+  kind: "detach_act";
+  act: string;
+  /** Series group scope; omitted/null means the unassigned Episode bucket. */
+  episode_id?: number | null;
+}
+
+export interface StoryStructureDetachChapterCommandDTO extends StoryStructureCommandBase {
+  kind: "detach_chapter";
+  act: string;
+  chapter: string;
+  /** Series group scope; omitted/null means the unassigned Episode bucket. */
+  episode_id?: number | null;
+}
+
+export interface StoryStructureDeleteSceneCommandDTO extends StoryStructureCommandBase {
+  kind: "delete_scene";
+  scene_id: number;
+}
+
+export interface StoryStructureRepairOrphansCommandDTO extends StoryStructureCommandBase {
+  kind: "repair_orphans";
+}
+
+export type StoryStructureCommandDTO =
+  | StoryStructureCreateSceneCommandDTO
+  | StoryStructureCreateActCommandDTO
+  | StoryStructureCreateChapterCommandDTO
+  | StoryStructureRenameActCommandDTO
+  | StoryStructureRenameChapterCommandDTO
+  | StoryStructureDetachActCommandDTO
+  | StoryStructureDetachChapterCommandDTO
+  | StoryStructureDeleteSceneCommandDTO
+  | StoryStructureRepairOrphansCommandDTO;
+
+/** Authoritative result returned after one atomic structure command. */
+export interface StoryStructureCommandResultDTO {
+  structure: StoryStructureDTO;
+  changed: boolean;
+  /** Populated only by commands that seed a new Scene. */
+  created_scene_id: number | null;
+  /**
+   * Scenes directly created, repaired, detached, renamed, deleted, or changed
+   * while scrubbing references. Ordering-only changes are represented by the
+   * returned structure and the `scenes_changed` event.
+   */
+  affected_scene_ids: number[];
 }
 
 /**

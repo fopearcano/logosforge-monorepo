@@ -72,6 +72,9 @@ const COMMENT_SCENE_TITLE = 'Chapter Two';
 const FIRST_SCENE_BODY = 'The archive waits behind a sealed brass door.';
 const QA_PREFIX = 'Ada stepped into the archive, dust hanging in the dawn light.';
 const SCENE_NAVIGATOR_MARKER = `Scene navigator save-barrier probe ${process.pid}.`;
+const STRUCTURE_UI_ACT = `Packaged UI Act ${process.pid}`;
+const STRUCTURE_UI_CHAPTER = `Packaged UI Chapter ${process.pid}`;
+const STRUCTURE_UI_SCENE = `Packaged UI Scene ${process.pid}`;
 const STARTUP_TIMEOUT_MS = 90_000;
 const UI_TIMEOUT_MS = 30_000;
 const CLOSE_TIMEOUT_MS = 20_000;
@@ -484,6 +487,213 @@ async function localServiceRequest(
   }
   record('api', `${session.label} ${upperMethod} ${requestPath} -> ${result.status}`);
   return result;
+}
+
+function storyStructureSceneRows(structure) {
+  assert.ok(structure && typeof structure === 'object', 'Story structure is not an object');
+  assert.ok(Array.isArray(structure.acts), 'Story structure has no Act list');
+  return structure.acts.flatMap((act) => {
+    assert.ok(Array.isArray(act?.chapters), `Story structure Act ${act?.name ?? '<unknown>'} has no Chapter list`);
+    return act.chapters.flatMap((chapter) => {
+      assert.ok(
+        Array.isArray(chapter?.scenes),
+        `Story structure Chapter ${chapter?.name ?? '<unknown>'} has no Scene list`,
+      );
+      return chapter.scenes.map((scene) => ({ act, chapter, scene }));
+    });
+  });
+}
+
+function assertStoryStructure(structure, projectId, label) {
+  assert.equal(structure?.project_id, projectId, `${label} belongs to another project`);
+  assert.match(
+    structure?.revision ?? '',
+    /^[0-9a-f]{64}$/,
+    `${label} has no canonical structure revision`,
+  );
+  storyStructureSceneRows(structure);
+  return structure;
+}
+
+async function readStoryStructure(session, projectId, label) {
+  const response = await localServiceRequest(
+    session,
+    `/api/projects/${projectId}/story-structure`,
+  );
+  assert.equal(response.status, 200, `${label} returned the wrong status`);
+  return assertStoryStructure(response.data, projectId, label);
+}
+
+async function executeStoryStructureCommand(
+  session,
+  projectId,
+  structure,
+  command,
+  label,
+) {
+  assertStoryStructure(structure, projectId, `${label} preflight structure`);
+  const response = await localServiceRequest(
+    session,
+    `/api/projects/${projectId}/story-structure/commands`,
+    {
+      method: 'POST',
+      body: { ...command, expected_revision: structure.revision },
+    },
+  );
+  assert.equal(response.status, 200, `${label} returned the wrong status`);
+  assert.equal(typeof response.data?.changed, 'boolean', `${label} omitted its changed receipt`);
+  assert.ok(
+    response.data?.created_scene_id == null
+      || (Number.isSafeInteger(response.data.created_scene_id) && response.data.created_scene_id > 0),
+    `${label} returned an invalid created Scene id`,
+  );
+  assert.ok(Array.isArray(response.data?.affected_scene_ids), `${label} omitted affected Scene ids`);
+  assertStoryStructure(response.data?.structure, projectId, `${label} result structure`);
+  return response.data;
+}
+
+async function placeStoryStructureScene(
+  session,
+  projectId,
+  structure,
+  { sceneId, act, chapter, index },
+  label,
+) {
+  assertStoryStructure(structure, projectId, `${label} preflight structure`);
+  const response = await localServiceRequest(
+    session,
+    `/api/projects/${projectId}/story-structure/scenes/${sceneId}/placement`,
+    {
+      method: 'PUT',
+      body: {
+        expected_revision: structure.revision,
+        act,
+        chapter,
+        index,
+      },
+    },
+  );
+  assert.equal(response.status, 200, `${label} returned the wrong status`);
+  return assertStoryStructure(response.data, projectId, `${label} result structure`);
+}
+
+/**
+ * Assign existing Scenes to a requested canonical Novel hierarchy exclusively
+ * through the public revision-guarded authoring API. Acts and Chapters are
+ * scene-derived, so a new container temporarily owns the seed Scene returned by
+ * create_act/create_chapter. The real Scene is placed beside that seed, then the
+ * seed is deleted transactionally. The final project therefore contains exactly
+ * the caller's original Scenes and no acceptance-only placeholders.
+ */
+async function assignScenesToStoryStructure(session, projectId, fixtures, label) {
+  let structure = await readStoryStructure(session, projectId, `${label} initial read`);
+  const actOrder = [];
+  const chapterOrder = new Map();
+  const siblingCounts = new Map();
+
+  for (const [fixtureIndex, fixture] of fixtures.entries()) {
+    const sceneId = Number(fixture?.scene?.id);
+    assert.ok(Number.isSafeInteger(sceneId) && sceneId > 0, `${label} fixture has an invalid Scene id`);
+    assert.ok(typeof fixture.act === 'string' && fixture.act.trim(), `${label} fixture has no Act name`);
+    assert.ok(typeof fixture.chapter === 'string' && fixture.chapter.trim(), `${label} fixture has no Chapter name`);
+
+    if (!actOrder.includes(fixture.act)) actOrder.push(fixture.act);
+    const chapters = chapterOrder.get(fixture.act) ?? [];
+    if (!chapters.includes(fixture.chapter)) chapters.push(fixture.chapter);
+    chapterOrder.set(fixture.act, chapters);
+
+    let seedSceneId = null;
+    let act = structure.acts.find((row) => !row.unassigned && row.name === fixture.act);
+    if (!act) {
+      const created = await executeStoryStructureCommand(
+        session,
+        projectId,
+        structure,
+        {
+          kind: 'create_act',
+          act: fixture.act,
+          chapter: fixture.chapter,
+          title: `${label} temporary Act seed`,
+          index: actOrder.indexOf(fixture.act),
+        },
+        `${label} create Act ${fixture.act}`,
+      );
+      assert.equal(created.changed, true, `${label} create Act was unexpectedly a no-op`);
+      seedSceneId = Number(created.created_scene_id);
+      assert.ok(
+        Number.isSafeInteger(seedSceneId) && seedSceneId > 0,
+        `${label} create Act did not return its seeded Scene id`,
+      );
+      structure = created.structure;
+      act = structure.acts.find((row) => !row.unassigned && row.name === fixture.act);
+    }
+
+    let chapter = act?.chapters?.find(
+      (row) => !row.unassigned && row.name === fixture.chapter,
+    );
+    if (!chapter) {
+      const created = await executeStoryStructureCommand(
+        session,
+        projectId,
+        structure,
+        {
+          kind: 'create_chapter',
+          act: fixture.act,
+          chapter: fixture.chapter,
+          title: `${label} temporary Chapter seed`,
+          index: chapters.indexOf(fixture.chapter),
+        },
+        `${label} create Chapter ${fixture.chapter}`,
+      );
+      assert.equal(created.changed, true, `${label} create Chapter was unexpectedly a no-op`);
+      seedSceneId = Number(created.created_scene_id);
+      assert.ok(
+        Number.isSafeInteger(seedSceneId) && seedSceneId > 0,
+        `${label} create Chapter did not return its seeded Scene id`,
+      );
+      structure = created.structure;
+      act = structure.acts.find((row) => !row.unassigned && row.name === fixture.act);
+      chapter = act?.chapters?.find(
+        (row) => !row.unassigned && row.name === fixture.chapter,
+      );
+    }
+    assert.ok(chapter, `${label} did not create ${fixture.act}/${fixture.chapter}`);
+
+    const siblingKey = `${fixture.act}\u0000${fixture.chapter}`;
+    const targetIndex = siblingCounts.get(siblingKey) ?? 0;
+    structure = await placeStoryStructureScene(
+      session,
+      projectId,
+      structure,
+      { sceneId, act: fixture.act, chapter: fixture.chapter, index: targetIndex },
+      `${label} place Scene ${sceneId} (${fixtureIndex + 1}/${fixtures.length})`,
+    );
+
+    if (seedSceneId != null) {
+      const deleted = await executeStoryStructureCommand(
+        session,
+        projectId,
+        structure,
+        { kind: 'delete_scene', scene_id: seedSceneId },
+        `${label} delete temporary seed ${seedSceneId}`,
+      );
+      assert.equal(deleted.changed, true, `${label} seed deletion was unexpectedly a no-op`);
+      assert.ok(
+        deleted.affected_scene_ids.includes(seedSceneId),
+        `${label} seed deletion omitted its deleted Scene id`,
+      );
+      structure = deleted.structure;
+    }
+    siblingCounts.set(siblingKey, targetIndex + 1);
+  }
+
+  const finalIds = storyStructureSceneRows(structure).map(({ scene }) => Number(scene.id));
+  assert.deepEqual(
+    [...finalIds].sort((left, right) => left - right),
+    fixtures.map((fixture) => Number(fixture.scene.id)).sort((left, right) => left - right),
+    `${label} changed the project Scene set`,
+  );
+  return structure;
 }
 
 async function allocateStrictPort() {
@@ -1597,6 +1807,220 @@ function proSceneNavigator(page) {
   return page.locator('[data-scene-navigator="true"]');
 }
 
+async function exerciseProTransactionalStructureAuthoring(session, projectId) {
+  const { page } = session;
+  const navigator = await waitVisible(
+    proSceneNavigator(page),
+    'Pro Scene Navigator before transactional UI authoring',
+  );
+  const baseline = await readStoryStructure(
+    session,
+    projectId,
+    'Pro transactional UI authoring baseline',
+  );
+  const baselineSceneIds = storyStructureSceneRows(baseline)
+    .map(({ scene }) => Number(scene.id))
+    .sort((left, right) => left - right);
+  const expectedActIndex = baseline.acts.filter((act) => !act.unassigned).length;
+  assert.equal(
+    storyStructureSceneRows(baseline).some(({ act }) => act.name === STRUCTURE_UI_ACT),
+    false,
+    'Pro transactional UI Act fixture already exists',
+  );
+
+  const create = await waitVisible(
+    navigator.locator('button[data-structure-action="create_act"]'),
+    'Pro transactional Create Act action',
+  );
+  assert.notEqual(
+    await create.getAttribute('aria-disabled'),
+    'true',
+    'Pro transactional Create Act action is disabled',
+  );
+  await create.click();
+  const form = await waitVisible(
+    navigator.locator('form[data-structure-action-editor="create_act"]'),
+    'Pro transactional Create Act form',
+  );
+  await form.getByLabel('New Act name', { exact: true }).fill(STRUCTURE_UI_ACT);
+  await form.getByLabel('First Chapter name', { exact: true }).fill(STRUCTURE_UI_CHAPTER);
+  await form.getByLabel('First Scene title', { exact: true }).fill(STRUCTURE_UI_SCENE);
+
+  const commandPath = `/api/projects/${projectId}/story-structure/commands`;
+  const commandResponsePromise = page.waitForResponse(
+    (response) => {
+      const request = response.request();
+      return request.method() === 'POST' && new URL(response.url()).pathname === commandPath;
+    },
+    { timeout: UI_TIMEOUT_MS },
+  );
+  await form.locator('button[data-structure-action-submit="create_act"]').click();
+  const commandResponse = await commandResponsePromise;
+  assert.equal(commandResponse.status(), 200, 'Pro transactional UI Create Act request failed');
+  const requestBody = commandResponse.request().postDataJSON();
+  assert.deepEqual(
+    {
+      kind: requestBody?.kind,
+      act: requestBody?.act,
+      chapter: requestBody?.chapter,
+      title: requestBody?.title,
+      index: requestBody?.index,
+      expected_revision: requestBody?.expected_revision,
+    },
+    {
+      kind: 'create_act',
+      act: STRUCTURE_UI_ACT,
+      chapter: STRUCTURE_UI_CHAPTER,
+      title: STRUCTURE_UI_SCENE,
+      index: expectedActIndex,
+      expected_revision: baseline.revision,
+    },
+    'Pro transactional UI did not submit the canonical revision-guarded Create Act command',
+  );
+  const createdReceipt = await commandResponse.json();
+  assert.equal(createdReceipt?.changed, true, 'Pro transactional UI Create Act was not acknowledged');
+  const createdSceneId = Number(createdReceipt?.created_scene_id);
+  assert.ok(
+    Number.isSafeInteger(createdSceneId) && createdSceneId > 0,
+    'Pro transactional UI Create Act returned no seeded Scene id',
+  );
+  assert.ok(
+    createdReceipt?.affected_scene_ids?.includes(createdSceneId),
+    'Pro transactional UI Create Act omitted its seeded Scene from affected ids',
+  );
+  assertStoryStructure(
+    createdReceipt?.structure,
+    projectId,
+    'Pro transactional UI Create Act receipt',
+  );
+  await waitFor(
+    async () => !(await form.isVisible().catch(() => false)),
+    'Pro transactional Create Act form to close',
+  );
+  await waitText(
+    navigator,
+    'New Act completed.',
+    'Pro transactional Create Act completion status',
+    { exact: false },
+  );
+
+  const createdStructure = await readStoryStructure(
+    session,
+    projectId,
+    'Pro transactional UI Create Act verification',
+  );
+  const createdRows = storyStructureSceneRows(createdStructure).filter(
+    ({ act, chapter, scene }) => act.name === STRUCTURE_UI_ACT
+      && chapter.name === STRUCTURE_UI_CHAPTER
+      && Number(scene.id) === createdSceneId
+      && scene.title === STRUCTURE_UI_SCENE,
+  );
+  assert.equal(
+    createdRows.length,
+    1,
+    'Pro transactional UI Create Act did not persist its exact Act/Chapter/Scene chain',
+  );
+  assert.equal(
+    createdStructure.acts.filter((act) => !act.unassigned)
+      .findIndex((act) => act.name === STRUCTURE_UI_ACT),
+    expectedActIndex,
+    'Pro transactional UI Create Act persisted at the wrong canonical Act index',
+  );
+  await waitVisible(
+    navigator.locator(`button[data-scene-id="${createdSceneId}"]`),
+    'Pro transactional UI-created Scene row',
+  );
+
+  // Complete the acceptance-only lifecycle through the packaged Navigator too.
+  // Since Acts and Chapters are scene-derived, deleting the seeded Scene removes
+  // the temporary containers and restores the exact writer structure.
+  await navigator.locator(
+    `button[data-structure-action="delete_scene"][data-structure-action-scene-id="${createdSceneId}"]`,
+  ).click();
+  const deleteForm = await waitVisible(
+    navigator.locator('form[data-structure-action-editor="delete_scene"]'),
+    'Pro transactional Delete Scene form',
+  );
+  const deleteResponsePromise = page.waitForResponse(
+    (response) => {
+      const request = response.request();
+      return request.method() === 'POST' && new URL(response.url()).pathname === commandPath;
+    },
+    { timeout: UI_TIMEOUT_MS },
+  );
+  await deleteForm.locator('button[data-structure-action-submit="delete_scene"]').click();
+  const deleteResponse = await deleteResponsePromise;
+  assert.equal(deleteResponse.status(), 200, 'Pro transactional UI Delete Scene request failed');
+  const deleteRequestBody = deleteResponse.request().postDataJSON();
+  assert.deepEqual(
+    {
+      kind: deleteRequestBody?.kind,
+      scene_id: deleteRequestBody?.scene_id,
+      expected_revision: deleteRequestBody?.expected_revision,
+    },
+    {
+      kind: 'delete_scene',
+      scene_id: createdSceneId,
+      expected_revision: createdStructure.revision,
+    },
+    'Pro transactional UI did not submit the canonical revision-guarded Delete Scene command',
+  );
+  const deleted = await deleteResponse.json();
+  assert.equal(deleted?.changed, true, 'Pro transactional UI fixture cleanup was a no-op');
+  assert.ok(
+    deleted?.affected_scene_ids?.includes(createdSceneId),
+    'Pro transactional UI fixture cleanup omitted the deleted Scene id',
+  );
+  assertStoryStructure(
+    deleted?.structure,
+    projectId,
+    'Pro transactional UI Delete Scene receipt',
+  );
+  assert.deepEqual(
+    deleted.structure,
+    baseline,
+    'Pro transactional UI create/delete lifecycle did not restore the exact baseline structure',
+  );
+  await waitFor(
+    async () => !(await deleteForm.isVisible().catch(() => false))
+      && (await navigator.locator(`button[data-scene-id="${createdSceneId}"]`).count()) === 0
+      && !(await navigator.textContent() ?? '').includes(STRUCTURE_UI_ACT),
+    'Pro transactional UI fixture cleanup to refresh the Navigator',
+  );
+  await waitText(
+    navigator,
+    `Delete ${STRUCTURE_UI_SCENE} completed.`,
+    'Pro transactional Delete Scene completion status',
+    { exact: false },
+  );
+  const cleanedStructure = await readStoryStructure(
+    session,
+    projectId,
+    'Pro transactional UI Delete Scene verification',
+  );
+  assert.deepEqual(
+    cleanedStructure,
+    baseline,
+    'Pro transactional UI cleanup API read did not restore the exact baseline structure',
+  );
+  assert.deepEqual(
+    storyStructureSceneRows(cleanedStructure)
+      .map(({ scene }) => Number(scene.id))
+      .sort((left, right) => left - right),
+    baselineSceneIds,
+    'Pro transactional UI lifecycle changed the writer Scene set',
+  );
+  record(
+    'journey',
+    'Pro packaged Navigator created an Act/Chapter/Scene through the real form, verified its guarded command, and restored the baseline transactionally',
+  );
+  return {
+    expectedStructure: cleanedStructure,
+    removedSceneId: createdSceneId,
+    removedAct: STRUCTURE_UI_ACT,
+  };
+}
+
 async function waitProSceneActivation(page, navigator, sceneId, label) {
   const manuscript = await waitVisible(
     proScreen(page, 'Manuscript Editor'),
@@ -2230,10 +2654,10 @@ async function verifyProSceneNavigator(session, importedProjectId, bodyMarker) {
   assert.ok(Number.isSafeInteger(knownSceneId) && knownSceneId > 0, 'Pro scene navigator lost Chapter One');
   assert.ok(Number.isSafeInteger(otherSceneId) && otherSceneId > 0, 'Pro scene navigator has no second scene fixture');
 
-  // Persist A1, B1, A2 in that deliberately divergent raw order. The core's
-  // canonical hierarchy groups the two Chapter A scenes together, so both the
-  // atomic manuscript snapshot and the rendered Manuscript must instead read
-  // A1, A2, B1. Extra fixture scenes remain in their own later groups.
+  // Assign A1, B1, A2 through the canonical transactional authoring surface.
+  // The second Chapter A placement rewrites the dense persisted order to the
+  // same A1, A2, B1 sequence exposed by Story Structure and Manuscript Snapshot.
+  // Extra fixture scenes remain in their own later groups.
   const divergentFixtures = importedScenes.map((scene, index) => ({
     scene,
     act: index < 3
@@ -2245,14 +2669,19 @@ async function verifyProSceneNavigator(session, importedProjectId, bodyMarker) {
         ? 'Snapshot Chapter B'
         : `Snapshot Extra Chapter ${String(index + 1).padStart(4, '0')}`,
   }));
-  for (const fixture of divergentFixtures) {
-    const patched = await localServiceRequest(
-      session,
-      `/api/projects/${projectId}/scenes/${fixture.scene.id}`,
-      { method: 'PATCH', body: { act: fixture.act, chapter: fixture.chapter } },
-    );
-    assert.equal(patched.status, 200, `Pro manuscript-snapshot scene ${fixture.scene.id} PATCH failed`);
-  }
+  const divergentStructure = await assignScenesToStoryStructure(
+    session,
+    projectId,
+    divergentFixtures,
+    'Pro manuscript-snapshot fixture',
+  );
+
+  const expectedCanonicalIds = [
+    Number(importedScenes[0].id),
+    Number(importedScenes[2].id),
+    Number(importedScenes[1].id),
+    ...importedScenes.slice(3).map((scene) => Number(scene.id)),
+  ];
 
   const rawScenesResult = await localServiceRequest(session, `/api/projects/${projectId}/scenes`);
   assert.equal(rawScenesResult.status, 200, 'Pro raw scene list returned the wrong status');
@@ -2261,37 +2690,27 @@ async function verifyProSceneNavigator(session, importedProjectId, bodyMarker) {
     .sort((left, right) => left.sort_order - right.sort_order || left.id - right.id);
   const rawSceneIds = rawScenes.map((scene) => Number(scene.id));
   assert.deepEqual(
-    rawSceneIds.slice(0, 3),
-    importedScenes.slice(0, 3).map((scene) => Number(scene.id)),
-    'Pro raw scene list no longer preserves the A1, B1, A2 fixture order',
+    rawSceneIds,
+    expectedCanonicalIds,
+    'Pro transactional structure placement did not persist dense canonical order',
+  );
+  assert.notDeepEqual(
+    rawSceneIds,
+    importedScenes.map((scene) => Number(scene.id)),
+    'Pro transactional structure fixture did not exercise a cross-Chapter reorder',
   );
 
-  const divergentStructureResult = await localServiceRequest(
-    session,
-    `/api/projects/${projectId}/story-structure`,
-  );
-  assert.equal(
-    divergentStructureResult.status,
-    200,
-    'Pro divergent story-structure endpoint returned the wrong status',
-  );
-  const divergentStructureIds = divergentStructureResult.data.acts.flatMap((act) =>
+  const divergentStructureIds = divergentStructure.acts.flatMap((act) =>
     act.chapters.flatMap((chapter) => chapter.scenes.map((scene) => Number(scene.id))));
-  const expectedCanonicalIds = [
-    Number(importedScenes[0].id),
-    Number(importedScenes[2].id),
-    Number(importedScenes[1].id),
-    ...importedScenes.slice(3).map((scene) => Number(scene.id)),
-  ];
   assert.deepEqual(
     divergentStructureIds,
     expectedCanonicalIds,
     'Pro divergent story structure did not canonically flatten A1, B1, A2 as A1, A2, B1',
   );
-  assert.notDeepEqual(
+  assert.deepEqual(
     divergentStructureIds,
     rawSceneIds,
-    'Pro manuscript-snapshot fixture did not diverge from persisted raw order',
+    'Pro transactional structure order diverged between raw and canonical reads',
   );
 
   const snapshotResult = await localServiceRequest(
@@ -2302,17 +2721,17 @@ async function verifyProSceneNavigator(session, importedProjectId, bodyMarker) {
   assert.equal(snapshotResult.data?.project_id, projectId, 'Pro manuscript snapshot has the wrong project id');
   assert.equal(
     snapshotResult.data?.chapter_level,
-    divergentStructureResult.data?.chapter_level,
+    divergentStructure.chapter_level,
     'Pro manuscript snapshot disagrees with story structure about chapter mode',
   );
   assert.equal(
     snapshotResult.data?.scene_count,
-    divergentStructureResult.data?.scene_count,
+    divergentStructure.scene_count,
     'Pro manuscript snapshot disagrees with story structure about scene count',
   );
   assert.equal(
     snapshotResult.data?.orphan_count,
-    divergentStructureResult.data?.orphan_count,
+    divergentStructure.orphan_count,
     'Pro manuscript snapshot disagrees with story structure about orphan count',
   );
   assert.ok(Array.isArray(snapshotResult.data?.scenes), 'Pro manuscript snapshot has no scene array');
@@ -2363,9 +2782,9 @@ async function verifyProSceneNavigator(session, importedProjectId, bodyMarker) {
   );
 
   // The hierarchy is scene-derived in the core. Give every imported scene a
-  // deterministic, distinct Act/Chapter path so this packaged journey proves
-  // the core-owned grouping and structural numbers rather than a renderer
-  // projection of the flat scene list.
+  // deterministic, distinct Act/Chapter path through the guarded command and
+  // placement endpoints so this packaged journey proves core-owned authoring,
+  // grouping and structural numbers rather than a renderer projection.
   const structureFixtures = importedScenes.map((scene, index) => ({
     scene,
     act: `Acceptance Act ${String(index + 1).padStart(4, '0')}`,
@@ -2374,30 +2793,20 @@ async function verifyProSceneNavigator(session, importedProjectId, bodyMarker) {
     chapterNumber: `${index + 1}.1`,
     sceneNumber: `${index + 1}.1.1`,
   }));
-  for (const fixture of structureFixtures) {
-    const patched = await localServiceRequest(
-      session,
-      `/api/projects/${projectId}/scenes/${fixture.scene.id}`,
-      { method: 'PATCH', body: { act: fixture.act, chapter: fixture.chapter } },
-    );
-    assert.equal(patched.status, 200, `Pro scene ${fixture.scene.id} structure PATCH failed`);
-    assert.equal(patched.data?.act, fixture.act, `Pro scene ${fixture.scene.id} lost its Act path`);
-    assert.equal(patched.data?.chapter, fixture.chapter, `Pro scene ${fixture.scene.id} lost its Chapter path`);
-  }
-
-  const structureResult = await localServiceRequest(
+  const structureResult = await assignScenesToStoryStructure(
     session,
-    `/api/projects/${projectId}/story-structure`,
+    projectId,
+    structureFixtures,
+    'Pro Scene Navigator hierarchy fixture',
   );
-  assert.equal(structureResult.status, 200, 'Pro story-structure endpoint returned the wrong status');
   assert.match(
-    structureResult.data?.revision ?? '',
+    structureResult.revision ?? '',
     /^[0-9a-f]{64}$/,
     'Pro story-structure endpoint did not return its project-wide structure revision',
   );
   const expectedStructure = {
     project_id: projectId,
-    revision: structureResult.data.revision,
+    revision: structureResult.revision,
     chapter_level: true,
     scene_count: structureFixtures.length,
     orphan_count: 0,
@@ -2424,16 +2833,16 @@ async function verifyProSceneNavigator(session, importedProjectId, bodyMarker) {
     })),
   };
   assert.deepEqual(
-    structureResult.data,
+    structureResult,
     expectedStructure,
     'Pro story-structure endpoint did not return the exact canonical Act/Chapter/Scene tree',
   );
-  const structurePayload = JSON.stringify(structureResult.data);
+  const structurePayload = JSON.stringify(structureResult);
   assert.ok(!structurePayload.includes(bodyMarker), 'Pro story-structure leaked the manuscript marker');
   assert.ok(!structurePayload.includes(FIRST_SCENE_BODY), 'Pro story-structure leaked manuscript prose');
   assert.ok(!structurePayload.includes('"content"'), 'Pro story-structure exposed a content field');
   assert.ok(
-    structureResult.data.acts.every((act) => act.chapters.every((chapter) =>
+    structureResult.acts.every((act) => act.chapters.every((chapter) =>
       chapter.scenes.every((scene) => !Object.hasOwn(scene, 'revision')))),
     'Pro story-structure exposed a per-scene manuscript revision',
   );
@@ -2470,7 +2879,9 @@ async function verifyProSceneNavigator(session, importedProjectId, bodyMarker) {
     );
     const actGroup = actGroups.first();
     const actToggle = await waitVisible(
-      actGroup.locator(':scope > button[data-scene-group-toggle="act"]'),
+      actGroup.locator(
+        ':scope > .lf-studio-structure-group-row > button[data-scene-group-toggle="act"]',
+      ),
       `Pro Scene Navigator Act ${fixture.actNumber} toggle`,
     );
     const expectedActLabel = `Act ${fixture.actNumber}: ${fixture.act}, 1 scene`;
@@ -2493,7 +2904,7 @@ async function verifyProSceneNavigator(session, importedProjectId, bodyMarker) {
     );
     const chapterGroup = chapterGroups.first();
     const chapterToggle = chapterGroup.locator(
-      ':scope > button[data-scene-group-toggle="chapter"]',
+      ':scope > .lf-studio-structure-group-row > button[data-scene-group-toggle="chapter"]',
     ).first();
     const expectedChapterLabel = `Chapter ${fixture.chapterNumber}: ${fixture.chapter}, 1 scene`;
     await waitFor(
@@ -2833,10 +3244,15 @@ async function verifyProSceneNavigator(session, importedProjectId, bodyMarker) {
       `restored Pro Scene Navigator Act ${fixture.actNumber}`,
     );
   }
+  const transactionalLifecycle = await exerciseProTransactionalStructureAuthoring(
+    session,
+    projectId,
+  );
   record(
     'journey',
-    'Pro core-owned Scene Navigator hierarchy, filtering, guarded activation, and project isolation verified',
+    'Pro core-owned Scene Navigator hierarchy, transactional authoring, filtering, guarded activation, and project isolation verified',
   );
+  return transactionalLifecycle;
 }
 
 async function verifyProOmniboxNavigation(session, destination) {
@@ -3474,25 +3890,55 @@ async function exportProMarkdown(session, outputPath, bodyMarker, proMarker) {
   record('journey', 'Pro Markdown export written and verified');
 }
 
-async function verifyProRestart(session, bundle, expectedDestination, bodyMarker, proMarker) {
+async function verifyProRestart(
+  session,
+  bundle,
+  expectedDestination,
+  structureLifecycle,
+  bodyMarker,
+  proMarker,
+) {
   const { page } = session;
   await waitProReady(session);
   const projectSelect = proProjectSelect(page);
   await waitFor(
-    async () => (await projectSelect.locator('option').allTextContents()).some((title) => title.trim() === PROJECT_TITLE),
-    'imported Pro project option after restart',
-  );
-  await projectSelect.selectOption({ label: PROJECT_TITLE });
-  await waitFor(
-    async () => (await projectSelect.locator('option:checked').textContent())?.trim() === PROJECT_TITLE,
-    'imported Pro project to become active after restart',
+    async () => (await projectSelect.locator('option').allTextContents())
+      .some((title) => title.trim() === PROJECT_TITLE)
+      && Number(await projectSelect.inputValue()) === expectedDestination.projectId,
+    'persisted imported Pro project to resume automatically after restart',
   );
   assert.equal(
     Number(await projectSelect.inputValue()),
     expectedDestination.projectId,
-    'A different Pro project id was selected after restart',
+    'Pro did not automatically resume the last active project after restart',
+  );
+  assert.equal(
+    (await projectSelect.locator('option:checked').textContent())?.trim(),
+    PROJECT_TITLE,
+    'Pro automatically resumed the wrong project title after restart',
   );
   await verifyProWorkspaceShellAfterRestart(page);
+  const restartedStructure = await readStoryStructure(
+    session,
+    expectedDestination.projectId,
+    'Pro transactional structure after restart',
+  );
+  assert.deepEqual(
+    restartedStructure,
+    structureLifecycle.expectedStructure,
+    'Pro transactional structure changed across graceful restart',
+  );
+  assert.equal(
+    storyStructureSceneRows(restartedStructure)
+      .some(({ scene }) => Number(scene.id) === structureLifecycle.removedSceneId),
+    false,
+    'Pro transactional UI cleanup Scene returned after restart',
+  );
+  assert.equal(
+    restartedStructure.acts.some((act) => act.name === structureLifecycle.removedAct),
+    false,
+    'Pro transactional UI cleanup Act returned after restart',
+  );
   const manuscript = await selectProPanel(page, 'Manuscript', 'Manuscript Editor');
   await waitText(manuscript, bodyMarker, 'Whiteboard marker after Pro restart');
   await waitText(manuscript, proMarker, 'Pro marker after Pro restart');
@@ -3531,7 +3977,11 @@ async function runProJourney({ electron, exePath, root, bundlePath, bundle, mark
     dialogs: { open: [bundlePath], save: [markdownPath] },
   });
   const expectedDestination = await importAndVerifyInPro(first, bundlePath, bundle, bodyMarker);
-  await verifyProSceneNavigator(first, expectedDestination.projectId, bodyMarker);
+  const structureLifecycle = await verifyProSceneNavigator(
+    first,
+    expectedDestination.projectId,
+    bodyMarker,
+  );
   await verifyProOmniboxNavigation(first, expectedDestination);
   await verifyProOmniboxCommandReview(first, expectedDestination.projectId);
   await configureProAiAndChat(first.page);
@@ -3556,7 +4006,14 @@ async function runProJourney({ electron, exePath, root, bundlePath, bundle, mark
     productRoot: root,
     dialogs: {},
   });
-  await verifyProRestart(second, bundle, expectedDestination, bodyMarker, proMarker);
+  await verifyProRestart(
+    second,
+    bundle,
+    expectedDestination,
+    structureLifecycle,
+    bodyMarker,
+    proMarker,
+  );
   await captureScreenshot(second, 'restart-persistence');
   await closeSession(second);
   record('journey', 'Pro import/edit/export/graceful-restart journey complete');

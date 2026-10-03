@@ -59,6 +59,11 @@ import { WRITING_MODES, type WritingMode, type ProjectDTO } from '@logosforge/ui
 import { desktop, platform, type CoreStatus } from './platform';
 import { AiDock, AI_TOOL_KEYS } from './AiDock';
 import { CommandPalette, type Command } from './CommandPalette';
+import { CoreGenerationTracker } from './coreGeneration';
+import {
+  projectIdFromSessionState,
+  selectStartupProjectId,
+} from './projectResume';
 
 // Shared UI owns the platform-neutral panel catalog. The desktop host retains
 // the AI companion container plus project/bootstrap and lifecycle orchestration.
@@ -83,6 +88,31 @@ function projectWritingMode(project: ProjectDTO): WritingMode {
   return (WRITING_MODES as readonly string[]).includes(candidate)
     ? candidate as WritingMode
     : 'novel';
+}
+
+interface BootstrapRun {
+  api: ApiClient;
+  attempt: number;
+  coreGeneration: number;
+}
+
+async function loadLastActiveProjectId(): Promise<number | null> {
+  try {
+    return projectIdFromSessionState(await desktop?.loadDesktopSessionState());
+  } catch {
+    // Session resume is a convenience. A missing/corrupt/unreadable host file
+    // must never stop the authoritative local project library from opening.
+    return null;
+  }
+}
+
+async function persistLastActiveProjectId(projectId: number | null): Promise<void> {
+  try {
+    await desktop?.saveLastActiveProjectId(projectId);
+  } catch {
+    // Project switching already committed in the core. Keep it successful even
+    // if the small host-side resume hint cannot be updated on this launch.
+  }
 }
 
 function CoreBadge({ status }: { status: CoreStatus }) {
@@ -135,11 +165,14 @@ function ProLiveContextPublisher({
 
 export function App() {
   const [status, setStatus] = useState<CoreStatus>({ state: 'connecting', baseUrl: '', managed: false });
+  const coreStatusRef = useRef<CoreStatus>(status);
+  const coreGenerationTrackerRef = useRef(new CoreGenerationTracker());
   const [projectId, setProjectId] = useState<number | undefined>(undefined);
   const [mode, setMode] = useState<WritingMode>('novel');
   const [modeBusy, setModeBusy] = useState(false);
   const [projectSwitching, setProjectSwitching] = useState(false);
   const [closePending, setClosePending] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [bootstrapAttempt, setBootstrapAttempt] = useState(0);
   const [pendingScene, setPendingScene] = useState<number | null>(null);
   const [pendingPsykeEntry, setPendingPsykeEntry] = useState<number | null>(null);
@@ -155,9 +188,18 @@ export function App() {
   const projectSwitchingRef = useRef(false);
   const projectSwitchSequenceRef = useRef(0);
   const projectIdRef = useRef(projectId);
-  const bootstrapRunRef = useRef<{ api: ApiClient; attempt: number } | null>(null);
+  const bootstrapRunRef = useRef<BootstrapRun | null>(null);
+  const bootstrapBusyOwnerRef = useRef<BootstrapRun | null>(null);
   const bootstrapRetryTimerRef = useRef<number | null>(null);
   const appMountedRef = useRef(true);
+  const releaseBootstrapRun = useCallback((run: BootstrapRun | null) => {
+    if (!run) return;
+    if (bootstrapRunRef.current === run) bootstrapRunRef.current = null;
+    if (bootstrapBusyOwnerRef.current === run) {
+      bootstrapBusyOwnerRef.current = null;
+      setBusy(false);
+    }
+  }, []);
 
   const {
     layout: workspaceLayout,
@@ -407,21 +449,34 @@ export function App() {
     if (!desktop) return;
     let active = true;
     let liveEventSeen = false;
+    const publishCoreStatus = (next: CoreStatus) => {
+      coreStatusRef.current = next;
+      const tracker = coreGenerationTrackerRef.current;
+      const previousGeneration = tracker.current();
+      const nextGeneration = tracker.observe(next);
+      if (nextGeneration !== previousGeneration) {
+        const invalidatedRun = bootstrapRunRef.current;
+        releaseBootstrapRun(invalidatedRun);
+      }
+      setStatus(next);
+    };
     const unsubscribe = desktop.onCoreStatus((next) => {
       if (!active) return;
       liveEventSeen = true;
-      setStatus(next);
+      publishCoreStatus(next);
     });
     void desktop.getCoreStatus().then((next) => {
-      if (active && !liveEventSeen) setStatus(next);
+      if (active && !liveEventSeen) publishCoreStatus(next);
     }).catch((error) => {
-      if (active && !liveEventSeen) setStatus({
-        state: 'error', baseUrl: '', managed: false,
-        detail: `Could not read core status. ${error instanceof Error ? error.message : String(error)}`,
-      });
+      if (active && !liveEventSeen) {
+        publishCoreStatus({
+          state: 'error', baseUrl: '', managed: false,
+          detail: `Could not read core status. ${error instanceof Error ? error.message : String(error)}`,
+        });
+      }
     });
     return () => { active = false; unsubscribe(); };
-  }, []);
+  }, [releaseBootstrapRun]);
 
   // Electron close/quit handshake: never let the process disappear inside the
   // scene debounce window. Main waits for this result before closing.
@@ -462,6 +517,9 @@ export function App() {
     () => (baseUrl != null ? createHttpApiClient(baseUrl, status.authToken ?? '') : null),
     [baseUrl, status.authToken],
   );
+  // Bound to the render that created `api`. Old callbacks retain this number,
+  // so a synchronous status event invalidates them before React has to rerender.
+  const apiCoreGeneration = coreGenerationTrackerRef.current.current();
   const apiDisposer = useMemo(
     () => createDeferredDisposer<ApiClient>((client) => client.dispose?.()),
     [],
@@ -470,18 +528,30 @@ export function App() {
 
   const selectProject = useCallback((id: number): Promise<boolean> => {
     if (closingRef.current) return Promise.resolve(false);
+    const ownerApi = api;
+    const ownerCoreGeneration = apiCoreGeneration;
+    const isCurrentCore = () => coreGenerationTrackerRef.current.isCurrent(ownerCoreGeneration)
+      && coreStatusRef.current.state === 'connected';
     const target = id || undefined;
     const requestSequence = projectSwitchSequenceRef.current + 1;
     projectSwitchSequenceRef.current = requestSequence;
     projectSwitchingRef.current = true;
     setProjectSwitching(true);
     const task = operationQueue.current.then(async () => {
-      if (projectIdRef.current === target) return true;
-      if (!api && target != null) return false;
+      if (!isCurrentCore()) return false;
+      if (projectIdRef.current === target) {
+        void persistLastActiveProjectId(target ?? null);
+        return true;
+      }
+      if (!ownerApi && target != null) return false;
       try {
         let opened: ProjectDTO | null = null;
         if (target == null) await flushPendingProjectSaves({ commitActiveField: true });
-        else opened = await prepareProjectHandoff(() => api!.openProject(target));
+        else opened = await prepareProjectHandoff(() => {
+          if (!isCurrentCore()) throw new Error('The core changed while opening the project.');
+          return ownerApi!.openProject(target);
+        });
+        if (!isCurrentCore()) return false;
         if (opened) {
           setProjects((current) => {
             const found = current.some((project) => project.id === opened.id);
@@ -492,6 +562,7 @@ export function App() {
           setMode(projectWritingMode(opened));
         }
       } catch (error) {
+        if (!isCurrentCore()) return false;
         setHandoffError(
           `Project switch stopped; your current manuscript remains open. ${
             error instanceof Error ? error.message : String(error)
@@ -503,6 +574,7 @@ export function App() {
       resetProjectSaveStatus();
       setProjectId(target);
       projectIdRef.current = target;
+      void persistLastActiveProjectId(target ?? null);
       setPendingScene(null);
       setPendingPsykeEntry(null);
       setPendingNote(null);
@@ -519,13 +591,12 @@ export function App() {
     };
     void task.then(finishSwitch, finishSwitch);
     return task;
-  }, [api]);
+  }, [api, apiCoreGeneration]);
 
   // Project list + selection. On connect, load the projects; if there are none,
   // create a starter one so a fresh install can write immediately (otherwise
   // every panel shows an empty "open a project" state with no way to make one).
   const [projects, setProjects] = useState<ProjectDTO[]>([]);
-  const [busy, setBusy] = useState(false);
 
   const refreshProjects = useCallback(async (): Promise<ProjectDTO[]> => {
     if (!api) return [];
@@ -595,44 +666,75 @@ export function App() {
       }
     };
     if (!api || status.state !== 'connected') {
-      bootstrapRunRef.current = null;
+      releaseBootstrapRun(bootstrapRunRef.current);
+      clearRetry();
+      return;
+    }
+    // A status event can invalidate the committed render before this passive
+    // effect starts. Never let that stale render acquire shared busy ownership.
+    if (!coreGenerationTrackerRef.current.isCurrent(apiCoreGeneration)
+        || coreStatusRef.current.state !== 'connected') {
+      releaseBootstrapRun(bootstrapRunRef.current);
       clearRetry();
       return;
     }
     if (bootstrapRunRef.current?.api !== api) {
-      bootstrapRunRef.current = null;
+      releaseBootstrapRun(bootstrapRunRef.current);
       clearRetry();
     }
     if (projects.length > 0 || projectId != null) {
-      bootstrapRunRef.current = null;
+      releaseBootstrapRun(bootstrapRunRef.current);
       clearRetry();
       return;
     }
     if (busy) return;
     const previous = bootstrapRunRef.current;
-    if (previous?.api === api && previous.attempt === bootstrapAttempt) return;
-    const run = { api, attempt: bootstrapAttempt };
+    if (previous?.api === api
+      && previous.attempt === bootstrapAttempt
+      && previous.coreGeneration === apiCoreGeneration) return;
+    const run = { api, attempt: bootstrapAttempt, coreGeneration: apiCoreGeneration };
     bootstrapRunRef.current = run;
-    const isCurrent = () => appMountedRef.current && bootstrapRunRef.current === run;
+    bootstrapBusyOwnerRef.current = run;
+    const isCurrent = () => appMountedRef.current
+      && bootstrapRunRef.current === run
+      && coreGenerationTrackerRef.current.isCurrent(run.coreGeneration)
+      && coreStatusRef.current.state === 'connected'
+      && !closingRef.current;
     setBusy(true);
     void (async () => {
       try {
-        const ps = await api.listProjects();
+        let nextProjects = await api.listProjects();
         if (!isCurrent()) return;
-        setProjects(ps);
-        if (ps.length === 0) {
+        if (nextProjects.length === 0) {
           const created = await api.createProject({ title: 'Untitled Project', narrative_engine: mode });
           if (!isCurrent()) return;
-          setProjects([created]);
+          nextProjects = [created];
+        }
+
+        const persistedProjectId = await loadLastActiveProjectId();
+        if (!isCurrent()) return;
+        const targetProjectId = selectStartupProjectId(nextProjects, persistedProjectId);
+        if (targetProjectId == null) throw new Error('The local project library is empty.');
+
+        // Startup has no outgoing project, but still use the normal open endpoint
+        // and save barrier so project-loaded observers see the same lifecycle as a
+        // writer-initiated switch. Keep all state publication behind the bootstrap
+        // identity guard: a replacement core must never receive this stale result.
+        const opened = await prepareProjectHandoff(() => {
+          if (!isCurrent()) throw new Error('The core changed while opening the startup project.');
+          return api.openProject(targetProjectId);
+        });
+        if (!isCurrent()) return;
+        nextProjects = nextProjects.some((candidate) => candidate.id === opened.id)
+          ? nextProjects.map((candidate) => candidate.id === opened.id ? opened : candidate)
+          : [...nextProjects, opened];
+        setProjects(nextProjects);
+        if (projectId == null) {
           workspaceHydratedProjectRef.current = undefined;
-          setProjectId(created.id);
-          projectIdRef.current = created.id;
-          setMode(projectWritingMode(created));
-        } else if (projectId == null) {
-          workspaceHydratedProjectRef.current = undefined;
-          setProjectId(ps[0]!.id);
-          projectIdRef.current = ps[0]!.id;
-          setMode(projectWritingMode(ps[0]!));
+          setProjectId(opened.id);
+          projectIdRef.current = opened.id;
+          setMode(projectWritingMode(opened));
+          void persistLastActiveProjectId(opened.id);
         }
         setHandoffError(null);
       } catch (error) {
@@ -649,10 +751,23 @@ export function App() {
         }, 3000);
         bootstrapRetryTimerRef.current = timer;
       } finally {
-        if (appMountedRef.current) setBusy(false);
+        if (bootstrapBusyOwnerRef.current === run) {
+          bootstrapBusyOwnerRef.current = null;
+          if (appMountedRef.current) setBusy(false);
+        }
       }
     })();
-  }, [api, status.state, busy, projects.length, projectId, mode, bootstrapAttempt]);
+  }, [
+    api,
+    apiCoreGeneration,
+    status.state,
+    busy,
+    projects.length,
+    projectId,
+    mode,
+    bootstrapAttempt,
+    releaseBootstrapRun,
+  ]);
 
   const newProject = useCallback(async () => {
     if (!api || busy || projectSwitchingRef.current || closingRef.current) return;

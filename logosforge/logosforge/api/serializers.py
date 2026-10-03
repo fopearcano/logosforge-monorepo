@@ -197,14 +197,16 @@ def manuscript_snapshot_to_dto(
         )
         for index, scene in enumerate(ordered_scenes)
     ]
+    mode = get_project_narrative_engine(snapshot.project)
+    chapter_level = mode == "novel"
+    requires_chapter = mode in {"novel", "series"}
     return schemas.ManuscriptSnapshotDTO(
         project_id=snapshot.project.id,
-        chapter_level=(
-            get_project_narrative_engine(snapshot.project) == "novel"
-        ),
+        chapter_level=chapter_level,
         scene_count=len(scene_dtos),
         orphan_count=sum(
-            1 for scene in ordered_scenes if story_structure.is_orphan_scene(scene)
+            1 for scene in ordered_scenes
+            if story_structure.is_orphan_scene(scene, requires_chapter)
         ),
         scenes=scene_dtos,
     )
@@ -237,7 +239,9 @@ def story_structure_snapshot_to_dto(
     from logosforge.project_compat import get_project_narrative_engine
 
     tree = story_structure.build_structure_tree_from_scenes(snapshot.scenes)
-    chapter_level = get_project_narrative_engine(snapshot.project) == "novel"
+    mode = get_project_narrative_engine(snapshot.project)
+    chapter_level = mode == "novel"
+    requires_chapter = mode in {"novel", "series"}
     numbers = story_structure.compute_structural_numbers(tree, chapter_level)
     acts: list[schemas.StoryStructureActDTO] = []
     order_index = 0
@@ -250,7 +254,7 @@ def story_structure_snapshot_to_dto(
             scenes: list[schemas.StoryStructureSceneDTO] = []
             for scene in scene_rows:
                 order_index += 1
-                orphan = story_structure.is_orphan_scene(scene)
+                orphan = story_structure.is_orphan_scene(scene, requires_chapter)
                 if orphan:
                     orphan_count += 1
                 scenes.append(schemas.StoryStructureSceneDTO(

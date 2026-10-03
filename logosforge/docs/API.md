@@ -102,7 +102,7 @@ GET  /api/health → { status, service, mode, version, api_version, core_version
 `core_version` is the Logosforge build (e.g. `0.9.0-alpha`). Clients (Electron
 desktop and Web/PWA) read these to verify they're talking to a compatible
 backend. `version` mirrors `api_version` for backward compatibility.
-The current additive contract version is **1.3.0**.
+The current additive contract version is **1.4.0**.
 
 ### Packaged-desktop live context
 ```
@@ -192,6 +192,7 @@ the scene and its replaceable associations, so no database migration is needed.
 ### Story structure (canonical, scene-derived)
 ```
 GET    /api/projects/{project_id}/story-structure
+POST   /api/projects/{project_id}/story-structure/commands
 PUT    /api/projects/{project_id}/story-structure/scenes/{scene_id}/placement
 ```
 
@@ -200,8 +201,9 @@ references. Ordering, structural numbers, the final Unassigned buckets, and
 orphan detection come from the core's canonical `story_structure` service.
 Scene references deliberately omit manuscript content and per-scene write
 revision tokens.
-`chapter_level` is true for Novel projects; other modes retain their canonical
-chapter grouping but use flat Act.Scene numbering. Each response carries a
+`chapter_level` is true for Novel projects; other modes use flat Act.Scene
+numbering. Series still requires named Chapters inside each Episode even though
+its global projection reports `chapter_level: false`. Each response carries a
 project-level `revision` covering only structural state (mode, scene ids,
 normalized Act/Chapter labels, Series Episode links, and raw order). Series
 scene references expose nullable `episode_id`, because equal Act/Chapter labels
@@ -232,6 +234,52 @@ or foreign scene/Episode returns 404; an unrepresentable target/index returns
 400. Successful mutations publish both `scene_changed` and `scenes_changed`;
 failed requests and exact no-ops publish nothing. The response is the coherent,
 committed `StoryStructureDTO` with its new revision.
+
+`POST .../commands` is the canonical authoring surface. Every body is a
+discriminated object with `kind` and the same required `expected_revision`:
+
+- `create_scene`: `act`, `chapter`, zero-based sibling `index`, optional
+  `title` and `episode_id`. The destination group must exist. Flat modes accept
+  `chapter: ""`; Novel and Series require a named Chapter. In Series, the
+  destination group must already exist in the selected Episode.
+- `create_act`: `act`, zero-based Act `index`, optional `chapter`, `title`, and
+  `episode_id`. It seeds the first Scene; an omitted Chapter becomes
+  `Chapter 1` for Novel/Series and the empty synthetic Chapter bucket for other
+  flat modes.
+- `create_chapter`: `act`, `chapter`, zero-based Chapter `index`, optional
+  `title` and `episode_id`. Chapter authoring is available for Novel and Series
+  and seeds a Scene.
+- `rename_act`: `act`, `new_name`; `rename_chapter`: `act`, `chapter`,
+  `new_name`; both accept optional `episode_id`. Renames affect all in-scope
+  member Scenes and reject in-scope collisions instead of merging containers.
+- `detach_act`: `act`; `detach_chapter`: `act`, `chapter`; both accept optional
+  `episode_id`. Detaching clears only that container label and preserves every
+  Scene body and other field.
+- `delete_scene`: `scene_id`; `repair_orphans`: no additional fields. Repair
+  fills missing required parents with `Recovered Act` / `Recovered Chapter`.
+  Novel and Series require both parents; other flat modes require only an Act.
+
+In Series, every command carrying `episode_id` scopes container membership,
+duplicate checks, and indexes to that Episode. Omitted/`null` scopes to
+episode-less Series scenes; a non-null Episode on another mode is rejected.
+The returned DTO remains the existing project-global label projection, so
+same-named containers from different Episodes are collapsed and their child
+scenes retain `episode_id`. Name-keyed summaries and Note/Timeline structure
+links are project-global: an Episode-scoped rename/detach leaves the old key in
+place while another scene still uses it, then migrates/removes it atomically
+when the last reference disappears.
+
+The response is `{structure, changed, created_scene_id, affected_scene_ids}`.
+All ownership checks, dependent-row cleanup, dense order writes, and the
+returned snapshot share the project structure lock and one `BEGIN IMMEDIATE`
+transaction. A stale revision returns `409 structure_conflict` with no partial
+mutation. Mutations publish `scene_changed` for surviving affected scenes and
+`scenes_changed`. Rename/detach also refresh project, note, and timeline readers
+whose metadata is keyed by structure labels. Deletion detaches StoryLink endpoints, removes exact
+numeric references from survivors' `setup_payoff_links`, and invalidates the
+comments, notes, PSYKE, outline, timeline, plot, and project-data domains.
+Structural fields (`act`, `chapter`, `sort_order`) are rejected by generic
+Scene PATCH with a 400 directing clients to these guarded APIs.
 
 ### Outline (hierarchical)
 ```

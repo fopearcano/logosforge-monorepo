@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.db
+*.db.*.bak
 *.sqlite
 *.sqlite3
 logosforge_memory.sqlite3

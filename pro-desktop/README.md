@@ -75,6 +75,11 @@ shielded from concurrent UI actions. Shared mounted-state guards reopen correctl
 during React Strict Mode's effect probe. Voice capture releases every media track,
 audio node and `AudioContext` after stop/cancel and after partial setup failures.
 
+The desktop host records the last active project in its stable Electron user-data
+directory and reopens it through the normal project handoff lifecycle on the next
+launch. Corrupt, obsolete, or missing session state falls back to the first project
+without blocking the workspace.
+
 The HTTP client owns an abort controller and every live transport. Replacing the
 core disposes the old client after a StrictMode-safe lease handoff, aborting its
 in-flight fetches and closing polling/SSE. Transport limits are classed by work:

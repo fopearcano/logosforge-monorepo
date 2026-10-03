@@ -316,6 +316,66 @@ def test_series_sibling_indexes_are_episode_scoped_and_episode_is_exposed():
     ]
 
 
+def test_series_placement_preserves_each_episodes_independent_act_order():
+    client, db, project_id = _project(engine="series")
+    season = db.create_season(project_id, season_number=1, title="S1")
+    episode_one = db.create_episode(
+        season.id, project_id=project_id, episode_number=1, title="E1",
+    )
+    episode_two = db.create_episode(
+        season.id, project_id=project_id, episode_number=2, title="E2",
+    )
+    one_b = db.create_scene(
+        project_id, "E1 B", act="B", chapter="One",
+        episode_id=episode_one.id,
+    )
+    one_a = db.create_scene(
+        project_id, "E1 A", act="A", chapter="One",
+        episode_id=episode_one.id,
+    )
+    two_a = db.create_scene(
+        project_id, "E2 A", act="A", chapter="One",
+        episode_id=episode_two.id,
+    )
+    two_b_one = db.create_scene(
+        project_id, "E2 B1", act="B", chapter="One",
+        episode_id=episode_two.id,
+    )
+    two_b_two = db.create_scene(
+        project_id, "E2 B2", act="B", chapter="One",
+        episode_id=episode_two.id,
+    )
+    before = _structure(client, project_id)
+
+    response = _put(
+        client,
+        project_id,
+        two_b_two.id,
+        before["revision"],
+        act="B",
+        chapter="One",
+        index=0,
+    )
+
+    assert response.status_code == 200
+    assert [scene.id for scene in db.get_scenes_for_episode(episode_one.id)] == [
+        one_b.id,
+        one_a.id,
+    ]
+    assert [scene.id for scene in db.get_scenes_for_episode(episode_two.id)] == [
+        two_a.id,
+        two_b_two.id,
+        two_b_one.id,
+    ]
+    assert [scene.id for scene in db.get_all_scenes(project_id)] == [
+        one_b.id,
+        one_a.id,
+        two_a.id,
+        two_b_two.id,
+        two_b_one.id,
+    ]
+
+
 def test_series_episode_scope_rejects_foreign_ids_and_supports_unassign():
     client, db, project_id = _project(engine="series")
     season = db.create_season(project_id, season_number=1, title="S1")

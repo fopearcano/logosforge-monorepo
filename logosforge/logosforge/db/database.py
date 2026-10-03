@@ -15,8 +15,7 @@ import shutil
 import sqlite3
 import threading
 import time
-from contextlib import closing
-from contextlib import contextmanager
+from contextlib import closing, contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import wraps
@@ -24,7 +23,7 @@ from pathlib import Path
 from typing import Optional
 from uuid import uuid4
 
-from sqlalchemy import event, text
+from sqlalchemy import event, func, text
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
@@ -388,7 +387,7 @@ class CommentRevisionConflict(RuntimeError):
 
 
 class StoryStructureRevisionConflict(RuntimeError):
-    """Raised when a placement targets an older project structure."""
+    """Raised when a structural command targets an older project state."""
 
     def __init__(self, expected: str, current: str) -> None:
         super().__init__("story-structure revision does not match")
@@ -397,7 +396,7 @@ class StoryStructureRevisionConflict(RuntimeError):
 
 
 class StoryStructurePlacementError(ValueError):
-    """A requested destination cannot be represented without ambiguity."""
+    """A requested structural mutation is invalid or ambiguous."""
 
 
 class StoryStructureSceneNotFound(LookupError):
@@ -446,6 +445,16 @@ class StoryStructurePlacementResult:
 
     snapshot: StoryStructureReadSnapshot
     changed: bool
+
+
+@dataclass(frozen=True)
+class StoryStructureCommandResult:
+    """Committed command state plus navigation/invalidation metadata."""
+
+    snapshot: StoryStructureReadSnapshot
+    changed: bool
+    created_scene_id: int | None = None
+    affected_scene_ids: tuple[int, ...] = ()
 
 
 # Inverse mapping for PSYKE typed relations. A "payoff" from A→B is stored as
@@ -784,6 +793,11 @@ class Database:
             return list(session.exec(select(Project)).all())
 
     def delete_project(self, project_id: int) -> None:
+        """Serialize project deletion with every structural writer."""
+        with self.structure_write_lock(project_id):
+            self._delete_project_rows(project_id)
+
+    def _delete_project_rows(self, project_id: int) -> None:
         """Delete a project and ALL of its data (generic cascade). Collects every
         parent id the project owns, then sweeps each table that references the
         project — by ``project_id`` or by a parent-id FK column — and finally removes
@@ -903,7 +917,7 @@ class Database:
 
     def update_project_format(self, project_id: int, format_mode: str) -> None:
         """Legacy: change the writing format and keep new fields in sync."""
-        with Session(self._engine) as session:
+        with self._structure_write_session(project_id) as session:
             project = session.get(Project, project_id)
             if project:
                 project.format_mode = format_mode
@@ -914,7 +928,7 @@ class Database:
     def update_project_narrative_engine(
         self, project_id: int, engine: str,
     ) -> None:
-        with Session(self._engine) as session:
+        with self._structure_write_session(project_id) as session:
             project = session.get(Project, project_id)
             if project and engine:
                 project.narrative_engine = engine
@@ -924,7 +938,7 @@ class Database:
         self, project_id: int, engine: str, writing_format: str,
     ) -> None:
         """Atomically keep the canonical engine and both format fields aligned."""
-        with Session(self._engine) as session:
+        with self._structure_write_session(project_id) as session:
             project = session.get(Project, project_id)
             if project is None or not engine or not writing_format:
                 return
@@ -938,7 +952,7 @@ class Database:
     def update_project_writing_format(
         self, project_id: int, writing_format: str,
     ) -> None:
-        with Session(self._engine) as session:
+        with self._structure_write_session(project_id) as session:
             project = session.get(Project, project_id)
             if project and writing_format:
                 project.default_writing_format = writing_format
@@ -2020,12 +2034,21 @@ class Database:
                     current_tree = story_structure.build_structure_tree_from_scenes(
                         raw_scenes,
                     )
-                    current_order = [
-                        scene
-                        for _act, chapters in current_tree
-                        for _chapter, scenes in chapters
-                        for scene in scenes
-                    ]
+                    # Series containers are Episode-scoped even though the read
+                    # DTO is a project-global label projection. Flattening that
+                    # projection would merge equal labels across Episodes and
+                    # overwrite each Episode's independent Act order. Use the
+                    # persisted raw order as the placement workspace for Series.
+                    current_order = (
+                        list(raw_scenes)
+                        if is_series
+                        else [
+                            scene
+                            for _act, chapters in current_tree
+                            for _chapter, scenes in chapters
+                            for scene in scenes
+                        ]
+                    )
 
                     def parent_key(scene) -> tuple[str, str, int | None]:
                         return (
@@ -2084,9 +2107,9 @@ class Database:
                             changed=False,
                         )
 
-                    # Locate insertion against immutable destination siblings,
-                    # then rebuild through the canonical grouping algorithm so
-                    # Unassigned Acts/Chapters are forced to the end.
+                    # Locate insertion against immutable destination siblings.
+                    # Non-Series projects then rebuild through canonical
+                    # grouping; Series must preserve the raw cross-Episode order.
                     if index < len(target_siblings):
                         anchor = target_siblings[index]
                         insertion = remaining.index(anchor)
@@ -2106,15 +2129,20 @@ class Database:
                         source.episode_id = episode_id
                     remaining.insert(insertion, source)
 
-                    final_tree = story_structure.build_structure_tree_from_scenes(
-                        remaining,
-                    )
-                    final_scenes = [
-                        scene
-                        for _act, chapters in final_tree
-                        for _chapter, scenes in chapters
-                        for scene in scenes
-                    ]
+                    if is_series:
+                        final_scenes = list(remaining)
+                    else:
+                        final_tree = (
+                            story_structure.build_structure_tree_from_scenes(
+                                remaining,
+                            )
+                        )
+                        final_scenes = [
+                            scene
+                            for _act, chapters in final_tree
+                            for _chapter, scenes in chapters
+                            for scene in scenes
+                        ]
                     for raw_index, scene in enumerate(final_scenes):
                         scene.sort_order = raw_index
 
@@ -2132,6 +2160,629 @@ class Database:
                     return StoryStructurePlacementResult(
                         snapshot=snapshot,
                         changed=True,
+                    )
+                except Exception:
+                    session.rollback()
+                    raise
+
+    def execute_story_structure_command(
+        self,
+        project_id: int,
+        *,
+        kind: str,
+        expected_revision: str,
+        act: str | None = None,
+        chapter: str | None = None,
+        new_name: str | None = None,
+        title: str = "Untitled Scene",
+        index: int | None = None,
+        episode_id: int | None = None,
+        scene_id: int | None = None,
+    ) -> StoryStructureCommandResult:
+        """Execute one canonical structure authoring command atomically.
+
+        Every command uses the same project lock and starts ``BEGIN IMMEDIATE``
+        before its first read.  The revision comparison, ownership checks,
+        dependent-row cleanup, dense ordering rewrite, and returned snapshot
+        are consequently one committed SQLite state.
+        """
+        import json
+
+        from logosforge import story_structure
+        from logosforge.project_compat import (
+            ENGINE_SERIES,
+            get_project_narrative_engine,
+        )
+
+        create_kinds = {"create_scene", "create_act", "create_chapter"}
+        group_kinds = {
+            "rename_act",
+            "rename_chapter",
+            "detach_act",
+            "detach_chapter",
+        }
+        episode_scoped_kinds = create_kinds | group_kinds
+        supported_kinds = episode_scoped_kinds | {
+            "delete_scene",
+            "repair_orphans",
+        }
+        if kind not in supported_kinds:
+            raise StoryStructurePlacementError(
+                f"Unknown story-structure command: {kind}"
+            )
+
+        def named_label(value: str | None, noun: str) -> str:
+            label = (value or "").strip()
+            if not label:
+                raise StoryStructurePlacementError(f"{noun} name cannot be empty")
+            if label in {
+                story_structure.UNASSIGNED_ACT,
+                story_structure.UNASSIGNED_CHAPTER,
+            }:
+                raise StoryStructurePlacementError(
+                    f"{label!r} is reserved for detached scenes"
+                )
+            return label
+
+        scene_guard = (
+            self.scene_write_lock(scene_id)
+            if kind == "delete_scene" and scene_id is not None
+            else nullcontext()
+        )
+        settings_guard = self._settings_lock if kind in group_kinds else nullcontext()
+        # Lock order is always Scene -> project structure -> project settings.
+        # Settings-only writers take just the final lock, so a rename cannot
+        # lose its name-keyed metadata migration to a concurrent settings PATCH.
+        with (
+            scene_guard,
+            self.structure_write_lock(project_id),
+            settings_guard,
+        ):
+            with Session(self._engine, expire_on_commit=False) as session:
+                # Must be the first database statement. This serializes both
+                # compare-and-write sequences and independent SQLite processes.
+                session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+                try:
+                    project = session.get(Project, project_id)
+                    if project is None:
+                        raise StoryStructureProjectNotFound(project_id)
+
+                    raw_scenes = list(session.exec(
+                        select(Scene)
+                        .where(Scene.project_id == project_id)
+                        .order_by(Scene.sort_order, Scene.id)
+                    ).all())
+                    current_revision = (
+                        story_structure.structure_revision_from_scenes(
+                            project, raw_scenes,
+                        )
+                    )
+                    if expected_revision != current_revision:
+                        raise StoryStructureRevisionConflict(
+                            expected_revision, current_revision,
+                        )
+
+                    mode = get_project_narrative_engine(project)
+                    is_series = mode == ENGINE_SERIES
+                    chapter_level = mode == "novel"
+                    requires_chapter = chapter_level or is_series
+                    if episode_id is not None and kind not in episode_scoped_kinds:
+                        raise StoryStructurePlacementError(
+                            f"{kind} does not accept an Episode scope"
+                        )
+                    if kind in episode_scoped_kinds and episode_id is not None:
+                        if not is_series:
+                            raise StoryStructurePlacementError(
+                                "Only Series story-structure commands accept an Episode"
+                            )
+                        episode = session.get(Episode, episode_id)
+                        season = (
+                            session.get(Season, episode.season_id)
+                            if episode is not None
+                            else None
+                        )
+                        if (
+                            episode is None
+                            or episode.project_id != project_id
+                            or season is None
+                            or season.project_id != project_id
+                        ):
+                            raise StoryStructureEpisodeNotFound(episode_id)
+
+                    projection_tree = story_structure.build_structure_tree_from_scenes(
+                        raw_scenes,
+                    )
+                    # Series hierarchy is Episode-scoped. The public structure DTO
+                    # remains a global label projection, but using that projection
+                    # as the write order would merge equal labels from independent
+                    # Episodes. Preserve raw manuscript order for Series commands.
+                    canonical_scenes = (
+                        list(raw_scenes)
+                        if is_series
+                        else [
+                            scene
+                            for _act_name, chapter_rows in projection_tree
+                            for _chapter_name, scene_rows in chapter_rows
+                            for scene in scene_rows
+                        ]
+                    )
+                    scope_scenes = (
+                        [
+                            scene for scene in canonical_scenes
+                            if scene.episode_id == episode_id
+                        ]
+                        if is_series
+                        else list(canonical_scenes)
+                    )
+                    scope_tree = story_structure.build_structure_tree_from_scenes(
+                        scope_scenes,
+                    )
+
+                    def labels(scene: Scene) -> tuple[str, str]:
+                        return (
+                            (scene.act or "").strip(),
+                            (scene.chapter or "").strip(),
+                        )
+
+                    def unchanged() -> StoryStructureCommandResult:
+                        session.expunge_all()
+                        snapshot = StoryStructureReadSnapshot(
+                            project=project,
+                            scenes=tuple(raw_scenes),
+                            revision=current_revision,
+                        )
+                        session.rollback()
+                        return StoryStructureCommandResult(
+                            snapshot=snapshot,
+                            changed=False,
+                        )
+
+                    working_scenes = list(canonical_scenes)
+                    created_scene_id: int | None = None
+                    affected_scene_ids: tuple[int, ...] = ()
+
+                    def label_is_still_referenced(
+                        target_type: str, target_ref: str,
+                    ) -> bool:
+                        if target_type == "act":
+                            return any(
+                                labels(scene)[0] == target_ref
+                                for scene in working_scenes
+                            )
+                        return any(
+                            labels(scene)[1] == target_ref
+                            for scene in working_scenes
+                        )
+
+                    def migrate_name_keyed_metadata(
+                        target_type: str,
+                        old_ref: str,
+                        replacement_ref: str | None,
+                    ) -> None:
+                        """Move/remove global label metadata once its old key is unused.
+
+                        Series commands mutate one Episode, while summaries and
+                        structure links predate Episode scoping and are keyed only
+                        by the label. Keep the old global key while any Episode
+                        still references it; once the last use is gone, migrate or
+                        remove it in this same transaction.
+                        """
+                        if label_is_still_referenced(target_type, old_ref):
+                            return
+
+                        summary_key = f"{target_type}_summaries"
+                        try:
+                            settings = json.loads(project.settings_json or "{}")
+                        except (json.JSONDecodeError, TypeError):
+                            settings = {}
+                        if not isinstance(settings, dict):
+                            settings = {}
+                        raw_summaries = settings.get(summary_key, {})
+                        summaries = (
+                            dict(raw_summaries)
+                            if isinstance(raw_summaries, dict)
+                            else {}
+                        )
+                        if old_ref in summaries:
+                            old_summary = summaries.pop(old_ref)
+                            # A pre-existing destination is already the global
+                            # summary for that name; never clobber it.
+                            if replacement_ref and replacement_ref not in summaries:
+                                summaries[replacement_ref] = old_summary
+                            settings[summary_key] = summaries
+                            project.settings_json = json.dumps(settings)
+
+                        note_links = list(session.exec(
+                            select(NoteStructureLink).where(
+                                NoteStructureLink.project_id == project_id,
+                                NoteStructureLink.target_type == target_type,
+                                NoteStructureLink.target_ref == old_ref,
+                            )
+                        ).all())
+                        timeline_links = list(session.exec(
+                            select(TimelineStructureLink).where(
+                                TimelineStructureLink.project_id == project_id,
+                                TimelineStructureLink.target_type == target_type,
+                                TimelineStructureLink.target_ref == old_ref,
+                            )
+                        ).all())
+                        if not replacement_ref:
+                            for link in (*note_links, *timeline_links):
+                                session.delete(link)
+                            return
+
+                        for link in note_links:
+                            duplicate = session.exec(
+                                select(NoteStructureLink).where(
+                                    NoteStructureLink.project_id == project_id,
+                                    NoteStructureLink.note_id == link.note_id,
+                                    NoteStructureLink.target_type == target_type,
+                                    NoteStructureLink.target_ref == replacement_ref,
+                                )
+                            ).first()
+                            if duplicate is not None:
+                                session.delete(link)
+                            else:
+                                link.target_ref = replacement_ref
+                        for link in timeline_links:
+                            duplicate = session.exec(
+                                select(TimelineStructureLink).where(
+                                    TimelineStructureLink.project_id == project_id,
+                                    TimelineStructureLink.source_scene_id
+                                    == link.source_scene_id,
+                                    TimelineStructureLink.target_type == target_type,
+                                    TimelineStructureLink.target_ref
+                                    == replacement_ref,
+                                )
+                            ).first()
+                            if duplicate is not None:
+                                session.delete(link)
+                            else:
+                                link.target_ref = replacement_ref
+
+                    if kind == "create_scene":
+                        target_act = named_label(act, "Act")
+                        target_chapter = (chapter or "").strip()
+                        if target_chapter == story_structure.UNASSIGNED_CHAPTER:
+                            target_chapter = ""
+                        if requires_chapter:
+                            target_chapter = named_label(target_chapter, "Chapter")
+                        destination = [
+                            scene for scene in scope_scenes
+                            if labels(scene) == (target_act, target_chapter)
+                        ]
+                        if not destination:
+                            if is_series:
+                                message = (
+                                    "The destination Act/Chapter group does not "
+                                    "exist in the selected Episode; create its "
+                                    "container first"
+                                )
+                            else:
+                                message = (
+                                    "The destination Act/Chapter group does not "
+                                    "exist; create its container first"
+                                )
+                            raise StoryStructurePlacementError(
+                                message
+                            )
+                        siblings = destination
+                        assert index is not None
+                        if index > len(siblings):
+                            raise StoryStructurePlacementError(
+                                "Destination index is outside the sibling group"
+                            )
+                        if index < len(siblings):
+                            insertion = working_scenes.index(siblings[index])
+                        else:
+                            insertion = working_scenes.index(siblings[-1]) + 1
+                        created = Scene(
+                            project_id=project_id,
+                            title=(title or "").strip() or "Untitled Scene",
+                            act=target_act,
+                            chapter=target_chapter,
+                            episode_id=episode_id,
+                            sort_order=len(raw_scenes),
+                        )
+                        session.add(created)
+                        session.flush()
+                        working_scenes.insert(insertion, created)
+                        created_scene_id = int(created.id)
+                        affected_scene_ids = (created_scene_id,)
+
+                    elif kind == "create_act":
+                        target_act = named_label(act, "Act")
+                        target_chapter = (
+                            story_structure.DEFAULT_CHAPTER
+                            if chapter is None and requires_chapter
+                            else (chapter or "").strip()
+                        )
+                        if target_chapter == story_structure.UNASSIGNED_CHAPTER:
+                            target_chapter = ""
+                        if requires_chapter:
+                            target_chapter = named_label(target_chapter, "Chapter")
+                        named_acts = [
+                            (act_name, chapter_rows)
+                            for act_name, chapter_rows in scope_tree
+                            if act_name != story_structure.UNASSIGNED_ACT
+                        ]
+                        if any(act_name == target_act for act_name, _ in named_acts):
+                            raise StoryStructurePlacementError(
+                                f"Act {target_act!r} already exists"
+                            )
+                        assert index is not None
+                        if index > len(named_acts):
+                            raise StoryStructurePlacementError(
+                                "Act index is outside the structure"
+                            )
+                        if index < len(named_acts):
+                            insertion = working_scenes.index(
+                                named_acts[index][1][0][1][0]
+                            )
+                        else:
+                            unassigned = next(
+                                (
+                                    chapter_rows
+                                    for act_name, chapter_rows in scope_tree
+                                    if act_name == story_structure.UNASSIGNED_ACT
+                                ),
+                                None,
+                            )
+                            insertion = (
+                                working_scenes.index(unassigned[0][1][0])
+                                if unassigned
+                                else (
+                                    working_scenes.index(scope_scenes[-1]) + 1
+                                    if scope_scenes
+                                    else len(working_scenes)
+                                )
+                            )
+                        created = Scene(
+                            project_id=project_id,
+                            title=(title or "").strip() or "Untitled Scene",
+                            act=target_act,
+                            chapter=target_chapter,
+                            episode_id=episode_id,
+                            sort_order=len(raw_scenes),
+                        )
+                        session.add(created)
+                        session.flush()
+                        working_scenes.insert(insertion, created)
+                        created_scene_id = int(created.id)
+                        affected_scene_ids = (created_scene_id,)
+
+                    elif kind == "create_chapter":
+                        if not requires_chapter:
+                            raise StoryStructurePlacementError(
+                                "Only Novel and Series projects have authorable "
+                                "Chapters"
+                            )
+                        target_act = named_label(act, "Act")
+                        target_chapter = named_label(chapter, "Chapter")
+                        act_row = next(
+                            (
+                                chapter_rows
+                                for act_name, chapter_rows in scope_tree
+                                if act_name == target_act
+                            ),
+                            None,
+                        )
+                        if act_row is None:
+                            raise StoryStructurePlacementError(
+                                f"Act {target_act!r} does not exist"
+                            )
+                        named_chapters = [
+                            (chapter_name, scene_rows)
+                            for chapter_name, scene_rows in act_row
+                            if chapter_name != story_structure.UNASSIGNED_CHAPTER
+                        ]
+                        if any(
+                            chapter_name == target_chapter
+                            for chapter_name, _ in named_chapters
+                        ):
+                            raise StoryStructurePlacementError(
+                                f"Chapter {target_chapter!r} already exists in "
+                                f"Act {target_act!r}"
+                            )
+                        assert index is not None
+                        if index > len(named_chapters):
+                            raise StoryStructurePlacementError(
+                                "Chapter index is outside the Act"
+                            )
+                        if index < len(named_chapters):
+                            insertion = working_scenes.index(
+                                named_chapters[index][1][0]
+                            )
+                        else:
+                            loose_chapter = next(
+                                (
+                                    scene_rows for chapter_name, scene_rows in act_row
+                                    if chapter_name
+                                    == story_structure.UNASSIGNED_CHAPTER
+                                ),
+                                None,
+                            )
+                            if loose_chapter:
+                                insertion = working_scenes.index(loose_chapter[0])
+                            else:
+                                last_in_act = act_row[-1][1][-1]
+                                insertion = working_scenes.index(last_in_act) + 1
+                        created = Scene(
+                            project_id=project_id,
+                            title=(title or "").strip() or "Untitled Scene",
+                            act=target_act,
+                            chapter=target_chapter,
+                            episode_id=episode_id,
+                            sort_order=len(raw_scenes),
+                        )
+                        session.add(created)
+                        session.flush()
+                        working_scenes.insert(insertion, created)
+                        created_scene_id = int(created.id)
+                        affected_scene_ids = (created_scene_id,)
+
+                    elif kind == "rename_act":
+                        source_act = named_label(act, "Act")
+                        replacement = named_label(new_name, "Act")
+                        members = [
+                            scene for scene in scope_scenes
+                            if labels(scene)[0] == source_act
+                        ]
+                        if not members:
+                            raise StoryStructurePlacementError(
+                                f"Act {source_act!r} does not exist"
+                            )
+                        if replacement == source_act:
+                            return unchanged()
+                        if any(
+                            labels(scene)[0] == replacement
+                            for scene in scope_scenes
+                        ):
+                            raise StoryStructurePlacementError(
+                                f"Act {replacement!r} already exists; rename "
+                                "cannot merge Acts"
+                            )
+                        affected_scene_ids = tuple(int(scene.id) for scene in members)
+                        for scene in members:
+                            scene.act = replacement
+                        migrate_name_keyed_metadata(
+                            "act", source_act, replacement,
+                        )
+
+                    elif kind == "rename_chapter":
+                        source_act = named_label(act, "Act")
+                        source_chapter = named_label(chapter, "Chapter")
+                        replacement = named_label(new_name, "Chapter")
+                        members = [
+                            scene for scene in scope_scenes
+                            if labels(scene) == (source_act, source_chapter)
+                        ]
+                        if not members:
+                            raise StoryStructurePlacementError(
+                                f"Chapter {source_chapter!r} does not exist in "
+                                f"Act {source_act!r}"
+                            )
+                        if replacement == source_chapter:
+                            return unchanged()
+                        if any(
+                            labels(scene) == (source_act, replacement)
+                            for scene in scope_scenes
+                        ):
+                            raise StoryStructurePlacementError(
+                                f"Chapter {replacement!r} already exists in "
+                                f"Act {source_act!r}; rename cannot merge Chapters"
+                            )
+                        affected_scene_ids = tuple(int(scene.id) for scene in members)
+                        for scene in members:
+                            scene.chapter = replacement
+                        migrate_name_keyed_metadata(
+                            "chapter", source_chapter, replacement,
+                        )
+
+                    elif kind == "detach_act":
+                        source_act = named_label(act, "Act")
+                        members = [
+                            scene for scene in scope_scenes
+                            if labels(scene)[0] == source_act
+                        ]
+                        if not members:
+                            raise StoryStructurePlacementError(
+                                f"Act {source_act!r} does not exist"
+                            )
+                        affected_scene_ids = tuple(int(scene.id) for scene in members)
+                        for scene in members:
+                            # Preserve Chapter labels and all manuscript fields.
+                            scene.act = ""
+                        migrate_name_keyed_metadata("act", source_act, None)
+
+                    elif kind == "detach_chapter":
+                        source_act = named_label(act, "Act")
+                        source_chapter = named_label(chapter, "Chapter")
+                        members = [
+                            scene for scene in scope_scenes
+                            if labels(scene) == (source_act, source_chapter)
+                        ]
+                        if not members:
+                            raise StoryStructurePlacementError(
+                                f"Chapter {source_chapter!r} does not exist in "
+                                f"Act {source_act!r}"
+                            )
+                        affected_scene_ids = tuple(int(scene.id) for scene in members)
+                        for scene in members:
+                            # Preserve Act labels and all manuscript fields.
+                            scene.chapter = ""
+                        migrate_name_keyed_metadata(
+                            "chapter", source_chapter, None,
+                        )
+
+                    elif kind == "delete_scene":
+                        assert scene_id is not None
+                        source = next(
+                            (
+                                scene for scene in canonical_scenes
+                                if scene.id == scene_id
+                            ),
+                            None,
+                        )
+                        if source is None:
+                            # Foreign ids are deliberately indistinguishable.
+                            raise StoryStructureSceneNotFound(scene_id)
+                        working_scenes.remove(source)
+                        scrubbed_scene_ids = self._delete_scene_rows(
+                            session, int(source.id),
+                        )
+                        affected_scene_ids = (
+                            int(source.id),
+                            *scrubbed_scene_ids,
+                        )
+
+                    elif kind == "repair_orphans":
+                        repaired: list[int] = []
+                        for scene in canonical_scenes:
+                            scene_act, scene_chapter = labels(scene)
+                            if scene_act and (scene_chapter or not requires_chapter):
+                                continue
+                            if not scene_act:
+                                scene.act = story_structure.RECOVERED_ACT
+                            if requires_chapter and not scene_chapter:
+                                scene.chapter = story_structure.RECOVERED_CHAPTER
+                            repaired.append(int(scene.id))
+                        if not repaired:
+                            return unchanged()
+                        affected_scene_ids = tuple(repaired)
+
+                    if is_series:
+                        final_scenes = list(working_scenes)
+                    else:
+                        final_tree = (
+                            story_structure.build_structure_tree_from_scenes(
+                                working_scenes,
+                            )
+                        )
+                        final_scenes = [
+                            scene
+                            for _act_name, chapter_rows in final_tree
+                            for _chapter_name, scene_rows in chapter_rows
+                            for scene in scene_rows
+                        ]
+                    for sort_order, scene in enumerate(final_scenes):
+                        scene.sort_order = sort_order
+
+                    session.flush()
+                    revision = story_structure.structure_revision_from_scenes(
+                        project, final_scenes,
+                    )
+                    session.commit()
+                    session.expunge_all()
+                    return StoryStructureCommandResult(
+                        snapshot=StoryStructureReadSnapshot(
+                            project=project,
+                            scenes=tuple(final_scenes),
+                            revision=revision,
+                        ),
+                        changed=True,
+                        created_scene_id=created_scene_id,
+                        affected_scene_ids=affected_scene_ids,
                     )
                 except Exception:
                     session.rollback()
@@ -2335,7 +2986,7 @@ class Database:
         place_ids: list[int] | None = None,
         character_states: list[tuple[int, str]] | None = None,
     ) -> Scene:
-        with Session(self._engine) as session:
+        with self._structure_write_session(project_id) as session:
             # Assign next sort_order
             from sqlalchemy import func
 
@@ -2420,9 +3071,9 @@ class Database:
         outcome: str = "",
         beat: str = "",
         tags: str = "",
-        act: str = "",
+        act: str | object = _UNSET,
         content: str = "",
-        chapter: str = "",
+        chapter: str | object = _UNSET,
         plotline: str = "",
         color_label: str | None = None,
         # -- Screenplay-engine fields (None = leave unchanged) -----------
@@ -2460,8 +3111,21 @@ class Database:
         place_ids: list[int] | None = None,
         character_states: list[tuple[int, str]] | None = None,
     ) -> Scene:
-        with Session(self._engine) as session:
+        structural_write = act is not _UNSET or chapter is not _UNSET
+        if structural_write:
+            with Session(self._engine) as read_session:
+                current = read_session.get(Scene, scene_id)
+                if current is None:
+                    return None
+                project_id = current.project_id
+            session_context = self._structure_write_session(project_id)
+        else:
+            session_context = Session(self._engine)
+
+        with session_context as session:
             scene = session.get(Scene, scene_id)
+            if scene is None:
+                return None
             scene.title = title
             scene.summary = summary
             scene.synopsis = synopsis
@@ -2470,9 +3134,11 @@ class Database:
             scene.outcome = outcome
             scene.beat = beat
             scene.tags = tags
-            scene.act = act
+            if act is not _UNSET:
+                scene.act = str(act)
             scene.content = content
-            scene.chapter = chapter
+            if chapter is not _UNSET:
+                scene.chapter = str(chapter)
             scene.plotline = plotline
             if color_label is not None:
                 scene.color_label = color_label
@@ -2572,100 +3238,172 @@ class Database:
             session.refresh(scene)
             return scene
 
-    @_scene_locked
-    def delete_scene(self, scene_id: int) -> None:
-        with Session(self._engine) as session:
-            # Delete links first
-            for link in session.exec(
-                select(SceneCharacterLink).where(
-                    SceneCharacterLink.scene_id == scene_id
-                )
+    @staticmethod
+    def _delete_scene_rows(session: Session, scene_id: int) -> tuple[int, ...]:
+        """Delete one Scene and apply the legacy-safe association policy.
+
+        The helper deliberately does not commit so guarded structure commands
+        can delete the Scene, clean every dependent row, and rewrite canonical
+        order in the same SQLite transaction.
+        """
+        scene = session.get(Scene, scene_id)
+        if scene is None:
+            return ()
+
+        # setup_payoff_links is legacy CSV storage. Remove only exact numeric
+        # tokens so deleting Scene 2 never corrupts Scene 20 or free-text notes.
+        scrubbed_scene_ids: list[int] = []
+        scene_ref = str(scene_id)
+        for survivor in session.exec(
+            select(Scene).where(
+                Scene.project_id == scene.project_id,
+                Scene.id != scene_id,
+            ).order_by(Scene.id)
+        ).all():
+            raw_links = survivor.setup_payoff_links or ""
+            tokens = raw_links.split(",")
+            if not any(token.strip() == scene_ref for token in tokens):
+                continue
+            survivor.setup_payoff_links = ", ".join(
+                token.strip()
+                for token in tokens
+                if token.strip() and token.strip() != scene_ref
+            )
+            scrubbed_scene_ids.append(int(survivor.id))
+
+        for model in (
+            SceneCharacterLink,
+            ScenePlaceLink,
+            SceneThemeLink,
+            SceneCharacterState,
+            NoteSceneLink,
+        ):
+            for row in session.exec(
+                select(model).where(model.scene_id == scene_id)
             ).all():
-                session.delete(link)
-            for link in session.exec(
-                select(ScenePlaceLink).where(
-                    ScenePlaceLink.scene_id == scene_id
-                )
+                session.delete(row)
+
+        # A range may begin or end in this scene. Inline-comment anchors are
+        # meaningless once either edge disappears, so remove the whole thread.
+        comments = list(session.exec(
+            select(Comment).where(
+                (Comment.start_scene_id == scene_id)
+                | (Comment.end_scene_id == scene_id)
+            )
+        ).all())
+        for comment in comments:
+            for reply in session.exec(
+                select(CommentReply).where(CommentReply.comment_id == comment.id)
             ).all():
-                session.delete(link)
-            for link in session.exec(
-                select(SceneThemeLink).where(
-                    SceneThemeLink.scene_id == scene_id
-                )
-            ).all():
-                session.delete(link)
-            for st in session.exec(
-                select(SceneCharacterState).where(
-                    SceneCharacterState.scene_id == scene_id
-                )
-            ).all():
-                session.delete(st)
-            for nsl in session.exec(
-                select(NoteSceneLink).where(
-                    NoteSceneLink.scene_id == scene_id,
-                )
-            ).all():
-                session.delete(nsl)
-            # A range may begin or end in this scene. Inline-comment anchors are
-            # not meaningful once either edge disappears, so remove the whole
-            # thread (replies first for FK-safe ordering).
-            comments = list(session.exec(
-                select(Comment).where(
-                    (Comment.start_scene_id == scene_id)
-                    | (Comment.end_scene_id == scene_id)
-                )
-            ).all())
-            for comment in comments:
-                for reply in session.exec(
-                    select(CommentReply).where(
-                        CommentReply.comment_id == comment.id,
+                session.delete(reply)
+        session.flush()
+        for comment in comments:
+            session.delete(comment)
+
+        for link in session.exec(
+            select(TimelineLink).where(
+                (TimelineLink.source_scene_id == scene_id)
+                | (TimelineLink.target_scene_id == scene_id)
+            )
+        ).all():
+            session.delete(link)
+        for link in session.exec(
+            select(TimelineStructureLink).where(
+                TimelineStructureLink.source_scene_id == scene_id
+            )
+        ).all():
+            session.delete(link)
+
+        # Story links can point at a Scene through the normalized numeric
+        # columns, through their legacy typed string endpoint, or both. Detach
+        # every exact reference while preserving any still-meaningful opposite
+        # endpoint and the user's evidence/status metadata.
+        story_links = session.exec(
+            select(StoryLink).where(
+                StoryLink.project_id == scene.project_id,
+                (
+                    (StoryLink.source_scene_id == scene_id)
+                    | (StoryLink.target_scene_id == scene_id)
+                    | (
+                        (func.trim(func.lower(StoryLink.source_type)) == "scene")
+                        & (func.trim(StoryLink.source_id) == scene_ref)
                     )
-                ).all():
-                    session.delete(reply)
-            session.flush()
-            for comment in comments:
-                session.delete(comment)
-            # Timeline links that reference this event (either direction) and any
-            # Act/Chapter structure links from it — never leave orphan links.
-            for tl in session.exec(
-                select(TimelineLink).where(
-                    (TimelineLink.source_scene_id == scene_id)
-                    | (TimelineLink.target_scene_id == scene_id)
-                )
-            ).all():
-                session.delete(tl)
-            for tsl in session.exec(
-                select(TimelineStructureLink).where(
-                    TimelineStructureLink.source_scene_id == scene_id,
-                )
-            ).all():
-                session.delete(tsl)
-
-            # Scene-owned rows disappear with the scene.
-            for model in (StageEntranceExit, StageCue, StageBusiness, StoryMemoryEntry):
-                for row in session.exec(select(model).where(model.scene_id == scene_id)).all():
-                    session.delete(row)
-
-            # Historical/planning rows survive, but their optional scene anchor
-            # is cleared so deleting manuscript text never erases the record.
-            for model in (
-                PsykeProgression,
-                ProductionSceneNumber,
-                RevisionChange,
-                RevisionDiffSnapshot,
-                RevisionImpactReport,
-                CanvasPlotNode,
-                OutlineNode,
+                    | (
+                        (func.trim(func.lower(StoryLink.target_type)) == "scene")
+                        & (func.trim(StoryLink.target_id) == scene_ref)
+                    )
+                ),
+            )
+        ).all()
+        for link in story_links:
+            changed = False
+            if link.source_scene_id == scene_id:
+                link.source_scene_id = None
+                link.source_block_index = None
+                changed = True
+            if (
+                (link.source_type or "").strip().lower() == "scene"
+                and (link.source_id or "").strip() == scene_ref
             ):
-                for row in session.exec(select(model).where(model.scene_id == scene_id)).all():
-                    row.scene_id = None
+                link.source_type = ""
+                link.source_id = ""
+                link.source_block_index = None
+                changed = True
+            if link.target_scene_id == scene_id:
+                link.target_scene_id = None
+                link.target_block_index = None
+                changed = True
+            if (
+                (link.target_type or "").strip().lower() == "scene"
+                and (link.target_id or "").strip() == scene_ref
+            ):
+                link.target_type = ""
+                link.target_id = ""
+                link.target_block_index = None
+                changed = True
+            if changed:
+                link.updated_at = datetime.now(timezone.utc)
 
-            # Delete the scene
-            session.flush()
+        # Scene-owned rows disappear with the scene.
+        for model in (StageEntranceExit, StageCue, StageBusiness, StoryMemoryEntry):
+            for row in session.exec(
+                select(model).where(model.scene_id == scene_id)
+            ).all():
+                session.delete(row)
+
+        # Historical/planning rows survive, but lose their optional anchor.
+        for model in (
+            PsykeProgression,
+            ProductionSceneNumber,
+            RevisionChange,
+            RevisionDiffSnapshot,
+            RevisionImpactReport,
+            CanvasPlotNode,
+            OutlineNode,
+        ):
+            for row in session.exec(
+                select(model).where(model.scene_id == scene_id)
+            ).all():
+                row.scene_id = None
+
+        session.flush()
+        session.delete(scene)
+        return tuple(scrubbed_scene_ids)
+
+    @_scene_locked
+    def delete_scene(self, scene_id: int) -> tuple[int, ...]:
+        with Session(self._engine) as read_session:
+            scene = read_session.get(Scene, scene_id)
+            if scene is None:
+                return ()
+            project_id = scene.project_id
+        with self._structure_write_session(project_id) as session:
             scene = session.get(Scene, scene_id)
-            if scene:
-                session.delete(scene)
+            if scene is None or scene.project_id != project_id:
+                return ()
+            scrubbed_scene_ids = self._delete_scene_rows(session, scene_id)
             session.commit()
+            return scrubbed_scene_ids
 
     @_scene_locked
     def move_scene_up(self, scene_id: int) -> None:
@@ -3522,9 +4260,14 @@ class Database:
         summary, tags, plotline, links, or sort order. Used by the Outline
         planner when a card is moved between Acts/Chapters.
         """
-        with Session(self._engine) as session:
-            scene = session.get(Scene, scene_id)
+        with Session(self._engine) as read_session:
+            scene = read_session.get(Scene, scene_id)
             if scene is None:
+                return
+            project_id = scene.project_id
+        with self._structure_write_session(project_id) as session:
+            scene = session.get(Scene, scene_id)
+            if scene is None or scene.project_id != project_id:
                 return
             scene.act = act or ""
             scene.chapter = chapter or ""
@@ -3538,9 +4281,14 @@ class Database:
         sort order. Used by the Series Navigator to move a scene between
         Episodes (and by the legacy-series migration). ``None`` unassigns it.
         """
-        with Session(self._engine) as session:
-            scene = session.get(Scene, scene_id)
+        with Session(self._engine) as read_session:
+            scene = read_session.get(Scene, scene_id)
             if scene is None:
+                return
+            project_id = scene.project_id
+        with self._structure_write_session(project_id) as session:
+            scene = session.get(Scene, scene_id)
+            if scene is None or scene.project_id != project_id:
                 return
             scene.episode_id = episode_id
             session.commit()
@@ -4384,7 +5132,12 @@ class Database:
         must not destroy manuscript text. Episode plotlines (a child table) are
         removed with the episode.
         """
-        with Session(self._engine) as session:
+        with Session(self._engine) as read_session:
+            episode = read_session.get(Episode, episode_id)
+            if episode is None:
+                return
+            project_id = episode.project_id
+        with self._structure_write_session(project_id) as session:
             for sc in session.exec(
                 select(Scene).where(Scene.episode_id == episode_id)
             ).all():
@@ -4418,7 +5171,12 @@ class Database:
         that belonged to those episodes has ``episode_id`` reset to NULL so its
         body survives as an unassigned Series scene.
         """
-        with Session(self._engine) as session:
+        with Session(self._engine) as read_session:
+            season = read_session.get(Season, season_id)
+            if season is None:
+                return
+            project_id = season.project_id
+        with self._structure_write_session(project_id) as session:
             episodes = session.exec(
                 select(Episode).where(Episode.season_id == season_id)
             ).all()

@@ -1,6 +1,12 @@
 import { MessagePort } from "node:worker_threads";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
-import type { EventMessage, StoryStructureDTO, StoryStructurePlacementDTO } from "@logosforge/ui-contracts";
+import type {
+  EventMessage,
+  StoryStructureCommandDTO,
+  StoryStructureCommandResultDTO,
+  StoryStructureDTO,
+  StoryStructurePlacementDTO,
+} from "@logosforge/ui-contracts";
 import type { ApiClient } from "../src/adapters/api";
 import { ApiRequestError } from "../src/adapters/httpApiClient";
 import type { PlatformAdapter } from "../src/adapters/platform";
@@ -839,6 +845,445 @@ check(
 );
 
 act(() => { renderer.unmount(); });
+
+let commandStructure = structuredClone(structureA);
+let commandStructureReads = 0;
+const commandCalls: StoryStructureCommandDTO[] = [];
+const commandFocusCalls: number[] = [];
+let nextCommandError: Error | null = null;
+let structureAfterCommandError: StoryStructureDTO | null = null;
+const commandApi = {
+  ...api,
+  getStoryStructure: async () => {
+    commandStructureReads += 1;
+    return structuredClone(commandStructure);
+  },
+  executeStoryStructureCommand: async (
+    _projectId: number,
+    body: StoryStructureCommandDTO,
+  ): Promise<StoryStructureCommandResultDTO> => {
+    commandCalls.push(structuredClone(body));
+    if (nextCommandError) {
+      const failure = nextCommandError;
+      nextCommandError = null;
+      if (structureAfterCommandError) {
+        commandStructure = structureAfterCommandError;
+        structureAfterCommandError = null;
+      }
+      throw failure;
+    }
+    if (body.kind !== "create_act") throw new Error(`Unexpected command ${body.kind}`);
+    const next = structuredClone(commandStructure);
+    next.revision = "h".repeat(64);
+    next.scene_count += 1;
+    const created = {
+      id: 40,
+      title: body.title ?? "Untitled Scene",
+      beat: "",
+      episode_id: body.episode_id ?? null,
+      number: "2.1.1",
+      order_index: 4,
+      is_orphan: false,
+    };
+    next.acts.splice(body.index, 0, {
+      name: body.act,
+      number: "2",
+      unassigned: false,
+      scene_count: 1,
+      chapters: [{
+        name: body.chapter ?? "Chapter 1",
+        number: "2.1",
+        unassigned: false,
+        scene_count: 1,
+        scenes: [created],
+      }],
+    });
+    commandStructure = next;
+    return {
+      structure: structuredClone(next),
+      changed: true,
+      created_scene_id: 40,
+      affected_scene_ids: [40],
+    };
+  },
+  subscribe: () => () => {},
+} as unknown as ApiClient;
+
+let commandRenderer!: ReactTestRenderer;
+await act(async () => {
+  commandRenderer = create(
+    <StudioProvider services={{ api: commandApi, platform }} projectId={1}>
+      <StudioSceneNavigator onOpenScene={async () => true} onSearch={() => {}} />
+    </StudioProvider>,
+    {
+      createNodeMock(element) {
+        const sceneId = element.props["data-scene-id"];
+        if (element.type === "button" && typeof sceneId === "number") {
+          return {
+            focus: () => commandFocusCalls.push(sceneId),
+            scrollIntoView() {},
+          };
+        }
+        if (element.type === "input" || element.type === "select" || element.type === "button") {
+          return { focus() {} };
+        }
+        return {};
+      },
+    },
+  );
+  await Promise.resolve();
+  await Promise.resolve();
+});
+check(
+  commandRenderer.root.findAllByProps({ className: "lf-studio-scene-search-action" }).length === 1,
+  "the compact structure toolbar should retain exactly one project-search action",
+);
+const createActControl = commandRenderer.root.findByProps({ "aria-label": "Create Act" });
+act(() => { createActControl.props.onClick({ currentTarget: { focus() {} } }); });
+check(
+  commandRenderer.root.findByProps({ "data-structure-action-editor": "create_act" })
+    .findByProps({ "aria-label": "First Chapter name" }).props.value === "Chapter 1",
+  "Novel create-Act should expose explicit seed Chapter and Scene fields",
+);
+act(() => {
+  commandRenderer.root.findByProps({ "aria-label": "New Act name" }).props.onChange({
+    currentTarget: { value: "Act Three" },
+  });
+});
+const preflightStructure = structuredClone(commandStructure);
+preflightStructure.revision = "g".repeat(64);
+commandStructure = preflightStructure;
+await act(async () => {
+  commandRenderer.root.findByProps({ "data-structure-action-editor": "create_act" }).props.onSubmit({
+    preventDefault() {},
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+});
+await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1)); });
+check(
+  commandCalls[0]?.kind === "create_act"
+    && commandCalls[0].expected_revision === preflightStructure.revision
+    && commandCalls[0].act === "Act Three"
+    && commandCalls[0].chapter === "Chapter 1"
+    && commandCalls[0].index === 2,
+  "create Act should preflight and execute with the latest authoritative revision and global Act index",
+);
+check(commandStructureReads >= 3, "a structure command should perform a latest-revision preflight and an authoritative refresh");
+check(
+  commandRenderer.root.findByProps({ "data-scene-id": 40 })
+    && commandFocusCalls.includes(40),
+  "a seeded Scene should be revealed and focused after its refreshed Act mounts",
+);
+
+const detachActControl = commandRenderer.root.findByProps({
+  "data-structure-action": "detach_act",
+  "data-structure-action-act": "Act One",
+});
+act(() => { detachActControl.props.onClick({ currentTarget: { focus() {} } }); });
+check(
+  commandCalls.length === 1
+    && renderedText(commandRenderer.root.findByProps({ "data-structure-action-editor": "detach_act" })).includes("Manuscript text and every scene field will be preserved"),
+  "detach Act should require an explicit manuscript-preserving confirmation before mutation",
+);
+act(() => {
+  commandRenderer.root.findByProps({ "data-structure-action-editor": "detach_act" })
+    .findAllByType("button")
+    .find((button) => renderedText(button) === "Cancel")?.props.onClick();
+});
+
+const deleteControl = commandRenderer.root.findByProps({
+  "data-structure-action": "delete_scene",
+  "data-structure-action-scene-id": 10,
+});
+act(() => { deleteControl.props.onClick({ currentTarget: { focus() {} } }); });
+check(
+  commandCalls.length === 1
+    && renderedText(commandRenderer.root.findByProps({ "data-structure-action-editor": "delete_scene" })).includes("cannot be undone"),
+  "delete Scene should require explicit destructive confirmation before mutation",
+);
+act(() => {
+  commandRenderer.root.findByProps({ "data-structure-action-editor": "delete_scene" })
+    .findAllByType("button")
+    .find((button) => renderedText(button) === "Cancel")?.props.onClick();
+});
+
+const externallyRenamed = structuredClone(commandStructure);
+externallyRenamed.revision = "i".repeat(64);
+externallyRenamed.acts.find((act) => act.name === "Act One")!.name = "Act Uno";
+structureAfterCommandError = externallyRenamed;
+nextCommandError = new ApiRequestError(
+  "POST",
+  "/api/projects/1/story-structure/commands",
+  409,
+  "The story structure changed",
+  "structure_conflict",
+);
+act(() => {
+  commandRenderer.root.findByProps({
+    "data-structure-action": "rename_act",
+    "data-structure-action-act": "Act One",
+  }).props.onClick({ currentTarget: { focus() {} } });
+});
+act(() => {
+  commandRenderer.root.findByProps({ "aria-label": "New Act name" }).props.onChange({
+    currentTarget: { value: "Opening Act" },
+  });
+});
+await act(async () => {
+  commandRenderer.root.findByProps({ "data-structure-action-editor": "rename_act" }).props.onSubmit({
+    preventDefault() {},
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+});
+await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1)); });
+check(
+  commandCalls.at(-1)?.kind === "rename_act"
+    && commandRenderer.root.findAllByProps({ role: "alert" }).some((node) => renderedText(node).includes("changed before this action could be saved"))
+    && commandRenderer.root.findByProps({ "data-structure-action-editor": "rename_act" }),
+  "a command conflict should refresh authoritative structure, keep the action reviewable, and never retry silently",
+);
+act(() => {
+  commandRenderer.root.findByProps({ "data-structure-action-editor": "rename_act" })
+    .findAllByType("button")
+    .find((button) => renderedText(button) === "Cancel")?.props.onClick();
+});
+check(
+  commandRenderer.root.findAllByProps({ "data-structure-action": "create_chapter" }).length > 0
+    && commandRenderer.root.findAllByProps({ "data-structure-action": "create_scene" }).length > 0
+    && commandRenderer.root.findAllByProps({ "data-structure-action": "rename_act" }).length > 0
+    && commandRenderer.root.findAllByProps({ "data-structure-action": "rename_chapter" }).length > 0
+    && commandRenderer.root.findAllByProps({ "data-structure-action": "detach_chapter" }).length > 0
+    && commandRenderer.root.findByProps({ "data-structure-action": "repair_orphans" }).props["aria-disabled"] === true,
+  "the navigator should expose every bounded structure action and disable repair when no orphan exists",
+);
+act(() => { commandRenderer.unmount(); });
+
+const seriesStructure: StoryStructureDTO = {
+  project_id: 11,
+  revision: "s".repeat(64),
+  // Series keeps screenplay-style numbering, but still authors Chapters.
+  chapter_level: false,
+  scene_count: 6,
+  orphan_count: 1,
+  acts: [
+    {
+      name: "Shared Act", number: "1", unassigned: false, scene_count: 4,
+      chapters: [
+        {
+          name: "Chapter One", number: "", unassigned: false, scene_count: 3,
+          scenes: [
+            { id: 110, title: "Unassigned episode", beat: "", episode_id: null, number: "1", order_index: 1, is_orphan: false },
+            { id: 111, title: "Pilot A", beat: "", episode_id: 501, number: "2", order_index: 2, is_orphan: false },
+            { id: 112, title: "Pilot B", beat: "", episode_id: 501, number: "3", order_index: 3, is_orphan: false },
+          ],
+        },
+        {
+          name: "Chapter Two", number: "", unassigned: false, scene_count: 1,
+          scenes: [
+            { id: 113, title: "Second episode", beat: "", episode_id: 502, number: "1", order_index: 4, is_orphan: false },
+          ],
+        },
+      ],
+    },
+    {
+      name: "Other Act", number: "2", unassigned: false, scene_count: 1,
+      chapters: [{
+        name: "Chapter One", number: "", unassigned: false, scene_count: 1,
+        scenes: [{ id: 114, title: "Pilot other", beat: "", episode_id: 501, number: "4", order_index: 5, is_orphan: false }],
+      }],
+    },
+    {
+      name: "Unassigned", number: "", unassigned: true, scene_count: 1,
+      chapters: [{
+        name: "Unassigned", number: "", unassigned: true, scene_count: 1,
+        scenes: [{ id: 115, title: "Needs repair", beat: "", episode_id: null, number: "", order_index: 6, is_orphan: true }],
+      }],
+    },
+  ],
+};
+const seriesCommandCalls: StoryStructureCommandDTO[] = [];
+const seriesEpisodeCatalog = [
+  { id: 501, episode_number: 1, title: "Pilot" },
+  { id: 502, episode_number: 2, title: "Second" },
+  { id: 503, episode_number: 3, title: "Empty" },
+];
+let seriesEventListener: ((event: EventMessage) => void) | null = null;
+const seriesApi = {
+  ...api,
+  getStoryStructure: async () => structuredClone(seriesStructure),
+  listEpisodes: async () => structuredClone(seriesEpisodeCatalog),
+  executeStoryStructureCommand: async (
+    _projectId: number,
+    body: StoryStructureCommandDTO,
+  ): Promise<StoryStructureCommandResultDTO> => {
+    seriesCommandCalls.push(structuredClone(body));
+    return {
+      structure: structuredClone(seriesStructure),
+      changed: false,
+      created_scene_id: null,
+      affected_scene_ids: [],
+    };
+  },
+  subscribe: (_projectId: number, listener: (event: EventMessage) => void) => {
+    seriesEventListener = listener;
+    return () => { if (seriesEventListener === listener) seriesEventListener = null; };
+  },
+} as unknown as ApiClient;
+let seriesRenderer!: ReactTestRenderer;
+await act(async () => {
+  seriesRenderer = create(
+    <StudioProvider services={{ api: seriesApi, platform }} projectId={11} writingMode="series">
+      <SelectionBridge />
+      <StudioSceneNavigator onOpenScene={async () => true} />
+    </StudioProvider>,
+  );
+  await Promise.resolve();
+  await Promise.resolve();
+});
+act(() => { publishSelection({ sceneId: 110, text: "", section: "Manuscript" }); });
+check(
+  seriesRenderer.root.findAllByProps({ "data-scene-group-toggle": "chapter" }).length === 4,
+  "Series should expose its Chapter hierarchy even though chapter_level remains a Novel-numbering flag",
+);
+
+act(() => {
+  seriesRenderer.root.findByProps({ "aria-label": "Create Act" }).props.onClick({ currentTarget: { focus() {} } });
+});
+const seriesCreateEditor = seriesRenderer.root.findByProps({ "data-structure-action-editor": "create_act" });
+const seriesCreateEpisode = seriesCreateEditor.findByProps({ "aria-label": "Series episode for structure action" });
+check(
+  seriesCreateEditor.findByProps({ "aria-label": "First Chapter name" }).props.value === "Chapter 1"
+    && seriesCreateEpisode.props.value === "none",
+  "Series create Act should seed a Chapter and preserve an active unassigned Scene's explicit null Episode",
+);
+check(
+  seriesCreateEpisode.findAllByType("option").map((option) => option.props.value).join(",") === "none,501,502,503",
+  "Series action choices should include every catalog Episode, including an empty Episode, plus unassigned",
+);
+seriesEpisodeCatalog.push({ id: 504, episode_number: 4, title: "New empty Episode" });
+act(() => {
+  seriesEventListener?.({
+    event: "project_data_changed",
+    project_id: 11,
+    data: {},
+    ts: Date.now(),
+  });
+});
+await act(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 140));
+  await Promise.resolve();
+});
+check(
+  seriesRenderer.root.findByProps({ "aria-label": "Series episode for structure action" })
+    .findAllByType("option").some((option) => option.props.value === 504),
+  "a project-data refresh should reload empty Series Episodes even when the structure revision is unchanged",
+);
+act(() => {
+  seriesRenderer.root.findByProps({ "data-structure-action-editor": "create_act" })
+    .findAllByType("button")
+    .find((button) => renderedText(button) === "Cancel")?.props.onClick();
+});
+
+act(() => {
+  seriesRenderer.root.findByProps({
+    "data-structure-action": "detach_act",
+    "data-structure-action-act": "Shared Act",
+  }).props.onClick({ currentTarget: { focus() {} } });
+});
+let seriesDetachEditor = seriesRenderer.root.findByProps({ "data-structure-action-editor": "detach_act" });
+check(
+  renderedText(seriesDetachEditor).includes("from 1 scene"),
+  "Series detach confirmation should count only the active unassigned Episode scope",
+);
+act(() => {
+  seriesDetachEditor.findByProps({ "aria-label": "Series episode for structure action" }).props.onChange({
+    currentTarget: { value: "501" },
+  });
+});
+seriesDetachEditor = seriesRenderer.root.findByProps({ "data-structure-action-editor": "detach_act" });
+check(
+  renderedText(seriesDetachEditor).includes("from 2 scenes"),
+  "changing the Series Episode should update the destructive confirmation's bounded scene count",
+);
+await act(async () => {
+  seriesDetachEditor.props.onSubmit({ preventDefault() {} });
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+});
+check(
+  seriesCommandCalls[0]?.kind === "detach_act"
+    && seriesCommandCalls[0].episode_id === 501,
+  "Series detach should send an explicit Episode scope instead of mutating every matching Act",
+);
+
+act(() => {
+  seriesRenderer.root.findByProps({ "data-structure-action": "repair_orphans" })
+    .props.onClick({ currentTarget: { focus() {} } });
+});
+check(
+  renderedText(seriesRenderer.root.findByProps({ "data-structure-action-editor": "repair_orphans" }))
+    .includes("recovered Act and Chapter labels"),
+  "Series repair confirmation should explain that both required container labels are restored",
+);
+act(() => {
+  seriesRenderer.root.findByProps({ "data-structure-action-editor": "repair_orphans" })
+    .findAllByType("button")
+    .find((button) => renderedText(button) === "Cancel")?.props.onClick();
+});
+act(() => { seriesRenderer.unmount(); });
+
+const staleEpisodes = deferred<Array<{ id: number }>>();
+const replacementSeries = structuredClone(seriesStructure);
+replacementSeries.project_id = 12;
+replacementSeries.revision = "t".repeat(64);
+const staleEpisodeApi = {
+  ...api,
+  getStoryStructure: async (projectId: number) => structuredClone(
+    projectId === 11 ? seriesStructure : replacementSeries,
+  ),
+  listEpisodes: (projectId: number) => projectId === 11
+    ? staleEpisodes.promise
+    : Promise.resolve([{ id: 601 }]),
+  subscribe: () => () => {},
+} as unknown as ApiClient;
+const staleTree = (projectId: number) => (
+  <StudioProvider services={{ api: staleEpisodeApi, platform }} projectId={projectId} writingMode="series">
+    <StudioSceneNavigator onOpenScene={async () => true} />
+  </StudioProvider>
+);
+let staleEpisodeRenderer!: ReactTestRenderer;
+await act(async () => {
+  staleEpisodeRenderer = create(staleTree(11));
+  await Promise.resolve();
+  staleEpisodeRenderer.update(staleTree(12));
+  await Promise.resolve();
+  await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 1));
+});
+await act(async () => {
+  staleEpisodes.resolve([{ id: 501 }, { id: 503 }]);
+  await staleEpisodes.promise;
+  await Promise.resolve();
+});
+act(() => {
+  staleEpisodeRenderer.root.findByProps({ "aria-label": "Create Act" })
+    .props.onClick({ currentTarget: { focus() {} } });
+});
+const replacementEpisodeValues = staleEpisodeRenderer.root
+  .findByProps({ "aria-label": "Series episode for structure action" })
+  .findAllByType("option")
+  .map((option) => option.props.value);
+check(
+  replacementEpisodeValues.includes(601)
+    && !replacementEpisodeValues.includes(503),
+  `a late Episode catalog response must not leak choices into the replacement project (${replacementEpisodeValues.join(",")})`,
+);
+act(() => { staleEpisodeRenderer.unmount(); });
 
 const switchingStructureApi = {
   ...api,

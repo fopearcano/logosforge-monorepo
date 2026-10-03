@@ -2,8 +2,13 @@ import { useCallback, useState, type CSSProperties, type ReactNode } from "react
 import type { SceneDTO } from "@logosforge/ui-contracts";
 import { PanelShell, Corners, type PanelProps } from "../shell/PanelShell";
 import { useStudio, useNavigate } from "../../adapters/StudioProvider";
-import { useScenes } from "../../hooks";
-import { trackProjectWrite } from "../../adapters/projectSaveCoordinator";
+import { useManuscriptSnapshot, useStoryStructure } from "../../hooks";
+import {
+  flushPendingProjectSaves,
+  trackProjectWrite,
+} from "../../adapters/projectSaveCoordinator";
+import { ApiRequestError } from "../../adapters/httpApiClient";
+import { planAppendSceneCommand } from "./structureAuthoring";
 
 const panelBox: CSSProperties = {
   position: "relative",
@@ -85,28 +90,53 @@ function byAct(scenes: SceneDTO[]): { act: string; scenes: SceneDTO[] }[] {
 }
 
 export function StoryGrid(props: PanelProps) {
-  const { api, projectId } = useStudio();
+  const { api, projectId, writingMode } = useStudio();
   const navigate = useNavigate();
-  const { data: scenes, loading, error, refetch } = useScenes();
+  const manuscriptResource = useManuscriptSnapshot();
+  const structureResource = useStoryStructure();
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  const sorted = [...(scenes ?? [])].sort((a, b) => a.sort_order - b.sort_order);
-  const columns = byAct(sorted);
+  const snapshot = manuscriptResource.data?.project_id === projectId
+    ? manuscriptResource.data
+    : undefined;
+  // The manuscript snapshot is already flattened in canonical structure order.
+  const ordered = snapshot?.scenes ?? [];
+  const columns = byAct(ordered);
+  const loading = manuscriptResource.loading || structureResource.loading;
+  const error = manuscriptResource.error ?? structureResource.error;
+
+  const refresh = useCallback(() => {
+    manuscriptResource.refetch();
+    structureResource.refetch();
+  }, [manuscriptResource.refetch, structureResource.refetch]);
 
   const addScene = useCallback(async () => {
     if (projectId == null || busy) return;
     setBusy(true);
     setActionError(null);
     try {
-      await trackProjectWrite(api.createScene(projectId, { title: `Scene ${sorted.length + 1}` }));
-      refetch();
+      await flushPendingProjectSaves();
+      const latest = await api.getStoryStructure(projectId);
+      if (latest.project_id !== projectId) throw new Error("The story structure belongs to another project.");
+      await trackProjectWrite(api.executeStoryStructureCommand(
+        projectId,
+        planAppendSceneCommand(
+          latest,
+          `Scene ${latest.scene_count + 1}`,
+          String(writingMode ?? "").toLocaleLowerCase() === "series",
+        ),
+      ));
+      refresh();
     } catch (error) {
-      setActionError(`Couldn't create the scene — ${error instanceof Error ? error.message : String(error)}`);
+      refresh();
+      const detail = error instanceof ApiRequestError && error.code === "structure_conflict"
+        ? "The story structure changed elsewhere. It has been refreshed; review it and try again."
+        : error instanceof Error ? error.message : String(error);
+      setActionError(`Couldn't create the scene — ${detail}`);
     } finally {
       setBusy(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [api, projectId, busy, sorted.length, refetch]);
+  }, [api, busy, projectId, refresh, writingMode]);
 
   return (
     <PanelShell {...props}>
@@ -125,7 +155,7 @@ export function StoryGrid(props: PanelProps) {
             ? message("Loading scenes…")
             : error
               ? message(`Couldn't load scenes — ${error}`)
-              : sorted.length === 0
+              : ordered.length === 0
                 ? message("No scenes yet — add one with ＋ SCENE")
                 : columns.map(({ act, scenes: acts }) => (
                     <Column key={act} act={act} meta={`${acts.length} SC`}>

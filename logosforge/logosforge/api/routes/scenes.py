@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends
 
 from logosforge.api import schemas, serializers
 from logosforge.api.deps import get_broker, get_db, get_project
-from logosforge.api.errors import conflict, not_found
+from logosforge.api.errors import bad_request, conflict, not_found
 from logosforge.api.events import ApiEventBroker
 from logosforge.db import Database
 
@@ -110,6 +110,14 @@ def update_scene(
     db: Database = Depends(get_db),
     broker: ApiEventBroker = Depends(get_broker),
 ):
+    structural_fields = {"act", "chapter", "sort_order"} & body.model_fields_set
+    if structural_fields:
+        fields = ", ".join(sorted(structural_fields))
+        raise bad_request(
+            f"Scene PATCH cannot change structural field(s): {fields}. "
+            "Use the revision-guarded story-structure placement or command endpoint."
+        )
+
     # The read, revision comparison and write are one process-local critical
     # section. Database's targeted Scene writers use this same re-entrant lock.
     with db.scene_write_lock(scene_id):
@@ -142,9 +150,7 @@ def update_scene(
             outcome=merged("outcome", scene.outcome),
             beat=merged("beat", scene.beat),
             tags=_csv(patch["tags"]) if "tags" in patch and patch["tags"] is not None else scene.tags,
-            act=merged("act", scene.act),
             content=merged("content", scene.content),
-            chapter=merged("chapter", scene.chapter),
             plotline=merged("plotline", scene.plotline),
             color_label=patch.get("color_label"),  # None = leave unchanged
             time_of_day=patch.get("time_of_day"),
@@ -158,8 +164,6 @@ def update_scene(
             place_ids=db.get_scene_place_ids(scene_id),
             character_states=db.get_scene_character_states(scene_id),
         )
-        if patch.get("sort_order") is not None:
-            db.reorder_scene(scene_id, patch["sort_order"])
         updated = db.get_scene_by_id(scene_id)
         updated_dto = serializers.scene_to_dto(db, updated)
 
@@ -180,9 +184,21 @@ def delete_scene(
     scene = db.get_scene_by_id(scene_id)
     if scene is None or scene.project_id != project.id:
         raise not_found(f"Scene {scene_id} not found")
-    db.delete_scene(scene_id)
+    scrubbed_scene_ids = db.delete_scene(scene_id)
+    for scrubbed_scene_id in scrubbed_scene_ids:
+        broker.publish(
+            "scene_changed",
+            project_id=project.id,
+            scene_id=scrubbed_scene_id,
+        )
     broker.publish("scenes_changed", project_id=project.id)
     broker.publish("comments_changed", project_id=project.id)
+    broker.publish("notes_changed", project_id=project.id)
+    broker.publish("psyke_changed", project_id=project.id)
+    broker.publish("outline_changed", project_id=project.id)
+    broker.publish("timeline_changed", project_id=project.id)
+    broker.publish("plot_changed", project_id=project.id)
+    broker.publish("project_data_changed", project_id=project.id)
     return {"ok": True, "deleted": scene_id}
 
 

@@ -277,6 +277,19 @@ for (const marker of [
   'event.key === "ArrowUp"',
   'event.key === "Enter"',
   'role="status" aria-live="polite"',
+  'data-structure-action="create_act"',
+  'data-structure-action="create_chapter"',
+  'data-structure-action="create_scene"',
+  'data-structure-action="rename_act"',
+  'data-structure-action="rename_chapter"',
+  'data-structure-action="detach_act"',
+  'data-structure-action="detach_chapter"',
+  'data-structure-action="delete_scene"',
+  'data-structure-action="repair_orphans"',
+  'data-structure-action-editor={structureAction.kind}',
+  'aria-busy={commandBusy != null || undefined}',
+  'This cannot be undone.',
+  'Manuscript text and every scene field will be preserved',
 ]) {
   if (!sceneNavigator.includes(marker)) violations.push(`StudioSceneNavigator is missing ${marker}`);
 }

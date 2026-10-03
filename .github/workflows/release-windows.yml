@@ -430,9 +430,9 @@ jobs:
       - name: Test contracts and Pro sources
         run: |
           set -euo pipefail
-          cd logosforge-ui-contracts && npm ci && npm test && npm audit --audit-level=moderate
-          cd ../pro-shared-ui && npm ci && npm test && npm run build && npm audit --audit-level=moderate
-          cd ../pro-desktop && npm ci && npm test && npm audit --audit-level=moderate
+          cd logosforge-ui-contracts && npm ci && npm test && node ../.github/npm-audit-policy.mjs
+          cd ../pro-shared-ui && npm ci && npm test && npm run build && node ../.github/npm-audit-policy.mjs
+          cd ../pro-desktop && npm ci && npm test && node ../.github/npm-audit-policy.mjs
 
       - name: Exercise real CoreManager live context through connector and MCP
         run: >-
@@ -734,9 +734,9 @@ jobs:
       - name: Test contracts and Pro sources
         run: |
           set -euo pipefail
-          cd logosforge-ui-contracts && npm ci && npm test && npm audit --audit-level=moderate
-          cd ../pro-shared-ui && npm ci && npm test && npm run build && npm audit --audit-level=moderate
-          cd ../pro-desktop && npm ci && npm test && npm audit --audit-level=moderate
+          cd logosforge-ui-contracts && npm ci && npm test && node ../.github/npm-audit-policy.mjs
+          cd ../pro-shared-ui && npm ci && npm test && npm run build && node ../.github/npm-audit-policy.mjs
+          cd ../pro-desktop && npm ci && npm test && node ../.github/npm-audit-policy.mjs
 
       - name: Exercise real CoreManager live context through connector and MCP
         run: >-
@@ -1158,9 +1158,9 @@ jobs:
       - name: Test contracts and Pro sources
         run: |
           set -euo pipefail
-          cd logosforge-ui-contracts && npm ci && npm test && npm audit --audit-level=moderate
-          cd ../pro-shared-ui && npm ci && npm test && npm run build && npm audit --audit-level=moderate
-          cd ../pro-desktop && npm ci && npm test && npm audit --audit-level=moderate
+          cd logosforge-ui-contracts && npm ci && npm test && node ../.github/npm-audit-policy.mjs
+          cd ../pro-shared-ui && npm ci && npm test && npm run build && node ../.github/npm-audit-policy.mjs
+          cd ../pro-desktop && npm ci && npm test && node ../.github/npm-audit-policy.mjs
 
       - name: Exercise real CoreManager live context through connector and MCP
         run: >-

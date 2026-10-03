@@ -16,6 +16,11 @@ export type LiveContextPayload = {
   selection: string;
 };
 
+export type DesktopSessionState = {
+  version: number;
+  lastActiveProjectId: number | null;
+};
+
 /** The flat `window.logosforge` surface exposed by the Electron preload. */
 export interface DesktopBridge {
   coreBaseUrl(): Promise<string>;
@@ -29,6 +34,8 @@ export interface DesktopBridge {
   loadLayout(projectId: number): Promise<unknown | null>;
   loadLayoutBackup(projectId: number): Promise<unknown | null>;
   saveLayout(projectId: number, layout: unknown, options?: { preserveBackup?: boolean }): Promise<void>;
+  loadDesktopSessionState(): Promise<DesktopSessionState | null>;
+  saveLastActiveProjectId(projectId: number | null): Promise<void>;
   onSaveBeforeClose(cb: (attemptId: number) => void): () => void;
   onCloseCancelled(cb: () => void): () => void;
   sendCloseResult(attemptId: number, saved: boolean): void;

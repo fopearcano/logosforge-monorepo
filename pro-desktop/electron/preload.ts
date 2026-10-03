@@ -1,7 +1,13 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 
 import type { CoreStatus, RendererLiveContextPayload } from './core-manager';
-import type { DialogFilter, LayoutSaveOptions, OpenFileResult, SaveFileResult } from './file-manager';
+import type {
+  DesktopSessionState,
+  DialogFilter,
+  LayoutSaveOptions,
+  OpenFileResult,
+  SaveFileResult,
+} from './file-manager';
 
 /**
  * The `window.logosforge` surface exposed to the renderer. Every method is FLAT
@@ -23,6 +29,8 @@ export interface LogosForgeDesktop {
   loadLayout(projectId: number): Promise<unknown | null>;
   loadLayoutBackup(projectId: number): Promise<unknown | null>;
   saveLayout(projectId: number, layout: unknown, options?: LayoutSaveOptions): Promise<void>;
+  loadDesktopSessionState(): Promise<DesktopSessionState | null>;
+  saveLastActiveProjectId(projectId: number | null): Promise<void>;
   onSaveBeforeClose(cb: (attemptId: number) => void): () => void;
   onCloseCancelled(cb: () => void): () => void;
   sendCloseResult(attemptId: number, saved: boolean): void;
@@ -54,6 +62,8 @@ const api: LogosForgeDesktop = {
     layout,
     preserveBackup: options?.preserveBackup === true,
   }),
+  loadDesktopSessionState: () => ipcRenderer.invoke('session:load'),
+  saveLastActiveProjectId: (projectId) => ipcRenderer.invoke('session:save-last-project', { projectId }),
   onSaveBeforeClose: (cb) => subscribe<number>('app:save-before-close', cb),
   onCloseCancelled: (cb) => subscribe<void>('app:close-cancelled', () => cb()),
   sendCloseResult: (attemptId, saved) => ipcRenderer.send('app:close-result', attemptId, saved),

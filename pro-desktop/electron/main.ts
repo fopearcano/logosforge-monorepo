@@ -3,7 +3,18 @@ import * as path from 'node:path';
 
 import { CoreManager, type CoreStatus } from './core-manager';
 import { serveStatic, type StaticServer } from './static-server';
-import { openFile, saveFile, openExternal, loadLayout, loadLayoutBackup, saveLayout, type DialogFilter } from './file-manager';
+import {
+  openFile,
+  saveFile,
+  openExternal,
+  loadLayout,
+  loadLayoutBackup,
+  saveLayout,
+  loadDesktopSessionState,
+  saveLastActiveProjectId,
+  drainDesktopSessionSaves,
+  type DialogFilter,
+} from './file-manager';
 import { buildAppMenu } from './menu';
 import { installMcpCompanion, mcpCompanionPath, runtimeDescriptorPath } from './mcp-runtime';
 import {
@@ -100,6 +111,10 @@ async function handleCloseRequest(): Promise<void> {
     closeInProgress = false;
     return;
   }
+  // Resume state is host-owned and may still be fsyncing after the renderer's
+  // project/save barrier completed. Do not destroy the window or process until
+  // every session operation accepted so far has settled.
+  await drainDesktopSessionSaves();
   if (isQuitting) {
     await core.stop();
     shutdownPrepared = true;
@@ -214,6 +229,17 @@ function registerIpc(): void {
     requireMainRenderer(event);
     return saveLayout(p.projectId, p.layout, { preserveBackup: p.preserveBackup === true });
   });
+  ipcMain.handle('session:load', (event) => {
+    requireMainRenderer(event);
+    return loadDesktopSessionState();
+  });
+  ipcMain.handle('session:save-last-project', (event, p?: { projectId: number | null }) => {
+    requireMainRenderer(event);
+    if (!p || !Object.prototype.hasOwnProperty.call(p, 'projectId')) {
+      throw new Error('A last active project id or null is required.');
+    }
+    return saveLastActiveProjectId(p.projectId);
+  });
   ipcMain.on('app:close-result', (event: IpcMainEvent, attemptId: number, saved: boolean) => {
     const win = mainWindow;
     if (!win || event.sender !== win.webContents || event.senderFrame !== win.webContents.mainFrame) return;
@@ -270,7 +296,7 @@ app.on('before-quit', (event) => {
   }
   if (shutdownInProgress) return;
   shutdownInProgress = true;
-  void core.stop().finally(() => {
+  void drainDesktopSessionSaves().then(() => core.stop()).finally(() => {
     shutdownPrepared = true;
     shutdownInProgress = false;
     app.quit();

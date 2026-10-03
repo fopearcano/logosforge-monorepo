@@ -46,6 +46,10 @@ const storyStructureRoute = ROUTES.storyStructure(42);
 if (storyStructureRoute !== '/api/projects/42/story-structure') {
   throw new Error(`story structure route mismatch: ${storyStructureRoute}`);
 }
+const storyStructureCommandsRoute = ROUTES.storyStructureCommands(42);
+if (storyStructureCommandsRoute !== '/api/projects/42/story-structure/commands') {
+  throw new Error(`story structure commands route mismatch: ${storyStructureCommandsRoute}`);
+}
 const scenePlacementRoute = ROUTES.scenePlacement(42, 7);
 if (scenePlacementRoute !== '/api/projects/42/story-structure/scenes/7/placement') {
   throw new Error(`scene placement route mismatch: ${scenePlacementRoute}`);
@@ -68,7 +72,7 @@ if (JSON.stringify(psykeCommandRoutes) !== JSON.stringify(expectedPsykeCommandRo
   throw new Error(`PSYKE command route mismatch: ${psykeCommandRoutes}`);
 }
 
-console.log('Contract route/event tests: 10 passed, 0 failed');
+console.log('Contract route/event tests: 11 passed, 0 failed');
 
 const pythonSchemas = readFileSync('../logosforge/logosforge/api/schemas.py', 'utf8');
 const typescriptSchemas = readFileSync('src/types.ts', 'utf8');
@@ -87,6 +91,29 @@ if (onlyPython.length || onlyTypescript.length) {
 }
 
 console.log(`DTO parity tests: ${pythonDtos.size} Python = ${typescriptDtos.size} TypeScript`);
+
+const episodeScopedStructureCommands = [
+  'StoryStructureRenameActCommandDTO',
+  'StoryStructureRenameChapterCommandDTO',
+  'StoryStructureDetachActCommandDTO',
+  'StoryStructureDetachChapterCommandDTO',
+];
+for (const dtoName of episodeScopedStructureCommands) {
+  const pythonBody = pythonSchemas.match(new RegExp(
+    `class ${dtoName}\\([^)]*\\):([\\s\\S]*?)\\n\\nclass `,
+  ))?.[1] ?? '';
+  const typescriptBody = typescriptSchemas.match(new RegExp(
+    `export interface ${dtoName}[^\\{]*\\{([\\s\\S]*?)\\n\\}`,
+  ))?.[1] ?? '';
+  if (!pythonBody.includes('episode_id:')) {
+    throw new Error(`Python ${dtoName} is missing episode_id`);
+  }
+  if (!typescriptBody.includes('episode_id?: number | null')) {
+    throw new Error(`TypeScript ${dtoName} is missing optional nullable episode_id`);
+  }
+}
+
+console.log('Series structure command parity tests: 4 episode-scoped DTOs mirrored');
 
 const pythonWhiteboardAnchor = pythonSchemas.match(
   /class WhiteboardImportCommentAnchorDTO\(BaseModel\):([\s\S]*?)\n\nclass /,

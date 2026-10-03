@@ -8,7 +8,7 @@ stable across releases.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
 
@@ -628,13 +628,34 @@ class SceneUpdateDTO(BaseModel):
     conflict: str | None = None
     outcome: str | None = None
     beat: str | None = None
-    act: str | None = None
-    chapter: str | None = None
+    act: str | None = Field(
+        default=None,
+        deprecated=True,
+        description=(
+            "Rejected by Scene PATCH. Use the revision-guarded "
+            "story-structure placement or command endpoint."
+        ),
+    )
+    chapter: str | None = Field(
+        default=None,
+        deprecated=True,
+        description=(
+            "Rejected by Scene PATCH. Use the revision-guarded "
+            "story-structure placement or command endpoint."
+        ),
+    )
     plotline: str | None = None
     color_label: str | None = None
     content: str | None = None
     tags: list[str] | None = None
-    sort_order: int | None = None
+    sort_order: int | None = Field(
+        default=None,
+        deprecated=True,
+        description=(
+            "Rejected by Scene PATCH. Use the revision-guarded "
+            "story-structure placement or command endpoint."
+        ),
+    )
     time_of_day: str | None = None
     location: str | None = None
     estimated_duration_minutes: int | None = None
@@ -710,6 +731,118 @@ class StoryStructurePlacementDTO(BaseModel):
     chapter: str = Field(max_length=500)
     index: int = Field(ge=0)
     episode_id: int | None = Field(default=None, gt=0)
+
+
+class _StoryStructureCommandBase(BaseModel):
+    """Optimistic-concurrency guard shared by every structure command."""
+
+    expected_revision: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+
+class StoryStructureCreateSceneCommandDTO(_StoryStructureCommandBase):
+    kind: Literal["create_scene"]
+    title: str = Field(default="Untitled Scene", max_length=500)
+    act: str = Field(min_length=1, max_length=500)
+    # Modes other than Novel and Series use the stored empty label for their
+    # synthetic Unassigned Chapter bucket. Novel and Series require a name.
+    chapter: str = Field(max_length=500)
+    index: int = Field(ge=0)
+    episode_id: int | None = Field(default=None, gt=0)
+
+
+class StoryStructureCreateActCommandDTO(_StoryStructureCommandBase):
+    kind: Literal["create_act"]
+    act: str = Field(min_length=1, max_length=500)
+    # None delegates to the core's mode-aware seed default: Chapter 1 for a
+    # Novel/Series, the synthetic empty Chapter bucket for other modes.
+    chapter: str | None = Field(default=None, max_length=500)
+    title: str = Field(default="Untitled Scene", max_length=500)
+    index: int = Field(ge=0)
+    episode_id: int | None = Field(default=None, gt=0)
+
+
+class StoryStructureCreateChapterCommandDTO(_StoryStructureCommandBase):
+    kind: Literal["create_chapter"]
+    act: str = Field(min_length=1, max_length=500)
+    chapter: str = Field(min_length=1, max_length=500)
+    title: str = Field(default="Untitled Scene", max_length=500)
+    index: int = Field(ge=0)
+    episode_id: int | None = Field(default=None, gt=0)
+
+
+class StoryStructureRenameActCommandDTO(_StoryStructureCommandBase):
+    kind: Literal["rename_act"]
+    act: str = Field(min_length=1, max_length=500)
+    new_name: str = Field(min_length=1, max_length=500)
+    episode_id: int | None = Field(default=None, gt=0)
+
+
+class StoryStructureRenameChapterCommandDTO(_StoryStructureCommandBase):
+    kind: Literal["rename_chapter"]
+    act: str = Field(min_length=1, max_length=500)
+    chapter: str = Field(min_length=1, max_length=500)
+    new_name: str = Field(min_length=1, max_length=500)
+    episode_id: int | None = Field(default=None, gt=0)
+
+
+class StoryStructureDetachActCommandDTO(_StoryStructureCommandBase):
+    kind: Literal["detach_act"]
+    act: str = Field(min_length=1, max_length=500)
+    episode_id: int | None = Field(default=None, gt=0)
+
+
+class StoryStructureDetachChapterCommandDTO(_StoryStructureCommandBase):
+    kind: Literal["detach_chapter"]
+    act: str = Field(min_length=1, max_length=500)
+    chapter: str = Field(min_length=1, max_length=500)
+    episode_id: int | None = Field(default=None, gt=0)
+
+
+class StoryStructureDeleteSceneCommandDTO(_StoryStructureCommandBase):
+    kind: Literal["delete_scene"]
+    scene_id: int = Field(gt=0)
+
+
+class StoryStructureRepairOrphansCommandDTO(_StoryStructureCommandBase):
+    kind: Literal["repair_orphans"]
+
+
+_StoryStructureCommandUnion = Annotated[
+    StoryStructureCreateSceneCommandDTO
+    | StoryStructureCreateActCommandDTO
+    | StoryStructureCreateChapterCommandDTO
+    | StoryStructureRenameActCommandDTO
+    | StoryStructureRenameChapterCommandDTO
+    | StoryStructureDetachActCommandDTO
+    | StoryStructureDetachChapterCommandDTO
+    | StoryStructureDeleteSceneCommandDTO
+    | StoryStructureRepairOrphansCommandDTO,
+    Field(discriminator="kind"),
+]
+
+
+class StoryStructureCommandDTO(RootModel[_StoryStructureCommandUnion]):
+    """Unwrapped discriminated command body used by the HTTP endpoint."""
+
+
+class StoryStructureCommandResultDTO(BaseModel):
+    """Committed structure plus stable focus/invalidation metadata."""
+
+    structure: StoryStructureDTO
+    changed: bool
+    created_scene_id: int | None = None
+    affected_scene_ids: list[int] = Field(
+        default_factory=list,
+        description=(
+            "Scenes directly created, repaired, detached, renamed, deleted, "
+            "or changed while scrubbing references. Ordering-only changes are "
+            "represented by the returned structure and scenes_changed event."
+        ),
+    )
 
 
 class ContinuityMemoryDTO(BaseModel):

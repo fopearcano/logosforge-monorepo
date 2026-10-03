@@ -91,6 +91,11 @@ export interface LayoutSaveOptions {
   preserveBackup?: boolean;
 }
 
+export interface DesktopSessionState {
+  version: 1;
+  lastActiveProjectId: number | null;
+}
+
 export const INVALID_STORED_LAYOUT = Object.freeze({
   storage: 'logosforge.pro.workspace-layout',
   status: 'invalid',
@@ -259,4 +264,128 @@ export async function saveLayout(
     await fs.rm(temporary, { force: true }).catch(() => undefined);
     await fs.rm(backupTemporary, { force: true }).catch(() => undefined);
   }
+}
+
+// -- Stable desktop session state (userData/session-state.json) ----------------
+
+const DESKTOP_SESSION_VERSION = 1 as const;
+const MAX_SESSION_STATE_BYTES = 4 * 1024;
+let sessionOperationQueue: Promise<void> = Promise.resolve();
+
+function sessionStatePath(): string {
+  return path.join(app.getPath('userData'), 'session-state.json');
+}
+
+function sessionStateBackupPath(): string {
+  return `${sessionStatePath()}.bak`;
+}
+
+function parseDesktopSessionState(value: unknown): DesktopSessionState | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const candidate = value as Partial<DesktopSessionState>;
+  if (candidate.version !== DESKTOP_SESSION_VERSION) return null;
+  if (candidate.lastActiveProjectId === null) {
+    return { version: DESKTOP_SESSION_VERSION, lastActiveProjectId: null };
+  }
+  if (!Number.isSafeInteger(candidate.lastActiveProjectId)
+      || Number(candidate.lastActiveProjectId) <= 0) return null;
+  return {
+    version: DESKTOP_SESSION_VERSION,
+    lastActiveProjectId: Number(candidate.lastActiveProjectId),
+  };
+}
+
+type DesktopSessionFileRead =
+  | { state: 'missing' }
+  | { state: 'invalid' }
+  | { state: 'parsed'; value: DesktopSessionState };
+
+async function readDesktopSessionStateFile(fp: string): Promise<DesktopSessionFileRead> {
+  let raw: string;
+  try {
+    const stat = await fs.stat(fp);
+    if (stat.size > MAX_SESSION_STATE_BYTES) return { state: 'invalid' };
+    raw = await fs.readFile(fp, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { state: 'missing' };
+    throw error;
+  }
+  try {
+    const value = parseDesktopSessionState(JSON.parse(raw));
+    return value ? { state: 'parsed', value } : { state: 'invalid' };
+  } catch {
+    return { state: 'invalid' };
+  }
+}
+
+async function loadDesktopSessionStateFromDisk(): Promise<DesktopSessionState | null> {
+  const primary = await readDesktopSessionStateFile(sessionStatePath());
+  if (primary.state === 'parsed') return primary.value;
+  // Invalid/corrupt/future-schema primaries are deliberate safety failures,
+  // not evidence of the Windows replacement gap. Only a missing primary may
+  // recover the immediately preceding, validated generation.
+  if (primary.state === 'invalid') return null;
+  const backup = await readDesktopSessionStateFile(sessionStateBackupPath());
+  return backup.state === 'parsed' ? backup.value : null;
+}
+
+function enqueueDesktopSessionOperation<T>(operation: () => Promise<T>): Promise<T> {
+  const task = sessionOperationQueue.then(operation);
+  sessionOperationQueue = task.then(() => undefined, () => undefined);
+  return task;
+}
+
+/** Reads and writes share one invocation-ordered host queue. */
+export function loadDesktopSessionState(): Promise<DesktopSessionState | null> {
+  return enqueueDesktopSessionOperation(loadDesktopSessionStateFromDisk);
+}
+
+async function writeDesktopSessionState(projectId: number | null): Promise<void> {
+  const validatedProjectId = projectId === null ? null : requireProjectId(projectId);
+  const fp = sessionStatePath();
+  const backup = sessionStateBackupPath();
+  const serialized = JSON.stringify({
+    version: DESKTOP_SESSION_VERSION,
+    lastActiveProjectId: validatedProjectId,
+  } satisfies DesktopSessionState);
+  const directory = path.dirname(fp);
+  const temporary = path.join(directory, `.${path.basename(fp)}.${process.pid}.${randomUUID()}.tmp`);
+  const backupTemporary = path.join(directory, `.${path.basename(backup)}.${process.pid}.${randomUUID()}.tmp`);
+  const retired = path.join(directory, `.${path.basename(fp)}.${process.pid}.${randomUUID()}.retired`);
+  await fs.mkdir(directory, { recursive: true });
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+  try {
+    handle = await fs.open(temporary, 'wx', 0o600);
+    await handle.writeFile(serialized, 'utf8');
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+
+    // Refresh a stable recovery generation before replacing a known-good
+    // primary. If Windows later crashes in its move-then-install fallback, the
+    // loader can still recover this validated predecessor from `.bak`.
+    const current = await readDesktopSessionStateFile(fp);
+    if (current.state === 'parsed') {
+      await durableCopy(fp, backupTemporary);
+      await replaceBackup(backupTemporary, backup);
+      await syncDirectory(directory);
+    }
+
+    await replacePrimary(temporary, fp, retired);
+    await syncDirectory(directory);
+  } finally {
+    await handle?.close().catch(() => undefined);
+    await fs.rm(temporary, { force: true }).catch(() => undefined);
+    await fs.rm(backupTemporary, { force: true }).catch(() => undefined);
+  }
+}
+
+/** Serialize reads and writes so rapid switches cannot finish out of order. */
+export function saveLastActiveProjectId(projectId: number | null): Promise<void> {
+  return enqueueDesktopSessionOperation(() => writeDesktopSessionState(projectId));
+}
+
+/** Await every session write accepted so far before allowing the host to close. */
+export function drainDesktopSessionSaves(): Promise<void> {
+  return sessionOperationQueue;
 }
