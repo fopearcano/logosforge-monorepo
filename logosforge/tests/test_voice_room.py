@@ -485,7 +485,9 @@ def test_dictation_still_works_without_billy():
     panel = win._voice_panel
     panel._refresh_billy_ops()
     assert panel._billy_generate_btn.isEnabled() is False
-    editor = QTextEdit()
+    # Real editors belong to MainWindow; avoid a synthetic second top-level
+    # after the modeless voice window under Qt's Windows offscreen plugin.
+    editor = QTextEdit(win)
     win._voice_commit.note_focus(editor)
     panel._preview.setPlainText("dictated text")
     assert panel.commit() is True                     # dictation unaffected

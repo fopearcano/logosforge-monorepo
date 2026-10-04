@@ -86,7 +86,9 @@ def test_no_duplicate_commit_after_repeated_toggles():
     for _ in range(6):                                  # re-toggle repeatedly
         win._toggle_voice_panel()
     panel = win._voice_panel
-    editor = QTextEdit()
+    # Match production ownership: a second parentless top-level intermittently
+    # crashes Qt's Windows offscreen plugin after modeless voice-window churn.
+    editor = QTextEdit(win)
     win._voice_commit.note_focus(editor)
     panel._preview.setPlainText("once only")
     assert panel.commit() is True
@@ -117,7 +119,7 @@ def test_commit_with_empty_preview_is_inert():
     _enable_voice()
     _db, _pid, win = _main_window()
     panel = win._voice_panel
-    editor = QTextEdit()
+    editor = QTextEdit(win)
     win._voice_commit.note_focus(editor)
     panel._preview.clear()
     assert panel.commit() is False
@@ -147,7 +149,7 @@ def test_editing_continues_while_window_open():
     _enable_voice()
     _db, _pid, win = _main_window()
     win._toggle_voice_panel()                           # window open
-    editor = QTextEdit()
+    editor = QTextEdit(win)
     cur = editor.textCursor()
     cur.insertText("still typing")                      # editor not blocked
     assert editor.toPlainText() == "still typing"
@@ -265,7 +267,7 @@ def test_project_switch_with_window_open_is_isolated():
     win._toggle_voice_panel()
     panel = win._voice_panel
     panel.start()
-    win._voice_commit.note_focus(QTextEdit())
+    win._voice_commit.note_focus(QTextEdit(win))
     win._switch_project(b)
     assert panel._controller.status == VoiceStatus.OFF  # stopped on switch
     assert win._voice_commit.active_editor() is None    # target forgotten

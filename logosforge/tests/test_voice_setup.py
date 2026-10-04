@@ -454,7 +454,9 @@ def test_dictation_works_without_billy_and_glossary():
     from logosforge.voice.types import TranscriptSegment
     panel._apply_final_segment(TranscriptSegment(text="still dictating"))
     assert panel._history.entries[0].corrections == []  # glossary absent
-    editor = QTextEdit()
+    # Real editors belong to MainWindow; avoid a synthetic second top-level
+    # after the modeless voice window under Qt's Windows offscreen plugin.
+    editor = QTextEdit(win)
     win._voice_commit.note_focus(editor)
     assert panel.commit() is True                       # dictation fine
     assert "still dictating" in editor.toPlainText()

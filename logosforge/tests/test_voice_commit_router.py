@@ -551,7 +551,9 @@ def test_ui_cursor_target_keeps_mvp_behavior():
     _db, _pid, win = _ui_window()
     win._toggle_voice_panel()
     panel = win._voice_panel
-    editor = QTextEdit()
+    # Real editors belong to MainWindow; avoid a synthetic second top-level
+    # after the modeless voice window under Qt's Windows offscreen plugin.
+    editor = QTextEdit(win)
     win._voice_commit.note_focus(editor)
     panel._preview.setPlainText("cursor words")
     idx = panel._target_combo.findData(T_CURSOR)
