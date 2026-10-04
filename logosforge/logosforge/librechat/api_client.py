@@ -20,6 +20,17 @@ DEFAULT_BASE_URL = "http://127.0.0.1:8765"
 class LogosForgeApiError(RuntimeError):
     """Raised when the LogosForge API is unreachable or returns an error."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        error_code: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.error_code = error_code
+
 
 class LogosForgeApiClient:
     def __init__(
@@ -111,6 +122,7 @@ class LogosForgeApiClient:
                 raw = resp.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
             detail = ""
+            error_code = ""
             try:
                 detail = exc.read().decode("utf-8", "replace")[:500]
             except (OSError, UnicodeError):
@@ -120,13 +132,18 @@ class LogosForgeApiClient:
                     parsed = json.loads(detail)
                     envelope = parsed.get("error", parsed.get("detail", parsed))
                     if isinstance(envelope, dict):
+                        raw_code = envelope.get("code")
+                        if isinstance(raw_code, str):
+                            error_code = raw_code
                         detail = str(envelope.get("message") or envelope.get("detail") or envelope)
                     elif envelope:
                         detail = str(envelope)
                 except (json.JSONDecodeError, AttributeError):
                     pass
             raise LogosForgeApiError(
-                f"HTTP {exc.code} for {method} {path}: {detail}"
+                f"HTTP {exc.code} for {method} {path}: {detail}",
+                status_code=int(exc.code),
+                error_code=error_code,
             ) from exc
         except (urllib.error.URLError, OSError) as exc:
             raise LogosForgeApiError(
@@ -174,6 +191,11 @@ class LogosForgeApiClient:
     def get_outline(self, project_id: int | None = None) -> list[dict]:
         pid = int(project_id) if project_id is not None else self.require_project_id()
         return self.request("GET", f"{self._prefix}/projects/{pid}/outline")
+
+    def get_timeline(self, project_id: int | None = None) -> dict:
+        """Return the canonical revisioned Timeline projection."""
+        pid = int(project_id) if project_id is not None else self.require_project_id()
+        return self.request("GET", f"{self._prefix}/projects/{pid}/timeline")
 
     def list_characters(self, project_id: int | None = None) -> list[dict]:
         pid = int(project_id) if project_id is not None else self.require_project_id()

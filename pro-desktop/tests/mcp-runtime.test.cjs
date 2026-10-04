@@ -204,6 +204,12 @@ check('packaged smoke applies comment proposals and rejects stale and replayed w
   packagedSmoke.includes('after_stale != after_reply') &&
   packagedSmoke.includes('installed MCP applied proposal replay') &&
   packagedSmoke.includes('replies[0].get("author") != "MCP assistant"'));
+check('packaged smoke applies one Timeline proposal and rejects its stale sibling',
+  packagedSmoke.includes('"logosforge_get_timeline"') &&
+  packagedSmoke.includes('"logosforge_propose_timeline_command"') &&
+  packagedSmoke.includes('installed MCP Timeline apply') &&
+  packagedSmoke.includes('installed MCP stale Timeline sibling apply') &&
+  packagedSmoke.includes('after_stale_timeline != applied_snapshot'));
 check('Windows release CI exercises both unpacked and portable MCP companions',
   releaseWorkflow.includes('Exercise packaged Windows MCP companion') &&
   releaseWorkflow.includes('Exercise portable Windows MCP companion'));

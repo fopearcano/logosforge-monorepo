@@ -993,6 +993,8 @@ class TimelineSnapshotDTO(BaseModel):
 
 
 class _TimelineCommandBase(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     expected_revision: str = Field(
         min_length=64,
         max_length=64,
@@ -1017,10 +1019,18 @@ class TimelineUpdateLaneCommandDTO(_TimelineCommandBase):
 
     @model_validator(mode="after")
     def _requires_change(self):
-        if not self.model_fields_set.intersection(
+        update_fields = self.model_fields_set.intersection(
             {"name", "color_label", "collapsed", "index"}
-        ):
+        )
+        if not update_fields:
             raise ValueError("update_lane must change at least one field")
+        null_fields = sorted(
+            field for field in update_fields if getattr(self, field) is None
+        )
+        if null_fields:
+            raise ValueError(
+                "update_lane fields must not be null: " + ", ".join(null_fields)
+            )
         return self
 
 

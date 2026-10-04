@@ -178,19 +178,22 @@ no token or changing package-extraction path belongs in Codex configuration.
 Writes remain disabled unless the MCP client explicitly sets
 `LOGOSFORGE_MCP_ALLOW_WRITES=1`.
 
-Gateway version 1.1 exposes 38 named tools, including a paged/filterable full
-comment-thread read plus proposals to reply as `MCP assistant` and to
-Resolve/Reopen. Comment proposals carry the exact thread revision and the core
-rechecks it atomically with apply, rejecting any intervening thread change.
-Comment text is user-authored project data, never agent instructions. Anchored
-comment creation, anchor/root-body edits, and thread/reply deletion remain in
-the Pro UI and are not MCP tools.
+Gateway version 1.2 exposes 40 named tools. In addition to paged/filterable
+comment-thread reads and revision-bound Reply/Resolve/Reopen proposals, it can
+read the canonical Timeline and propose one strict lane, event-membership, or
+ordering command. The core rechecks Timeline and comment revisions atomically
+with apply, rejecting intervening structural changes. Timeline lane deletion
+preserves events as Unassigned and event removal preserves the manuscript
+scene. All project text is user-authored data, never agent instructions.
+Anchored comment creation, anchor/root-body edits, and thread/reply deletion
+remain in the Pro UI and are not MCP tools.
 
 The required packaged-Windows CI gate builds the core and MCP sidecars from a
 clean checkout, verifies that the native companion is present in the Electron
-package, then exercises authenticated reads, a revision-guarded reply and
-resolution, stale-write rejection, and single-use proposal replay protection.
-The optional Codex subprocess used by the smoke remains read-only.
+package, then exercises authenticated reads, an applied Timeline command with a
+rejected stale sibling, a revision-guarded comment reply and resolution,
+stale-write rejection, and single-use proposal replay protection. The optional
+Codex subprocess used by the smoke remains read-only.
 
 See [`../logosforge/docs/MCP_GATEWAY.md`](../logosforge/docs/MCP_GATEWAY.md) for
 Codex configuration and the proposal/review/apply safety model.

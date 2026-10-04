@@ -84,6 +84,179 @@ def _preview(value: Any, limit: int) -> str:
     return text if len(text) <= limit else text[:limit] + "…"
 
 
+def _bounded_sequence(values: list[Any], limit: int = 50) -> dict[str, Any]:
+    """Return a deterministic bounded review of a potentially large id list."""
+    return {
+        "items": values[:limit],
+        "total": len(values),
+        "truncated": max(0, len(values) - limit),
+    }
+
+
+_TIMELINE_COMMAND_FIELDS: dict[str, set[str]] = {
+    "create_lane": {
+        "kind", "expected_revision", "name", "color_label", "index",
+    },
+    "update_lane": {
+        "kind", "expected_revision", "lane_id", "name", "color_label",
+        "collapsed", "index",
+    },
+    "delete_lane": {"kind", "expected_revision", "lane_id"},
+    "place_event": {
+        "kind", "expected_revision", "scene_id", "lane_id", "index",
+    },
+    "remove_event": {"kind", "expected_revision", "scene_id"},
+    "set_order_mode": {"kind", "expected_revision", "mode"},
+}
+
+
+def _timeline_revision(value: Any) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(char not in "0123456789abcdef" for char in value)
+    ):
+        raise GatewayError(
+            "expected_revision must be the exact 64-character lowercase "
+            "revision returned by logosforge_get_timeline."
+        )
+    return value
+
+
+def _timeline_integer(
+    value: Any,
+    name: str,
+    *,
+    minimum: int,
+    nullable: bool = False,
+) -> int | None:
+    if nullable and value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        qualifier = "positive " if minimum == 1 else "non-negative "
+        null_note = " or null" if nullable else ""
+        raise GatewayError(f"{name} must be a {qualifier}integer{null_note}.")
+    return value
+
+
+def _timeline_string(
+    value: Any,
+    name: str,
+    *,
+    maximum: int,
+    nonempty: bool = False,
+) -> str:
+    if not isinstance(value, str) or (nonempty and not value.strip()):
+        qualifier = "non-empty " if nonempty else ""
+        raise GatewayError(f"{name} must be a {qualifier}string.")
+    if len(value) > maximum:
+        raise GatewayError(f"{name} may contain at most {maximum} characters.")
+    return value.strip() if nonempty else value
+
+
+def _normalize_timeline_command(command: dict[str, Any]) -> dict[str, Any]:
+    """Validate and copy the bounded Timeline command vocabulary.
+
+    This intentionally stays independent of ``logosforge.api.schemas``.  The
+    packaged MCP companion is a lean HTTP client and must not pull FastAPI,
+    SQLModel, or database modules into its frozen dependency graph.
+    """
+    if not isinstance(command, dict):
+        raise GatewayError("Timeline command must be an object.")
+    kind = command.get("kind")
+    if not isinstance(kind, str) or kind not in _TIMELINE_COMMAND_FIELDS:
+        raise GatewayError(
+            "Timeline command kind must be one of: "
+            + ", ".join(sorted(_TIMELINE_COMMAND_FIELDS))
+            + "."
+        )
+    extra = sorted(set(command) - _TIMELINE_COMMAND_FIELDS[kind])
+    if extra:
+        raise GatewayError(
+            "Unexpected Timeline command field(s): " + ", ".join(extra) + "."
+        )
+    if "expected_revision" not in command:
+        raise GatewayError("Timeline command requires expected_revision.")
+
+    normalized: dict[str, Any] = {
+        "kind": kind,
+        "expected_revision": _timeline_revision(command["expected_revision"]),
+    }
+    if kind == "create_lane":
+        if "name" not in command:
+            raise GatewayError("create_lane requires name.")
+        normalized["name"] = _timeline_string(
+            command["name"], "name", maximum=500, nonempty=True,
+        )
+        if "color_label" in command:
+            normalized["color_label"] = _timeline_string(
+                command["color_label"], "color_label", maximum=100,
+            )
+        if "index" in command:
+            normalized["index"] = _timeline_integer(
+                command["index"], "index", minimum=0, nullable=True,
+            )
+    elif kind == "update_lane":
+        if "lane_id" not in command:
+            raise GatewayError("update_lane requires lane_id.")
+        normalized["lane_id"] = _timeline_integer(
+            command["lane_id"], "lane_id", minimum=1,
+        )
+        updates = {"name", "color_label", "collapsed", "index"}.intersection(command)
+        if not updates:
+            raise GatewayError("update_lane must change at least one field.")
+        if "name" in command:
+            normalized["name"] = _timeline_string(
+                command["name"], "name", maximum=500, nonempty=True,
+            )
+        if "color_label" in command:
+            normalized["color_label"] = _timeline_string(
+                command["color_label"], "color_label", maximum=100,
+            )
+        if "collapsed" in command:
+            if not isinstance(command["collapsed"], bool):
+                raise GatewayError("collapsed must be a boolean.")
+            normalized["collapsed"] = command["collapsed"]
+        if "index" in command:
+            normalized["index"] = _timeline_integer(
+                command["index"], "index", minimum=0,
+            )
+    elif kind == "delete_lane":
+        if "lane_id" not in command:
+            raise GatewayError("delete_lane requires lane_id.")
+        normalized["lane_id"] = _timeline_integer(
+            command["lane_id"], "lane_id", minimum=1,
+        )
+    elif kind == "place_event":
+        if "scene_id" not in command or "lane_id" not in command:
+            raise GatewayError(
+                "place_event requires scene_id and lane_id; null lane_id means "
+                "the virtual Unassigned lane."
+            )
+        normalized["scene_id"] = _timeline_integer(
+            command["scene_id"], "scene_id", minimum=1,
+        )
+        normalized["lane_id"] = _timeline_integer(
+            command["lane_id"], "lane_id", minimum=1, nullable=True,
+        )
+        if "index" in command:
+            normalized["index"] = _timeline_integer(
+                command["index"], "index", minimum=0, nullable=True,
+            )
+    elif kind == "remove_event":
+        if "scene_id" not in command:
+            raise GatewayError("remove_event requires scene_id.")
+        normalized["scene_id"] = _timeline_integer(
+            command["scene_id"], "scene_id", minimum=1,
+        )
+    else:
+        mode = command.get("mode")
+        if mode not in {"structural", "custom"}:
+            raise GatewayError("mode must be 'structural' or 'custom'.")
+        normalized["mode"] = mode
+    return normalized
+
+
 @dataclass
 class Proposal:
     proposal_id: str
@@ -99,7 +272,10 @@ class Proposal:
     guard_path: str = ""
     guard_digest: str = ""
     review: dict[str, Any] = field(default_factory=dict)
-    state: str = "pending"  # pending | applying | applied | failed | discarded
+    # ``indeterminate`` means an attempted apply was not proven rejected (for
+    # example, no response or HTTP 5xx); it may have committed and must be
+    # inspected, never retried.
+    state: str = "pending"  # pending | applying | applied | failed | indeterminate | discarded
     result: Any = None
     error: str = ""
 
@@ -188,6 +364,9 @@ class LogosForgeMcpGateway:
 
     def get_outline(self) -> list[dict]:
         return self.client.get_outline(self._project_id())
+
+    def get_timeline(self) -> dict[str, Any]:
+        return self.client.get_timeline(self._project_id())
 
     def list_characters(self) -> list[dict]:
         return self.client.list_characters(self._project_id())
@@ -444,13 +623,30 @@ class LogosForgeMcpGateway:
         try:
             result = self.client.request(proposal.method, proposal.path, proposal.body)
         except Exception as exc:
+            definite_http_rejection = (
+                isinstance(exc, LogosForgeApiError)
+                and exc.status_code is not None
+                and 400 <= exc.status_code < 500
+            )
+            if definite_http_rejection:
+                code = f" [{exc.error_code}]" if exc.error_code else ""
+                public_error = (
+                    f"The apply attempt was rejected{code} and will not be "
+                    f"retried automatically: {exc}"
+                )
+                state = "failed"
+            else:
+                public_error = (
+                    "The apply outcome is indeterminate because the response does "
+                    "not prove that the mutation was rejected. Inspect current "
+                    "project state and do not retry this proposal: "
+                    f"{exc}"
+                )
+                state = "indeterminate"
             with self._lock:
-                proposal.state = "failed"
-                proposal.error = str(exc)
-            raise GatewayError(
-                "The apply attempt failed and will not be retried automatically: "
-                f"{exc}"
-            ) from exc
+                proposal.state = state
+                proposal.error = public_error
+            raise GatewayError(public_error) from exc
 
         with self._lock:
             proposal.state = "applied"
@@ -488,6 +684,289 @@ class LogosForgeMcpGateway:
             self._expire(proposal, now, raise_error=False)
 
     # -- Focused proposal builders ---------------------------------------
+
+    def propose_timeline_command(
+        self, command: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Store one exact Timeline command after a revisioned preflight.
+
+        The command endpoint performs the authoritative revision comparison in
+        the same database transaction as its mutation.  Do not add a generic
+        snapshot digest guard here: the Timeline revision intentionally ignores
+        unrelated prose edits, while the rendered snapshot may still include
+        fields that changed outside Timeline topology.
+        """
+        pid = self._project_id()
+        normalized = _normalize_timeline_command(command)
+        current = self.client.get_timeline(pid)
+        if not isinstance(current, dict):
+            raise GatewayError("The LogosForge API returned an invalid Timeline snapshot.")
+        revision = current.get("revision")
+        if revision != normalized["expected_revision"]:
+            raise GatewayError(
+                "expected_revision does not match the current Timeline. Read it "
+                "again with logosforge_get_timeline and create a fresh proposal."
+            )
+
+        lanes = [row for row in current.get("lanes", []) if isinstance(row, dict)]
+        events = [row for row in current.get("events", []) if isinstance(row, dict)]
+        off_timeline = [
+            row for row in current.get("off_timeline", []) if isinstance(row, dict)
+        ]
+        lane_order = [int(row["id"]) for row in lanes if isinstance(row.get("id"), int)]
+        event_order = [
+            int(row["id"]) for row in events if isinstance(row.get("id"), int)
+        ]
+
+        def lane_by_id(lane_id: int) -> dict[str, Any]:
+            lane = next((row for row in lanes if row.get("id") == lane_id), None)
+            if lane is None:
+                raise GatewayError(
+                    f"Timeline lane {lane_id} is not present in the current snapshot."
+                )
+            return lane
+
+        def scene_by_id(scene_id: int) -> tuple[dict[str, Any], bool]:
+            event = next((row for row in events if row.get("id") == scene_id), None)
+            if event is not None:
+                return event, True
+            scene = next(
+                (row for row in off_timeline if row.get("id") == scene_id), None,
+            )
+            if scene is None:
+                raise GatewayError(
+                    f"Scene {scene_id} is not present in the current Timeline snapshot."
+                )
+            return scene, False
+
+        kind = normalized["kind"]
+        destructive = kind in {"delete_lane", "remove_event"}
+        review: dict[str, Any] = {
+            "timeline_revision": revision,
+            "command_kind": kind,
+            "destructive": destructive,
+            "requires_destructive_confirmation": destructive,
+        }
+
+        if kind == "create_lane":
+            name = normalized["name"]
+            duplicate = next(
+                (
+                    row for row in lanes
+                    if str(row.get("name", "")).strip().casefold() == name.casefold()
+                ),
+                None,
+            )
+            if duplicate is not None:
+                raise GatewayError(f"A Timeline lane named {name!r} already exists.")
+            requested_index = normalized.get("index")
+            index = len(lanes) if requested_index is None else requested_index
+            if index > len(lanes):
+                raise GatewayError("index is outside the available lane range.")
+            after_order = list(lane_order)
+            after_order.insert(index, "new")
+            summary = f"Create Timeline lane {name!r} at index {index}."
+            review.update({
+                "before": {"lane_order": _bounded_sequence(lane_order)},
+                "after_intent": {
+                    "name": name,
+                    "color_label": normalized.get("color_label", ""),
+                    "index": index,
+                    "lane_order": _bounded_sequence(after_order),
+                },
+            })
+
+        elif kind == "update_lane":
+            lane_id = normalized["lane_id"]
+            lane = lane_by_id(lane_id)
+            if "name" in normalized:
+                wanted = normalized["name"].casefold()
+                duplicate = next(
+                    (
+                        row for row in lanes
+                        if row.get("id") != lane_id
+                        and str(row.get("name", "")).strip().casefold() == wanted
+                    ),
+                    None,
+                )
+                if duplicate is not None:
+                    raise GatewayError(
+                        f"A Timeline lane named {normalized['name']!r} already exists."
+                    )
+            if "index" in normalized and normalized["index"] >= len(lanes):
+                raise GatewayError("index is outside the available lane range.")
+            changes: dict[str, Any] = {}
+            for key in ("name", "color_label", "collapsed"):
+                if key in normalized:
+                    before_value = lane.get(
+                        key, "" if key != "collapsed" else False,
+                    )
+                    if key in {"name", "color_label"}:
+                        before_value = _preview(before_value, 500)
+                    changes[key] = {
+                        "before": before_value,
+                        "after": normalized[key],
+                    }
+            if "index" in normalized:
+                changes["index"] = {
+                    "before": lane.get("order_index", lane_order.index(lane_id)),
+                    "after": normalized["index"],
+                }
+            if all(change["before"] == change["after"] for change in changes.values()):
+                raise GatewayError("The requested lane update would not change the Timeline.")
+            members = [row["id"] for row in events if row.get("lane_id") == lane_id]
+            summary = (
+                f"Update Timeline lane {lane_id} "
+                f"({_preview(lane.get('name'), 200)!r})."
+            )
+            review.update({
+                "lane": {
+                    "id": lane_id,
+                    "name": _preview(lane.get("name"), 500),
+                    "member_scene_ids": _bounded_sequence(members),
+                },
+                "changes": changes,
+                "rename_updates_member_plotlines": "name" in normalized,
+            })
+
+        elif kind == "delete_lane":
+            lane_id = normalized["lane_id"]
+            lane = lane_by_id(lane_id)
+            members = [row["id"] for row in events if row.get("lane_id") == lane_id]
+            summary = (
+                f"Delete Timeline lane {lane_id} "
+                f"({_preview(lane.get('name'), 200)!r}); "
+                f"keep its {len(members)} event(s) as Unassigned."
+            )
+            review.update({
+                "lane": {
+                    "id": lane_id,
+                    "name": _preview(lane.get("name"), 500),
+                    "member_scene_ids": _bounded_sequence(members),
+                },
+                "effect": (
+                    "The lane is deleted. Its events remain on the Timeline in "
+                    "Unassigned, and their manuscript scenes are not deleted."
+                ),
+            })
+
+        elif kind == "place_event":
+            scene_id = normalized["scene_id"]
+            scene, on_timeline = scene_by_id(scene_id)
+            lane_id = normalized["lane_id"]
+            lane = lane_by_id(lane_id) if lane_id is not None else None
+            current_event = scene if on_timeline else None
+            requested_index = normalized.get("index")
+            remaining = [value for value in event_order if value != scene_id]
+            if requested_index is not None and requested_index > len(remaining):
+                raise GatewayError("index is outside the available event range.")
+            desired_order = None
+            if requested_index is not None:
+                desired_order = list(remaining)
+                desired_order.insert(requested_index, scene_id)
+            same_lane = on_timeline and current_event.get("lane_id") == lane_id
+            if same_lane and requested_index is None:
+                raise GatewayError(
+                    "The scene is already in that Timeline lane; provide an index "
+                    "only when an explicit custom-order move is intended."
+                )
+            if (
+                same_lane
+                and current.get("order_mode") == "custom"
+                and desired_order == event_order
+            ):
+                raise GatewayError("The requested event placement would not change the Timeline.")
+            target_name = (
+                str(lane.get("name", "")) if lane is not None else "Unassigned"
+            )
+            before_plotline = (
+                str(current_event.get("plotline", "")) if current_event else ""
+            )
+            after_plotline = str(lane.get("name", "")) if lane is not None else ""
+            summary = (
+                f"Place scene {scene_id} ({_preview(scene.get('title'), 200)!r}) "
+                f"in Timeline lane {_preview(target_name, 200)!r}."
+            )
+            review.update({
+                "scene": {
+                    "id": scene_id,
+                    "title": _preview(scene.get("title"), 500),
+                },
+                "before": {
+                    "on_timeline": on_timeline,
+                    "lane_id": current_event.get("lane_id") if current_event else None,
+                    "one_based_display_order_index": (
+                        current_event.get("order_index") if current_event else None
+                    ),
+                    "plotline": _preview(before_plotline, 500),
+                },
+                "after_intent": {
+                    "lane_id": lane_id,
+                    "lane_name": _preview(target_name, 500),
+                    "zero_based_command_index": requested_index,
+                    "order_mode": (
+                        "custom" if requested_index is not None
+                        else current.get("order_mode", "structural")
+                    ),
+                    "event_order": (
+                        _bounded_sequence(desired_order)
+                        if desired_order is not None else None
+                    ),
+                    "plotline": _preview(after_plotline, 500),
+                },
+                "changes_plotline": before_plotline != after_plotline,
+            })
+
+        elif kind == "remove_event":
+            scene_id = normalized["scene_id"]
+            scene = next((row for row in events if row.get("id") == scene_id), None)
+            if scene is None:
+                raise GatewayError(
+                    f"Scene {scene_id} is not currently a Timeline event."
+                )
+            summary = (
+                f"Remove scene {scene_id} ({_preview(scene.get('title'), 200)!r}) "
+                "from the Timeline without deleting the manuscript scene."
+            )
+            review.update({
+                "scene": {
+                    "id": scene_id,
+                    "title": _preview(scene.get("title"), 500),
+                    "lane_id": scene.get("lane_id"),
+                    "one_based_display_order_index": scene.get("order_index"),
+                },
+                "effect": (
+                    "Timeline membership and lane assignment are removed. The "
+                    "underlying manuscript scene remains and becomes off-Timeline."
+                ),
+            })
+
+        else:
+            mode = normalized["mode"]
+            before = current.get("order_mode", "structural")
+            if before == mode:
+                raise GatewayError(f"Timeline order is already {mode!r}.")
+            summary = f"Switch Timeline order from {before!r} to {mode!r}."
+            review.update({
+                "before": {
+                    "order_mode": before,
+                    "event_order": _bounded_sequence(event_order),
+                },
+                "after_intent": {
+                    "order_mode": mode,
+                    "structural_mode_recomputes_effective_order": mode == "structural",
+                },
+            })
+
+        return self.propose_request(
+            operation=f"timeline_{kind}",
+            method="POST",
+            path=self.client.project_path("timeline/commands", pid),
+            body=normalized,
+            summary=summary,
+            project_id=pid,
+            review=review,
+        )
 
     def propose_create_project(self, body: dict[str, Any]) -> dict[str, Any]:
         return self.propose_request(

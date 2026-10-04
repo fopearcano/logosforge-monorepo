@@ -71,6 +71,75 @@ def test_api_client_get_scene_uses_full_scene_endpoint_and_keeps_revision():
     assert result["revision"] == "rev-scene-31"
 
 
+def test_api_client_get_timeline_uses_authoritative_project_endpoint():
+    client = LogosForgeApiClient(
+        base_url="http://127.0.0.1:8765", project_id=7, auth_token="secret",
+    )
+    captured = {}
+    timeline = {
+        "project_id": 7,
+        "revision": "a" * 64,
+        "order_mode": "structural",
+        "lanes": [],
+        "events": [],
+        "off_timeline": [],
+    }
+
+    def fake_urlopen(request, timeout=None):
+        captured.update(
+            url=request.full_url,
+            method=request.get_method(),
+            authorization=request.headers.get("Authorization"),
+            timeout=timeout,
+        )
+        return _response(timeline)
+
+    with mock.patch.object(ac.urllib.request, "urlopen", fake_urlopen):
+        result = client.get_timeline()
+
+    assert captured == {
+        "url": "http://127.0.0.1:8765/api/projects/7/timeline",
+        "method": "GET",
+        "authorization": "Bearer secret",
+        "timeout": 15.0,
+    }
+    assert result == timeline
+
+
+def test_api_client_preserves_http_status_and_machine_error_code():
+    client = LogosForgeApiClient(
+        base_url="http://127.0.0.1:8765", project_id=7,
+    )
+    response = _response({
+        "error": {
+            "code": "timeline_conflict",
+            "message": "The Timeline changed.",
+        },
+    })
+
+    def fake_urlopen(request, timeout=None):
+        del timeout
+        raise ac.urllib.error.HTTPError(
+            request.full_url,
+            409,
+            "Conflict",
+            hdrs=None,
+            fp=response,
+        )
+
+    with (
+        mock.patch.object(ac.urllib.request, "urlopen", fake_urlopen),
+        pytest.raises(
+            LogosForgeApiError,
+            match=r"HTTP 409.*GET /api/projects/7/timeline.*Timeline changed",
+        ) as caught,
+    ):
+        client.get_timeline()
+
+    assert caught.value.status_code == 409
+    assert caught.value.error_code == "timeline_conflict"
+
+
 def test_api_client_search_uses_typed_project_endpoint_and_encodes_query():
     client = LogosForgeApiClient(
         base_url="http://127.0.0.1:8765", project_id=7, auth_token="secret",
@@ -149,6 +218,31 @@ class _FakeApiClient:
             },
             2: {},
         }
+        self.timelines = {
+            1: {
+                "project_id": 1,
+                "revision": "1" * 64,
+                "order_mode": "structural",
+                "lanes": [],
+                "events": [],
+                "off_timeline": [{
+                    "id": 11,
+                    "title": "Opening",
+                    "structural_number": "1",
+                    "act": "",
+                    "chapter": "",
+                }],
+            },
+            2: {
+                "project_id": 2,
+                "revision": "2" * 64,
+                "order_mode": "structural",
+                "lanes": [],
+                "events": [],
+                "off_timeline": [],
+            },
+        }
+        self._timeline_revision_sequence = 3
         self.comments = {
             1: [
                 {
@@ -284,6 +378,10 @@ class _FakeApiClient:
         pid = int(project_id) if project_id is not None else self.require_project_id()
         return copy.deepcopy(self.resources[f"/api/projects/{pid}/outline"])
 
+    def get_timeline(self, project_id: int | None = None) -> dict:
+        pid = int(project_id) if project_id is not None else self.require_project_id()
+        return copy.deepcopy(self.timelines[pid])
+
     def list_characters(self, project_id: int | None = None) -> list[dict]:
         pid = int(project_id) if project_id is not None else self.require_project_id()
         if pid == 1:
@@ -345,6 +443,8 @@ class _FakeApiClient:
         self.requests.append((method, path, stored_body))
 
         if method == "GET":
+            if path == "/api/projects/1/timeline":
+                return self.get_timeline(1)
             comment_prefix = "/api/projects/1/comments/"
             if path.startswith(comment_prefix):
                 return self.get_comment(int(path.removeprefix(comment_prefix)), 1)
@@ -360,7 +460,11 @@ class _FakeApiClient:
                 )
                 assert body is not None
                 if body.get("expected_revision") != comment["revision"]:
-                    raise LogosForgeApiError("HTTP 409: comment_conflict")
+                    raise LogosForgeApiError(
+                        "HTTP 409: comment thread changed",
+                        status_code=409,
+                        error_code="comment_conflict",
+                    )
                 comment["replies"].append({
                     "id": 90 + len(comment["replies"]) + 1,
                     "source_id": "",
@@ -379,19 +483,56 @@ class _FakeApiClient:
                 )
                 assert body is not None
                 if body.get("expected_revision") != comment["revision"]:
-                    raise LogosForgeApiError("HTTP 409: comment_conflict")
+                    raise LogosForgeApiError(
+                        "HTTP 409: comment thread changed",
+                        status_code=409,
+                        error_code="comment_conflict",
+                    )
                 if "resolved" in body:
                     comment["resolved"] = bool(body["resolved"])
                 comment["updated_at"] = "2026-09-01T11:00:00Z"
                 comment["revision"] = self._next_comment_revision()
                 return copy.deepcopy(comment)
 
+        if method == "POST" and path == "/api/projects/1/timeline/commands":
+            timeline = self.timelines[1]
+            assert body is not None
+            if body.get("expected_revision") != timeline["revision"]:
+                raise LogosForgeApiError(
+                    "HTTP 409: The Timeline changed.",
+                    status_code=409,
+                    error_code="timeline_conflict",
+                )
+            if body.get("kind") != "create_lane":
+                raise LogosForgeApiError("unsupported fake Timeline command")
+            lane = {
+                "id": 301 + len(timeline["lanes"]),
+                "name": body["name"],
+                "color_label": body.get("color_label", ""),
+                "order_index": len(timeline["lanes"]),
+                "collapsed": False,
+                "event_count": 0,
+            }
+            index = body.get("index")
+            if index is None:
+                index = len(timeline["lanes"])
+            timeline["lanes"].insert(index, lane)
+            for order_index, row in enumerate(timeline["lanes"]):
+                row["order_index"] = order_index
+            timeline["revision"] = f"{self._timeline_revision_sequence:064x}"
+            self._timeline_revision_sequence += 1
+            return {
+                "timeline": copy.deepcopy(timeline),
+                "changed": True,
+                "affected_scene_ids": [],
+            }
+
         scene_prefix = "/api/projects/1/scenes/"
         if method == "PATCH" and path.startswith(scene_prefix):
             scene_id = int(path.removeprefix(scene_prefix))
             scene = self.scenes[1][scene_id]
             if body is None or body.get("expected_revision") != scene["revision"]:
-                raise LogosForgeApiError("revision conflict")
+                raise LogosForgeApiError("revision conflict", status_code=409)
             for key, value in body.items():
                 if key != "expected_revision":
                     scene[key] = value
@@ -460,6 +601,395 @@ def test_scene_reads_return_full_content_and_revision_but_lists_are_compact():
     assert listed[0]["revision"] == "rev-1"
     assert listed[0]["content_length"] == len("Before.\n")
     assert "content" not in listed[0]
+
+
+def test_timeline_read_and_proposal_apply_are_exact_revision_bound_and_single_use():
+    gateway, fake = _gateway(allow_writes=True)
+    current = gateway.get_timeline()
+    assert current == fake.timelines[1]
+
+    first = gateway.propose_timeline_command({
+        "kind": "create_lane",
+        "expected_revision": current["revision"],
+        "name": " Main ",
+        "color_label": "cyan",
+        "index": 0,
+    })
+    stale_sibling = gateway.propose_timeline_command({
+        "kind": "create_lane",
+        "expected_revision": current["revision"],
+        "name": "Secondary",
+    })
+
+    assert first["state"] == stale_sibling["state"] == "pending"
+    assert first["request"] == {
+        "method": "POST",
+        "path": "/api/projects/1/timeline/commands",
+        "body": {
+            "kind": "create_lane",
+            "expected_revision": "1" * 64,
+            "name": "Main",
+            "color_label": "cyan",
+            "index": 0,
+        },
+    }
+    assert first["review"]["before"]["lane_order"] == {
+        "items": [], "total": 0, "truncated": 0,
+    }
+    assert fake.timelines[1]["lanes"] == []
+    assert not any(method == "POST" for method, _path, _body in fake.requests)
+
+    applied = gateway.apply_proposal(first["proposal_id"])
+    assert applied["state"] == "applied"
+    assert [lane["name"] for lane in fake.timelines[1]["lanes"]] == ["Main"]
+    assert applied["result"]["timeline"]["revision"] != current["revision"]
+    assert fake.requests[-1] == (
+        "POST",
+        "/api/projects/1/timeline/commands",
+        first["request"]["body"],
+    )
+
+    with pytest.raises(GatewayError, match="timeline_conflict.*will not be retried"):
+        gateway.apply_proposal(stale_sibling["proposal_id"])
+    assert gateway.get_proposal(stale_sibling["proposal_id"])["state"] == "failed"
+    assert [lane["name"] for lane in fake.timelines[1]["lanes"]] == ["Main"]
+
+    with pytest.raises(GatewayError, match="applied, not pending"):
+        gateway.apply_proposal(first["proposal_id"])
+
+
+@pytest.mark.parametrize("status_code", [None, 500], ids=["no-response", "server-error"])
+def test_timeline_ambiguous_apply_is_indeterminate_and_not_retried(status_code):
+    gateway, fake = _gateway(allow_writes=True)
+    proposal = gateway.propose_timeline_command({
+        "kind": "create_lane",
+        "expected_revision": fake.timelines[1]["revision"],
+        "name": "Possibly committed",
+    })
+    request = fake.request
+
+    def lose_response(method, path, body=None, query=None):
+        result = request(method, path, body, query)
+        if method == "POST" and path.endswith("/timeline/commands"):
+            del result
+            raise LogosForgeApiError(
+                "connection reset after request",
+                status_code=status_code,
+            )
+        return result
+
+    fake.request = lose_response
+
+    with pytest.raises(GatewayError, match="outcome is indeterminate.*do not retry"):
+        gateway.apply_proposal(proposal["proposal_id"])
+
+    receipt = gateway.get_proposal(proposal["proposal_id"])
+    assert receipt["state"] == "indeterminate"
+    assert [lane["name"] for lane in fake.timelines[1]["lanes"]] == [
+        "Possibly committed",
+    ]
+    with pytest.raises(GatewayError, match="indeterminate, not pending"):
+        gateway.apply_proposal(proposal["proposal_id"])
+    assert len([
+        call for call in fake.requests
+        if call[:2] == ("POST", "/api/projects/1/timeline/commands")
+    ]) == 1
+
+
+def test_timeline_proposal_ignores_display_only_snapshot_changes_but_keeps_cas():
+    gateway, fake = _gateway(allow_writes=True)
+    proposal = gateway.propose_timeline_command({
+        "kind": "create_lane",
+        "expected_revision": fake.timelines[1]["revision"],
+        "name": "Main",
+    })
+
+    # Scene titles are displayed by Timeline but intentionally do not belong
+    # to its topology revision. A full-snapshot digest guard would reject this
+    # otherwise safe lane command.
+    fake.timelines[1]["off_timeline"][0]["title"] = "New display title"
+
+    applied = gateway.apply_proposal(proposal["proposal_id"])
+    assert applied["state"] == "applied"
+    assert fake.timelines[1]["lanes"][0]["name"] == "Main"
+
+
+def test_timeline_destructive_proposals_explain_that_scenes_are_preserved():
+    gateway, fake = _gateway()
+    fake.timelines[1].update({
+        "lanes": [{
+            "id": 301,
+            "name": "Main",
+            "color_label": "cyan",
+            "order_index": 0,
+            "collapsed": False,
+            "event_count": 1,
+        }],
+        "events": [{
+            "id": 11,
+            "order_index": 1,
+            "title": "Opening",
+            "structural_number": "1",
+            "act": "",
+            "chapter": "",
+            "plotline": "Main",
+            "color_label": "",
+            "lane_id": 301,
+            "time_of_day": "",
+            "location": "",
+            "duration_minutes": 0,
+            "character_states": [],
+        }],
+        "off_timeline": [],
+    })
+    revision = fake.timelines[1]["revision"]
+
+    deleted_lane = gateway.propose_timeline_command({
+        "kind": "delete_lane",
+        "expected_revision": revision,
+        "lane_id": 301,
+    })
+    removed_event = gateway.propose_timeline_command({
+        "kind": "remove_event",
+        "expected_revision": revision,
+        "scene_id": 11,
+    })
+    moved_to_unassigned = gateway.propose_timeline_command({
+        "kind": "place_event",
+        "expected_revision": revision,
+        "scene_id": 11,
+        "lane_id": None,
+    })
+
+    assert deleted_lane["review"]["destructive"] is True
+    assert deleted_lane["review"]["lane"]["member_scene_ids"] == {
+        "items": [11], "total": 1, "truncated": 0,
+    }
+    assert "not deleted" in deleted_lane["review"]["effect"]
+    assert removed_event["review"]["destructive"] is True
+    assert "remains" in removed_event["review"]["effect"]
+    assert moved_to_unassigned["review"]["changes_plotline"] is True
+    assert moved_to_unassigned["review"]["before"][
+        "one_based_display_order_index"
+    ] == 1
+    assert moved_to_unassigned["review"]["after_intent"][
+        "zero_based_command_index"
+    ] is None
+    assert fake.timelines[1]["events"][0]["lane_id"] == 301
+
+
+def test_timeline_lane_update_and_order_mode_proposals_preserve_exact_commands():
+    gateway, fake = _gateway()
+    fake.timelines[1]["lanes"] = [
+        {
+            "id": 301,
+            "name": "Main",
+            "color_label": "cyan",
+            "order_index": 0,
+            "collapsed": False,
+            "event_count": 1,
+        },
+        {
+            "id": 302,
+            "name": "Secondary",
+            "color_label": "",
+            "order_index": 1,
+            "collapsed": False,
+            "event_count": 0,
+        },
+    ]
+    fake.timelines[1]["events"] = [{
+        "id": 11,
+        "order_index": 1,
+        "title": "Opening",
+        "structural_number": "1",
+        "act": "",
+        "chapter": "",
+        "plotline": "Main",
+        "color_label": "",
+        "lane_id": 301,
+        "time_of_day": "",
+        "location": "",
+        "duration_minutes": 0,
+        "character_states": [],
+    }]
+    fake.timelines[1]["off_timeline"] = []
+    revision = fake.timelines[1]["revision"]
+
+    update_command = {
+        "kind": "update_lane",
+        "expected_revision": revision,
+        "lane_id": 301,
+        "name": "Primary",
+        "collapsed": True,
+        "index": 1,
+    }
+    update = gateway.propose_timeline_command(update_command)
+    custom = gateway.propose_timeline_command({
+        "kind": "set_order_mode",
+        "expected_revision": revision,
+        "mode": "custom",
+    })
+
+    assert update["request"]["body"] == update_command
+    assert update["review"]["changes"] == {
+        "name": {"before": "Main", "after": "Primary"},
+        "collapsed": {"before": False, "after": True},
+        "index": {"before": 0, "after": 1},
+    }
+    assert update["review"]["lane"]["member_scene_ids"] == {
+        "items": [11], "total": 1, "truncated": 0,
+    }
+    assert update["review"]["rename_updates_member_plotlines"] is True
+    assert custom["request"]["body"]["mode"] == "custom"
+    assert custom["review"]["before"]["order_mode"] == "structural"
+    assert custom["review"]["after_intent"] == {
+        "order_mode": "custom",
+        "structural_mode_recomputes_effective_order": False,
+    }
+    assert fake.timelines[1]["order_mode"] == "structural"
+
+
+def test_timeline_reviews_bound_legacy_snapshot_text():
+    gateway, fake = _gateway()
+    legacy_lane_name = "L" * 800
+    legacy_plotline = "P" * 800
+    fake.timelines[1].update({
+        "lanes": [{
+            "id": 301,
+            "name": legacy_lane_name,
+            "color_label": "cyan",
+            "order_index": 0,
+            "collapsed": False,
+            "event_count": 0,
+        }],
+        "events": [{
+            "id": 11,
+            "order_index": 1,
+            "title": "Opening",
+            "structural_number": "1",
+            "act": "",
+            "chapter": "",
+            "plotline": legacy_plotline,
+            "color_label": "",
+            "lane_id": None,
+            "time_of_day": "",
+            "location": "",
+            "duration_minutes": 0,
+            "character_states": [],
+        }],
+        "off_timeline": [],
+    })
+    revision = fake.timelines[1]["revision"]
+
+    updated = gateway.propose_timeline_command({
+        "kind": "update_lane",
+        "expected_revision": revision,
+        "lane_id": 301,
+        "name": "Short",
+    })
+    placed = gateway.propose_timeline_command({
+        "kind": "place_event",
+        "expected_revision": revision,
+        "scene_id": 11,
+        "lane_id": 301,
+    })
+
+    assert updated["review"]["lane"]["name"] == "L" * 500 + "…"
+    assert updated["review"]["changes"]["name"]["before"] == "L" * 500 + "…"
+    assert legacy_lane_name not in updated["summary"]
+    assert placed["review"]["before"]["plotline"] == "P" * 500 + "…"
+    assert placed["review"]["after_intent"]["lane_name"] == "L" * 500 + "…"
+    assert placed["review"]["after_intent"]["plotline"] == "L" * 500 + "…"
+    assert legacy_lane_name not in placed["summary"]
+
+
+@pytest.mark.parametrize(
+    ("command", "message"),
+    [
+        (
+            {
+                "kind": "create_lane",
+                "expected_revision": "A" * 64,
+                "name": "Lane",
+            },
+            "exact 64-character lowercase revision",
+        ),
+        (
+            {
+                "kind": "create_lane",
+                "expected_revision": "0" * 64,
+                "name": "Lane",
+            },
+            "expected_revision does not match the current Timeline",
+        ),
+        (
+            {
+                "kind": "set_order_mode",
+                "expected_revision": "1" * 64,
+                "mode": "custom",
+                "confirmed": True,
+            },
+            "Unexpected Timeline command field",
+        ),
+        (
+            {
+                "kind": "create_lane",
+                "expected_revision": "1" * 64,
+                "name": "Lane",
+                "index": True,
+            },
+            "index must be a non-negative integer",
+        ),
+        (
+            {
+                "kind": "update_lane",
+                "expected_revision": "1" * 64,
+                "lane_id": 301,
+                "index": None,
+            },
+            "index must be a non-negative integer",
+        ),
+        (
+            {
+                "kind": "place_event",
+                "expected_revision": "1" * 64,
+                "scene_id": 11,
+            },
+            "requires scene_id and lane_id",
+        ),
+        (
+            {
+                "kind": "remove_event",
+                "expected_revision": "1" * 64,
+                "scene_id": False,
+            },
+            "scene_id must be a positive integer",
+        ),
+        (
+            {
+                "kind": "set_order_mode",
+                "expected_revision": "1" * 64,
+                "mode": "random",
+            },
+            "mode must be 'structural' or 'custom'",
+        ),
+    ],
+)
+def test_timeline_tool_rejects_unscoped_or_ambiguous_commands(command, message):
+    from logosforge.librechat.mcp_server import call_tool
+
+    gateway, fake = _gateway()
+    response = call_tool(
+        gateway,
+        "logosforge_propose_timeline_command",
+        {"command": command},
+    )
+
+    assert response["ok"] is False
+    assert message in response["error"]
+    assert gateway.list_proposals() == {"proposals": []}
+    assert not any(method == "POST" for method, _path, _body in fake.requests)
 
 
 def test_snapshot_uses_canonical_cast_and_bounded_comment_summaries():
@@ -815,8 +1345,10 @@ def test_mcp_registry_has_unique_focused_tools_and_no_legacy_self_approval():
     from logosforge.librechat import mcp_server as server
 
     names = [spec.name for spec in server.TOOL_SPECS]
-    assert len(names) == len(set(names)) == 38
+    assert len(names) == len(set(names)) == 40
     assert {
+        "logosforge_get_timeline",
+        "logosforge_propose_timeline_command",
         "logosforge_list_comments",
         "logosforge_propose_comment_reply",
         "logosforge_propose_comment_resolution",
@@ -835,6 +1367,32 @@ def test_mcp_registry_has_unique_focused_tools_and_no_legacy_self_approval():
     assert server.HANDLERS[
         "logosforge_propose_comment_resolution"
     ].idempotent is False
+    timeline_read = server.HANDLERS["logosforge_get_timeline"]
+    assert timeline_read.read_only is True
+    assert timeline_read.destructive is False
+    assert timeline_read.idempotent is True
+    timeline_proposal = server.HANDLERS[
+        "logosforge_propose_timeline_command"
+    ]
+    assert timeline_proposal.read_only is True
+    assert timeline_proposal.destructive is False
+    assert timeline_proposal.idempotent is False
+    variants = timeline_proposal.input_schema["properties"]["command"]["oneOf"]
+    assert {variant["properties"]["kind"]["const"] for variant in variants} == {
+        "create_lane", "update_lane", "delete_lane", "place_event",
+        "remove_event", "set_order_mode",
+    }
+    assert all(variant["additionalProperties"] is False for variant in variants)
+    update_variant = next(
+        variant for variant in variants
+        if variant["properties"]["kind"]["const"] == "update_lane"
+    )
+    assert update_variant["anyOf"] == [
+        {"required": ["name"]},
+        {"required": ["color_label"]},
+        {"required": ["collapsed"]},
+        {"required": ["index"]},
+    ]
     search = server.HANDLERS["logosforge_search"]
     assert search.input_schema == server._obj(
         {"query": {"type": "string", "maxLength": 500}}, ["query"],
@@ -890,10 +1448,12 @@ def test_real_mcp_stdio_initializes_and_advertises_structured_tools():
 
     initialized, listed = asyncio.run(exercise())
     assert initialized.serverInfo.name == "logosforge"
-    assert initialized.serverInfo.version == "1.1.0"
+    assert initialized.serverInfo.version == "1.2.0"
     tools = {tool.name: tool for tool in listed.tools}
-    assert len(tools) == 38
+    assert len(tools) == 40
     assert {
+        "logosforge_get_timeline",
+        "logosforge_propose_timeline_command",
         "logosforge_list_comments",
         "logosforge_propose_comment_reply",
         "logosforge_propose_comment_resolution",
@@ -921,6 +1481,16 @@ def test_real_mcp_stdio_initializes_and_advertises_structured_tools():
     assert search_annotations.destructiveHint is False
     assert search_annotations.idempotentHint is True
     assert search_annotations.openWorldHint is False
+    timeline_annotations = tools["logosforge_get_timeline"].annotations
+    assert timeline_annotations.readOnlyHint is True
+    assert timeline_annotations.destructiveHint is False
+    assert timeline_annotations.idempotentHint is True
+    timeline_proposal_annotations = tools[
+        "logosforge_propose_timeline_command"
+    ].annotations
+    assert timeline_proposal_annotations.readOnlyHint is True
+    assert timeline_proposal_annotations.destructiveHint is False
+    assert timeline_proposal_annotations.idempotentHint is False
     annotations = tools["logosforge_apply_proposal"].annotations
     assert annotations.readOnlyHint is False
     assert annotations.destructiveHint is True

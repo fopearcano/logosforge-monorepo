@@ -132,10 +132,12 @@ async def _exercise_mcp(
         if initialized.serverInfo.name != "logosforge":
             raise RuntimeError(f"unexpected MCP server: {initialized.serverInfo.name!r}")
         listed = await session.list_tools()
-        if len(listed.tools) != 38:
-            raise RuntimeError(f"expected 38 MCP tools, received {len(listed.tools)}")
+        if len(listed.tools) != 40:
+            raise RuntimeError(f"expected 40 MCP tools, received {len(listed.tools)}")
         tool_names = {tool.name for tool in listed.tools}
         expected_tools = {
+            "logosforge_get_timeline",
+            "logosforge_propose_timeline_command",
             "logosforge_search",
             "logosforge_list_comments",
             "logosforge_propose_comment_reply",
@@ -157,6 +159,46 @@ async def _exercise_mcp(
             ),
             "MCP project selection",
         )
+        timeline_before = _structured(
+            await session.call_tool("logosforge_get_timeline", {}),
+            "MCP Timeline read",
+        )
+        timeline_revision = timeline_before.get("revision")
+        if not isinstance(timeline_revision, str) or len(timeline_revision) != 64:
+            raise RuntimeError("MCP Timeline read returned no valid revision")
+        timeline_proposal = _structured(
+            await session.call_tool(
+                "logosforge_propose_timeline_command",
+                {
+                    "command": {
+                        "kind": "create_lane",
+                        "expected_revision": timeline_revision,
+                        "name": "Frozen MCP lane",
+                        "color_label": "cyan",
+                    },
+                },
+            ),
+            "MCP Timeline proposal",
+        )
+        if timeline_proposal.get("state") != "pending":
+            raise RuntimeError("MCP Timeline proposal was not left pending")
+        if timeline_proposal.get("request") != {
+            "method": "POST",
+            "path": f"/api/projects/{project_id}/timeline/commands",
+            "body": {
+                "kind": "create_lane",
+                "expected_revision": timeline_revision,
+                "name": "Frozen MCP lane",
+                "color_label": "cyan",
+            },
+        }:
+            raise RuntimeError("MCP Timeline proposal did not store the exact command")
+        timeline_after = _structured(
+            await session.call_tool("logosforge_get_timeline", {}),
+            "MCP post-proposal Timeline read",
+        )
+        if timeline_after != timeline_before:
+            raise RuntimeError("creating a Timeline proposal mutated project data")
         search = _structured(
             await session.call_tool(
                 "logosforge_search", {"query": "Inspect this packaged thread."},
@@ -310,9 +352,9 @@ def smoke(executable: Path, mcp_executable: Path | None = None) -> None:
                     process.kill()
                     process.wait(timeout=10)
         print(
-            "Frozen LogosForge MCP initialized, advertised 38 tools including the "
-            "Phase 5C comment tools, searched and read a seeded thread, and "
-            "created both non-mutating comment proposal types."
+            "Frozen LogosForge MCP initialized, advertised 40 tools, read and "
+            "proposed against the revisioned Timeline without mutation, searched "
+            "and read a seeded thread, and created both comment proposal types."
         )
 
 

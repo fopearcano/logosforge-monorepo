@@ -23,6 +23,13 @@ from logosforge import story_structure
 TIMELINE_ORDER_MODES = frozenset({"structural", "custom"})
 
 
+def _creation_identity(value: Any) -> str:
+    """Serialize an entity's immutable creation marker for revision guards."""
+    created_at = getattr(value, "created_at", None)
+    isoformat = getattr(created_at, "isoformat", None)
+    return str(isoformat()) if callable(isoformat) else str(created_at or "")
+
+
 def _unique_ints(value: Any, *, allowed: set[int] | None = None) -> tuple[int, ...]:
     """Return ordered, unique integer ids from legacy JSON settings."""
     if not isinstance(value, list):
@@ -127,6 +134,11 @@ def timeline_revision(
     projection = project_timeline(scenes, settings)
     payload = {
         "project_id": int(getattr(project, "id", 0) or 0),
+        # SQLite may reuse an INTEGER PRIMARY KEY after deletion.  Binding the
+        # revision to immutable creation markers prevents an old proposal from
+        # targeting a replacement Project, Scene, or lane that inherited the
+        # same numeric id and topology (the classic ABA problem).
+        "project_created_at": _creation_identity(project),
         "narrative_engine": str(
             getattr(project, "narrative_engine", "")
             or getattr(project, "format_mode", "")
@@ -135,6 +147,7 @@ def timeline_revision(
         "scenes": [
             [
                 int(scene.id),
+                _creation_identity(scene),
                 (getattr(scene, "act", "") or "").strip(),
                 (getattr(scene, "chapter", "") or "").strip(),
                 (
@@ -151,6 +164,7 @@ def timeline_revision(
         "lanes": [
             [
                 int(lane.id),
+                _creation_identity(lane),
                 lane.name or "",
                 lane.color_label or "",
                 int(lane.order_index or 0),

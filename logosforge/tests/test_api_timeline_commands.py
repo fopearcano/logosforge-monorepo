@@ -417,6 +417,86 @@ def test_scene_deletion_scrubs_timeline_state_before_id_reuse(
     assert [row["id"] for row in timeline["off_timeline"]] == [replacement.id]
 
 
+def test_revision_rejects_scene_replacement_that_reuses_identical_id_and_topology():
+    client, db, project_id = _project()
+    original = db.create_scene(
+        project_id, "Same", act="Act I", chapter="One",
+    )
+    stale = _timeline(client, project_id)
+
+    assert client.delete(
+        f"/api/projects/{project_id}/scenes/{original.id}",
+    ).status_code == 200
+    replacement = db.create_scene(
+        project_id, "Same", act="Act I", chapter="One",
+    )
+    assert replacement.id == original.id
+    current = _timeline(client, project_id)
+    assert current["revision"] != stale["revision"]
+
+    rejected = _command(
+        client,
+        project_id,
+        kind="place_event",
+        expected_revision=stale["revision"],
+        scene_id=replacement.id,
+        lane_id=None,
+    )
+    assert rejected.status_code == 409
+    assert _timeline(client, project_id) == current
+
+
+def test_revision_rejects_lane_replacement_that_reuses_identical_id_and_fields():
+    client, db, project_id = _project()
+    original = db.create_timeline_lane(
+        project_id, "Main", "cyan", order_index=0,
+    )
+    stale = _timeline(client, project_id)
+
+    db.delete_timeline_lane(original.id)
+    replacement = db.create_timeline_lane(
+        project_id, "Main", "cyan", order_index=0,
+    )
+    assert replacement.id == original.id
+    current = _timeline(client, project_id)
+    assert current["revision"] != stale["revision"]
+
+    rejected = _command(
+        client,
+        project_id,
+        kind="delete_lane",
+        expected_revision=stale["revision"],
+        lane_id=replacement.id,
+    )
+    assert rejected.status_code == 409
+    assert _timeline(client, project_id) == current
+
+
+def test_revision_rejects_project_replacement_that_reuses_identical_id_and_mode():
+    client, db, project_id = _project()
+    stale = _timeline(client, project_id)
+
+    db.delete_project(project_id)
+    replacement = db.create_project(
+        "Timeline commands",
+        narrative_engine="novel",
+        default_writing_format="novel",
+    )
+    assert replacement.id == project_id
+    current = _timeline(client, project_id)
+    assert current["revision"] != stale["revision"]
+
+    rejected = _command(
+        client,
+        project_id,
+        kind="create_lane",
+        expected_revision=stale["revision"],
+        name="Should not exist",
+    )
+    assert rejected.status_code == 409
+    assert _timeline(client, project_id) == current
+
+
 def test_stale_revision_rejects_without_partial_mutation_or_events():
     client, db, project_id = _project()
     scene = db.create_scene(project_id, "Scene")
@@ -627,6 +707,37 @@ def test_update_lane_requires_at_least_one_patch_field():
         lane_id=lane["lanes"][0]["id"],
     )
     assert response.status_code == 422
+
+
+def test_commands_reject_unscoped_fields_and_null_update_index():
+    client, _db, project_id = _project()
+    current = _timeline(client, project_id)
+    lane = _create_lane(client, project_id, current, "Main")["timeline"]
+    lane_id = lane["lanes"][0]["id"]
+
+    unexpected = _command(
+        client,
+        project_id,
+        kind="set_order_mode",
+        expected_revision=lane["revision"],
+        mode="custom",
+        confirmed=True,
+    )
+    null_updates = [
+        _command(
+            client,
+            project_id,
+            kind="update_lane",
+            expected_revision=lane["revision"],
+            lane_id=lane_id,
+            **{field: None},
+        )
+        for field in ("name", "color_label", "collapsed", "index")
+    ]
+
+    assert unexpected.status_code == 422
+    assert all(response.status_code == 422 for response in null_updates)
+    assert _timeline(client, project_id) == lane
 
 
 @pytest.mark.parametrize(

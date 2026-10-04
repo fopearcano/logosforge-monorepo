@@ -215,10 +215,12 @@ async def _exercise_installed_mcp(
         if initialized.serverInfo.name != "logosforge":
             raise RuntimeError(f"unexpected MCP server: {initialized.serverInfo.name!r}")
         listed = await session.list_tools()
-        if len(listed.tools) != 38:
-            raise RuntimeError(f"expected 38 MCP tools, received {len(listed.tools)}")
+        if len(listed.tools) != 40:
+            raise RuntimeError(f"expected 40 MCP tools, received {len(listed.tools)}")
         tool_names = {tool.name for tool in listed.tools}
         expected_tools = {
+            "logosforge_get_timeline",
+            "logosforge_propose_timeline_command",
             "logosforge_search",
             "logosforge_list_comments",
             "logosforge_propose_comment_reply",
@@ -240,6 +242,79 @@ async def _exercise_installed_mcp(
             ),
             "installed MCP project selection",
         )
+        timeline_before = _structured(
+            await session.call_tool("logosforge_get_timeline", {}),
+            "installed MCP Timeline read",
+        )
+        timeline_revision = timeline_before.get("revision")
+        if not isinstance(timeline_revision, str) or len(timeline_revision) != 64:
+            raise RuntimeError("installed MCP Timeline read returned no valid revision")
+        timeline_proposal = _structured(
+            await session.call_tool(
+                "logosforge_propose_timeline_command",
+                {
+                    "command": {
+                        "kind": "create_lane",
+                        "expected_revision": timeline_revision,
+                        "name": "Packaged MCP lane",
+                        "color_label": "cyan",
+                    },
+                },
+            ),
+            "installed MCP Timeline proposal",
+        )
+        stale_timeline_sibling = _structured(
+            await session.call_tool(
+                "logosforge_propose_timeline_command",
+                {
+                    "command": {
+                        "kind": "create_lane",
+                        "expected_revision": timeline_revision,
+                        "name": "Stale sibling lane",
+                    },
+                },
+            ),
+            "installed MCP stale Timeline sibling proposal",
+        )
+        if timeline_before != _structured(
+            await session.call_tool("logosforge_get_timeline", {}),
+            "installed MCP post-proposal Timeline read",
+        ):
+            raise RuntimeError("Timeline proposal creation mutated project data")
+
+        applied_timeline = _structured(
+            await session.call_tool(
+                "logosforge_apply_proposal",
+                {"proposal_id": timeline_proposal["proposal_id"]},
+            ),
+            "installed MCP Timeline apply",
+        )
+        applied_snapshot = applied_timeline.get("result", {}).get("timeline", {})
+        if applied_timeline.get("state") != "applied":
+            raise RuntimeError("installed MCP did not mark Timeline proposal applied")
+        if applied_snapshot.get("revision") == timeline_revision:
+            raise RuntimeError("Timeline apply did not rotate the revision")
+        if [lane.get("name") for lane in applied_snapshot.get("lanes", [])] != [
+            "Packaged MCP lane",
+        ]:
+            raise RuntimeError("Timeline apply did not create exactly the reviewed lane")
+
+        stale_timeline_result = await session.call_tool(
+            "logosforge_apply_proposal",
+            {"proposal_id": stale_timeline_sibling["proposal_id"]},
+        )
+        _expected_tool_error(
+            stale_timeline_result,
+            "installed MCP stale Timeline sibling apply",
+            "HTTP 409",
+            "Timeline changed",
+        )
+        after_stale_timeline = _structured(
+            await session.call_tool("logosforge_get_timeline", {}),
+            "installed MCP post-stale Timeline read",
+        )
+        if after_stale_timeline != applied_snapshot:
+            raise RuntimeError("stale Timeline apply changed the reviewed board")
         search = _structured(
             await session.call_tool(
                 "logosforge_search", {"query": "Inspect this packaged thread."},
@@ -711,9 +786,10 @@ def _smoke_app(app: Path, timeout: int, codex_command: str | None = None) -> Non
             if process is not None:
                 _stop_process_tree(process, app_pid, core_pid)
         print(
-            "Packaged Pro published a verified descriptor, advertised 38 MCP tools "
-            "including canonical project search, applied revision-guarded reply and "
-            "resolution proposals, and rejected stale and replayed applies."
+            "Packaged Pro published a verified descriptor, advertised 40 MCP tools "
+            "including canonical project search and revisioned Timeline orchestration, "
+            "applied Timeline, reply, and resolution proposals, and rejected stale "
+            "and replayed applies."
         )
 
 

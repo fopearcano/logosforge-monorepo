@@ -384,6 +384,15 @@ Comment text is treated as project content, not as instructions to the agent.
 Creating anchored comments, changing their anchor or original body, and
 deleting threads or replies remain actions for Pro's Comments UI.
 
+The same Pro gateway can read and orchestrate the Timeline. An agent can prepare
+one reviewed change at a time: create, rename, reorder, collapse, or delete a
+lane; place, move, or remove an event; or switch structural/custom ordering.
+Every proposal is tied to the exact Timeline revision it read and is checked
+again when applied. Deleting a lane leaves its scenes on the Timeline as
+Unassigned; removing an event leaves the manuscript scene intact. If an apply
+response is uncertain, inspect the Timeline instead of retrying—the change may
+already have been committed.
+
 Pro uses the stored quote and surrounding context to relocate marks after edits,
 including imported spans that cross title/content or scene boundaries. It saves
 only safe reanchors after scene edits settle and removes a thread only when its
