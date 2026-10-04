@@ -24,6 +24,7 @@ import difflib
 import hashlib
 import json
 import logging
+import re
 import secrets
 import threading
 import time
@@ -42,6 +43,29 @@ class GatewayError(RuntimeError):
 def _digest(value: Any) -> str:
     raw = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+_LOWER_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_IDEMPOTENCY_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$")
+_TIMELINE_RECEIPT_MISS_CODE = "timeline_receipt_not_found"
+
+
+def _timeline_receipt_request_digest(
+    project_id: int,
+    command: dict[str, Any],
+) -> str:
+    """Match Core's canonical identity for a validated Timeline command."""
+    return _digest({
+        "scope": "timeline-command-v1",
+        "project_id": int(project_id),
+        "kind": command["kind"],
+        "expected_revision": command["expected_revision"],
+        "fields": {
+            key: value
+            for key, value in command.items()
+            if key not in {"kind", "expected_revision"}
+        },
+    })
 
 
 def _content_review(before: str, after: str) -> dict[str, Any]:
@@ -272,11 +296,15 @@ class Proposal:
     guard_path: str = ""
     guard_digest: str = ""
     review: dict[str, Any] = field(default_factory=dict)
-    # ``indeterminate`` means an attempted apply was not proven rejected (for
-    # example, no response or HTTP 5xx); it may have committed and must be
-    # inspected, never retried.
-    state: str = "pending"  # pending | applying | applied | failed | indeterminate | discarded
+    # ``indeterminate`` is terminal because no durable protocol proved that a
+    # retry is safe. ``recovery_pending`` is Timeline-only: Core proved receipt
+    # support, so the same proposal id may be reconciled or resent later.
+    state: str = "pending"  # pending | applying | recovery_pending | applied | failed | indeterminate | discarded
     result: Any = None
+    receipt: dict[str, Any] | None = None
+    recovered_from_core: bool = False
+    timeline_resend_attempted: bool = False
+    timeline_receipt_observed: bool = False
     error: str = ""
 
     def public(self, include_result: bool = False) -> dict[str, Any]:
@@ -299,6 +327,10 @@ class Proposal:
         }
         if self.error:
             out["error"] = self.error
+        if self.receipt is not None:
+            out["receipt"] = copy.deepcopy(self.receipt)
+        if self.recovered_from_core:
+            out["recovered_from_core"] = True
         if include_result and self.result is not None:
             out["result"] = self.result
         return out
@@ -549,9 +581,15 @@ class LogosForgeMcpGateway:
 
     def get_proposal(self, proposal_id: str) -> dict[str, Any]:
         with self._lock:
-            proposal = self._proposal(proposal_id)
-            self._expire(proposal)
-            return proposal.public(include_result=True)
+            proposal = self._proposals.get(proposal_id)
+            if proposal is not None:
+                self._expire(proposal)
+                return proposal.public(include_result=True)
+
+        # Proposals are intentionally held in memory, but Timeline receipts
+        # survive an MCP gateway restart in Core. Recovery is strictly scoped
+        # to the selected project; never scan projects with a capability key.
+        return self._recover_unknown_timeline_proposal(proposal_id)
 
     def list_proposals(self, include_finished: bool = False) -> dict[str, Any]:
         now = time.time()
@@ -559,7 +597,10 @@ class LogosForgeMcpGateway:
             self._prune_expired(now)
             proposals = list(self._proposals.values())
             if not include_finished:
-                proposals = [p for p in proposals if p.state == "pending"]
+                proposals = [
+                    p for p in proposals
+                    if p.state in {"pending", "recovery_pending"}
+                ]
             proposals.sort(key=lambda p: p.created_at)
             return {"proposals": [p.public() for p in proposals]}
 
@@ -586,8 +627,13 @@ class LogosForgeMcpGateway:
 
         with self._lock:
             proposal = self._proposal(proposal_id)
-            self._expire(proposal)
-            if proposal.state != "pending":
+            if proposal.state == "pending":
+                self._expire(proposal)
+            recovering = (
+                proposal.state == "recovery_pending"
+                and self._is_timeline_proposal(proposal)
+            )
+            if proposal.state != "pending" and not recovering:
                 raise GatewayError(f"Proposal is {proposal.state}, not pending.")
             if (
                 proposal.project_id is not None
@@ -607,7 +653,7 @@ class LogosForgeMcpGateway:
                 proposal.state = "failed"
                 proposal.error = "Proposal integrity check failed; create a fresh proposal."
                 raise GatewayError(proposal.error)
-            if proposal.guard_path:
+            if proposal.guard_path and not recovering:
                 current = self.client.request("GET", proposal.guard_path)
                 if _digest(current) != proposal.guard_digest:
                     proposal.state = "failed"
@@ -616,42 +662,427 @@ class LogosForgeMcpGateway:
                         "Read the current state and create a new proposal."
                     )
                     raise GatewayError(proposal.error)
-            # Mark before the request: a lost HTTP response is ambiguous, so an
-            # automatic retry must never duplicate a create operation.
+            # Mark before network I/O so a concurrent call cannot race the same
+            # proposal. Timeline recovery is safe only because the exact
+            # proposal id is also Core's durable idempotency capability.
             proposal.state = "applying"
+            proposal.error = ""
+
+        if recovering:
+            return self._resume_timeline_recovery(proposal)
 
         try:
-            result = self.client.request(proposal.method, proposal.path, proposal.body)
-        except Exception as exc:
-            definite_http_rejection = (
-                isinstance(exc, LogosForgeApiError)
-                and exc.status_code is not None
-                and 400 <= exc.status_code < 500
-            )
-            if definite_http_rejection:
-                code = f" [{exc.error_code}]" if exc.error_code else ""
-                public_error = (
-                    f"The apply attempt was rejected{code} and will not be "
-                    f"retried automatically: {exc}"
-                )
-                state = "failed"
-            else:
-                public_error = (
-                    "The apply outcome is indeterminate because the response does "
-                    "not prove that the mutation was rejected. Inspect current "
-                    "project state and do not retry this proposal: "
-                    f"{exc}"
-                )
-                state = "indeterminate"
-            with self._lock:
-                proposal.state = state
-                proposal.error = public_error
-            raise GatewayError(public_error) from exc
+            result = self._execute_proposal_request(proposal)
+        except Exception as exc:  # noqa: BLE001 - transport boundary
+            if self._is_definite_http_rejection(exc):
+                self._raise_rejected_apply(proposal, exc)
+            if self._is_timeline_proposal(proposal):
+                return self._recover_ambiguous_timeline_apply(proposal, exc)
+            self._raise_indeterminate_apply(proposal, exc)
 
+        return self._complete_proposal(proposal, result)
+
+    @staticmethod
+    def _is_definite_http_rejection(exc: Exception) -> bool:
+        return (
+            isinstance(exc, LogosForgeApiError)
+            and exc.status_code is not None
+            and 400 <= exc.status_code < 500
+        )
+
+    def _is_timeline_proposal(self, proposal: Proposal) -> bool:
+        if proposal.project_id is None or not proposal.operation.startswith("timeline_"):
+            return False
+        return (
+            proposal.method == "POST"
+            and proposal.path
+            == self.client.project_path("timeline/commands", proposal.project_id)
+        )
+
+    def _execute_proposal_request(self, proposal: Proposal) -> Any:
+        if self._is_timeline_proposal(proposal):
+            return self.client.request(
+                proposal.method,
+                proposal.path,
+                proposal.body,
+                idempotency_key=proposal.proposal_id,
+            )
+        return self.client.request(proposal.method, proposal.path, proposal.body)
+
+    def _complete_proposal(self, proposal: Proposal, result: Any) -> dict[str, Any]:
         with self._lock:
             proposal.state = "applied"
+            proposal.error = ""
             proposal.result = result
             return proposal.public(include_result=True)
+
+    def _raise_rejected_apply(self, proposal: Proposal, exc: Exception) -> None:
+        code = (
+            f" [{exc.error_code}]"
+            if isinstance(exc, LogosForgeApiError) and exc.error_code
+            else ""
+        )
+        public_error = (
+            f"The apply attempt was rejected{code} and will not be "
+            f"retried automatically: {exc}"
+        )
+        with self._lock:
+            proposal.state = "failed"
+            proposal.error = public_error
+        raise GatewayError(public_error) from exc
+
+    def _raise_indeterminate_apply(
+        self,
+        proposal: Proposal,
+        exc: Exception,
+        *,
+        receipt_error: Exception | None = None,
+    ) -> None:
+        detail = f"{exc}"
+        if receipt_error is not None:
+            detail += f"; durable receipt lookup was inconclusive: {receipt_error}"
+        public_error = (
+            "The apply outcome is indeterminate because the response does "
+            "not prove that the mutation was rejected. Inspect current "
+            "project state and do not retry this proposal: "
+            f"{detail}"
+        )
+        with self._lock:
+            proposal.state = "indeterminate"
+            proposal.error = public_error
+        raise GatewayError(public_error) from exc
+
+    def _timeline_receipt(
+        self,
+        proposal_id: str,
+        project_id: int,
+    ) -> dict[str, Any] | None:
+        """Read a receipt, distinguishing a supported miss from legacy 404."""
+        try:
+            return self.client.get_timeline_command_receipt(
+                proposal_id,
+                project_id,
+            )
+        except LogosForgeApiError as exc:
+            if (
+                exc.status_code == 404
+                and exc.error_code == _TIMELINE_RECEIPT_MISS_CODE
+            ):
+                return None
+            raise
+
+    @staticmethod
+    def _validate_timeline_receipt_shape(
+        receipt: Any,
+        project_id: int,
+    ) -> dict[str, Any]:
+        if not isinstance(receipt, dict):
+            raise GatewayError("Core returned an invalid Timeline receipt.")
+        receipt_project_id = receipt.get("project_id")
+        affected = receipt.get("original_affected_scene_ids")
+        canonical = {
+            "project_id": receipt_project_id,
+            "request_digest": receipt.get("request_digest"),
+            "command_kind": receipt.get("command_kind"),
+            "expected_revision": receipt.get("expected_revision"),
+            "applied_revision": receipt.get("applied_revision"),
+            "original_changed": receipt.get("original_changed"),
+            "original_affected_scene_ids": affected,
+            "committed_at": receipt.get("committed_at"),
+        }
+        valid = (
+            isinstance(receipt_project_id, int)
+            and not isinstance(receipt_project_id, bool)
+            and receipt_project_id == project_id
+            and isinstance(canonical["request_digest"], str)
+            and _LOWER_SHA256_RE.fullmatch(canonical["request_digest"]) is not None
+            and isinstance(canonical["command_kind"], str)
+            and canonical["command_kind"] in _TIMELINE_COMMAND_FIELDS
+            and isinstance(canonical["expected_revision"], str)
+            and _LOWER_SHA256_RE.fullmatch(canonical["expected_revision"]) is not None
+            and isinstance(canonical["applied_revision"], str)
+            and _LOWER_SHA256_RE.fullmatch(canonical["applied_revision"]) is not None
+            and isinstance(canonical["original_changed"], bool)
+            and isinstance(affected, list)
+            and all(
+                not isinstance(value, bool)
+                and isinstance(value, int)
+                and value > 0
+                for value in affected
+            )
+            and len(set(affected or [])) == len(affected or [])
+            and isinstance(canonical["committed_at"], str)
+            and bool(canonical["committed_at"])
+        )
+        if not valid:
+            raise GatewayError("Core returned an invalid Timeline receipt.")
+        return copy.deepcopy(canonical)
+
+    def _validate_timeline_receipt_for_proposal(
+        self,
+        proposal: Proposal,
+        receipt: Any,
+    ) -> dict[str, Any]:
+        assert proposal.project_id is not None
+        canonical = self._validate_timeline_receipt_shape(
+            receipt,
+            proposal.project_id,
+        )
+        expected_digest = _timeline_receipt_request_digest(
+            proposal.project_id,
+            proposal.body,
+        )
+        if (
+            canonical["command_kind"] != proposal.body.get("kind")
+            or canonical["expected_revision"]
+            != proposal.body.get("expected_revision")
+            or not secrets.compare_digest(
+                canonical["request_digest"],
+                expected_digest,
+            )
+        ):
+            raise GatewayError(
+                "Durable Timeline receipt integrity check failed; do not retry."
+            )
+        return canonical
+
+    def _recovered_timeline_result(
+        self,
+        project_id: int,
+        proposal_id: str,
+        receipt: dict[str, Any],
+        *,
+        proposal: Proposal | None = None,
+    ) -> dict[str, Any]:
+        """Read one board bracketed by the same durable project receipt.
+
+        The receipt and Timeline are separate HTTP resources. Re-reading the
+        receipt after the board closes the project-delete/SQLite-id-reuse window:
+        an old receipt can never be paired with a replacement project's board.
+        """
+        current = self.client.get_timeline(project_id)
+        raw_confirmation = self._timeline_receipt(proposal_id, project_id)
+        if raw_confirmation is None:
+            raise GatewayError(
+                "The durable Timeline receipt disappeared during recovery; "
+                "the project lifetime may have changed."
+            )
+        confirmation = (
+            self._validate_timeline_receipt_for_proposal(
+                proposal,
+                raw_confirmation,
+            )
+            if proposal is not None
+            else self._validate_timeline_receipt_shape(
+                raw_confirmation,
+                project_id,
+            )
+        )
+        if confirmation != receipt:
+            raise GatewayError(
+                "The durable Timeline receipt changed during recovery; "
+                "the project lifetime may have changed."
+            )
+        return {
+            "timeline": current,
+            "replayed": True,
+            "applied_revision": receipt["applied_revision"],
+            "changed": False,
+            "affected_scene_ids": [],
+        }
+
+    def _complete_timeline_recovery(
+        self,
+        proposal: Proposal,
+        raw_receipt: Any,
+    ) -> dict[str, Any]:
+        receipt = self._validate_timeline_receipt_for_proposal(
+            proposal,
+            raw_receipt,
+        )
+        assert proposal.project_id is not None
+        with self._lock:
+            # Remember proof of commit before the fresh-snapshot request. If
+            # that read fails, no later recovery call may resend the command.
+            proposal.receipt = receipt
+            proposal.recovered_from_core = True
+            proposal.timeline_receipt_observed = True
+        result = self._recovered_timeline_result(
+            proposal.project_id,
+            proposal.proposal_id,
+            receipt,
+            proposal=proposal,
+        )
+        with self._lock:
+            proposal.state = "applied"
+            proposal.error = ""
+            proposal.result = result
+            return proposal.public(include_result=True)
+
+    def _mark_receipt_validation_failed(
+        self,
+        proposal: Proposal,
+        exc: GatewayError,
+    ) -> None:
+        with self._lock:
+            proposal.state = "failed"
+            proposal.error = str(exc)
+        raise exc
+
+    def _mark_recovery_pending(
+        self,
+        proposal: Proposal,
+        exc: Exception,
+    ) -> None:
+        public_error = (
+            "The Timeline apply is still awaiting durable recovery after an "
+            "ambiguous retry. Later, call logosforge_apply_proposal again with "
+            "this same proposal_id; do not create a replacement proposal: "
+            f"{exc}"
+        )
+        with self._lock:
+            proposal.state = "recovery_pending"
+            proposal.error = public_error
+        raise GatewayError(public_error) from exc
+
+    def _retry_timeline_once(self, proposal: Proposal) -> dict[str, Any]:
+        with self._lock:
+            if (
+                proposal.timeline_resend_attempted
+                or proposal.timeline_receipt_observed
+            ):
+                self._keep_timeline_recovery_pending(
+                    proposal,
+                    "No durable receipt is currently visible; the single "
+                    "bounded resend has already been consumed.",
+                )
+            # Set before I/O so even an ambiguous response consumes the sole
+            # protocol-authorized resend.
+            proposal.timeline_resend_attempted = True
+        try:
+            result = self._execute_proposal_request(proposal)
+        except Exception as exc:  # noqa: BLE001 - transport boundary
+            if self._is_definite_http_rejection(exc):
+                self._raise_rejected_apply(proposal, exc)
+            self._mark_recovery_pending(proposal, exc)
+        return self._complete_proposal(proposal, result)
+
+    def _keep_timeline_recovery_pending(
+        self,
+        proposal: Proposal,
+        detail: str,
+        *,
+        cause: Exception | None = None,
+    ) -> None:
+        public_error = (
+            "The Timeline apply remains recovery_pending. No additional "
+            "mutation was sent. Later, call logosforge_apply_proposal again "
+            "with this same proposal_id to poll its durable receipt: "
+            f"{detail}"
+        )
+        with self._lock:
+            proposal.state = "recovery_pending"
+            proposal.error = public_error
+        if cause is not None:
+            raise GatewayError(public_error) from cause
+        raise GatewayError(public_error)
+
+    def _recover_ambiguous_timeline_apply(
+        self,
+        proposal: Proposal,
+        original_error: Exception,
+    ) -> dict[str, Any]:
+        assert proposal.project_id is not None
+        try:
+            receipt = self._timeline_receipt(
+                proposal.proposal_id,
+                proposal.project_id,
+            )
+        except Exception as lookup_error:  # noqa: BLE001 - transport boundary
+            self._raise_indeterminate_apply(
+                proposal,
+                original_error,
+                receipt_error=lookup_error,
+            )
+        if receipt is None:
+            # The unique machine code proves the new Core protocol is present
+            # and the first transaction did not commit a receipt. One exact
+            # same-key resend is therefore bounded and safe.
+            return self._retry_timeline_once(proposal)
+        try:
+            return self._complete_timeline_recovery(proposal, receipt)
+        except GatewayError as exc:
+            self._mark_receipt_validation_failed(proposal, exc)
+        except Exception as exc:  # noqa: BLE001 - fresh snapshot transport
+            # The receipt proves a commit, but returning an old stored snapshot
+            # would be incoherent. Let a later same-id call fetch a fresh one.
+            self._mark_recovery_pending(proposal, exc)
+
+    def _resume_timeline_recovery(
+        self,
+        proposal: Proposal,
+    ) -> dict[str, Any]:
+        assert proposal.project_id is not None
+        try:
+            receipt = self._timeline_receipt(
+                proposal.proposal_id,
+                proposal.project_id,
+            )
+        except Exception as lookup_error:  # noqa: BLE001 - transport boundary
+            self._keep_timeline_recovery_pending(
+                proposal,
+                f"Receipt lookup was inconclusive: {lookup_error}",
+                cause=lookup_error,
+            )
+        if receipt is None:
+            self._keep_timeline_recovery_pending(
+                proposal,
+                "Core reported that no receipt is currently available and "
+                "the single bounded resend has already been consumed.",
+            )
+        try:
+            return self._complete_timeline_recovery(proposal, receipt)
+        except GatewayError as exc:
+            self._mark_receipt_validation_failed(proposal, exc)
+        except Exception as exc:  # noqa: BLE001 - fresh snapshot transport
+            self._mark_recovery_pending(proposal, exc)
+
+    def _recover_unknown_timeline_proposal(
+        self,
+        proposal_id: str,
+    ) -> dict[str, Any]:
+        if _IDEMPOTENCY_KEY_RE.fullmatch(proposal_id or "") is None:
+            raise GatewayError("Unknown proposal id.")
+        project_id = self._project_id()
+        try:
+            raw_receipt = self._timeline_receipt(proposal_id, project_id)
+        except Exception as exc:
+            raise GatewayError(
+                "Unknown proposal id; durable Timeline receipt recovery could "
+                f"not be verified: {exc}"
+            ) from exc
+        if raw_receipt is None:
+            raise GatewayError("Unknown proposal id.")
+        receipt = self._validate_timeline_receipt_shape(raw_receipt, project_id)
+        result = self._recovered_timeline_result(
+            project_id,
+            proposal_id,
+            receipt,
+        )
+        return {
+            "proposal_id": proposal_id,
+            "operation": f"timeline_{receipt['command_kind']}",
+            "summary": "Recovered durable Timeline command receipt.",
+            "project_id": project_id,
+            "state": "applied",
+            "recovered_from_core": True,
+            "request_digest": receipt["request_digest"],
+            "request": None,
+            "review": {"recovered_receipt": copy.deepcopy(receipt)},
+            "requires_user_approval": True,
+            "receipt": receipt,
+            "result": result,
+        }
 
     def _proposal(self, proposal_id: str) -> Proposal:
         proposal = self._proposals.get(proposal_id)

@@ -1076,6 +1076,42 @@ class TimelineCommandResultDTO(BaseModel):
     timeline: TimelineSnapshotDTO
     changed: bool
     affected_scene_ids: list[int] = Field(default_factory=list)
+    replayed: bool
+    applied_revision: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+
+class TimelineCommandReceiptDTO(BaseModel):
+    project_id: int
+    request_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    command_kind: Literal[
+        "create_lane",
+        "update_lane",
+        "delete_lane",
+        "place_event",
+        "remove_event",
+        "set_order_mode",
+    ]
+    expected_revision: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    applied_revision: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    original_changed: bool
+    original_affected_scene_ids: list[int] = Field(default_factory=list)
+    committed_at: datetime
 
 
 # ---------------------------------------------------------------------------

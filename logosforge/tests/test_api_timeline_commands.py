@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 
 import pytest
@@ -10,7 +11,11 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from logosforge.api import create_api
-from logosforge.db import Database
+from logosforge.db import (
+    Database,
+    TimelineCommandError,
+    TimelineIdempotencyKeyConflict,
+)
 
 
 def _project(*, path: str | None = None):
@@ -29,10 +34,21 @@ def _timeline(client: TestClient, project_id: int) -> dict:
     return response.json()
 
 
-def _command(client: TestClient, project_id: int, **body):
+def _command(
+    client: TestClient,
+    project_id: int,
+    *,
+    idempotency_key: str | None = None,
+    **body,
+):
+    headers = (
+        {"Idempotency-Key": idempotency_key}
+        if idempotency_key is not None else None
+    )
     return client.post(
         f"/api/projects/{project_id}/timeline/commands",
         json=body,
+        headers=headers,
     )
 
 
@@ -166,6 +182,489 @@ def test_lane_create_update_reorder_and_exact_no_op():
     assert no_op["changed"] is False
     assert no_op["timeline"]["revision"] == body["timeline"]["revision"]
     assert client.app.state.broker.events_since(cursor, project_id) == []
+
+
+def test_idempotency_receipt_replays_once_and_survives_api_restart(tmp_path):
+    path = str(tmp_path / "timeline-receipt.db")
+    client, db, project_id = _project(path=path)
+    current = _timeline(client, project_id)
+    key = "timeline-retry-0001"
+    body = {
+        "kind": "create_lane",
+        "expected_revision": current["revision"],
+        "name": "Exactly once",
+    }
+    cursor = client.app.state.broker.latest_id()
+
+    first = _command(
+        client, project_id, idempotency_key=key, **body,
+    )
+    assert first.status_code == 200
+    applied = first.json()
+    assert applied["changed"] is True
+    assert applied["replayed"] is False
+    assert applied["applied_revision"] == applied["timeline"]["revision"]
+
+    replay = _command(
+        client, project_id, idempotency_key=key, **body,
+    )
+    assert replay.status_code == 200
+    replayed = replay.json()
+    assert replayed["changed"] is False
+    assert replayed["affected_scene_ids"] == []
+    assert replayed["replayed"] is True
+    assert replayed["applied_revision"] == applied["applied_revision"]
+    assert replayed["timeline"] == applied["timeline"]
+    assert [event["event"] for event in client.app.state.broker.events_since(
+        cursor, project_id,
+    )] == ["timeline_changed"]
+
+    receipt = client.get(
+        f"/api/projects/{project_id}/timeline/command-receipt",
+        headers={"Idempotency-Key": key},
+    )
+    assert receipt.status_code == 200
+    assert receipt.headers["cache-control"] == "no-store"
+    vary = {value.strip() for value in receipt.headers["vary"].split(",")}
+    assert {"Authorization", "Idempotency-Key"} <= vary
+    receipt_body = receipt.json()
+    assert receipt_body | {"committed_at": "ignored"} == {
+        "project_id": project_id,
+        "request_digest": receipt_body["request_digest"],
+        "command_kind": "create_lane",
+        "expected_revision": current["revision"],
+        "applied_revision": applied["applied_revision"],
+        "original_changed": True,
+        "original_affected_scene_ids": [],
+        "committed_at": "ignored",
+    }
+    assert len(receipt_body["request_digest"]) == 64
+    with db._engine.connect() as connection:
+        stored = connection.execute(text(
+            "SELECT idempotency_key_hash, result_json "
+            "FROM timelinecommandreceipt"
+        )).fetchone()
+    assert stored is not None
+    assert len(stored[0]) == 64
+    assert key not in stored[0] and key not in stored[1]
+    stored_result = json.loads(stored[1])
+    assert stored_result["schema_version"] == 1
+    assert set(stored_result) == {
+        "schema_version",
+        "kind",
+        "expected_revision",
+        "applied_revision",
+        "original_changed",
+        "original_affected_scene_ids",
+    }
+
+    db._engine.dispose()
+    reopened = Database(path)
+    restarted = TestClient(create_api(db=reopened))
+    after_restart = _command(
+        restarted, project_id, idempotency_key=key, **body,
+    )
+    assert after_restart.status_code == 200
+    assert after_restart.json()["replayed"] is True
+    assert [lane.name for lane in reopened.get_timeline_lanes(project_id)] == [
+        "Exactly once",
+    ]
+
+
+def test_idempotency_key_reuse_with_another_request_is_a_conflict():
+    client, db, project_id = _project()
+    current = _timeline(client, project_id)
+    key = "timeline-conflict-01"
+    first = _command(
+        client,
+        project_id,
+        idempotency_key=key,
+        kind="create_lane",
+        expected_revision=current["revision"],
+        name="First",
+    )
+    assert first.status_code == 200
+
+    mismatched = _command(
+        client,
+        project_id,
+        idempotency_key=key,
+        kind="create_lane",
+        expected_revision=current["revision"],
+        name="Different",
+    )
+    assert mismatched.status_code == 409
+    assert mismatched.json()["error"]["code"] == "idempotency_key_conflict"
+    assert [lane.name for lane in db.get_timeline_lanes(project_id)] == ["First"]
+
+
+def test_idempotency_key_and_receipt_validation_is_fail_closed():
+    client, db, project_id = _project()
+    current = _timeline(client, project_id)
+    body = {
+        "kind": "create_lane",
+        "expected_revision": current["revision"],
+        "name": "Never created",
+    }
+    for key in (
+        "",
+        "A" * 15,
+        "A" * 129,
+        " leading-space-key",
+        "trailing-space-key ",
+        "unsafe/key-value",
+    ):
+        response = _command(
+            client, project_id, idempotency_key=key, **body,
+        )
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "bad_request"
+
+    # HTTP header libraries reject non-ASCII before the request reaches the
+    # app, so exercise Core's own boundary directly as well.
+    with pytest.raises(TimelineCommandError):
+        db.execute_timeline_command(
+            project_id,
+            kind="create_lane",
+            expected_revision=current["revision"],
+            idempotency_key="é" * 16,
+            name="Never created",
+        )
+
+    minimum = _command(
+        client,
+        project_id,
+        idempotency_key="A" * 16,
+        **body,
+    )
+    assert minimum.status_code == 200
+    maximum = _command(
+        client,
+        project_id,
+        idempotency_key="Z" * 128,
+        kind="create_lane",
+        expected_revision=minimum.json()["timeline"]["revision"],
+        name="Maximum key",
+    )
+    assert maximum.status_code == 200
+
+    missing_header = client.get(
+        f"/api/projects/{project_id}/timeline/command-receipt",
+    )
+    missing_receipt = client.get(
+        f"/api/projects/{project_id}/timeline/command-receipt",
+        headers={"Idempotency-Key": "unknown-receipt-001"},
+    )
+    invalid_receipt = client.get(
+        f"/api/projects/{project_id}/timeline/command-receipt",
+        headers={"Idempotency-Key": "A" * 15},
+    )
+    assert missing_header.status_code == 400
+    assert missing_receipt.status_code == 404
+    assert invalid_receipt.status_code == 400
+    assert missing_receipt.json()["error"]["code"] == "timeline_receipt_not_found"
+    for response in (missing_header, missing_receipt, invalid_receipt):
+        assert response.headers["cache-control"] == "no-store"
+        vary = {value.strip() for value in response.headers["vary"].split(",")}
+        assert {"Authorization", "Idempotency-Key"} <= vary
+
+
+def test_idempotent_no_op_receipt_does_not_normalize_settings():
+    client, db, project_id = _project()
+    lane = db.create_timeline_lane(
+        project_id, "Main", "cyan", order_index=0,
+    )
+    raw_settings = '{"z": 1, "nested": {"b": 2, "a": 1}}'
+    with db._engine.begin() as connection:
+        connection.execute(
+            text("UPDATE project SET settings_json=:value WHERE id=:project_id"),
+            {"value": raw_settings, "project_id": project_id},
+        )
+    current = _timeline(client, project_id)
+    key = "timeline-noop-0001"
+    body = {
+        "kind": "update_lane",
+        "expected_revision": current["revision"],
+        "lane_id": lane.id,
+        "name": "Main",
+        "color_label": "cyan",
+        "collapsed": False,
+        "index": 0,
+    }
+
+    no_op = _command(
+        client, project_id, idempotency_key=key, **body,
+    )
+    assert no_op.status_code == 200
+    assert no_op.json()["changed"] is False
+    assert no_op.json()["replayed"] is False
+    receipt = client.get(
+        f"/api/projects/{project_id}/timeline/command-receipt",
+        headers={"Idempotency-Key": key},
+    )
+    assert receipt.status_code == 200
+    assert receipt.json()["original_changed"] is False
+    assert receipt.json()["original_affected_scene_ids"] == []
+    with db._engine.connect() as connection:
+        assert connection.execute(
+            text("SELECT settings_json FROM project WHERE id=:project_id"),
+            {"project_id": project_id},
+        ).scalar_one() == raw_settings
+
+    changed = _create_lane(
+        client, project_id, no_op.json()["timeline"], "Later",
+    )
+    replay = _command(
+        client, project_id, idempotency_key=key, **body,
+    )
+    assert replay.status_code == 200
+    assert replay.json()["replayed"] is True
+    assert replay.json()["changed"] is False
+    assert replay.json()["timeline"] == changed["timeline"]
+
+
+def test_receipt_insert_failure_rolls_back_the_timeline_mutation(tmp_path):
+    _client, db, project_id = _project(
+        path=str(tmp_path / "receipt-insert-rollback.db"),
+    )
+    snapshot = db.read_timeline_snapshot(project_id)
+    assert snapshot is not None
+    key = "timeline-insert-fail-001"
+    with db._engine.begin() as connection:
+        connection.execute(text("""
+            CREATE TRIGGER reject_timeline_receipt
+            BEFORE INSERT ON timelinecommandreceipt
+            BEGIN
+                SELECT RAISE(ABORT, 'forced receipt rollback');
+            END;
+        """))
+
+    try:
+        with pytest.raises(IntegrityError):
+            db.execute_timeline_command(
+                project_id,
+                kind="create_lane",
+                expected_revision=snapshot.revision,
+                idempotency_key=key,
+                name="Must roll back",
+            )
+    finally:
+        with db._engine.begin() as connection:
+            connection.execute(text("DROP TRIGGER reject_timeline_receipt"))
+
+    assert db.get_timeline_lanes(project_id) == []
+    assert db.get_timeline_command_receipt(project_id, key) is None
+    assert db.read_timeline_snapshot(project_id).revision == snapshot.revision
+
+    retried = db.execute_timeline_command(
+        project_id,
+        kind="create_lane",
+        expected_revision=snapshot.revision,
+        idempotency_key=key,
+        name="Must roll back",
+    )
+    assert retried.changed is True
+    assert retried.replayed is False
+    assert [lane.name for lane in db.get_timeline_lanes(project_id)] == [
+        "Must roll back",
+    ]
+
+
+def test_same_key_is_exactly_once_across_independent_database_instances(tmp_path):
+    path = str(tmp_path / "independent-databases.db")
+    _client, seed, project_id = _project(path=path)
+    snapshot = seed.read_timeline_snapshot(project_id)
+    assert snapshot is not None
+    first_db = Database(path)
+    second_db = Database(path)
+    barrier = threading.Barrier(3)
+    results = []
+    errors = []
+
+    def apply(database: Database) -> None:
+        barrier.wait()
+        try:
+            results.append(database.execute_timeline_command(
+                project_id,
+                kind="create_lane",
+                expected_revision=snapshot.revision,
+                idempotency_key="timeline-cross-core-001",
+                name="One durable lane",
+            ))
+        except Exception as exc:  # surfaced below with the original error
+            errors.append(exc)
+
+    one = threading.Thread(target=apply, args=(first_db,))
+    two = threading.Thread(target=apply, args=(second_db,))
+    one.start()
+    two.start()
+    barrier.wait()
+    one.join(timeout=10)
+    two.join(timeout=10)
+
+    assert not one.is_alive() and not two.is_alive()
+    assert errors == []
+    assert sorted((result.changed, result.replayed) for result in results) == [
+        (False, True),
+        (True, False),
+    ]
+    assert [lane.name for lane in seed.get_timeline_lanes(project_id)] == [
+        "One durable lane",
+    ]
+    with seed._engine.connect() as connection:
+        assert connection.execute(text(
+            "SELECT COUNT(*) FROM timelinecommandreceipt"
+        )).scalar_one() == 1
+    first_db._engine.dispose()
+    second_db._engine.dispose()
+
+
+def test_concurrent_same_key_different_bodies_conflict_after_one_commit(tmp_path):
+    path = str(tmp_path / "independent-conflict.db")
+    _client, seed, project_id = _project(path=path)
+    snapshot = seed.read_timeline_snapshot(project_id)
+    assert snapshot is not None
+    first_db = Database(path)
+    second_db = Database(path)
+    barrier = threading.Barrier(3)
+    results = []
+    errors = []
+
+    def apply(database: Database, name: str) -> None:
+        barrier.wait()
+        try:
+            results.append((name, database.execute_timeline_command(
+                project_id,
+                kind="create_lane",
+                expected_revision=snapshot.revision,
+                idempotency_key="timeline-cross-core-conflict-001",
+                name=name,
+            )))
+        except Exception as exc:  # surfaced below with the original error
+            errors.append(exc)
+
+    one = threading.Thread(target=apply, args=(first_db, "One"))
+    two = threading.Thread(target=apply, args=(second_db, "Two"))
+    one.start()
+    two.start()
+    barrier.wait()
+    one.join(timeout=10)
+    two.join(timeout=10)
+
+    assert not one.is_alive() and not two.is_alive()
+    assert len(results) == 1
+    assert results[0][1].changed is True
+    assert results[0][1].replayed is False
+    assert len(errors) == 1
+    assert isinstance(errors[0], TimelineIdempotencyKeyConflict)
+    assert [lane.name for lane in seed.get_timeline_lanes(project_id)] == [
+        results[0][0],
+    ]
+    first_db._engine.dispose()
+    second_db._engine.dispose()
+
+
+def test_receipt_lookup_is_project_scoped():
+    client, db, project_id = _project()
+    other = db.create_project("Other", narrative_engine="novel")
+    current = _timeline(client, project_id)
+    key = "timeline-project-scope-001"
+    applied = _command(
+        client,
+        project_id,
+        idempotency_key=key,
+        kind="create_lane",
+        expected_revision=current["revision"],
+        name="Only first project",
+    )
+    assert applied.status_code == 200
+
+    missing = client.get(
+        f"/api/projects/{other.id}/timeline/command-receipt",
+        headers={"Idempotency-Key": key},
+    )
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "timeline_receipt_not_found"
+
+
+def test_domain_failure_does_not_create_a_receipt():
+    client, db, project_id = _project()
+    created = _create_lane(
+        client, project_id, _timeline(client, project_id), "Existing",
+    )
+    key = "timeline-domain-failure-001"
+
+    rejected = _command(
+        client,
+        project_id,
+        idempotency_key=key,
+        kind="create_lane",
+        expected_revision=created["timeline"]["revision"],
+        name="Existing",
+    )
+
+    assert rejected.status_code == 400
+    assert db.get_timeline_command_receipt(project_id, key) is None
+    assert [lane.name for lane in db.get_timeline_lanes(project_id)] == [
+        "Existing",
+    ]
+
+
+def test_project_delete_removes_receipt_before_id_reuse():
+    client, db, project_id = _project()
+    original = _timeline(client, project_id)
+    key = "timeline-project-aba-001"
+    applied = _command(
+        client,
+        project_id,
+        idempotency_key=key,
+        kind="create_lane",
+        expected_revision=original["revision"],
+        name="Old project lane",
+    )
+    assert applied.status_code == 200
+
+    db.delete_project(project_id)
+    replacement = db.create_project(
+        "Timeline commands",
+        narrative_engine="novel",
+        default_writing_format="novel",
+    )
+    assert replacement.id == project_id
+    missing = client.get(
+        f"/api/projects/{project_id}/timeline/command-receipt",
+        headers={"Idempotency-Key": key},
+    )
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "timeline_receipt_not_found"
+
+    delayed = _command(
+        client,
+        project_id,
+        idempotency_key=key,
+        kind="create_lane",
+        expected_revision=original["revision"],
+        name="Old project lane",
+    )
+    assert delayed.status_code == 409
+    assert delayed.json()["error"]["code"] == "timeline_conflict"
+    assert db.get_timeline_lanes(project_id) == []
+    assert db.get_timeline_command_receipt(project_id, key) is None
+
+    replacement_snapshot = _timeline(client, project_id)
+    reused = _command(
+        client,
+        project_id,
+        idempotency_key=key,
+        kind="create_lane",
+        expected_revision=replacement_snapshot["revision"],
+        name="Replacement project lane",
+    )
+    assert reused.status_code == 200
+    assert reused.json()["replayed"] is False
+    assert [lane.name for lane in db.get_timeline_lanes(project_id)] == [
+        "Replacement project lane",
+    ]
 
 
 def test_place_event_uses_custom_order_without_reordering_manuscript():

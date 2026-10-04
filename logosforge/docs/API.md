@@ -299,6 +299,7 @@ PATCH  /api/projects/{project_id}/plot/blocks/{block_id}          { plotline?, c
 ```
 GET    /api/projects/{project_id}/timeline
 POST   /api/projects/{project_id}/timeline/commands
+GET    /api/projects/{project_id}/timeline/command-receipt
 ```
 
 The read returns one authoritative `TimelineSnapshotDTO` containing
@@ -321,6 +322,26 @@ request-schema failures return `422`. Supported command kinds are:
   `index`
 - `remove_event`: `scene_id` (the underlying scene is preserved)
 - `set_order_mode`: `mode` (`structural` or `custom`)
+
+Timeline command clients may send an `Idempotency-Key` header containing 16–128
+safe ASCII characters (`A-Z`, `a-z`, `0-9`, `.`, `_`, `:`, or `-`, beginning
+with an alphanumeric character). The core stores only its SHA-256 digest. A
+first keyed command and its compact receipt commit in the same transaction;
+the result includes `replayed: false` and the committed `applied_revision`.
+Sending the exact same command with the same key returns the current coherent
+Timeline with `changed: false`, no current-call affected scene ids,
+`replayed: true`, and the original `applied_revision`. Receipt lookup happens
+before the revision comparison, so that replay remains safe after the board
+has advanced. Reusing a key for a different request returns `409` with
+`idempotency_key_conflict` and never mutates the project.
+
+`GET /timeline/command-receipt` requires the same `Idempotency-Key` header and
+returns compact original-outcome metadata: the canonical request digest,
+command kind, expected and applied revisions, original changed flag, original
+affected scene ids, and commit timestamp. A genuine miss returns `404` with
+`timeline_receipt_not_found`; responses are non-cacheable. Receipts last for
+the project lifetime and are deleted with the project. Calls without a key
+retain the original revision-guarded command behavior.
 
 The former `/timeline/events` POST/PATCH/DELETE endpoints are retired because
 they could mutate scene structure without the Timeline revision guard. Create

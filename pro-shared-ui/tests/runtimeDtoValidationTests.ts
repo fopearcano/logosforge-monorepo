@@ -153,12 +153,17 @@ const timelineSnapshot = (
   ...overrides,
 });
 
-const timelineCommandResult = (overrides: Record<string, unknown> = {}) => ({
-  timeline: timelineSnapshot({}, { revision: "d".repeat(64) }),
-  changed: true,
-  affected_scene_ids: [2],
-  ...overrides,
-});
+const timelineCommandResult = (overrides: Record<string, unknown> = {}) => {
+  const timeline = overrides.timeline ?? timelineSnapshot({}, { revision: "d".repeat(64) });
+  return {
+    timeline,
+    replayed: false,
+    applied_revision: (timeline as { revision: string }).revision,
+    changed: true,
+    affected_scene_ids: [2],
+    ...overrides,
+  };
+};
 
 const inlineCommentAnchor = (overrides: Record<string, unknown> = {}) => ({
   start_scene_id: 2,
@@ -862,6 +867,34 @@ try {
       changed: false,
       affected_scene_ids: [],
     }),
+  );
+  await expectValid(
+    "replayed Timeline commands may return a newer coherent board",
+    () => client.executeTimelineCommand(1, {
+      kind: "create_lane",
+      expected_revision: "c".repeat(64),
+      name: "Subplot",
+    }),
+    timelineCommandResult({
+      timeline: timelineSnapshot({}, { revision: "e".repeat(64) }),
+      replayed: true,
+      applied_revision: "d".repeat(64),
+      changed: false,
+      affected_scene_ids: [],
+    }),
+    (value) => value.replayed && value.applied_revision === "d".repeat(64),
+  );
+  await expectInvalid(
+    "replayed Timeline commands cannot claim a fresh mutation",
+    () => client.executeTimelineCommand(1, {
+      kind: "create_lane",
+      expected_revision: "c".repeat(64),
+      name: "Subplot",
+    }),
+    json(timelineCommandResult({ replayed: true })),
+    "POST",
+    "/api/projects/1/timeline/commands",
+    "$.changed",
   );
   await expectInvalid(
     "changed Timeline commands require a new revision",

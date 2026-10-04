@@ -1228,8 +1228,11 @@ export function createMockApiClient(): ApiClient {
       scenesFor(projectId).splice(0, scenesFor(projectId).length, ...candidateScenes);
       timelineStates.set(projectId, candidate);
     }
+    const timeline = timelineSnapshotFrom(projectId);
     return {
-      timeline: timelineSnapshotFrom(projectId),
+      timeline,
+      replayed: false,
+      applied_revision: timeline.revision,
       changed,
       affected_scene_ids: changed ? affectedSceneIds : [],
     };

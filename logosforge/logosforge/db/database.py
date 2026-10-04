@@ -9,9 +9,11 @@ UI code should only call the public methods below (e.g. create_character,
 get_all_places). All session management stays inside this module.
 """
 
+import hashlib
 import hmac
 import json
 import os
+import re
 import shutil
 import sqlite3
 import threading
@@ -29,7 +31,7 @@ from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
 
-DB_SCHEMA_VERSION = 3
+DB_SCHEMA_VERSION = 4
 SQLITE_BUSY_TIMEOUT_MS = 5000
 BACKUP_INSTALL_WAIT_SECONDS = 10.0
 
@@ -356,6 +358,7 @@ from logosforge.models import (
     SeriesArc,
     EpisodePlotline,
     TimelineLane,
+    TimelineCommandReceipt,
     TimelineLink,
     TimelineStructureLink,
     CanvasPlotNode,
@@ -423,6 +426,10 @@ class TimelineRevisionConflict(RuntimeError):
 
 class TimelineCommandError(ValueError):
     """A requested Timeline mutation is invalid or ambiguous."""
+
+
+class TimelineIdempotencyKeyConflict(RuntimeError):
+    """An Idempotency-Key was already committed for another command."""
 
 
 class TimelineProjectNotFound(LookupError):
@@ -503,6 +510,155 @@ class TimelineCommandResult:
     snapshot: TimelineReadSnapshot
     changed: bool
     affected_scene_ids: tuple[int, ...] = ()
+    replayed: bool = False
+    applied_revision: str = ""
+
+
+@dataclass(frozen=True)
+class TimelineCommandReceiptData:
+    """Decoded durable receipt safe to expose through the typed API."""
+
+    project_id: int
+    request_digest: str
+    kind: str
+    expected_revision: str
+    applied_revision: str
+    original_changed: bool
+    original_affected_scene_ids: tuple[int, ...]
+    created_at: datetime
+
+
+_TIMELINE_RECEIPT_SCHEMA_VERSION = 1
+_TIMELINE_COMMAND_KINDS = frozenset({
+    "create_lane",
+    "update_lane",
+    "delete_lane",
+    "place_event",
+    "remove_event",
+    "set_order_mode",
+})
+_TIMELINE_IDEMPOTENCY_KEY_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$"
+)
+_LOWER_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _timeline_idempotency_key_hash(value: str) -> str:
+    """Validate and irreversibly identify one caller-supplied capability."""
+    if not isinstance(value, str):
+        raise TimelineCommandError("Idempotency-Key must be a string")
+    if (
+        value != value.strip()
+        or _TIMELINE_IDEMPOTENCY_KEY_RE.fullmatch(value) is None
+    ):
+        raise TimelineCommandError(
+            "Idempotency-Key must contain 16-128 safe ASCII characters"
+        )
+    return hashlib.sha256(value.encode("ascii")).hexdigest()
+
+
+def _timeline_command_request_digest(
+    project_id: int,
+    kind: str,
+    expected_revision: str,
+    fields: dict,
+) -> str:
+    """Content-address the exact validated command bound to an idempotency key."""
+    try:
+        encoded = json.dumps(
+            {
+                "scope": "timeline-command-v1",
+                "project_id": int(project_id),
+                "kind": kind,
+                "expected_revision": expected_revision,
+                "fields": fields,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise TimelineCommandError(
+            "Timeline command contains a value that cannot be persisted"
+        ) from exc
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _timeline_receipt_result_json(
+    *,
+    kind: str,
+    expected_revision: str,
+    applied_revision: str,
+    original_changed: bool,
+    original_affected_scene_ids: tuple[int, ...],
+) -> str:
+    return json.dumps(
+        {
+            "schema_version": _TIMELINE_RECEIPT_SCHEMA_VERSION,
+            "kind": kind,
+            "expected_revision": expected_revision,
+            "applied_revision": applied_revision,
+            "original_changed": original_changed,
+            "original_affected_scene_ids": list(original_affected_scene_ids),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _decode_timeline_command_receipt(
+    row: TimelineCommandReceipt,
+) -> TimelineCommandReceiptData:
+    """Decode a receipt fail-closed; persisted corruption must never replay."""
+    try:
+        payload = json.loads(row.result_json)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise RuntimeError("Timeline command receipt is corrupt") from exc
+    if (
+        not isinstance(payload, dict)
+        or not isinstance(payload.get("schema_version"), int)
+        or isinstance(payload.get("schema_version"), bool)
+        or payload.get("schema_version") != _TIMELINE_RECEIPT_SCHEMA_VERSION
+    ):
+        raise RuntimeError("Timeline command receipt has an unsupported schema")
+    kind = payload.get("kind")
+    expected_revision = payload.get("expected_revision")
+    applied_revision = payload.get("applied_revision")
+    original_changed = payload.get("original_changed")
+    affected = payload.get("original_affected_scene_ids")
+    if (
+        not isinstance(kind, str)
+        or kind not in _TIMELINE_COMMAND_KINDS
+        or not isinstance(expected_revision, str)
+        or _LOWER_SHA256_RE.fullmatch(expected_revision) is None
+        or not isinstance(applied_revision, str)
+        or _LOWER_SHA256_RE.fullmatch(applied_revision) is None
+        or not isinstance(original_changed, bool)
+        or not isinstance(affected, list)
+        or any(
+            isinstance(value, bool) or not isinstance(value, int) or value <= 0
+            for value in affected
+        )
+        or len(set(affected)) != len(affected)
+    ):
+        raise RuntimeError("Timeline command receipt has invalid result data")
+    if (
+        _LOWER_SHA256_RE.fullmatch(row.idempotency_key_hash or "") is None
+        or _LOWER_SHA256_RE.fullmatch(row.request_digest or "") is None
+    ):
+        raise RuntimeError("Timeline command receipt has invalid digest data")
+    return TimelineCommandReceiptData(
+        project_id=int(row.project_id),
+        request_digest=row.request_digest,
+        kind=kind,
+        expected_revision=expected_revision,
+        applied_revision=applied_revision,
+        original_changed=original_changed,
+        original_affected_scene_ids=tuple(affected),
+        created_at=row.created_at,
+    )
 
 
 @dataclass(frozen=True)
@@ -2079,6 +2235,29 @@ class Database:
                 session.rollback()
         return snapshot
 
+    def get_timeline_command_receipt(
+        self,
+        project_id: int,
+        idempotency_key: str,
+    ) -> TimelineCommandReceiptData | None:
+        """Return one completed Timeline command receipt, scoped to its project."""
+        key_hash = _timeline_idempotency_key_hash(idempotency_key)
+        with Session(self._engine, expire_on_commit=False) as session:
+            session.connection().exec_driver_sql("BEGIN")
+            try:
+                if session.get(Project, project_id) is None:
+                    return None
+                row = session.get(
+                    TimelineCommandReceipt,
+                    (int(project_id), key_hash),
+                )
+                if row is None:
+                    return None
+                receipt = _decode_timeline_command_receipt(row)
+            finally:
+                session.rollback()
+        return receipt
+
     def update_plot_block(
         self,
         project_id: int,
@@ -2217,6 +2396,7 @@ class Database:
         *,
         kind: str,
         expected_revision: str,
+        idempotency_key: str | None = None,
         **fields,
     ) -> TimelineCommandResult:
         """Apply one revision-guarded Timeline command atomically.
@@ -2230,16 +2410,19 @@ class Database:
         """
         from logosforge.timeline import project_timeline
 
-        supported = {
-            "create_lane",
-            "update_lane",
-            "delete_lane",
-            "place_event",
-            "remove_event",
-            "set_order_mode",
-        }
-        if kind not in supported:
+        if kind not in _TIMELINE_COMMAND_KINDS:
             raise TimelineCommandError(f"Unsupported Timeline command: {kind!r}")
+
+        key_hash: str | None = None
+        request_digest: str | None = None
+        if idempotency_key is not None:
+            key_hash = _timeline_idempotency_key_hash(idempotency_key)
+            request_digest = _timeline_command_request_digest(
+                project_id,
+                kind,
+                expected_revision,
+                fields,
+            )
 
         scene_id = fields.get("scene_id")
         scene_guard = (
@@ -2261,6 +2444,31 @@ class Database:
                     current = self._timeline_snapshot_in_session(session, project_id)
                     if current is None:
                         raise TimelineProjectNotFound(project_id)
+                    if key_hash is not None:
+                        receipt_row = session.get(
+                            TimelineCommandReceipt,
+                            (int(project_id), key_hash),
+                        )
+                        if receipt_row is not None:
+                            receipt = _decode_timeline_command_receipt(receipt_row)
+                            assert request_digest is not None
+                            if not hmac.compare_digest(
+                                receipt.request_digest,
+                                request_digest,
+                            ):
+                                raise TimelineIdempotencyKeyConflict(
+                                    "Idempotency-Key was already used for a "
+                                    "different Timeline command"
+                                )
+                            session.expunge_all()
+                            session.rollback()
+                            return TimelineCommandResult(
+                                snapshot=current,
+                                changed=False,
+                                affected_scene_ids=(),
+                                replayed=True,
+                                applied_revision=receipt.applied_revision,
+                            )
                     if expected_revision != current.revision:
                         raise TimelineRevisionConflict(
                             expected_revision, current.revision,
@@ -2271,6 +2479,11 @@ class Database:
                     lanes = list(current.lanes)
                     settings = dict(current.settings)
                     affected_scene_ids: list[int] = []
+                    # A successful exact no-op still needs a durable receipt.
+                    # Isolate all command writes in a savepoint so that branch
+                    # can discard incidental ORM/settings normalization while
+                    # retaining the outer BEGIN IMMEDIATE for receipt commit.
+                    command_savepoint = session.begin_nested()
 
                     def scene_or_error(value) -> Scene:
                         if isinstance(value, bool) or not isinstance(value, int):
@@ -2477,19 +2690,59 @@ class Database:
                     updated = self._timeline_snapshot_in_session(session, project_id)
                     assert updated is not None
                     if updated.revision == current.revision:
-                        session.expunge_all()
-                        session.rollback()
+                        command_savepoint.rollback()
+                        stable = self._timeline_snapshot_in_session(
+                            session, project_id,
+                        )
+                        assert stable is not None
+                        if key_hash is not None:
+                            assert request_digest is not None
+                            session.add(TimelineCommandReceipt(
+                                project_id=project_id,
+                                idempotency_key_hash=key_hash,
+                                request_digest=request_digest,
+                                result_json=_timeline_receipt_result_json(
+                                    kind=kind,
+                                    expected_revision=expected_revision,
+                                    applied_revision=stable.revision,
+                                    original_changed=False,
+                                    original_affected_scene_ids=(),
+                                ),
+                            ))
+                            session.commit()
+                            session.expunge_all()
+                        else:
+                            session.expunge_all()
+                            session.rollback()
                         return TimelineCommandResult(
-                            snapshot=current,
+                            snapshot=stable,
                             changed=False,
+                            applied_revision=stable.revision,
                         )
 
+                    command_savepoint.commit()
+                    unique_affected = tuple(dict.fromkeys(affected_scene_ids))
+                    if key_hash is not None:
+                        assert request_digest is not None
+                        session.add(TimelineCommandReceipt(
+                            project_id=project_id,
+                            idempotency_key_hash=key_hash,
+                            request_digest=request_digest,
+                            result_json=_timeline_receipt_result_json(
+                                kind=kind,
+                                expected_revision=expected_revision,
+                                applied_revision=updated.revision,
+                                original_changed=True,
+                                original_affected_scene_ids=unique_affected,
+                            ),
+                        ))
                     session.commit()
                     session.expunge_all()
                     return TimelineCommandResult(
                         snapshot=updated,
                         changed=True,
-                        affected_scene_ids=tuple(dict.fromkeys(affected_scene_ids)),
+                        affected_scene_ids=unique_affected,
+                        applied_revision=updated.revision,
                     )
                 except Exception:
                     session.rollback()

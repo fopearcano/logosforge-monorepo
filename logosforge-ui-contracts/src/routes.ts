@@ -42,6 +42,7 @@ export const ROUTES = {
   plotBlock: (p: number, blockId: string) => `/api/projects/${p}/plot/blocks/${encodeURIComponent(blockId)}`,
   timeline: (p: number) => `/api/projects/${p}/timeline`,
   timelineCommands: (p: number) => `/api/projects/${p}/timeline/commands`,
+  timelineCommandReceipt: (p: number) => `/api/projects/${p}/timeline/command-receipt`,
   psykeEntries: (p: number) => `/api/projects/${p}/psyke/entries`,
   psykeEntry: (p: number, entryId: number) => `/api/projects/${p}/psyke/entries/${entryId}`,
   psykeRelations: (p: number) => `/api/projects/${p}/psyke/relations`,

@@ -200,7 +200,7 @@ async def _exercise_installed_mcp(
     project_id: int,
     comment_id: int,
     comment_revision: str,
-) -> str:
+) -> tuple[str, str, str]:
     params = mcp.StdioServerParameters(
         command=str(command),
         args=command_args,
@@ -289,9 +289,21 @@ async def _exercise_installed_mcp(
             ),
             "installed MCP Timeline apply",
         )
-        applied_snapshot = applied_timeline.get("result", {}).get("timeline", {})
+        applied_result = applied_timeline.get("result")
+        if not isinstance(applied_result, dict):
+            raise RuntimeError("installed MCP Timeline apply returned no result receipt")
+        applied_snapshot = applied_result.get("timeline", {})
+        applied_revision = applied_result.get("applied_revision")
         if applied_timeline.get("state") != "applied":
             raise RuntimeError("installed MCP did not mark Timeline proposal applied")
+        if (
+            not isinstance(applied_revision, str)
+            or len(applied_revision) != 64
+            or applied_revision != applied_snapshot.get("revision")
+        ):
+            raise RuntimeError(
+                "installed MCP Timeline apply returned no valid applied revision"
+            )
         if applied_snapshot.get("revision") == timeline_revision:
             raise RuntimeError("Timeline apply did not rotate the revision")
         if [lane.get("name") for lane in applied_snapshot.get("lanes", [])] != [
@@ -495,7 +507,98 @@ async def _exercise_installed_mcp(
             after_replay_page, comment_id, "installed MCP post-replay comment read",
         ) != resolved:
             raise RuntimeError("replaying an applied proposal mutated the comment thread")
-        return resolved_revision
+        timeline_proposal_id = timeline_proposal.get("proposal_id")
+        if not isinstance(timeline_proposal_id, str) or not timeline_proposal_id:
+            raise RuntimeError("installed MCP Timeline proposal returned no proposal ID")
+        return resolved_revision, timeline_proposal_id, applied_revision
+
+
+async def _recover_installed_timeline_receipt(
+    command: Path,
+    command_args: list[str],
+    env: dict[str, str],
+    project_id: int,
+    timeline_proposal_id: str,
+    applied_revision: str,
+) -> None:
+    """Recover an applied Timeline proposal in a fresh MCP companion process."""
+    params = mcp.StdioServerParameters(
+        command=str(command),
+        args=command_args,
+        cwd=str(command.parent),
+        env=env,
+    )
+    async with (
+        stdio_client(params) as streams,
+        mcp.ClientSession(*streams) as session,
+    ):
+        initialized = await session.initialize()
+        if initialized.serverInfo.name != "logosforge":
+            raise RuntimeError(f"unexpected MCP server: {initialized.serverInfo.name!r}")
+        _structured(
+            await session.call_tool(
+                "logosforge_select_project", {"project_id": project_id},
+            ),
+            "restarted MCP project selection",
+        )
+        recovered = _structured(
+            await session.call_tool(
+                "logosforge_get_proposal",
+                {"proposal_id": timeline_proposal_id},
+            ),
+            "restarted MCP durable Timeline receipt recovery",
+        )
+        if recovered.get("state") != "applied":
+            raise RuntimeError(
+                "restarted MCP did not recover the Timeline proposal as applied"
+            )
+        if (
+            recovered.get("recovered_from_core") is not True
+            or recovered.get("request") is not None
+        ):
+            raise RuntimeError(
+                "restarted MCP did not identify Core as the durable receipt source"
+            )
+        recovered_receipt = recovered.get("receipt")
+        if (
+            not isinstance(recovered_receipt, dict)
+            or recovered_receipt.get("applied_revision") != applied_revision
+        ):
+            raise RuntimeError("restarted MCP returned the wrong canonical receipt")
+        recovered_result = recovered.get("result")
+        if not isinstance(recovered_result, dict):
+            raise RuntimeError("restarted MCP recovered no Timeline result receipt")
+        if recovered_result.get("replayed") is not True:
+            raise RuntimeError("restarted MCP Timeline receipt was not marked replayed")
+        if recovered_result.get("applied_revision") != applied_revision:
+            raise RuntimeError(
+                "restarted MCP Timeline receipt returned the wrong applied revision"
+            )
+        if (
+            recovered_result.get("changed") is not False
+            or recovered_result.get("affected_scene_ids") != []
+        ):
+            raise RuntimeError(
+                "restarted MCP Timeline receipt was not a non-mutating replay"
+            )
+
+        current_timeline = _structured(
+            await session.call_tool("logosforge_get_timeline", {}),
+            "restarted MCP Timeline read",
+        )
+        if recovered_result.get("timeline") != current_timeline:
+            raise RuntimeError(
+                "restarted MCP receipt did not return the current Timeline snapshot"
+            )
+        packaged_lane_count = sum(
+            lane.get("name") == "Packaged MCP lane"
+            for lane in current_timeline.get("lanes", [])
+            if isinstance(lane, dict)
+        )
+        if packaged_lane_count != 1:
+            raise RuntimeError(
+                "restarted MCP recovery did not preserve exactly one packaged lane"
+            )
 
 
 def _windows_process_is_alive(pid: int) -> bool:
@@ -755,7 +858,11 @@ def _smoke_app(app: Path, timeout: int, codex_command: str | None = None) -> Non
                 )
                 writable_mcp_env = env.copy()
                 writable_mcp_env["LOGOSFORGE_MCP_ALLOW_WRITES"] = "1"
-                final_comment_revision = asyncio.run(
+                (
+                    final_comment_revision,
+                    timeline_proposal_id,
+                    applied_timeline_revision,
+                ) = asyncio.run(
                     asyncio.wait_for(
                         _exercise_installed_mcp(
                             installed_mcp_path,
@@ -766,6 +873,19 @@ def _smoke_app(app: Path, timeout: int, codex_command: str | None = None) -> Non
                             comment_revision,
                         ),
                         timeout=45,
+                    )
+                )
+                asyncio.run(
+                    asyncio.wait_for(
+                        _recover_installed_timeline_receipt(
+                            installed_mcp_path,
+                            [],
+                            env,
+                            project_id,
+                            timeline_proposal_id,
+                            applied_timeline_revision,
+                        ),
+                        timeout=20,
                     )
                 )
                 if codex_command:
@@ -788,8 +908,9 @@ def _smoke_app(app: Path, timeout: int, codex_command: str | None = None) -> Non
         print(
             "Packaged Pro published a verified descriptor, advertised 40 MCP tools "
             "including canonical project search and revisioned Timeline orchestration, "
-            "applied Timeline, reply, and resolution proposals, and rejected stale "
-            "and replayed applies."
+            "applied Timeline, reply, and resolution proposals, recovered the durable "
+            "Timeline receipt after a companion restart, and rejected stale and "
+            "replayed applies."
         )
 
 

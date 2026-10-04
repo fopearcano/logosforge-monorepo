@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
 import io
 import json
 import os
@@ -19,9 +20,14 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
+from logosforge.db.database import _timeline_command_request_digest
 from logosforge.librechat import api_client as ac
 from logosforge.librechat.api_client import LogosForgeApiClient, LogosForgeApiError
-from logosforge.librechat.mcp_gateway import GatewayError, LogosForgeMcpGateway
+from logosforge.librechat.mcp_gateway import (
+    GatewayError,
+    LogosForgeMcpGateway,
+    _timeline_receipt_request_digest,
+)
 
 
 class _Response(io.BytesIO):
@@ -104,6 +110,45 @@ def test_api_client_get_timeline_uses_authoritative_project_endpoint():
         "timeout": 15.0,
     }
     assert result == timeline
+
+
+def test_api_client_timeline_receipt_keeps_idempotency_key_out_of_url():
+    client = LogosForgeApiClient(
+        base_url="http://127.0.0.1:8765", project_id=7, auth_token="secret",
+    )
+    proposal_id = "lfp_abcdefghijklmnopqrstuvwx"
+    captured = {}
+    receipt = {
+        "project_id": 7,
+        "request_digest": "a" * 64,
+        "command_kind": "create_lane",
+        "expected_revision": "b" * 64,
+        "applied_revision": "c" * 64,
+        "original_changed": True,
+        "original_affected_scene_ids": [],
+        "committed_at": "2026-10-04T10:00:00Z",
+    }
+
+    def fake_urlopen(request, timeout=None):
+        captured.update(
+            url=request.full_url,
+            method=request.get_method(),
+            headers={key.lower(): value for key, value in request.header_items()},
+            timeout=timeout,
+        )
+        return _response(receipt)
+
+    with mock.patch.object(ac.urllib.request, "urlopen", fake_urlopen):
+        result = client.get_timeline_command_receipt(proposal_id)
+
+    assert captured["url"] == (
+        "http://127.0.0.1:8765/api/projects/7/timeline/command-receipt"
+    )
+    assert proposal_id not in captured["url"]
+    assert captured["method"] == "GET"
+    assert captured["headers"]["idempotency-key"] == proposal_id
+    assert captured["headers"]["authorization"] == "Bearer secret"
+    assert result == receipt
 
 
 def test_api_client_preserves_http_status_and_machine_error_code():
@@ -189,6 +234,88 @@ def test_api_client_requires_an_explicit_project_for_scoped_calls():
         client.get_scene(1)
 
 
+def _timeline_request_digest(project_id: int, body: dict) -> str:
+    raw = json.dumps(
+        {
+            "scope": "timeline-command-v1",
+            "project_id": project_id,
+            "kind": body["kind"],
+            "expected_revision": body["expected_revision"],
+            "fields": {
+                key: value
+                for key, value in body.items()
+                if key not in {"kind", "expected_revision"}
+            },
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {
+            "kind": "create_lane",
+            "expected_revision": "a" * 64,
+            "name": "Trama café ∞",
+        },
+        {
+            "kind": "update_lane",
+            "expected_revision": "b" * 64,
+            "lane_id": 7,
+            "collapsed": False,
+            "index": 0,
+        },
+        {
+            "kind": "delete_lane",
+            "expected_revision": "c" * 64,
+            "lane_id": 7,
+        },
+        {
+            "kind": "place_event",
+            "expected_revision": "d" * 64,
+            "scene_id": 11,
+            "lane_id": None,
+        },
+        {
+            "kind": "remove_event",
+            "expected_revision": "e" * 64,
+            "scene_id": 11,
+        },
+        {
+            "kind": "set_order_mode",
+            "expected_revision": "f" * 64,
+            "mode": "custom",
+        },
+    ],
+    ids=[
+        "create-unicode-omitted-optionals",
+        "update",
+        "delete",
+        "place-explicit-null-lane",
+        "remove",
+        "order-mode",
+    ],
+)
+def test_timeline_receipt_request_digest_matches_core_canonical_wire(body):
+    fields = {
+        key: value
+        for key, value in body.items()
+        if key not in {"kind", "expected_revision"}
+    }
+    assert _timeline_receipt_request_digest(7, body) == (
+        _timeline_command_request_digest(
+            7,
+            body["kind"],
+            body["expected_revision"],
+            fields,
+        )
+    )
+
+
 class _FakeApiClient:
     """Minimal canonical-Pro-API fake with mutable server-side state."""
 
@@ -243,6 +370,7 @@ class _FakeApiClient:
             },
         }
         self._timeline_revision_sequence = 3
+        self.timeline_receipts: dict[tuple[int, str], dict] = {}
         self.comments = {
             1: [
                 {
@@ -317,6 +445,7 @@ class _FakeApiClient:
             "/api/projects/1/psyke/relations": [],
         }
         self.requests: list[tuple[str, str, dict | None]] = []
+        self.request_idempotency_keys: list[tuple[str, str, str]] = []
         self.search_calls: list[tuple[int, str]] = []
 
     @property
@@ -382,6 +511,18 @@ class _FakeApiClient:
         pid = int(project_id) if project_id is not None else self.require_project_id()
         return copy.deepcopy(self.timelines[pid])
 
+    def get_timeline_command_receipt(
+        self,
+        idempotency_key: str,
+        project_id: int | None = None,
+    ) -> dict:
+        pid = int(project_id) if project_id is not None else self.require_project_id()
+        return self.request(
+            "GET",
+            self.project_path("timeline/command-receipt", pid),
+            idempotency_key=idempotency_key,
+        )
+
     def list_characters(self, project_id: int | None = None) -> list[dict]:
         pid = int(project_id) if project_id is not None else self.require_project_id()
         if pid == 1:
@@ -436,13 +577,26 @@ class _FakeApiClient:
         path: str,
         body: dict | None = None,
         query: dict | None = None,
+        *,
+        idempotency_key: str = "",
     ):
         del query
         method = method.upper()
         stored_body = copy.deepcopy(body)
         self.requests.append((method, path, stored_body))
+        self.request_idempotency_keys.append((method, path, idempotency_key))
 
         if method == "GET":
+            if path.endswith("/timeline/command-receipt"):
+                project_id = int(path.split("/")[3])
+                receipt = self.timeline_receipts.get((project_id, idempotency_key))
+                if receipt is None:
+                    raise LogosForgeApiError(
+                        "Timeline command receipt not found",
+                        status_code=404,
+                        error_code="timeline_receipt_not_found",
+                    )
+                return copy.deepcopy(receipt)
             if path == "/api/projects/1/timeline":
                 return self.get_timeline(1)
             comment_prefix = "/api/projects/1/comments/"
@@ -497,6 +651,22 @@ class _FakeApiClient:
         if method == "POST" and path == "/api/projects/1/timeline/commands":
             timeline = self.timelines[1]
             assert body is not None
+            receipt_key = (1, idempotency_key)
+            if idempotency_key and receipt_key in self.timeline_receipts:
+                receipt = self.timeline_receipts[receipt_key]
+                if receipt["request_digest"] != _timeline_request_digest(1, body):
+                    raise LogosForgeApiError(
+                        "Idempotency-Key was reused",
+                        status_code=409,
+                        error_code="idempotency_key_conflict",
+                    )
+                return {
+                    "timeline": copy.deepcopy(timeline),
+                    "replayed": True,
+                    "applied_revision": receipt["applied_revision"],
+                    "changed": False,
+                    "affected_scene_ids": [],
+                }
             if body.get("expected_revision") != timeline["revision"]:
                 raise LogosForgeApiError(
                     "HTTP 409: The Timeline changed.",
@@ -521,8 +691,21 @@ class _FakeApiClient:
                 row["order_index"] = order_index
             timeline["revision"] = f"{self._timeline_revision_sequence:064x}"
             self._timeline_revision_sequence += 1
+            if idempotency_key:
+                self.timeline_receipts[receipt_key] = {
+                    "project_id": 1,
+                    "request_digest": _timeline_request_digest(1, body),
+                    "command_kind": body["kind"],
+                    "expected_revision": body["expected_revision"],
+                    "applied_revision": timeline["revision"],
+                    "original_changed": True,
+                    "original_affected_scene_ids": [],
+                    "committed_at": "2026-10-04T10:00:00Z",
+                }
             return {
                 "timeline": copy.deepcopy(timeline),
+                "replayed": False,
+                "applied_revision": timeline["revision"],
                 "changed": True,
                 "affected_scene_ids": [],
             }
@@ -648,6 +831,11 @@ def test_timeline_read_and_proposal_apply_are_exact_revision_bound_and_single_us
         "/api/projects/1/timeline/commands",
         first["request"]["body"],
     )
+    assert fake.request_idempotency_keys[-1] == (
+        "POST",
+        "/api/projects/1/timeline/commands",
+        first["proposal_id"],
+    )
 
     with pytest.raises(GatewayError, match="timeline_conflict.*will not be retried"):
         gateway.apply_proposal(stale_sibling["proposal_id"])
@@ -659,7 +847,7 @@ def test_timeline_read_and_proposal_apply_are_exact_revision_bound_and_single_us
 
 
 @pytest.mark.parametrize("status_code", [None, 500], ids=["no-response", "server-error"])
-def test_timeline_ambiguous_apply_is_indeterminate_and_not_retried(status_code):
+def test_timeline_ambiguous_apply_recovers_a_committed_receipt(status_code):
     gateway, fake = _gateway(allow_writes=True)
     proposal = gateway.propose_timeline_command({
         "kind": "create_lane",
@@ -667,10 +855,16 @@ def test_timeline_ambiguous_apply_is_indeterminate_and_not_retried(status_code):
         "name": "Possibly committed",
     })
     request = fake.request
+    post_keys = []
 
-    def lose_response(method, path, body=None, query=None):
-        result = request(method, path, body, query)
+    def lose_response(
+        method, path, body=None, query=None, *, idempotency_key="",
+    ):
+        result = request(
+            method, path, body, query, idempotency_key=idempotency_key,
+        )
         if method == "POST" and path.endswith("/timeline/commands"):
+            post_keys.append(idempotency_key)
             del result
             raise LogosForgeApiError(
                 "connection reset after request",
@@ -679,21 +873,293 @@ def test_timeline_ambiguous_apply_is_indeterminate_and_not_retried(status_code):
         return result
 
     fake.request = lose_response
+    applied = gateway.apply_proposal(proposal["proposal_id"])
 
-    with pytest.raises(GatewayError, match="outcome is indeterminate.*do not retry"):
-        gateway.apply_proposal(proposal["proposal_id"])
-
-    receipt = gateway.get_proposal(proposal["proposal_id"])
-    assert receipt["state"] == "indeterminate"
+    assert applied["state"] == "applied"
+    assert applied["recovered_from_core"] is True
+    assert applied["result"]["replayed"] is True
+    assert applied["result"]["changed"] is False
+    assert applied["result"]["affected_scene_ids"] == []
+    assert applied["receipt"]["command_kind"] == "create_lane"
     assert [lane["name"] for lane in fake.timelines[1]["lanes"]] == [
         "Possibly committed",
     ]
-    with pytest.raises(GatewayError, match="indeterminate, not pending"):
+    assert post_keys == [proposal["proposal_id"]]
+    assert (
+        "GET",
+        "/api/projects/1/timeline/command-receipt",
+        proposal["proposal_id"],
+    ) in fake.request_idempotency_keys
+
+
+def test_timeline_supported_receipt_miss_allows_one_bounded_same_key_resend():
+    gateway, fake = _gateway(allow_writes=True)
+    proposal = gateway.propose_timeline_command({
+        "kind": "create_lane",
+        "expected_revision": fake.timelines[1]["revision"],
+        "name": "Retry exactly once",
+    })
+    request = fake.request
+    post_keys = []
+
+    def lose_first_before_commit(
+        method, path, body=None, query=None, *, idempotency_key="",
+    ):
+        if method == "POST" and path.endswith("/timeline/commands"):
+            post_keys.append(idempotency_key)
+            if len(post_keys) == 1:
+                raise LogosForgeApiError("connection reset before commit")
+        return request(
+            method, path, body, query, idempotency_key=idempotency_key,
+        )
+
+    fake.request = lose_first_before_commit
+    applied = gateway.apply_proposal(proposal["proposal_id"])
+
+    assert applied["state"] == "applied"
+    assert post_keys == [proposal["proposal_id"], proposal["proposal_id"]]
+    assert [lane["name"] for lane in fake.timelines[1]["lanes"]] == [
+        "Retry exactly once",
+    ]
+
+
+def test_timeline_recovery_pending_never_resends_more_than_once_total():
+    gateway, fake = _gateway(allow_writes=True)
+    proposal = gateway.propose_timeline_command({
+        "kind": "create_lane",
+        "expected_revision": fake.timelines[1]["revision"],
+        "name": "No unbounded retries",
+    })
+    request = fake.request
+    post_keys = []
+
+    def lose_both_before_commit(
+        method, path, body=None, query=None, *, idempotency_key="",
+    ):
+        if method == "POST" and path.endswith("/timeline/commands"):
+            post_keys.append(idempotency_key)
+            raise LogosForgeApiError("connection reset before commit")
+        return request(
+            method, path, body, query, idempotency_key=idempotency_key,
+        )
+
+    fake.request = lose_both_before_commit
+    with pytest.raises(GatewayError, match="awaiting durable recovery"):
         gateway.apply_proposal(proposal["proposal_id"])
-    assert len([
-        call for call in fake.requests
-        if call[:2] == ("POST", "/api/projects/1/timeline/commands")
-    ]) == 1
+    assert gateway.get_proposal(proposal["proposal_id"])["state"] == (
+        "recovery_pending"
+    )
+
+    fake.request = request
+    for _ in range(2):
+        with pytest.raises(GatewayError, match="remains recovery_pending"):
+            gateway.apply_proposal(proposal["proposal_id"])
+    assert post_keys == [proposal["proposal_id"], proposal["proposal_id"]]
+    assert fake.timelines[1]["lanes"] == []
+
+
+def test_timeline_recovery_pending_can_later_observe_the_committed_receipt():
+    gateway, fake = _gateway(allow_writes=True)
+    proposal = gateway.propose_timeline_command({
+        "kind": "create_lane",
+        "expected_revision": fake.timelines[1]["revision"],
+        "name": "Committed on resend",
+    })
+    request = fake.request
+    post_count = 0
+
+    def ambiguous_twice(
+        method, path, body=None, query=None, *, idempotency_key="",
+    ):
+        nonlocal post_count
+        if method == "POST" and path.endswith("/timeline/commands"):
+            post_count += 1
+            if post_count == 1:
+                raise LogosForgeApiError("first request did not arrive")
+            result = request(
+                method, path, body, query, idempotency_key=idempotency_key,
+            )
+            del result
+            raise LogosForgeApiError("resend committed; response lost")
+        return request(
+            method, path, body, query, idempotency_key=idempotency_key,
+        )
+
+    fake.request = ambiguous_twice
+    with pytest.raises(GatewayError, match="awaiting durable recovery"):
+        gateway.apply_proposal(proposal["proposal_id"])
+
+    fake.request = request
+    applied = gateway.apply_proposal(proposal["proposal_id"])
+    assert applied["state"] == "applied"
+    assert applied["recovered_from_core"] is True
+    assert applied["result"]["replayed"] is True
+    assert post_count == 2
+    assert [lane["name"] for lane in fake.timelines[1]["lanes"]] == [
+        "Committed on resend",
+    ]
+
+
+def test_timeline_legacy_receipt_404_keeps_ambiguous_apply_terminal():
+    gateway, fake = _gateway(allow_writes=True)
+    proposal = gateway.propose_timeline_command({
+        "kind": "create_lane",
+        "expected_revision": fake.timelines[1]["revision"],
+        "name": "Legacy Core",
+    })
+    request = fake.request
+    post_count = 0
+
+    def legacy_core(
+        method, path, body=None, query=None, *, idempotency_key="",
+    ):
+        nonlocal post_count
+        if method == "GET" and path.endswith("/timeline/command-receipt"):
+            raise LogosForgeApiError("route not found", status_code=404)
+        result = request(
+            method, path, body, query, idempotency_key=idempotency_key,
+        )
+        if method == "POST" and path.endswith("/timeline/commands"):
+            post_count += 1
+            del result
+            raise LogosForgeApiError("response lost")
+        return result
+
+    fake.request = legacy_core
+    with pytest.raises(GatewayError, match="indeterminate.*do not retry"):
+        gateway.apply_proposal(proposal["proposal_id"])
+
+    assert gateway.get_proposal(proposal["proposal_id"])["state"] == "indeterminate"
+    assert post_count == 1
+
+
+def test_non_timeline_ambiguous_apply_remains_terminal_and_has_no_key():
+    gateway, fake = _gateway(allow_writes=True)
+    proposal = gateway.propose_create_psyke_entry({"name": "Ada"})
+    request = fake.request
+
+    def lose_response(method, path, body=None, query=None, *, idempotency_key=""):
+        assert idempotency_key == ""
+        result = request(method, path, body, query)
+        if method == "POST":
+            del result
+            raise LogosForgeApiError("response lost")
+        return result
+
+    fake.request = lose_response
+    with pytest.raises(GatewayError, match="indeterminate.*do not retry"):
+        gateway.apply_proposal(proposal["proposal_id"])
+    assert gateway.get_proposal(proposal["proposal_id"])["state"] == "indeterminate"
+
+
+def test_timeline_receipt_integrity_mismatch_fails_closed():
+    gateway, fake = _gateway(allow_writes=True)
+    proposal = gateway.propose_timeline_command({
+        "kind": "create_lane",
+        "expected_revision": fake.timelines[1]["revision"],
+        "name": "Tampered receipt",
+    })
+    request = fake.request
+
+    def commit_then_tamper(
+        method, path, body=None, query=None, *, idempotency_key="",
+    ):
+        result = request(
+            method, path, body, query, idempotency_key=idempotency_key,
+        )
+        if method == "POST" and path.endswith("/timeline/commands"):
+            fake.timeline_receipts[(1, idempotency_key)]["request_digest"] = "f" * 64
+            del result
+            raise LogosForgeApiError("response lost")
+        return result
+
+    fake.request = commit_then_tamper
+    with pytest.raises(GatewayError, match="receipt integrity check failed"):
+        gateway.apply_proposal(proposal["proposal_id"])
+    assert gateway.get_proposal(proposal["proposal_id"])["state"] == "failed"
+
+
+def test_unknown_timeline_proposal_recovers_from_selected_project_after_restart():
+    gateway, fake = _gateway(allow_writes=True)
+    proposal = gateway.propose_timeline_command({
+        "kind": "create_lane",
+        "expected_revision": fake.timelines[1]["revision"],
+        "name": "Survives gateway restart",
+    })
+    gateway.apply_proposal(proposal["proposal_id"])
+
+    restarted, _ = _gateway(fake)
+    recovered = restarted.get_proposal(proposal["proposal_id"])
+
+    assert recovered["state"] == "applied"
+    assert recovered["recovered_from_core"] is True
+    assert recovered["request"] is None
+    assert recovered["receipt"]["command_kind"] == "create_lane"
+    assert recovered["review"]["recovered_receipt"] == recovered["receipt"]
+    assert recovered["result"] == {
+        "timeline": fake.timelines[1],
+        "replayed": True,
+        "applied_revision": recovered["receipt"]["applied_revision"],
+        "changed": False,
+        "affected_scene_ids": [],
+    }
+
+    fake.project_id = 2
+    wrong_project, _ = _gateway(fake)
+    with pytest.raises(GatewayError, match="Unknown proposal id"):
+        wrong_project.get_proposal(proposal["proposal_id"])
+
+
+def test_restart_recovery_rejects_project_id_reuse_between_receipt_and_board():
+    gateway, fake = _gateway(allow_writes=True)
+    proposal = gateway.propose_timeline_command({
+        "kind": "create_lane",
+        "expected_revision": fake.timelines[1]["revision"],
+        "name": "Old project lane",
+    })
+    gateway.apply_proposal(proposal["proposal_id"])
+
+    restarted, _ = _gateway(fake)
+    replacement = {
+        "project_id": 1,
+        "revision": "9" * 64,
+        "order_mode": "structural",
+        "lanes": [{
+            "id": 1,
+            "name": "Replacement project lane",
+            "color_label": "",
+            "order_index": 0,
+            "collapsed": False,
+            "event_count": 0,
+        }],
+        "events": [],
+        "off_timeline": [],
+    }
+
+    def replace_project_during_timeline_read(project_id=None):
+        assert int(project_id or fake.require_project_id()) == 1
+        fake.timeline_receipts.clear()
+        fake.timelines[1] = copy.deepcopy(replacement)
+        return copy.deepcopy(replacement)
+
+    fake.get_timeline = replace_project_during_timeline_read
+    with pytest.raises(GatewayError, match="project lifetime may have changed"):
+        restarted.get_proposal(proposal["proposal_id"])
+
+
+def test_unknown_proposal_receipt_miss_stays_unknown():
+    gateway, fake = _gateway()
+    before = len(fake.requests)
+    with pytest.raises(GatewayError, match="Unknown proposal id"):
+        gateway.get_proposal("not a valid capability")
+    assert len(fake.requests) == before
+
+    with pytest.raises(GatewayError, match="Unknown proposal id"):
+        gateway.get_proposal("lfp_abcdefghijklmnopqrstuvwx")
+    assert fake.requests[-1][:2] == (
+        "GET",
+        "/api/projects/1/timeline/command-receipt",
+    )
 
 
 def test_timeline_proposal_ignores_display_only_snapshot_changes_but_keeps_cas():
@@ -1448,7 +1914,7 @@ def test_real_mcp_stdio_initializes_and_advertises_structured_tools():
 
     initialized, listed = asyncio.run(exercise())
     assert initialized.serverInfo.name == "logosforge"
-    assert initialized.serverInfo.version == "1.2.0"
+    assert initialized.serverInfo.version == "1.3.0"
     tools = {tool.name: tool for tool in listed.tools}
     assert len(tools) == 40
     assert {

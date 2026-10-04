@@ -578,6 +578,21 @@ function timelineCommandResult(value: unknown, path: string): TimelineCommandRes
     requireField(dto, "timeline", path),
     fieldPath(path, "timeline"),
   );
+  const replayed = booleanValue(
+    requireField(dto, "replayed", path),
+    fieldPath(path, "replayed"),
+  );
+  const appliedRevision = stringValue(
+    requireField(dto, "applied_revision", path),
+    fieldPath(path, "applied_revision"),
+  );
+  if (!/^[0-9a-f]{64}$/.test(appliedRevision)) {
+    fail(
+      fieldPath(path, "applied_revision"),
+      "a 64-character lowercase hexadecimal revision",
+      appliedRevision,
+    );
+  }
   const changed = booleanValue(requireField(dto, "changed", path), fieldPath(path, "changed"));
   const idsPath = fieldPath(path, "affected_scene_ids");
   const ids = integerArray(requireField(dto, "affected_scene_ids", path), idsPath);
@@ -598,6 +613,9 @@ function timelineCommandResult(value: unknown, path: string): TimelineCommandRes
   if (!changed && ids.length !== 0) {
     fail(idsPath, "an empty array when changed is false", ids);
   }
+  if (replayed && changed) {
+    fail(fieldPath(path, "changed"), "false when replayed is true", changed);
+  }
   return value as TimelineCommandResultDTO;
 }
 
@@ -614,14 +632,29 @@ export function validateTimelineCommandResultDTOForRequest(
       result.timeline.project_id,
     );
   }
-  if (!result.changed && result.timeline.revision !== command.expected_revision) {
+  if (!result.replayed && result.applied_revision !== result.timeline.revision) {
+    fail(
+      "$.applied_revision",
+      "the returned Timeline revision for a fresh command",
+      result.applied_revision,
+    );
+  }
+  if (
+    !result.replayed
+    && !result.changed
+    && result.timeline.revision !== command.expected_revision
+  ) {
     fail(
       "$.timeline.revision",
       "the command's expected revision when changed is false",
       result.timeline.revision,
     );
   }
-  if (result.changed && result.timeline.revision === command.expected_revision) {
+  if (
+    !result.replayed
+    && result.changed
+    && result.timeline.revision === command.expected_revision
+  ) {
     fail(
       "$.timeline.revision",
       "a new revision when changed is true",

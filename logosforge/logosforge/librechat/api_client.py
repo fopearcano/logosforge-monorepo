@@ -94,6 +94,8 @@ class LogosForgeApiClient:
         path: str,
         body: dict | None = None,
         query: dict[str, Any] | None = None,
+        *,
+        idempotency_key: str = "",
     ) -> Any:
         """Issue one authenticated API request.
 
@@ -114,6 +116,10 @@ class LogosForgeApiClient:
         if body is not None:
             data = json.dumps(body).encode("utf-8")
             headers["Content-Type"] = "application/json"
+        if idempotency_key:
+            # Idempotency keys are capabilities. Keep them out of URLs and
+            # query strings, which are commonly retained in access logs.
+            headers["Idempotency-Key"] = idempotency_key
         if self._auth:
             headers["Authorization"] = f"Bearer {self._auth}"
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
@@ -196,6 +202,25 @@ class LogosForgeApiClient:
         """Return the canonical revisioned Timeline projection."""
         pid = int(project_id) if project_id is not None else self.require_project_id()
         return self.request("GET", f"{self._prefix}/projects/{pid}/timeline")
+
+    def get_timeline_command_receipt(
+        self,
+        idempotency_key: str,
+        project_id: int | None = None,
+    ) -> dict:
+        """Return one durable project-scoped Timeline command receipt.
+
+        The opaque key is deliberately sent only in the request header.  A
+        ``timeline_receipt_not_found`` API error is meaningful to recovery
+        callers; other 404 responses may come from an older Core API that does
+        not implement the receipt endpoint.
+        """
+        pid = int(project_id) if project_id is not None else self.require_project_id()
+        return self.request(
+            "GET",
+            f"{self._prefix}/projects/{pid}/timeline/command-receipt",
+            idempotency_key=idempotency_key,
+        )
 
     def list_characters(self, project_id: int | None = None) -> list[dict]:
         pid = int(project_id) if project_id is not None else self.require_project_id()

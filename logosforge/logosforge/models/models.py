@@ -1214,6 +1214,22 @@ class TimelineLane(SQLModel, table=True):
     created_at: datetime = Field(default_factory=_now)
 
 
+class TimelineCommandReceipt(SQLModel, table=True):
+    """Durable exactly-once receipt for a project Timeline command.
+
+    The caller's raw ``Idempotency-Key`` is a capability and is deliberately
+    never persisted.  ``idempotency_key_hash`` stores its SHA-256 digest.  The
+    compact result JSON contains only the committed command outcome, not a
+    potentially large or subsequently stale Timeline snapshot.
+    """
+
+    project_id: int = Field(foreign_key="project.id", primary_key=True)
+    idempotency_key_hash: str = Field(primary_key=True, max_length=64)
+    request_digest: str = Field(max_length=64)
+    result_json: str
+    created_at: datetime = Field(default_factory=_now)
+
+
 class TimelineLink(SQLModel, table=True):
     """A visual link between two Timeline events (scenes).
 

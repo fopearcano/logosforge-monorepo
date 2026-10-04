@@ -82,7 +82,13 @@ const api = {
     check(command.kind === "set_order_mode", "retry must preserve the writer's original order-mode intent");
     serverSnapshot = snapshot("c", command.mode);
     pendingResultRefetch = deferred<TimelineSnapshotDTO>();
-    return { timeline: structuredClone(serverSnapshot), changed: true, affected_scene_ids: [] };
+    return {
+      timeline: structuredClone(serverSnapshot),
+      replayed: false,
+      applied_revision: serverSnapshot.revision,
+      changed: true,
+      affected_scene_ids: [],
+    };
   },
   subscribe: (_projectId: number, listener: (event: EventMessage) => void) => {
     listeners.add(listener);

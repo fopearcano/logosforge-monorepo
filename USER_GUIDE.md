@@ -389,9 +389,13 @@ one reviewed change at a time: create, rename, reorder, collapse, or delete a
 lane; place, move, or remove an event; or switch structural/custom ordering.
 Every proposal is tied to the exact Timeline revision it read and is checked
 again when applied. Deleting a lane leaves its scenes on the Timeline as
-Unassigned; removing an event leaves the manuscript scene intact. If an apply
-response is uncertain, inspect the Timeline instead of retrying—the change may
-already have been committed.
+Unassigned; removing an event leaves the manuscript scene intact. Timeline
+applies now carry a durable project receipt under the same reviewed proposal
+id. If a response is lost, the gateway reconciles that exact proposal instead
+of duplicating the change; this also works after restarting the MCP companion.
+It never turns recovery into a fresh proposal. Other proposal types remain
+conservative: if their apply response is uncertain, inspect current state and
+do not retry because the change may already have committed.
 
 Pro uses the stored quote and surrounding context to relocate marks after edits,
 including imported spans that cross title/content or scene boundaries. It saves

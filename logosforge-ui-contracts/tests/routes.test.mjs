@@ -64,6 +64,10 @@ const timelineCommandsRoute = ROUTES.timelineCommands(42);
 if (timelineCommandsRoute !== '/api/projects/42/timeline/commands') {
   throw new Error(`timeline commands route mismatch: ${timelineCommandsRoute}`);
 }
+const timelineReceiptRoute = ROUTES.timelineCommandReceipt(42);
+if (timelineReceiptRoute !== '/api/projects/42/timeline/command-receipt') {
+  throw new Error(`timeline command receipt route mismatch: ${timelineReceiptRoute}`);
+}
 if ('timelineEvents' in ROUTES || 'timelineEvent' in ROUTES) {
   throw new Error('legacy unguarded Timeline mutation routes must not be advertised');
 }

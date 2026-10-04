@@ -842,8 +842,24 @@ export type TimelineCommandDTO =
 
 export interface TimelineCommandResultDTO {
   timeline: TimelineSnapshotDTO;
+  /** True when this call returned a previously committed idempotent command. */
+  replayed: boolean;
+  /** Revision produced by the original command, even if the board changed later. */
+  applied_revision: string;
   changed: boolean;
   affected_scene_ids: number[];
+}
+
+/** Durable, project-scoped receipt for one idempotent Timeline command. */
+export interface TimelineCommandReceiptDTO {
+  project_id: number;
+  request_digest: string;
+  command_kind: TimelineCommandDTO["kind"];
+  expected_revision: string;
+  applied_revision: string;
+  original_changed: boolean;
+  original_affected_scene_ids: number[];
+  committed_at: string;
 }
 
 // ── PSYKE (the story bible) ────────────────────────────────────────────────

@@ -344,12 +344,16 @@ try {
       }],
       off_timeline: [],
     },
+    replayed: false,
+    applied_revision: 'e'.repeat(64),
     changed: true,
     affected_scene_ids: [11],
   }), { status: 200, headers: { 'content-type': 'application/json' } }));
   const timelineCommandResult = await pendingTimelineCommand;
   await timelineBarrier;
   if (!timelineCommandResult.changed
+      || timelineCommandResult.replayed
+      || timelineCommandResult.applied_revision !== 'e'.repeat(64)
       || timelineCommandResult.timeline.order_mode !== 'custom'
       || timelineCommandResult.affected_scene_ids[0] !== 11) {
     throw new Error('Timeline command response was not validated');

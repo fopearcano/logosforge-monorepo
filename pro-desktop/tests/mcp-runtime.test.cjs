@@ -210,6 +210,16 @@ check('packaged smoke applies one Timeline proposal and rejects its stale siblin
   packagedSmoke.includes('installed MCP Timeline apply') &&
   packagedSmoke.includes('installed MCP stale Timeline sibling apply') &&
   packagedSmoke.includes('after_stale_timeline != applied_snapshot'));
+check('packaged smoke recovers one durable Timeline receipt after companion restart',
+  packagedSmoke.includes('async def _recover_installed_timeline_receipt(') &&
+  packagedSmoke.includes('restarted MCP durable Timeline receipt recovery') &&
+  packagedSmoke.includes('recovered.get("recovered_from_core") is not True') &&
+  packagedSmoke.includes('recovered_result.get("replayed") is not True') &&
+  packagedSmoke.includes('recovered_result.get("applied_revision") != applied_revision') &&
+  packagedSmoke.includes('recovered_result.get("affected_scene_ids") != []') &&
+  packagedSmoke.includes('packaged_lane_count != 1') &&
+  packagedSmoke.indexOf('_exercise_installed_mcp(') <
+    packagedSmoke.lastIndexOf('_recover_installed_timeline_receipt('));
 check('Windows release CI exercises both unpacked and portable MCP companions',
   releaseWorkflow.includes('Exercise packaged Windows MCP companion') &&
   releaseWorkflow.includes('Exercise portable Windows MCP companion'));
