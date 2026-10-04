@@ -56,9 +56,12 @@ def test_show_chat_opens_window_not_central_view():
 
 # -- Persistence --------------------------------------------------------------
 
-def test_user_message_persists_when_submitted():
+def test_user_message_persists_when_submitted(monkeypatch):
     db, proj = _setup()
     view = ChatView(db, proj.id)
+    # This is a persistence contract, not a provider integration test.  Never
+    # launch the default live LM Studio worker from this unit test.
+    monkeypatch.setattr(view, "_send_to_assistant", lambda: None)
     view._on_user_submit("Hello world")
     msgs = db.get_chat_messages(proj.id)
     assert any(m.role == "user" and m.content == "Hello world" for m in msgs)

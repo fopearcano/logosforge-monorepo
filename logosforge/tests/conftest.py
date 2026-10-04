@@ -13,6 +13,9 @@ def qapp():
     app = QApplication.instance()
     if app is None:
         app = QApplication([])
+    # The session QApplication is reused after each test's windows are closed.
+    # Do not let closing the final visible window queue an application quit.
+    app.setQuitOnLastWindowClosed(False)
     return app
 
 
@@ -130,7 +133,7 @@ def _reset_event_bus():
 
 
 @pytest.fixture(autouse=True)
-def _reap_top_level_widgets():
+def _reap_top_level_widgets(qapp):
     """Destroy every top-level widget a test leaves behind.
 
     Headless tests have no Qt event loop, so widgets created in a test are
@@ -158,46 +161,8 @@ def _reap_top_level_widgets():
     mask this — the worker always had live objects to signal — so reaping
     widgets without first joining the workers exposes the race.
     """
+    from tests.helpers.qt_cleanup import cleanup_qt_test_state, snapshot_qthreads
+
+    baseline_threads = snapshot_qthreads(qapp)
     yield
-    import gc
-
-    from PySide6.QtCore import QCoreApplication, QEvent, QObject, QThread
-    app = QApplication.instance()
-    if app is None:
-        return
-    # A parented dialog can still be a Qt "top-level widget".  Delete only
-    # QObject ownership roots; their descendants are destroyed with them and
-    # must not receive a second deleteLater request.
-    tops = [w for w in app.topLevelWidgets() if w.parent() is None]
-    if tops:
-        # Join running worker threads first. A gc scan finds them no matter how
-        # they're referenced (they're parentless, so findChildren can't reach
-        # them). Bounded wait so a genuinely stuck worker can't hang the suite.
-        for obj in gc.get_objects():
-            if isinstance(obj, QThread):
-                try:
-                    if obj.isRunning():
-                        obj.wait(5000)
-                except RuntimeError:
-                    pass  # underlying C++ thread already gone
-    for w in tops:
-        app.removeEventFilter(w)
-
-        # Queued cross-thread signal deliveries are QMetaCallEvents addressed
-        # to the receiving QObject.  Drop only those calls, and only for the
-        # widget tree that is about to be destroyed.  The previous blanket
-        # ``removePostedEvents(None)`` also removed internal events belonging
-        # to long-lived Qt subsystems (notably QtWebEngine); Qt explicitly
-        # warns that removing every event can break receiver invariants and it
-        # caused a later ``processEvents()`` to segfault on Linux CI.
-        receivers = [w, *w.findChildren(QObject)]
-        for receiver in receivers:
-            try:
-                QCoreApplication.removePostedEvents(
-                    receiver, QEvent.Type.MetaCall,
-                )
-            except RuntimeError:
-                pass  # the underlying C++ receiver was already destroyed
-
-        w.deleteLater()
-    app.sendPostedEvents(None, QEvent.Type.DeferredDelete)  # delete the widgets now
+    cleanup_qt_test_state(qapp, preserve_threads=baseline_threads)
