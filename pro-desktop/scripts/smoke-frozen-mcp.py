@@ -132,12 +132,14 @@ async def _exercise_mcp(
         if initialized.serverInfo.name != "logosforge":
             raise RuntimeError(f"unexpected MCP server: {initialized.serverInfo.name!r}")
         listed = await session.list_tools()
-        if len(listed.tools) != 40:
-            raise RuntimeError(f"expected 40 MCP tools, received {len(listed.tools)}")
+        if len(listed.tools) != 42:
+            raise RuntimeError(f"expected 42 MCP tools, received {len(listed.tools)}")
         tool_names = {tool.name for tool in listed.tools}
         expected_tools = {
             "logosforge_get_timeline",
             "logosforge_propose_timeline_command",
+            "logosforge_get_canvas_plot",
+            "logosforge_propose_canvas_plot_command",
             "logosforge_search",
             "logosforge_list_comments",
             "logosforge_propose_comment_reply",
@@ -199,6 +201,56 @@ async def _exercise_mcp(
         )
         if timeline_after != timeline_before:
             raise RuntimeError("creating a Timeline proposal mutated project data")
+        canvas_before = _structured(
+            await session.call_tool("logosforge_get_canvas_plot", {}),
+            "MCP Canvas Plot read",
+        )
+        canvas_revision = canvas_before.get("revision")
+        if (
+            not isinstance(canvas_revision, str)
+            or len(canvas_revision) != 64
+            or any(char not in "0123456789abcdef" for char in canvas_revision)
+            or canvas_before.get("project_id") != project_id
+            or canvas_before.get("nodes") != []
+            or canvas_before.get("links") != []
+            or canvas_before.get("frames") != []
+        ):
+            raise RuntimeError("MCP Canvas Plot read returned an invalid empty snapshot")
+        canvas_command = {
+            "kind": "create_node",
+            "expected_revision": canvas_revision,
+            "title": "Frozen MCP Canvas node",
+            "body": "Proposed through the frozen companion without mutation.",
+            "x": 48.0,
+            "y": 72.0,
+            "width": 240.0,
+            "height": 132.0,
+            "color_label": "cyan",
+            "group_label": "Frozen acceptance",
+        }
+        canvas_proposal = _structured(
+            await session.call_tool(
+                "logosforge_propose_canvas_plot_command",
+                {"command": canvas_command},
+            ),
+            "MCP Canvas Plot proposal",
+        )
+        if canvas_proposal.get("state") != "pending":
+            raise RuntimeError("MCP Canvas Plot proposal was not left pending")
+        if canvas_proposal.get("request") != {
+            "method": "POST",
+            "path": f"/api/projects/{project_id}/canvas-plot/commands",
+            "body": canvas_command,
+        }:
+            raise RuntimeError(
+                "MCP Canvas Plot proposal did not store the exact command"
+            )
+        canvas_after = _structured(
+            await session.call_tool("logosforge_get_canvas_plot", {}),
+            "MCP post-proposal Canvas Plot read",
+        )
+        if canvas_after != canvas_before:
+            raise RuntimeError("creating a Canvas Plot proposal mutated project data")
         search = _structured(
             await session.call_tool(
                 "logosforge_search", {"query": "Inspect this packaged thread."},
@@ -352,9 +404,10 @@ def smoke(executable: Path, mcp_executable: Path | None = None) -> None:
                     process.kill()
                     process.wait(timeout=10)
         print(
-            "Frozen LogosForge MCP initialized, advertised 40 tools, read and "
-            "proposed against the revisioned Timeline without mutation, searched "
-            "and read a seeded thread, and created both comment proposal types."
+            "Frozen LogosForge MCP initialized, advertised 42 tools, read and "
+            "proposed against the revisioned Timeline and Canvas Plot without "
+            "mutation, searched and read a seeded thread, and created both "
+            "comment proposal types."
         )
 
 

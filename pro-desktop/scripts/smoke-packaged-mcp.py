@@ -200,7 +200,7 @@ async def _exercise_installed_mcp(
     project_id: int,
     comment_id: int,
     comment_revision: str,
-) -> tuple[str, str, str]:
+) -> tuple[str, str, str, dict]:
     params = mcp.StdioServerParameters(
         command=str(command),
         args=command_args,
@@ -215,12 +215,14 @@ async def _exercise_installed_mcp(
         if initialized.serverInfo.name != "logosforge":
             raise RuntimeError(f"unexpected MCP server: {initialized.serverInfo.name!r}")
         listed = await session.list_tools()
-        if len(listed.tools) != 40:
-            raise RuntimeError(f"expected 40 MCP tools, received {len(listed.tools)}")
+        if len(listed.tools) != 42:
+            raise RuntimeError(f"expected 42 MCP tools, received {len(listed.tools)}")
         tool_names = {tool.name for tool in listed.tools}
         expected_tools = {
             "logosforge_get_timeline",
             "logosforge_propose_timeline_command",
+            "logosforge_get_canvas_plot",
+            "logosforge_propose_canvas_plot_command",
             "logosforge_search",
             "logosforge_list_comments",
             "logosforge_propose_comment_reply",
@@ -327,6 +329,156 @@ async def _exercise_installed_mcp(
         )
         if after_stale_timeline != applied_snapshot:
             raise RuntimeError("stale Timeline apply changed the reviewed board")
+
+        canvas_before = _structured(
+            await session.call_tool(
+                "logosforge_get_canvas_plot", {"include_bodies": True},
+            ),
+            "installed MCP Canvas Plot read",
+        )
+        canvas_revision = canvas_before.get("revision")
+        if (
+            not isinstance(canvas_revision, str)
+            or len(canvas_revision) != 64
+            or any(char not in "0123456789abcdef" for char in canvas_revision)
+            or canvas_before.get("project_id") != project_id
+            or canvas_before.get("nodes") != []
+            or canvas_before.get("links") != []
+            or canvas_before.get("frames") != []
+        ):
+            raise RuntimeError(
+                "installed MCP Canvas Plot read returned an invalid empty snapshot"
+            )
+        canvas_command = {
+            "kind": "create_node",
+            "expected_revision": canvas_revision,
+            "title": "Packaged MCP Canvas node",
+            "body": "Applied by the installed MCP companion.",
+            "x": 96.0,
+            "y": 128.0,
+            "width": 260.0,
+            "height": 144.0,
+            "color_label": "violet",
+            "group_label": "Packaged acceptance",
+        }
+        stale_canvas_command = {
+            **canvas_command,
+            "title": "Stale Canvas sibling node",
+            "x": 420.0,
+        }
+        canvas_proposal = _structured(
+            await session.call_tool(
+                "logosforge_propose_canvas_plot_command",
+                {"command": canvas_command},
+            ),
+            "installed MCP Canvas Plot proposal",
+        )
+        stale_canvas_sibling = _structured(
+            await session.call_tool(
+                "logosforge_propose_canvas_plot_command",
+                {"command": stale_canvas_command},
+            ),
+            "installed MCP stale Canvas Plot sibling proposal",
+        )
+        if canvas_proposal.get("request") != {
+            "method": "POST",
+            "path": f"/api/projects/{project_id}/canvas-plot/commands",
+            "body": canvas_command,
+        }:
+            raise RuntimeError(
+                "installed MCP Canvas Plot proposal did not store the exact command"
+            )
+        if canvas_before != _structured(
+            await session.call_tool(
+                "logosforge_get_canvas_plot", {"include_bodies": True},
+            ),
+            "installed MCP post-proposal Canvas Plot read",
+        ):
+            raise RuntimeError("Canvas Plot proposal creation mutated project data")
+
+        applied_canvas = _structured(
+            await session.call_tool(
+                "logosforge_apply_proposal",
+                {"proposal_id": canvas_proposal["proposal_id"]},
+            ),
+            "installed MCP Canvas Plot apply",
+        )
+        applied_canvas_result = applied_canvas.get("result")
+        if not isinstance(applied_canvas_result, dict):
+            raise RuntimeError(
+                "installed MCP Canvas Plot apply returned no result receipt"
+            )
+        applied_canvas_snapshot = applied_canvas_result.get("canvas_plot")
+        if applied_canvas.get("state") != "applied" or not isinstance(
+            applied_canvas_snapshot, dict
+        ):
+            raise RuntimeError(
+                "installed MCP did not mark the Canvas Plot proposal applied"
+            )
+        applied_canvas_revision = applied_canvas_snapshot.get("revision")
+        if (
+            not isinstance(applied_canvas_revision, str)
+            or len(applied_canvas_revision) != 64
+            or any(
+                char not in "0123456789abcdef"
+                for char in applied_canvas_revision
+            )
+            or applied_canvas_revision == canvas_revision
+        ):
+            raise RuntimeError("Canvas Plot apply did not rotate the revision")
+        canvas_nodes = applied_canvas_snapshot.get("nodes")
+        if not isinstance(canvas_nodes, list) or len(canvas_nodes) != 1:
+            raise RuntimeError("Canvas Plot apply did not create exactly one node")
+        canvas_node = canvas_nodes[0]
+        if not isinstance(canvas_node, dict) or any(
+            canvas_node.get(field) != expected
+            for field, expected in {
+                "title": canvas_command["title"],
+                "body": canvas_command["body"],
+                "x": canvas_command["x"],
+                "y": canvas_command["y"],
+                "width": canvas_command["width"],
+                "height": canvas_command["height"],
+                "color_label": canvas_command["color_label"],
+                "group_label": canvas_command["group_label"],
+            }.items()
+        ):
+            raise RuntimeError(
+                "Canvas Plot apply did not preserve the reviewed node payload"
+            )
+        created_node_id = applied_canvas_result.get("created_node_id")
+        if (
+            not isinstance(created_node_id, int)
+            or canvas_node.get("id") != created_node_id
+            or applied_canvas_result.get("affected_node_ids") != [created_node_id]
+            or applied_canvas_result.get("affected_link_ids") != []
+            or applied_canvas_result.get("affected_frame_ids") != []
+            or applied_canvas_result.get("created_link_id") is not None
+            or applied_canvas_result.get("created_frame_id") is not None
+        ):
+            raise RuntimeError(
+                "Canvas Plot apply returned inconsistent created/affected IDs"
+            )
+
+        stale_canvas_result = await session.call_tool(
+            "logosforge_apply_proposal",
+            {"proposal_id": stale_canvas_sibling["proposal_id"]},
+        )
+        _expected_tool_error(
+            stale_canvas_result,
+            "installed MCP stale Canvas Plot sibling apply",
+            "HTTP 409",
+            "Canvas Plot changed",
+        )
+        after_stale_canvas = _structured(
+            await session.call_tool(
+                "logosforge_get_canvas_plot", {"include_bodies": True},
+            ),
+            "installed MCP post-stale Canvas Plot read",
+        )
+        if after_stale_canvas != applied_canvas_snapshot:
+            raise RuntimeError("stale Canvas Plot apply changed the reviewed board")
+
         search = _structured(
             await session.call_tool(
                 "logosforge_search", {"query": "Inspect this packaged thread."},
@@ -510,7 +662,12 @@ async def _exercise_installed_mcp(
         timeline_proposal_id = timeline_proposal.get("proposal_id")
         if not isinstance(timeline_proposal_id, str) or not timeline_proposal_id:
             raise RuntimeError("installed MCP Timeline proposal returned no proposal ID")
-        return resolved_revision, timeline_proposal_id, applied_revision
+        return (
+            resolved_revision,
+            timeline_proposal_id,
+            applied_revision,
+            applied_canvas_snapshot,
+        )
 
 
 async def _recover_installed_timeline_receipt(
@@ -520,8 +677,9 @@ async def _recover_installed_timeline_receipt(
     project_id: int,
     timeline_proposal_id: str,
     applied_revision: str,
+    expected_canvas_plot: dict,
 ) -> None:
-    """Recover an applied Timeline proposal in a fresh MCP companion process."""
+    """Recover Timeline receipt and verify Canvas data in a fresh companion."""
     params = mcp.StdioServerParameters(
         command=str(command),
         args=command_args,
@@ -541,6 +699,16 @@ async def _recover_installed_timeline_receipt(
             ),
             "restarted MCP project selection",
         )
+        restarted_canvas_plot = _structured(
+            await session.call_tool(
+                "logosforge_get_canvas_plot", {"include_bodies": True},
+            ),
+            "restarted MCP Canvas Plot persistence read",
+        )
+        if restarted_canvas_plot != expected_canvas_plot:
+            raise RuntimeError(
+                "restarted MCP did not read the persisted Canvas Plot snapshot"
+            )
         recovered = _structured(
             await session.call_tool(
                 "logosforge_get_proposal",
@@ -862,6 +1030,7 @@ def _smoke_app(app: Path, timeout: int, codex_command: str | None = None) -> Non
                     final_comment_revision,
                     timeline_proposal_id,
                     applied_timeline_revision,
+                    applied_canvas_plot,
                 ) = asyncio.run(
                     asyncio.wait_for(
                         _exercise_installed_mcp(
@@ -884,6 +1053,7 @@ def _smoke_app(app: Path, timeout: int, codex_command: str | None = None) -> Non
                             project_id,
                             timeline_proposal_id,
                             applied_timeline_revision,
+                            applied_canvas_plot,
                         ),
                         timeout=20,
                     )
@@ -906,10 +1076,11 @@ def _smoke_app(app: Path, timeout: int, codex_command: str | None = None) -> Non
             if process is not None:
                 _stop_process_tree(process, app_pid, core_pid)
         print(
-            "Packaged Pro published a verified descriptor, advertised 40 MCP tools "
-            "including canonical project search and revisioned Timeline orchestration, "
-            "applied Timeline, reply, and resolution proposals, recovered the durable "
-            "Timeline receipt after a companion restart, and rejected stale and "
+            "Packaged Pro published a verified descriptor, advertised 42 MCP tools "
+            "including canonical project search plus revisioned Timeline and Canvas "
+            "Plot orchestration, applied Timeline, Canvas Plot, reply, and resolution "
+            "proposals, recovered only the durable Timeline receipt while re-reading "
+            "persisted Canvas data after a companion restart, and rejected stale and "
             "replayed applies."
         )
 

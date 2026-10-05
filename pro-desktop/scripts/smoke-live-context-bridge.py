@@ -465,6 +465,71 @@ async def _exercise_mcp(
                 "resumed publication did not advance the ordered revision"
             )
 
+        canvas_selection = "Canvas Plot node selected through CoreManager"
+        await asyncio.to_thread(
+            driver.command,
+            "publish",
+            context={
+                "projectId": project_id,
+                "activePanelId": "canvas-plot",
+                "activeSceneId": None,
+                "selectionSection": "Canvas Plot",
+                "selection": canvas_selection,
+            },
+        )
+        canvas_live = _structured(
+            await session.call_tool("logosforge_get_live_context", {}),
+            "Canvas Plot MCP live-context read",
+        )
+        canvas_selection_result = _structured(
+            await session.call_tool("logosforge_get_current_selection", {}),
+            "Canvas Plot MCP selection read",
+        )
+        canvas_context_revision = canvas_live.get("revision")
+        if not (
+            canvas_live.get("available") is True
+            and canvas_live.get("project_id") == project_id
+            and canvas_live.get("active_panel_id") == "canvas-plot"
+            and canvas_live.get("active_scene_id") is None
+            and canvas_live.get("selection_section") == "Canvas Plot"
+            and canvas_live.get("selection_length") == len(canvas_selection)
+            and type(canvas_context_revision) is int
+            and canvas_context_revision > resumed_revision
+        ):
+            raise RuntimeError(
+                f"Canvas Plot live context did not match publication: {canvas_live!r}"
+            )
+        if not (
+            canvas_selection_result.get("available") is True
+            and canvas_selection_result.get("selection") == canvas_selection
+            and canvas_selection_result.get("length") == len(canvas_selection)
+            and canvas_selection_result.get("revision") == canvas_context_revision
+        ):
+            raise RuntimeError(
+                "Canvas Plot current selection did not match publication: "
+                f"{canvas_selection_result!r}"
+            )
+        canvas_plot = _structured(
+            await session.call_tool("logosforge_get_canvas_plot", {}),
+            "Canvas Plot MCP selected-project read",
+        )
+        canvas_plot_revision = canvas_plot.get("revision")
+        if not (
+            canvas_plot.get("project_id") == project_id
+            and isinstance(canvas_plot_revision, str)
+            and len(canvas_plot_revision) == 64
+            and all(
+                char in "0123456789abcdef" for char in canvas_plot_revision
+            )
+            and canvas_plot.get("nodes") == []
+            and canvas_plot.get("links") == []
+            and canvas_plot.get("frames") == []
+        ):
+            raise RuntimeError(
+                "Canvas Plot MCP read did not use the live selected project: "
+                f"{canvas_plot!r}"
+            )
+
 
 def smoke(
     *,
@@ -597,7 +662,8 @@ def smoke(
 
     print(
         "Real CoreManager live context reached all connector and MCP reads, "
-        "cleared on suspension without resurrection, and resumed at a newer revision."
+        "cleared on suspension without resurrection, resumed at a newer revision, "
+        "and published Canvas Plot focus for a selected-project board read."
     )
 
 

@@ -137,6 +137,14 @@ const packagedSmoke = fs.readFileSync(
   path.join(process.cwd(), 'scripts', 'smoke-packaged-mcp.py'),
   'utf8',
 );
+const frozenSmoke = fs.readFileSync(
+  path.join(process.cwd(), 'scripts', 'smoke-frozen-mcp.py'),
+  'utf8',
+);
+const liveContextSmoke = fs.readFileSync(
+  path.join(process.cwd(), 'scripts', 'smoke-live-context-bridge.py'),
+  'utf8',
+);
 
 check('the installed app uses a stable per-user MCP companion path',
   electronMain.includes('mcpCompanionPath(') &&
@@ -210,6 +218,20 @@ check('packaged smoke applies one Timeline proposal and rejects its stale siblin
   packagedSmoke.includes('installed MCP Timeline apply') &&
   packagedSmoke.includes('installed MCP stale Timeline sibling apply') &&
   packagedSmoke.includes('after_stale_timeline != applied_snapshot'));
+check('frozen smoke advertises and proposes an exact non-mutating Canvas Plot command',
+  frozenSmoke.includes('expected 42 MCP tools') &&
+  frozenSmoke.includes('"logosforge_get_canvas_plot"') &&
+  frozenSmoke.includes('"logosforge_propose_canvas_plot_command"') &&
+  frozenSmoke.includes('f"/api/projects/{project_id}/canvas-plot/commands"') &&
+  frozenSmoke.includes('canvas_after != canvas_before'));
+check('packaged smoke applies one Canvas Plot proposal and rejects its stale sibling',
+  packagedSmoke.includes('expected 42 MCP tools') &&
+  packagedSmoke.includes('"logosforge_get_canvas_plot"') &&
+  packagedSmoke.includes('"logosforge_propose_canvas_plot_command"') &&
+  (packagedSmoke.match(/\{"include_bodies": True\}/g) || []).length === 4 &&
+  packagedSmoke.includes('installed MCP Canvas Plot apply') &&
+  packagedSmoke.includes('installed MCP stale Canvas Plot sibling apply') &&
+  packagedSmoke.includes('after_stale_canvas != applied_canvas_snapshot'));
 check('packaged smoke recovers one durable Timeline receipt after companion restart',
   packagedSmoke.includes('async def _recover_installed_timeline_receipt(') &&
   packagedSmoke.includes('restarted MCP durable Timeline receipt recovery') &&
@@ -220,6 +242,17 @@ check('packaged smoke recovers one durable Timeline receipt after companion rest
   packagedSmoke.includes('packaged_lane_count != 1') &&
   packagedSmoke.indexOf('_exercise_installed_mcp(') <
     packagedSmoke.lastIndexOf('_recover_installed_timeline_receipt('));
+check('companion restart re-reads Canvas data but keeps receipt recovery Timeline-only',
+  packagedSmoke.includes('restarted MCP Canvas Plot persistence read') &&
+  packagedSmoke.includes('restarted_canvas_plot != expected_canvas_plot') &&
+  packagedSmoke.includes('{"proposal_id": timeline_proposal_id}') &&
+  !packagedSmoke.includes('canvas_proposal_id'));
+check('real CoreManager smoke publishes Canvas Plot focus and reads its selected board',
+  liveContextSmoke.includes('"activePanelId": "canvas-plot"') &&
+  liveContextSmoke.includes('"activeSceneId": None') &&
+  liveContextSmoke.includes('canvas_context_revision > resumed_revision') &&
+  liveContextSmoke.includes('"logosforge_get_canvas_plot"') &&
+  liveContextSmoke.includes('canvas_plot.get("project_id") == project_id'));
 check('Windows release CI exercises both unpacked and portable MCP companions',
   releaseWorkflow.includes('Exercise packaged Windows MCP companion') &&
   releaseWorkflow.includes('Exercise portable Windows MCP companion'));
@@ -228,6 +261,7 @@ check('required packaged CI pins every Pro MCP build and smoke input',
     'pro-desktop/core/logosforge-mcp.spec',
     'pro-desktop/core/mcp_entry.py',
     'pro-desktop/scripts/smoke-frozen-mcp.py',
+    'pro-desktop/scripts/smoke-live-context-bridge.py',
     'pro-desktop/scripts/smoke-packaged-mcp.py',
   ].every((requiredPath) => packagedWorkflow.includes(requiredPath)));
 check('required packaged CI installs the Pro MCP runtime dependency',

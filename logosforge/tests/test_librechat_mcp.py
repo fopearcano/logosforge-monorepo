@@ -112,6 +112,40 @@ def test_api_client_get_timeline_uses_authoritative_project_endpoint():
     assert result == timeline
 
 
+def test_api_client_get_canvas_plot_uses_authoritative_project_endpoint():
+    client = LogosForgeApiClient(
+        base_url="http://127.0.0.1:8765", project_id=7, auth_token="secret",
+    )
+    captured = {}
+    canvas_plot = {
+        "project_id": 7,
+        "revision": "c" * 64,
+        "nodes": [],
+        "links": [],
+        "frames": [],
+    }
+
+    def fake_urlopen(request, timeout=None):
+        captured.update(
+            url=request.full_url,
+            method=request.get_method(),
+            authorization=request.headers.get("Authorization"),
+            timeout=timeout,
+        )
+        return _response(canvas_plot)
+
+    with mock.patch.object(ac.urllib.request, "urlopen", fake_urlopen):
+        result = client.get_canvas_plot()
+
+    assert captured == {
+        "url": "http://127.0.0.1:8765/api/projects/7/canvas-plot",
+        "method": "GET",
+        "authorization": "Bearer secret",
+        "timeout": 15.0,
+    }
+    assert result == canvas_plot
+
+
 def test_api_client_timeline_receipt_keeps_idempotency_key_out_of_url():
     client = LogosForgeApiClient(
         base_url="http://127.0.0.1:8765", project_id=7, auth_token="secret",
@@ -371,6 +405,83 @@ class _FakeApiClient:
         }
         self._timeline_revision_sequence = 3
         self.timeline_receipts: dict[tuple[int, str], dict] = {}
+        self.canvas_plots = {
+            1: {
+                "project_id": 1,
+                "revision": "4" * 64,
+                "nodes": [
+                    {
+                        "id": 501,
+                        "title": "Opening beat",
+                        "body": "A storm gathers.",
+                        "x": 20.0,
+                        "y": 30.0,
+                        "width": 180.0,
+                        "height": 110.0,
+                        "color_label": "blue",
+                        "group_label": "Act I",
+                        "scene_id": 11,
+                        "sort_order": 0,
+                        "created_at": "2026-09-01T10:00:00Z",
+                    },
+                    {
+                        "id": 502,
+                        "title": "Decision",
+                        "body": "Ada crosses the threshold.",
+                        "x": 240.0,
+                        "y": 30.0,
+                        "width": 200.0,
+                        "height": 120.0,
+                        "color_label": "amber",
+                        "group_label": "Act I",
+                        "scene_id": None,
+                        "sort_order": 1,
+                        "created_at": "2026-09-01T10:01:00Z",
+                    },
+                    {
+                        "id": 503,
+                        "title": "Aftermath",
+                        "body": "The cost becomes visible.",
+                        "x": 460.0,
+                        "y": 30.0,
+                        "width": 180.0,
+                        "height": 110.0,
+                        "color_label": "red",
+                        "group_label": "Act I",
+                        "scene_id": None,
+                        "sort_order": 2,
+                        "created_at": "2026-09-01T10:01:30Z",
+                    },
+                ],
+                "links": [{
+                    "id": 601,
+                    "source_node_id": 501,
+                    "target_node_id": 502,
+                    "label": "causes",
+                    "color_label": "gray",
+                    "link_type": "causal",
+                    "created_at": "2026-09-01T10:02:00Z",
+                }],
+                "frames": [{
+                    "id": 701,
+                    "title": "Opening sequence",
+                    "color_label": "violet",
+                    "x": 0.0,
+                    "y": 0.0,
+                    "width": 480.0,
+                    "height": 300.0,
+                    "created_at": "2026-09-01T10:03:00Z",
+                }],
+            },
+            2: {
+                "project_id": 2,
+                "revision": "5" * 64,
+                "nodes": [],
+                "links": [],
+                "frames": [],
+            },
+        }
+        self._canvas_plot_revision_sequence = 6
         self.comments = {
             1: [
                 {
@@ -511,6 +622,10 @@ class _FakeApiClient:
         pid = int(project_id) if project_id is not None else self.require_project_id()
         return copy.deepcopy(self.timelines[pid])
 
+    def get_canvas_plot(self, project_id: int | None = None) -> dict:
+        pid = int(project_id) if project_id is not None else self.require_project_id()
+        return copy.deepcopy(self.canvas_plots[pid])
+
     def get_timeline_command_receipt(
         self,
         idempotency_key: str,
@@ -599,6 +714,8 @@ class _FakeApiClient:
                 return copy.deepcopy(receipt)
             if path == "/api/projects/1/timeline":
                 return self.get_timeline(1)
+            if path == "/api/projects/1/canvas-plot":
+                return self.get_canvas_plot(1)
             comment_prefix = "/api/projects/1/comments/"
             if path.startswith(comment_prefix):
                 return self.get_comment(int(path.removeprefix(comment_prefix)), 1)
@@ -708,6 +825,53 @@ class _FakeApiClient:
                 "applied_revision": timeline["revision"],
                 "changed": True,
                 "affected_scene_ids": [],
+            }
+
+        if method == "POST" and path == "/api/projects/1/canvas-plot/commands":
+            canvas_plot = self.canvas_plots[1]
+            assert body is not None
+            if body.get("expected_revision") != canvas_plot["revision"]:
+                raise LogosForgeApiError(
+                    "HTTP 409: The Canvas Plot changed.",
+                    status_code=409,
+                    error_code="canvas_plot_conflict",
+                )
+            if body.get("kind") != "create_node":
+                raise LogosForgeApiError("unsupported fake Canvas Plot command")
+            created_node_id = 504 + max(0, len(canvas_plot["nodes"]) - 3)
+            node = {
+                "id": created_node_id,
+                "title": body.get("title", ""),
+                "body": body.get("body", ""),
+                "x": body.get("x", 0.0),
+                "y": body.get("y", 0.0),
+                "width": body.get("width", 180.0),
+                "height": body.get("height", 110.0),
+                "color_label": body.get("color_label", ""),
+                "group_label": body.get("group_label", ""),
+                "scene_id": body.get("scene_id"),
+                "sort_order": len(canvas_plot["nodes"]),
+                "created_at": "2026-09-01T11:00:00Z",
+            }
+            index = body.get("index")
+            if index is None:
+                index = len(canvas_plot["nodes"])
+            canvas_plot["nodes"].insert(index, node)
+            for sort_order, row in enumerate(canvas_plot["nodes"]):
+                row["sort_order"] = sort_order
+            canvas_plot["revision"] = (
+                f"{self._canvas_plot_revision_sequence:064x}"
+            )
+            self._canvas_plot_revision_sequence += 1
+            return {
+                "canvas_plot": copy.deepcopy(canvas_plot),
+                "changed": True,
+                "affected_node_ids": [created_node_id],
+                "affected_link_ids": [],
+                "affected_frame_ids": [],
+                "created_node_id": created_node_id,
+                "created_link_id": None,
+                "created_frame_id": None,
             }
 
         scene_prefix = "/api/projects/1/scenes/"
@@ -844,6 +1008,313 @@ def test_timeline_read_and_proposal_apply_are_exact_revision_bound_and_single_us
 
     with pytest.raises(GatewayError, match="applied, not pending"):
         gateway.apply_proposal(first["proposal_id"])
+
+
+def test_canvas_plot_read_and_proposal_apply_are_revision_bound_and_single_use():
+    gateway, fake = _gateway(allow_writes=True)
+    compact = gateway.get_canvas_plot()
+    compact_node = compact["nodes"][0]
+    assert "body" not in compact_node
+    assert compact_node["body_length"] == len("A storm gathers.")
+    assert compact_node["body_preview"] == "A storm gathers."
+    assert len(compact_node["body_sha256"]) == 64
+
+    current = gateway.get_canvas_plot(include_bodies=True)
+    assert current == fake.canvas_plots[1]
+
+    command = {
+        "kind": "create_node",
+        "expected_revision": current["revision"],
+        "title": "Hidden motive",
+        "body": "Ada withholds the letter.",
+        "x": 120.5,
+        "y": -30.0,
+        "width": 210.0,
+        "height": 140.0,
+        "color_label": "indigo",
+        "group_label": "Act II",
+        "scene_id": 11,
+        "index": 1,
+    }
+    first = gateway.propose_canvas_plot_command(command)
+    stale_sibling = gateway.propose_canvas_plot_command({
+        "kind": "create_node",
+        "expected_revision": current["revision"],
+        "title": "Stale sibling",
+    })
+
+    assert first["state"] == stale_sibling["state"] == "pending"
+    assert first["request"] == {
+        "method": "POST",
+        "path": "/api/projects/1/canvas-plot/commands",
+        "body": command,
+    }
+    assert first["review"]["canvas_plot_revision"] == "4" * 64
+    assert first["review"]["command_kind"] == "create_node"
+    assert first["review"]["destructive"] is False
+    assert [node["id"] for node in fake.canvas_plots[1]["nodes"]] == [
+        501, 502, 503,
+    ]
+    assert not any(
+        method == "POST" and path.endswith("/canvas-plot/commands")
+        for method, path, _body in fake.requests
+    )
+
+    applied = gateway.apply_proposal(first["proposal_id"])
+    assert applied["state"] == "applied"
+    assert [node["title"] for node in fake.canvas_plots[1]["nodes"]] == [
+        "Opening beat", "Hidden motive", "Decision", "Aftermath",
+    ]
+    assert applied["result"]["changed"] is True
+    assert applied["result"]["created_node_id"] == 504
+    assert fake.requests[-1] == (
+        "POST",
+        "/api/projects/1/canvas-plot/commands",
+        command,
+    )
+    assert fake.request_idempotency_keys[-1] == (
+        "POST",
+        "/api/projects/1/canvas-plot/commands",
+        "",
+    )
+
+    with pytest.raises(GatewayError, match="canvas_plot_conflict.*will not be retried"):
+        gateway.apply_proposal(stale_sibling["proposal_id"])
+    assert gateway.get_proposal(stale_sibling["proposal_id"])["state"] == "failed"
+    assert [node["title"] for node in fake.canvas_plots[1]["nodes"]] == [
+        "Opening beat", "Hidden motive", "Decision", "Aftermath",
+    ]
+
+    with pytest.raises(GatewayError, match="applied, not pending"):
+        gateway.apply_proposal(first["proposal_id"])
+
+
+def test_canvas_plot_all_nine_commands_preserve_the_exact_reviewed_payload():
+    gateway, fake = _gateway()
+    revision = fake.canvas_plots[1]["revision"]
+    commands = [
+        {
+            "kind": "create_node",
+            "expected_revision": revision,
+            "title": "New card",
+            "body": "Draft text",
+            "x": 1.25,
+            "y": -2.5,
+            "width": 181.0,
+            "height": 111.0,
+            "color_label": "green",
+            "group_label": "Act II",
+            "scene_id": 11,
+            "index": 3,
+        },
+        {
+            "kind": "update_node",
+            "expected_revision": revision,
+            "node_id": 501,
+            "title": "Opening image",
+            "body": "Rain needles the empty road.",
+            "x": 21.0,
+            "y": 31.0,
+            "width": 190.0,
+            "height": 115.0,
+            "color_label": "cyan",
+            "group_label": "Act One",
+            "scene_id": None,
+            "index": 1,
+        },
+        {
+            "kind": "delete_node",
+            "expected_revision": revision,
+            "node_id": 502,
+        },
+        {
+            "kind": "create_link",
+            "expected_revision": revision,
+            "source_node_id": 501,
+            "target_node_id": 503,
+            "label": "foreshadows",
+            "color_label": "orange",
+            "link_type": "thematic",
+        },
+        {
+            "kind": "update_link",
+            "expected_revision": revision,
+            "link_id": 601,
+            "label": "forces",
+            "color_label": "black",
+            "link_type": "conflict",
+        },
+        {
+            "kind": "delete_link",
+            "expected_revision": revision,
+            "link_id": 601,
+        },
+        {
+            "kind": "create_frame",
+            "expected_revision": revision,
+            "title": "Act II",
+            "color_label": "green",
+            "x": 10.0,
+            "y": 20.0,
+            "width": 500.0,
+            "height": 320.0,
+        },
+        {
+            "kind": "update_frame",
+            "expected_revision": revision,
+            "frame_id": 701,
+            "title": "Opening movement",
+            "color_label": "purple",
+            "x": -10.0,
+            "y": -20.0,
+            "width": 520.0,
+            "height": 340.0,
+        },
+        {
+            "kind": "delete_frame",
+            "expected_revision": revision,
+            "frame_id": 701,
+        },
+    ]
+
+    proposals = [gateway.propose_canvas_plot_command(command) for command in commands]
+
+    assert [proposal["operation"] for proposal in proposals] == [
+        f"canvas_plot_{command['kind']}" for command in commands
+    ]
+    assert [proposal["request"]["body"] for proposal in proposals] == commands
+    assert all(
+        proposal["request"]["path"]
+        == "/api/projects/1/canvas-plot/commands"
+        for proposal in proposals
+    )
+    assert all(proposal["state"] == "pending" for proposal in proposals)
+    assert fake.canvas_plots[1]["revision"] == revision
+    assert len(fake.canvas_plots[1]["nodes"]) == 3
+    assert len(fake.canvas_plots[1]["links"]) == 1
+    assert len(fake.canvas_plots[1]["frames"]) == 1
+    assert not any(method == "POST" for method, _path, _body in fake.requests)
+
+
+def test_canvas_plot_destructive_reviews_name_the_exact_blast_radius():
+    gateway, fake = _gateway()
+    revision = fake.canvas_plots[1]["revision"]
+
+    deleted_node = gateway.propose_canvas_plot_command({
+        "kind": "delete_node",
+        "expected_revision": revision,
+        "node_id": 501,
+    })
+    deleted_link = gateway.propose_canvas_plot_command({
+        "kind": "delete_link",
+        "expected_revision": revision,
+        "link_id": 601,
+    })
+    deleted_frame = gateway.propose_canvas_plot_command({
+        "kind": "delete_frame",
+        "expected_revision": revision,
+        "frame_id": 701,
+    })
+
+    assert deleted_node["review"]["destructive"] is True
+    assert deleted_node["review"]["requires_destructive_confirmation"] is True
+    assert deleted_node["review"]["node"] == {
+        "id": 501,
+        "title": "Opening beat",
+        "scene_id": 11,
+    }
+    assert deleted_node["review"]["incident_link_ids"] == {
+        "items": [601], "total": 1, "truncated": 0,
+    }
+    assert "scene remains unchanged" in deleted_node["review"]["effect"]
+
+    assert deleted_link["review"]["destructive"] is True
+    assert deleted_link["review"]["link"] == {
+        "id": 601,
+        "source_node_id": 501,
+        "target_node_id": 502,
+        "label": "causes",
+    }
+    assert "legacy reverse or duplicate rows" in deleted_link["review"]["effect"]
+    assert "Nodes and manuscript scenes remain unchanged" in (
+        deleted_link["review"]["effect"]
+    )
+
+    assert deleted_frame["review"]["destructive"] is True
+    assert deleted_frame["review"]["frame"] == {
+        "id": 701,
+        "title": "Opening sequence",
+    }
+    assert "nodes, links" in deleted_frame["review"]["effect"]
+    assert "manuscript scenes remain unchanged" in deleted_frame["review"]["effect"]
+
+    assert len(fake.canvas_plots[1]["nodes"]) == 3
+    assert len(fake.canvas_plots[1]["links"]) == 1
+    assert len(fake.canvas_plots[1]["frames"]) == 1
+
+
+@pytest.mark.parametrize(
+    ("command", "message"),
+    [
+        (
+            {
+                "kind": "update_node",
+                "expected_revision": "4" * 64,
+                "node_id": 501,
+                "title": "Opening beat",
+            },
+            "node update would not change",
+        ),
+        (
+            {
+                "kind": "update_link",
+                "expected_revision": "4" * 64,
+                "link_id": 601,
+                "color_label": "gray",
+            },
+            "link update would not change",
+        ),
+        (
+            {
+                "kind": "update_frame",
+                "expected_revision": "4" * 64,
+                "frame_id": 701,
+                "title": "Opening sequence",
+            },
+            "frame update would not change",
+        ),
+        (
+            {
+                "kind": "create_link",
+                "expected_revision": "4" * 64,
+                "source_node_id": 502,
+                "target_node_id": 501,
+            },
+            "already linked",
+        ),
+        (
+            {
+                "kind": "create_link",
+                "expected_revision": "4" * 64,
+                "source_node_id": 501,
+                "target_node_id": 501,
+            },
+            "cannot connect a node to itself",
+        ),
+    ],
+    ids=[
+        "node-update", "link-update", "frame-update", "duplicate-link",
+        "self-link",
+    ],
+)
+def test_canvas_plot_noop_commands_are_rejected_before_proposal(command, message):
+    gateway, fake = _gateway()
+
+    with pytest.raises(GatewayError, match=message):
+        gateway.propose_canvas_plot_command(command)
+
+    assert gateway.list_proposals() == {"proposals": []}
+    assert not any(method == "POST" for method, _path, _body in fake.requests)
 
 
 @pytest.mark.parametrize("status_code", [None, 500], ids=["no-response", "server-error"])
@@ -1458,6 +1929,123 @@ def test_timeline_tool_rejects_unscoped_or_ambiguous_commands(command, message):
     assert not any(method == "POST" for method, _path, _body in fake.requests)
 
 
+@pytest.mark.parametrize(
+    ("command", "message"),
+    [
+        (
+            {
+                "kind": "create_node",
+                "expected_revision": "A" * 64,
+            },
+            "exact 64-character lowercase revision",
+        ),
+        (
+            {
+                "kind": "create_node",
+                "expected_revision": "0" * 64,
+            },
+            "expected_revision does not match the current Canvas Plot",
+        ),
+        (
+            {
+                "kind": "delete_frame",
+                "expected_revision": "4" * 64,
+                "frame_id": 701,
+                "confirmed": True,
+            },
+            "Unexpected Canvas Plot command field",
+        ),
+        (
+            {
+                "kind": "update_node",
+                "expected_revision": "4" * 64,
+                "node_id": 501,
+            },
+            "must change at least one field",
+        ),
+        (
+            {
+                "kind": "update_node",
+                "expected_revision": "4" * 64,
+                "node_id": 501,
+                "title": None,
+            },
+            "title must not be null",
+        ),
+        (
+            {
+                "kind": "create_node",
+                "expected_revision": "4" * 64,
+                "index": True,
+            },
+            "index must be a non-negative integer",
+        ),
+        (
+            {
+                "kind": "create_node",
+                "expected_revision": "4" * 64,
+                "width": 0,
+            },
+            "width must be greater than zero",
+        ),
+        (
+            {
+                "kind": "create_link",
+                "expected_revision": "4" * 64,
+                "source_node_id": 501,
+            },
+            "requires source_node_id and target_node_id",
+        ),
+        (
+            {
+                "kind": "update_link",
+                "expected_revision": "4" * 64,
+                "link_id": 601,
+            },
+            "must change at least one field",
+        ),
+        (
+            {
+                "kind": "update_frame",
+                "expected_revision": "4" * 64,
+                "frame_id": 701,
+                "height": None,
+            },
+            "height must not be null",
+        ),
+        (
+            {
+                "kind": "delete_node",
+                "expected_revision": "4" * 64,
+                "node_id": False,
+            },
+            "node_id must be a positive integer",
+        ),
+        (
+            {
+                "kind": "teleport_node",
+                "expected_revision": "4" * 64,
+            },
+            "command kind must be one of",
+        ),
+    ],
+)
+def test_canvas_plot_tool_rejects_unscoped_or_ambiguous_commands(command, message):
+    from logosforge.librechat.mcp_server import call_tool
+
+    gateway, fake = _gateway()
+    response = call_tool(
+        gateway,
+        "logosforge_propose_canvas_plot_command",
+        {"command": command},
+    )
+
+    assert response["ok"] is False
+    assert message in response["error"]
+    assert gateway.list_proposals() == {"proposals": []}
+    assert not any(method == "POST" for method, _path, _body in fake.requests)
+
+
 def test_snapshot_uses_canonical_cast_and_bounded_comment_summaries():
     gateway, _ = _gateway()
 
@@ -1811,10 +2399,12 @@ def test_mcp_registry_has_unique_focused_tools_and_no_legacy_self_approval():
     from logosforge.librechat import mcp_server as server
 
     names = [spec.name for spec in server.TOOL_SPECS]
-    assert len(names) == len(set(names)) == 40
+    assert len(names) == len(set(names)) == 42
     assert {
         "logosforge_get_timeline",
         "logosforge_propose_timeline_command",
+        "logosforge_get_canvas_plot",
+        "logosforge_propose_canvas_plot_command",
         "logosforge_list_comments",
         "logosforge_propose_comment_reply",
         "logosforge_propose_comment_resolution",
@@ -1858,6 +2448,66 @@ def test_mcp_registry_has_unique_focused_tools_and_no_legacy_self_approval():
         {"required": ["color_label"]},
         {"required": ["collapsed"]},
         {"required": ["index"]},
+    ]
+    canvas_read = server.HANDLERS["logosforge_get_canvas_plot"]
+    assert canvas_read.input_schema == server._obj({"include_bodies": server.BOOL})
+    assert canvas_read.read_only is True
+    assert canvas_read.destructive is False
+    assert canvas_read.idempotent is True
+    canvas_proposal = server.HANDLERS[
+        "logosforge_propose_canvas_plot_command"
+    ]
+    assert canvas_proposal.read_only is True
+    assert canvas_proposal.destructive is False
+    assert canvas_proposal.idempotent is False
+    canvas_variants = canvas_proposal.input_schema["properties"]["command"][
+        "oneOf"
+    ]
+    assert {variant["properties"]["kind"]["const"] for variant in canvas_variants} == {
+        "create_node", "update_node", "delete_node",
+        "create_link", "update_link", "delete_link",
+        "create_frame", "update_frame", "delete_frame",
+    }
+    assert all(
+        variant["additionalProperties"] is False for variant in canvas_variants
+    )
+    canvas_by_kind = {
+        variant["properties"]["kind"]["const"]: variant
+        for variant in canvas_variants
+    }
+    assert canvas_by_kind["create_node"]["required"] == [
+        "kind", "expected_revision",
+    ]
+    assert canvas_by_kind["create_node"]["properties"]["body"]["maxLength"] == (
+        100_000
+    )
+    assert canvas_by_kind["create_node"]["properties"]["scene_id"] == {
+        "type": ["integer", "null"], "minimum": 1,
+    }
+    assert canvas_by_kind["update_node"]["anyOf"] == [
+        {"required": [field]}
+        for field in (
+            "title", "body", "x", "y", "width", "height",
+            "color_label", "group_label", "scene_id", "index",
+        )
+    ]
+    assert canvas_by_kind["update_link"]["anyOf"] == [
+        {"required": ["label"]},
+        {"required": ["color_label"]},
+        {"required": ["link_type"]},
+    ]
+    assert canvas_by_kind["update_frame"]["anyOf"] == [
+        {"required": [field]}
+        for field in ("title", "color_label", "x", "y", "width", "height")
+    ]
+    assert canvas_by_kind["delete_node"]["required"] == [
+        "kind", "expected_revision", "node_id",
+    ]
+    assert canvas_by_kind["delete_link"]["required"] == [
+        "kind", "expected_revision", "link_id",
+    ]
+    assert canvas_by_kind["delete_frame"]["required"] == [
+        "kind", "expected_revision", "frame_id",
     ]
     search = server.HANDLERS["logosforge_search"]
     assert search.input_schema == server._obj(
@@ -1914,12 +2564,14 @@ def test_real_mcp_stdio_initializes_and_advertises_structured_tools():
 
     initialized, listed = asyncio.run(exercise())
     assert initialized.serverInfo.name == "logosforge"
-    assert initialized.serverInfo.version == "1.3.0"
+    assert initialized.serverInfo.version == "1.4.0"
     tools = {tool.name: tool for tool in listed.tools}
-    assert len(tools) == 40
+    assert len(tools) == 42
     assert {
         "logosforge_get_timeline",
         "logosforge_propose_timeline_command",
+        "logosforge_get_canvas_plot",
+        "logosforge_propose_canvas_plot_command",
         "logosforge_list_comments",
         "logosforge_propose_comment_reply",
         "logosforge_propose_comment_resolution",
@@ -1957,6 +2609,23 @@ def test_real_mcp_stdio_initializes_and_advertises_structured_tools():
     assert timeline_proposal_annotations.readOnlyHint is True
     assert timeline_proposal_annotations.destructiveHint is False
     assert timeline_proposal_annotations.idempotentHint is False
+    canvas_annotations = tools["logosforge_get_canvas_plot"].annotations
+    assert canvas_annotations.readOnlyHint is True
+    assert canvas_annotations.destructiveHint is False
+    assert canvas_annotations.idempotentHint is True
+    canvas_proposal = tools["logosforge_propose_canvas_plot_command"]
+    canvas_proposal_annotations = canvas_proposal.annotations
+    assert canvas_proposal_annotations.readOnlyHint is True
+    assert canvas_proposal_annotations.destructiveHint is False
+    assert canvas_proposal_annotations.idempotentHint is False
+    advertised_canvas_variants = canvas_proposal.inputSchema["properties"][
+        "command"
+    ]["oneOf"]
+    assert len(advertised_canvas_variants) == 9
+    assert all(
+        variant["additionalProperties"] is False
+        for variant in advertised_canvas_variants
+    )
     annotations = tools["logosforge_apply_proposal"].annotations
     assert annotations.readOnlyHint is False
     assert annotations.destructiveHint is True

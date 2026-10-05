@@ -53,6 +53,27 @@ def _create_node(
     return response.json()
 
 
+def test_create_node_explicit_null_index_appends_like_an_omitted_index():
+    client, _db, project_id = _project()
+    first = _create_node(
+        client, project_id, _snapshot(client, project_id), "First",
+    )
+    second = _create_node(
+        client,
+        project_id,
+        first["canvas_plot"],
+        "Second",
+        index=None,
+    )
+
+    assert [node["title"] for node in second["canvas_plot"]["nodes"]] == [
+        "First", "Second",
+    ]
+    assert [node["sort_order"] for node in second["canvas_plot"]["nodes"]] == [
+        0, 1,
+    ]
+
+
 def test_all_nine_commands_return_canonical_persisted_snapshots(tmp_path):
     path = str(tmp_path / "canvas.db")
     client, db, project_id = _project(path=path)

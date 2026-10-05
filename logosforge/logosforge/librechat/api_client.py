@@ -203,6 +203,11 @@ class LogosForgeApiClient:
         pid = int(project_id) if project_id is not None else self.require_project_id()
         return self.request("GET", f"{self._prefix}/projects/{pid}/timeline")
 
+    def get_canvas_plot(self, project_id: int | None = None) -> dict:
+        """Return the canonical revisioned Canvas Plot board."""
+        pid = int(project_id) if project_id is not None else self.require_project_id()
+        return self.request("GET", f"{self._prefix}/projects/{pid}/canvas-plot")
+
     def get_timeline_command_receipt(
         self,
         idempotency_key: str,

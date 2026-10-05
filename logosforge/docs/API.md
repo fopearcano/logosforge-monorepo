@@ -307,6 +307,8 @@ own their text, geometry, colour/group labels, and dense zero-based stacking
 order; an optional `scene_id` is a reference only and does not make the board
 scene-derived. Viewport zoom and centre are stored separately in the project's
 `canvas_plot_view` setting and therefore never advance the structural revision.
+For `create_node`, an omitted or explicit-null `index` appends the node; an
+integer inserts it at that zero-based position.
 
 Every command includes the snapshot's `expected_revision` and is applied under
 the project Canvas lock in one `BEGIN IMMEDIATE` transaction. A stale token

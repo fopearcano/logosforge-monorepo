@@ -5153,8 +5153,11 @@ class Database:
                         )
                         session.add(node)
                         session.flush()
-                        insertion = checked_index(
-                            fields.get("index", len(nodes)), len(nodes),
+                        requested_index = fields.get("index")
+                        insertion = (
+                            len(nodes)
+                            if requested_index is None
+                            else checked_index(requested_index, len(nodes))
                         )
                         nodes.insert(insertion, node)
                         dense_node_order(nodes)

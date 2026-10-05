@@ -24,6 +24,7 @@ import difflib
 import hashlib
 import json
 import logging
+import math
 import re
 import secrets
 import threading
@@ -90,7 +91,10 @@ def _compact_body(body: dict[str, Any]) -> dict[str, Any]:
     """Return a review-safe body without echoing an entire manuscript."""
     out: dict[str, Any] = {}
     for key, value in body.items():
-        if key == "content" and isinstance(value, str):
+        if (
+            key == "content"
+            or (key == "body" and isinstance(value, str) and len(value) > 2_000)
+        ) and isinstance(value, str):
             out[key] = {
                 "length": len(value),
                 "sha256": hashlib.sha256(value.encode("utf-8")).hexdigest(),
@@ -131,6 +135,36 @@ _TIMELINE_COMMAND_FIELDS: dict[str, set[str]] = {
     },
     "remove_event": {"kind", "expected_revision", "scene_id"},
     "set_order_mode": {"kind", "expected_revision", "mode"},
+}
+
+_CANVAS_PLOT_COMMAND_FIELDS: dict[str, set[str]] = {
+    "create_node": {
+        "kind", "expected_revision", "title", "body", "x", "y", "width",
+        "height", "color_label", "group_label", "scene_id", "index",
+    },
+    "update_node": {
+        "kind", "expected_revision", "node_id", "title", "body", "x", "y",
+        "width", "height", "color_label", "group_label", "scene_id", "index",
+    },
+    "delete_node": {"kind", "expected_revision", "node_id"},
+    "create_link": {
+        "kind", "expected_revision", "source_node_id", "target_node_id",
+        "label", "color_label", "link_type",
+    },
+    "update_link": {
+        "kind", "expected_revision", "link_id", "label", "color_label",
+        "link_type",
+    },
+    "delete_link": {"kind", "expected_revision", "link_id"},
+    "create_frame": {
+        "kind", "expected_revision", "title", "color_label", "x", "y",
+        "width", "height",
+    },
+    "update_frame": {
+        "kind", "expected_revision", "frame_id", "title", "color_label", "x",
+        "y", "width", "height",
+    },
+    "delete_frame": {"kind", "expected_revision", "frame_id"},
 }
 
 
@@ -281,6 +315,210 @@ def _normalize_timeline_command(command: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def _canvas_plot_revision(value: Any) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(char not in "0123456789abcdef" for char in value)
+    ):
+        raise GatewayError(
+            "expected_revision must be the exact 64-character lowercase "
+            "revision returned by logosforge_get_canvas_plot."
+        )
+    return value
+
+
+def _canvas_plot_integer(
+    value: Any,
+    name: str,
+    *,
+    minimum: int,
+    nullable: bool = False,
+) -> int | None:
+    if nullable and value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        qualifier = "positive " if minimum == 1 else "non-negative "
+        null_note = " or null" if nullable else ""
+        raise GatewayError(f"{name} must be a {qualifier}integer{null_note}.")
+    return value
+
+
+def _canvas_plot_string(value: Any, name: str, *, maximum: int) -> str:
+    if not isinstance(value, str):
+        raise GatewayError(f"{name} must be a string.")
+    if len(value) > maximum:
+        raise GatewayError(f"{name} may contain at most {maximum} characters.")
+    return value
+
+
+def _canvas_plot_number(
+    value: Any,
+    name: str,
+    *,
+    positive: bool = False,
+) -> int | float:
+    try:
+        finite = math.isfinite(value)
+    except (OverflowError, TypeError):
+        finite = False
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not finite:
+        raise GatewayError(f"{name} must be a finite number.")
+    if positive and value <= 0:
+        raise GatewayError(f"{name} must be greater than zero.")
+    return value
+
+
+def _normalize_canvas_plot_command(command: dict[str, Any]) -> dict[str, Any]:
+    """Validate and copy the complete transactional Canvas Plot vocabulary.
+
+    Keep this independent of the FastAPI/Pydantic models so the frozen MCP
+    companion remains a lean HTTP client.
+    """
+    if not isinstance(command, dict):
+        raise GatewayError("Canvas Plot command must be an object.")
+    kind = command.get("kind")
+    if not isinstance(kind, str) or kind not in _CANVAS_PLOT_COMMAND_FIELDS:
+        raise GatewayError(
+            "Canvas Plot command kind must be one of: "
+            + ", ".join(sorted(_CANVAS_PLOT_COMMAND_FIELDS))
+            + "."
+        )
+    extra = sorted(set(command) - _CANVAS_PLOT_COMMAND_FIELDS[kind])
+    if extra:
+        raise GatewayError(
+            "Unexpected Canvas Plot command field(s): " + ", ".join(extra) + "."
+        )
+    if "expected_revision" not in command:
+        raise GatewayError("Canvas Plot command requires expected_revision.")
+
+    normalized: dict[str, Any] = {
+        "kind": kind,
+        "expected_revision": _canvas_plot_revision(command["expected_revision"]),
+    }
+
+    node_strings = {
+        "title": 500,
+        "body": 100_000,
+        "color_label": 100,
+        "group_label": 500,
+    }
+    node_numbers = {"x": False, "y": False, "width": True, "height": True}
+    frame_strings = {"title": 500, "color_label": 100}
+    frame_numbers = {"x": False, "y": False, "width": True, "height": True}
+
+    if kind in {"create_node", "update_node"}:
+        if kind == "update_node":
+            if "node_id" not in command:
+                raise GatewayError("update_node requires node_id.")
+            normalized["node_id"] = _canvas_plot_integer(
+                command["node_id"], "node_id", minimum=1,
+            )
+            updates = set(node_strings) | set(node_numbers) | {"scene_id", "index"}
+            if not updates.intersection(command):
+                raise GatewayError("update_node must change at least one field.")
+        for field, maximum in node_strings.items():
+            if field in command:
+                if command[field] is None:
+                    raise GatewayError(f"{field} must not be null.")
+                normalized[field] = _canvas_plot_string(
+                    command[field], field, maximum=maximum,
+                )
+        for field, positive in node_numbers.items():
+            if field in command:
+                if command[field] is None:
+                    raise GatewayError(f"{field} must not be null.")
+                normalized[field] = _canvas_plot_number(
+                    command[field], field, positive=positive,
+                )
+        if "scene_id" in command:
+            normalized["scene_id"] = _canvas_plot_integer(
+                command["scene_id"], "scene_id", minimum=1, nullable=True,
+            )
+        if "index" in command:
+            normalized["index"] = _canvas_plot_integer(
+                command["index"], "index", minimum=0,
+                nullable=kind == "create_node",
+            )
+    elif kind == "delete_node":
+        if "node_id" not in command:
+            raise GatewayError("delete_node requires node_id.")
+        normalized["node_id"] = _canvas_plot_integer(
+            command["node_id"], "node_id", minimum=1,
+        )
+    elif kind == "create_link":
+        for field in ("source_node_id", "target_node_id"):
+            if field not in command:
+                raise GatewayError(
+                    "create_link requires source_node_id and target_node_id."
+                )
+            normalized[field] = _canvas_plot_integer(
+                command[field], field, minimum=1,
+            )
+        for field, maximum in {
+            "label": 500, "color_label": 100, "link_type": 100,
+        }.items():
+            if field in command:
+                normalized[field] = _canvas_plot_string(
+                    command[field], field, maximum=maximum,
+                )
+    elif kind == "update_link":
+        if "link_id" not in command:
+            raise GatewayError("update_link requires link_id.")
+        normalized["link_id"] = _canvas_plot_integer(
+            command["link_id"], "link_id", minimum=1,
+        )
+        updates = {"label", "color_label", "link_type"}.intersection(command)
+        if not updates:
+            raise GatewayError("update_link must change at least one field.")
+        for field, maximum in {
+            "label": 500, "color_label": 100, "link_type": 100,
+        }.items():
+            if field in command:
+                if command[field] is None:
+                    raise GatewayError(f"{field} must not be null.")
+                normalized[field] = _canvas_plot_string(
+                    command[field], field, maximum=maximum,
+                )
+    elif kind == "delete_link":
+        if "link_id" not in command:
+            raise GatewayError("delete_link requires link_id.")
+        normalized["link_id"] = _canvas_plot_integer(
+            command["link_id"], "link_id", minimum=1,
+        )
+    elif kind in {"create_frame", "update_frame"}:
+        if kind == "update_frame":
+            if "frame_id" not in command:
+                raise GatewayError("update_frame requires frame_id.")
+            normalized["frame_id"] = _canvas_plot_integer(
+                command["frame_id"], "frame_id", minimum=1,
+            )
+            updates = set(frame_strings) | set(frame_numbers)
+            if not updates.intersection(command):
+                raise GatewayError("update_frame must change at least one field.")
+        for field, maximum in frame_strings.items():
+            if field in command:
+                if command[field] is None:
+                    raise GatewayError(f"{field} must not be null.")
+                normalized[field] = _canvas_plot_string(
+                    command[field], field, maximum=maximum,
+                )
+        for field, positive in frame_numbers.items():
+            if field in command:
+                if command[field] is None:
+                    raise GatewayError(f"{field} must not be null.")
+                normalized[field] = _canvas_plot_number(
+                    command[field], field, positive=positive,
+                )
+    else:
+        if "frame_id" not in command:
+            raise GatewayError("delete_frame requires frame_id.")
+        normalized["frame_id"] = _canvas_plot_integer(
+            command["frame_id"], "frame_id", minimum=1,
+        )
+    return normalized
+
+
 @dataclass
 class Proposal:
     proposal_id: str
@@ -399,6 +637,22 @@ class LogosForgeMcpGateway:
 
     def get_timeline(self) -> dict[str, Any]:
         return self.client.get_timeline(self._project_id())
+
+    def get_canvas_plot(self, include_bodies: bool = False) -> dict[str, Any]:
+        snapshot = copy.deepcopy(self.client.get_canvas_plot(self._project_id()))
+        if include_bodies or not isinstance(snapshot, dict):
+            return snapshot
+        nodes = snapshot.get("nodes")
+        if not isinstance(nodes, list):
+            return snapshot
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            body = str(node.pop("body", "") or "")
+            node["body_length"] = len(body)
+            node["body_sha256"] = hashlib.sha256(body.encode("utf-8")).hexdigest()
+            node["body_preview"] = _preview(body, 500)
+        return snapshot
 
     def list_characters(self) -> list[dict]:
         return self.client.list_characters(self._project_id())
@@ -1115,6 +1369,374 @@ class LogosForgeMcpGateway:
             self._expire(proposal, now, raise_error=False)
 
     # -- Focused proposal builders ---------------------------------------
+
+    def propose_canvas_plot_command(
+        self, command: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Store one exact Canvas Plot command after a revisioned preflight.
+
+        Core compares the same revision again inside the write transaction.
+        A generic digest guard would add a second read without strengthening
+        that atomic compare-and-swap boundary, so Canvas proposals rely on the
+        canonical board revision just as Timeline proposals do.
+        """
+        pid = self._project_id()
+        normalized = _normalize_canvas_plot_command(command)
+        current = self.client.get_canvas_plot(pid)
+        if not isinstance(current, dict):
+            raise GatewayError(
+                "The LogosForge API returned an invalid Canvas Plot snapshot."
+            )
+        revision = current.get("revision")
+        if revision != normalized["expected_revision"]:
+            raise GatewayError(
+                "expected_revision does not match the current Canvas Plot. Read it "
+                "again with logosforge_get_canvas_plot and create a fresh proposal."
+            )
+
+        nodes = [row for row in current.get("nodes", []) if isinstance(row, dict)]
+        links = [row for row in current.get("links", []) if isinstance(row, dict)]
+        frames = [row for row in current.get("frames", []) if isinstance(row, dict)]
+        node_order = [
+            int(row["id"]) for row in nodes if isinstance(row.get("id"), int)
+        ]
+
+        def node_by_id(node_id: int) -> dict[str, Any]:
+            node = next((row for row in nodes if row.get("id") == node_id), None)
+            if node is None:
+                raise GatewayError(
+                    f"Canvas Plot node {node_id} is not present in the current snapshot."
+                )
+            return node
+
+        def link_by_id(link_id: int) -> dict[str, Any]:
+            link = next((row for row in links if row.get("id") == link_id), None)
+            if link is None:
+                raise GatewayError(
+                    f"Canvas Plot link {link_id} is not present in the current snapshot."
+                )
+            return link
+
+        def frame_by_id(frame_id: int) -> dict[str, Any]:
+            frame = next((row for row in frames if row.get("id") == frame_id), None)
+            if frame is None:
+                raise GatewayError(
+                    f"Canvas Plot frame {frame_id} is not present in the current snapshot."
+                )
+            return frame
+
+        def validate_scene(scene_id: int | None) -> dict[str, Any] | None:
+            if scene_id is None:
+                return None
+            scene = self.client.get_scene(scene_id, pid)
+            if not isinstance(scene, dict) or scene.get("id") != scene_id:
+                raise GatewayError(
+                    f"Scene {scene_id} is not present in the selected project."
+                )
+            return scene
+
+        kind = normalized["kind"]
+        destructive = kind in {"delete_node", "delete_link", "delete_frame"}
+        review: dict[str, Any] = {
+            "canvas_plot_revision": revision,
+            "command_kind": kind,
+            "destructive": destructive,
+            "requires_destructive_confirmation": destructive,
+        }
+
+        if kind == "create_node":
+            requested_index = normalized.get("index")
+            index = len(nodes) if requested_index is None else requested_index
+            if index > len(nodes):
+                raise GatewayError("index is outside the available node range.")
+            scene = validate_scene(normalized.get("scene_id"))
+            body = normalized.get("body", "")
+            after_order: list[Any] = list(node_order)
+            after_order.insert(index, "new")
+            title = normalized.get("title", "")
+            summary = f"Create Canvas Plot node {_preview(title, 200)!r} at index {index}."
+            review.update({
+                "before": {"node_order": _bounded_sequence(node_order)},
+                "after_intent": {
+                    "title": _preview(title, 500),
+                    "body": {
+                        "length": len(body),
+                        "sha256": hashlib.sha256(body.encode("utf-8")).hexdigest(),
+                        "preview": _preview(body, 500),
+                    },
+                    "x": normalized.get("x", 0.0),
+                    "y": normalized.get("y", 0.0),
+                    "width": normalized.get("width", 180.0),
+                    "height": normalized.get("height", 110.0),
+                    "color_label": normalized.get("color_label", ""),
+                    "group_label": _preview(normalized.get("group_label", ""), 500),
+                    "scene": None if scene is None else {
+                        "id": scene.get("id"),
+                        "title": _preview(scene.get("title"), 500),
+                    },
+                    "index": index,
+                    "node_order": _bounded_sequence(after_order),
+                },
+            })
+
+        elif kind == "update_node":
+            node_id = normalized["node_id"]
+            node = node_by_id(node_id)
+            if "index" in normalized and normalized["index"] >= len(nodes):
+                raise GatewayError("index is outside the available node range.")
+            scene = None
+            if "scene_id" in normalized:
+                scene = validate_scene(normalized["scene_id"])
+            changes: dict[str, Any] = {}
+            changed = False
+            defaults: dict[str, Any] = {
+                "title": "", "body": "", "x": 0.0, "y": 0.0,
+                "width": 180.0, "height": 110.0, "color_label": "",
+                "group_label": "", "scene_id": None,
+            }
+            for field in (
+                "title", "body", "x", "y", "width", "height", "color_label",
+                "group_label", "scene_id",
+            ):
+                if field not in normalized:
+                    continue
+                before = node.get(field, defaults[field])
+                after = normalized[field]
+                if before != after:
+                    changed = True
+                if field == "body":
+                    changes[field] = _content_review(str(before or ""), str(after or ""))
+                elif field in {"title", "color_label", "group_label"}:
+                    changes[field] = {
+                        "before": _preview(before, 500),
+                        "after": _preview(after, 500),
+                    }
+                else:
+                    changes[field] = {"before": before, "after": after}
+            if "index" in normalized:
+                current_index = node_order.index(node_id)
+                after_index = normalized["index"]
+                if current_index != after_index:
+                    changed = True
+                changes["index"] = {
+                    "before": current_index,
+                    "after": after_index,
+                }
+            if not changed:
+                raise GatewayError(
+                    "The requested node update would not change the Canvas Plot."
+                )
+            summary = (
+                f"Update Canvas Plot node {node_id} "
+                f"({_preview(node.get('title'), 200)!r})."
+            )
+            review.update({
+                "node": {
+                    "id": node_id,
+                    "title": _preview(node.get("title"), 500),
+                    "scene_id": node.get("scene_id"),
+                },
+                "changes": changes,
+            })
+            if "scene_id" in normalized:
+                review["scene_after"] = None if scene is None else {
+                    "id": scene.get("id"),
+                    "title": _preview(scene.get("title"), 500),
+                }
+
+        elif kind == "delete_node":
+            node_id = normalized["node_id"]
+            node = node_by_id(node_id)
+            incident_ids = [
+                row["id"] for row in links
+                if row.get("source_node_id") == node_id
+                or row.get("target_node_id") == node_id
+            ]
+            summary = (
+                f"Delete Canvas Plot node {node_id} "
+                f"({_preview(node.get('title'), 200)!r}) and "
+                f"{len(incident_ids)} incident link(s)."
+            )
+            review.update({
+                "node": {
+                    "id": node_id,
+                    "title": _preview(node.get("title"), 500),
+                    "scene_id": node.get("scene_id"),
+                },
+                "incident_link_ids": _bounded_sequence(incident_ids),
+                "effect": (
+                    "The node and its incident Canvas Plot links are deleted. "
+                    "Any hidden same-project legacy incident link rows are also "
+                    "cleaned up. Any linked manuscript scene remains unchanged."
+                ),
+            })
+
+        elif kind == "create_link":
+            source_id = normalized["source_node_id"]
+            target_id = normalized["target_node_id"]
+            if source_id == target_id:
+                raise GatewayError("A Canvas Plot link cannot connect a node to itself.")
+            source = node_by_id(source_id)
+            target = node_by_id(target_id)
+            duplicate = next(
+                (
+                    row for row in links
+                    if {row.get("source_node_id"), row.get("target_node_id")}
+                    == {source_id, target_id}
+                ),
+                None,
+            )
+            if duplicate is not None:
+                raise GatewayError(
+                    f"Canvas Plot nodes {source_id} and {target_id} are already linked."
+                )
+            label = normalized.get("label", "")
+            color_label = normalized.get("color_label", "gray") or "gray"
+            summary = (
+                f"Create Canvas Plot link from node {source_id} to node {target_id}."
+            )
+            review.update({
+                "source": {
+                    "id": source_id,
+                    "title": _preview(source.get("title"), 500),
+                },
+                "target": {
+                    "id": target_id,
+                    "title": _preview(target.get("title"), 500),
+                },
+                "after_intent": {
+                    "label": _preview(label, 500),
+                    "color_label": color_label,
+                    "link_type": normalized.get("link_type", ""),
+                },
+            })
+
+        elif kind == "update_link":
+            link_id = normalized["link_id"]
+            link = link_by_id(link_id)
+            changes: dict[str, Any] = {}
+            changed = False
+            for field, default in (
+                ("label", ""), ("color_label", "gray"), ("link_type", ""),
+            ):
+                if field not in normalized:
+                    continue
+                before = link.get(field, default)
+                after = normalized[field]
+                effective_after = after or "gray" if field == "color_label" else after
+                if before != effective_after:
+                    changed = True
+                changes[field] = {
+                    "before": _preview(before, 500),
+                    "after": _preview(effective_after, 500),
+                }
+            if not changed:
+                raise GatewayError(
+                    "The requested link update would not change the Canvas Plot."
+                )
+            summary = f"Update Canvas Plot link {link_id}."
+            review.update({
+                "link": {
+                    "id": link_id,
+                    "source_node_id": link.get("source_node_id"),
+                    "target_node_id": link.get("target_node_id"),
+                },
+                "changes": changes,
+            })
+
+        elif kind == "delete_link":
+            link_id = normalized["link_id"]
+            link = link_by_id(link_id)
+            summary = f"Delete Canvas Plot link {link_id}."
+            review.update({
+                "link": {
+                    "id": link_id,
+                    "source_node_id": link.get("source_node_id"),
+                    "target_node_id": link.get("target_node_id"),
+                    "label": _preview(link.get("label"), 500),
+                },
+                "effect": (
+                    "This undirected Canvas Plot link is deleted together with "
+                    "any hidden same-project legacy reverse or duplicate rows. "
+                    "Nodes and manuscript scenes remain unchanged."
+                ),
+            })
+
+        elif kind == "create_frame":
+            title = normalized.get("title", "")
+            summary = f"Create Canvas Plot frame {_preview(title, 200)!r}."
+            review["after_intent"] = {
+                "title": _preview(title, 500),
+                "color_label": normalized.get("color_label", ""),
+                "x": normalized.get("x", 0.0),
+                "y": normalized.get("y", 0.0),
+                "width": normalized.get("width", 360.0),
+                "height": normalized.get("height", 260.0),
+            }
+
+        elif kind == "update_frame":
+            frame_id = normalized["frame_id"]
+            frame = frame_by_id(frame_id)
+            changes: dict[str, Any] = {}
+            changed = False
+            defaults = {
+                "title": "", "color_label": "", "x": 0.0, "y": 0.0,
+                "width": 360.0, "height": 260.0,
+            }
+            for field in defaults:
+                if field not in normalized:
+                    continue
+                before = frame.get(field, defaults[field])
+                after = normalized[field]
+                if before != after:
+                    changed = True
+                changes[field] = {
+                    "before": _preview(before, 500) if isinstance(before, str) else before,
+                    "after": _preview(after, 500) if isinstance(after, str) else after,
+                }
+            if not changed:
+                raise GatewayError(
+                    "The requested frame update would not change the Canvas Plot."
+                )
+            summary = (
+                f"Update Canvas Plot frame {frame_id} "
+                f"({_preview(frame.get('title'), 200)!r})."
+            )
+            review.update({
+                "frame": {
+                    "id": frame_id,
+                    "title": _preview(frame.get("title"), 500),
+                },
+                "changes": changes,
+            })
+
+        else:
+            frame_id = normalized["frame_id"]
+            frame = frame_by_id(frame_id)
+            summary = (
+                f"Delete Canvas Plot frame {frame_id} "
+                f"({_preview(frame.get('title'), 200)!r})."
+            )
+            review.update({
+                "frame": {
+                    "id": frame_id,
+                    "title": _preview(frame.get("title"), 500),
+                },
+                "effect": (
+                    "Only this visual Canvas Plot frame is deleted; nodes, links, "
+                    "and manuscript scenes remain unchanged."
+                ),
+            })
+
+        return self.propose_request(
+            operation=f"canvas_plot_{kind}",
+            method="POST",
+            path=self.client.project_path("canvas-plot/commands", pid),
+            body=normalized,
+            summary=summary,
+            project_id=pid,
+            review=review,
+        )
 
     def propose_timeline_command(
         self, command: dict[str, Any],
