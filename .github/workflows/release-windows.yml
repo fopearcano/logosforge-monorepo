@@ -1048,7 +1048,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "${{ needs.metadata.outputs.source_sha }}"
-          for path in logosforge/pyproject.toml logosforge-ui-contracts/package.json pro-shared-ui/package.json pro-desktop/package.json pro-desktop/core/logosforge-core.spec pro-desktop/core/logosforge-mcp.spec pro-desktop/scripts/live-context-core-manager-driver.cjs pro-desktop/scripts/smoke-live-context-bridge.py whiteboard-desktop/scripts/check-macos-deployment-targets.py; do
+          for path in logosforge/pyproject.toml logosforge-ui-contracts/package.json pro-shared-ui/package.json pro-desktop/package.json pro-desktop/core/logosforge-core.spec pro-desktop/core/logosforge-mcp.spec pro-desktop/scripts/live-context-core-manager-driver.cjs pro-desktop/scripts/packaged-workspace-acceptance.mjs pro-desktop/scripts/smoke-live-context-bridge.py whiteboard-desktop/scripts/check-macos-deployment-targets.py; do
             test -e "$path" || { echo "::error::Missing required monorepo path: $path"; exit 1; }
           done
 
@@ -1304,6 +1304,49 @@ jobs:
           ./build-venv/bin/python pro-desktop/scripts/smoke-packaged-mcp.py
           "pro-desktop/release/LogosForge Pro-${{ needs.metadata.outputs.version }}-x64.dmg"
           --timeout 120
+
+      - name: Exercise packaged macOS Pro pointer workspace and restart persistence
+        env:
+          ACCEPTANCE_ROOT: ${{ runner.temp }}/logosforge-pro-workspace-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          set -- pro-desktop/release/mac*/LogosForge\ Pro.app/Contents/MacOS/LogosForge\ Pro
+          if [ "$#" -ne 1 ] || [ ! -x "$1" ]; then
+            echo "::error::Expected exactly one unpacked macOS Pro executable."
+            exit 1
+          fi
+          app_exe="$(cd "$(dirname "$1")" && pwd -P)/$(basename "$1")"
+          LOGOSFORGE_PRO_WORKSPACE_ACCEPTANCE_EXE="$app_exe" \
+          LOGOSFORGE_PRO_WORKSPACE_ACCEPTANCE_ROOT="$ACCEPTANCE_ROOT" \
+            npm --prefix pro-desktop run test:packaged-workspace
+
+      - name: Preserve macOS packaged-workspace failure diagnostics on the host
+        if: failure()
+        working-directory: .
+        env:
+          ACCEPTANCE_ROOT: ${{ runner.temp }}/logosforge-pro-workspace-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          if [ ! -d "$ACCEPTANCE_ROOT" ]; then
+            echo "::notice::No packaged-workspace diagnostics directory was created."
+            exit 0
+          fi
+          workspace="$(cd "${GITHUB_WORKSPACE:?}" && pwd -P)"
+          case "$workspace" in ""|"/") echo "::error::Unsafe runner workspace: $workspace"; exit 1 ;; esac
+          drop="$workspace/macos-build-drop/run-${GITHUB_RUN_ID}-attempt-${GITHUB_RUN_ATTEMPT}/acceptance-diagnostics"
+          case "$drop" in "$workspace"/macos-build-drop/run-*/acceptance-diagnostics) ;; *) echo "::error::Unsafe diagnostics target: $drop"; exit 1 ;; esac
+          mkdir -p -- "$drop"
+          cp -R -- "$ACCEPTANCE_ROOT"/. "$drop"/
+          echo "::notice::Packaged-workspace failure diagnostics preserved at $drop"
+          {
+            echo "### macOS packaged-workspace failure diagnostics"
+            echo
+            echo "The retained diagnostics remain on the self-hosted Mac at:"
+            echo
+            echo '```text'
+            echo "$drop"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Record macOS dependency and artifact provenance
         run: |

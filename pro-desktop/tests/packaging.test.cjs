@@ -84,6 +84,15 @@ check('packaged workspace acceptance is an explicit Pro script',
   fs.statSync(packagedWorkspaceScriptPath).isFile());
 check('packaged workspace acceptance pins the browserless Electron driver',
   pkg.devDependencies['playwright-core'] === '1.63.0');
+check('packaged workspace acceptance supports native Windows and macOS layouts',
+  packagedWorkspaceScript.includes("process.platform === 'win32' || process.platform === 'darwin'") &&
+  packagedWorkspaceScript.includes("path.resolve(path.dirname(exePath), '..', 'Resources')") &&
+  packagedWorkspaceScript.includes("process.platform === 'win32' ? 'logosforge-core.exe' : 'logosforge-core'") &&
+  packagedWorkspaceScript.includes("process.platform === 'win32' ? 'logosforge-mcp.exe' : 'logosforge-mcp'"));
+check('packaged workspace acceptance uses native shortcuts and graceful macOS app quit',
+  packagedWorkspaceScript.includes("process.platform === 'darwin' ? 'Meta+A' : 'Control+A'") &&
+  packagedWorkspaceScript.includes("if (process.platform === 'darwin') app.quit()") &&
+  packagedWorkspaceScript.includes("fallback SIGTERM for owned root PID"));
 check('packaged workspace acceptance drives real pointer interactions and relaunch persistence',
   packagedWorkspaceScript.includes('notesTab.dragTo(workspace') &&
   packagedWorkspaceScript.includes('page.mouse.down()') &&
@@ -124,6 +133,16 @@ check('Windows release candidates pass the same packaged pointer journey',
   releaseWorkflow.includes('Exercise packaged Pro pointer workspace and restart persistence') &&
   releaseWorkflow.includes('npm run test:packaged-workspace') &&
   releaseWorkflow.includes('logosforge-pro-windows-workspace-diagnostics'));
+check('macOS release candidates pass the same packaged pointer journey',
+  macJob.includes('Exercise packaged macOS Pro pointer workspace and restart persistence') &&
+  macJob.includes('LOGOSFORGE_PRO_WORKSPACE_ACCEPTANCE_EXE="$app_exe"') &&
+  macJob.includes('LOGOSFORGE_PRO_WORKSPACE_ACCEPTANCE_ROOT="$ACCEPTANCE_ROOT"') &&
+  macJob.includes('npm --prefix pro-desktop run test:packaged-workspace'));
+check('Monterey retains packaged-workspace failure diagnostics without JavaScript actions',
+  macJob.includes('Preserve macOS packaged-workspace failure diagnostics on the host') &&
+  macJob.includes('if: failure()') &&
+  macJob.includes('acceptance-diagnostics') &&
+  macJob.includes('cp -R -- "$ACCEPTANCE_ROOT"/. "$drop"/'));
 check('generic release script verifies the current native x64 sidecar',
   pkg.scripts.dist.includes('verify-native-release.cjs current x64'));
 check('Windows release script verifies a native x64 sidecar',

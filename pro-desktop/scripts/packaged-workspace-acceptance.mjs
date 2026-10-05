@@ -3,16 +3,16 @@
 /**
  * Pointer-driven acceptance for the packaged LogosForge Pro workspace shell.
  *
- * This launches electron-builder's unpacked Windows application through
- * Playwright's Electron transport. It uses a fresh, isolated profile, drives
- * real mouse input through Canvas Plot and workspace move/resize interactions,
- * closes through the application's save handshake, and relaunches the same
- * profile to prove that project data and the project-scoped layout were
- * restored from disk.
+ * This launches electron-builder's unpacked Windows or macOS application
+ * through Playwright's Electron transport. It uses a fresh, isolated profile,
+ * drives real mouse input through Canvas Plot and workspace move/resize
+ * interactions, closes through the application's save handshake, and
+ * relaunches the same profile to prove that project data and the project-scoped
+ * layout were restored from disk.
  *
  * Optional overrides:
- *   LOGOSFORGE_PRO_WORKSPACE_ACCEPTANCE_EXE=C:\...\LogosForge Pro.exe
- *   LOGOSFORGE_PRO_WORKSPACE_ACCEPTANCE_ROOT=C:\...\empty-run-directory
+ *   LOGOSFORGE_PRO_WORKSPACE_ACCEPTANCE_EXE=<absolute packaged executable>
+ *   LOGOSFORGE_PRO_WORKSPACE_ACCEPTANCE_ROOT=<absolute empty run directory>
  */
 
 import assert from 'node:assert/strict';
@@ -30,7 +30,7 @@ const execFileAsync = promisify(execFile);
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DESKTOP_DIR = path.resolve(SCRIPT_DIR, '..');
 const REPO_ROOT = path.resolve(DESKTOP_DIR, '..');
-const DEFAULT_EXE = path.join(
+const DEFAULT_WINDOWS_EXE = path.join(
   DESKTOP_DIR,
   'release',
   'win-unpacked',
@@ -66,16 +66,39 @@ function errorText(error) {
   return error instanceof Error ? (error.stack || error.message) : String(error);
 }
 
-function windowsPathKey(value) {
-  return path.resolve(value).replace(/[\\/]+$/, '').toLocaleLowerCase('en-US');
+function pathKey(value) {
+  const resolved = path.resolve(value);
+  const root = path.parse(resolved).root;
+  const withoutTrailingSeparators = resolved === root
+    ? resolved
+    : resolved.replace(/[\\/]+$/, '');
+  return process.platform === 'win32'
+    ? withoutTrailingSeparators.toLocaleLowerCase('en-US')
+    : withoutTrailingSeparators;
 }
 
 function assertSamePath(actual, expected, label) {
   assert.equal(
-    windowsPathKey(actual),
-    windowsPathKey(expected),
+    pathKey(actual),
+    pathKey(expected),
     `${label}: expected ${expected}, received ${actual}`,
   );
+}
+
+function packagedResourcesPath(exePath) {
+  if (process.platform === 'win32') return path.join(path.dirname(exePath), 'resources');
+  if (process.platform === 'darwin') {
+    return path.resolve(path.dirname(exePath), '..', 'Resources');
+  }
+  throw new Error(`Unsupported packaged workspace acceptance platform: ${process.platform}`);
+}
+
+function packagedCoreExecutableName() {
+  return process.platform === 'win32' ? 'logosforge-core.exe' : 'logosforge-core';
+}
+
+function packagedMcpExecutableName() {
+  return process.platform === 'win32' ? 'logosforge-mcp.exe' : 'logosforge-mcp';
 }
 
 function isSameOrInside(candidate, parent) {
@@ -98,7 +121,39 @@ async function canonicalExecutable() {
   if (override && !path.isAbsolute(override)) {
     throw new Error(`LOGOSFORGE_PRO_WORKSPACE_ACCEPTANCE_EXE must be absolute: ${override}`);
   }
-  const requested = override || DEFAULT_EXE;
+  let requested = override;
+  if (!requested && process.platform === 'win32') requested = DEFAULT_WINDOWS_EXE;
+  if (!requested && process.platform === 'darwin') {
+    const releaseEntries = await fs.readdir(path.join(DESKTOP_DIR, 'release'), {
+      withFileTypes: true,
+    });
+    const candidates = releaseEntries
+      .filter((entry) => entry.isDirectory() && /^mac(?:-.+)?$/.test(entry.name))
+      .map((entry) => path.join(
+        DESKTOP_DIR,
+        'release',
+        entry.name,
+        'LogosForge Pro.app',
+        'Contents',
+        'MacOS',
+        'LogosForge Pro',
+      ));
+    const existing = [];
+    for (const candidate of candidates) {
+      try {
+        if ((await fs.stat(candidate)).isFile()) existing.push(candidate);
+      } catch (error) {
+        if (error?.code !== 'ENOENT') throw error;
+      }
+    }
+    assert.equal(
+      existing.length,
+      1,
+      `Expected exactly one unpacked macOS Pro executable; found ${existing.length}.`,
+    );
+    [requested] = existing;
+  }
+  assert.ok(requested, `No default packaged executable for ${process.platform}.`);
   await assertFile(requested, 'packaged Pro executable');
   return fs.realpath(requested);
 }
@@ -119,15 +174,15 @@ async function createIsolationRoot() {
   const resolved = path.resolve(override);
   const filesystemRoot = path.parse(resolved).root;
   assert.notEqual(
-    windowsPathKey(resolved),
-    windowsPathKey(filesystemRoot),
+    pathKey(resolved),
+    pathKey(filesystemRoot),
     `Refusing to use a filesystem root for packaged workspace acceptance: ${resolved}`,
   );
 
   const canonicalRepo = await fs.realpath(REPO_ROOT);
   assert.notEqual(
-    windowsPathKey(resolved),
-    windowsPathKey(canonicalRepo),
+    pathKey(resolved),
+    pathKey(canonicalRepo),
     `Refusing to use the repository root for packaged workspace acceptance: ${resolved}`,
   );
   assert.ok(
@@ -155,8 +210,8 @@ async function createIsolationRoot() {
 
   const canonical = await fs.realpath(resolved);
   assert.notEqual(
-    windowsPathKey(canonical),
-    windowsPathKey(canonicalRepo),
+    pathKey(canonical),
+    pathKey(canonicalRepo),
     `Refusing to use the repository root for packaged workspace acceptance: ${canonical}`,
   );
   assert.ok(
@@ -296,7 +351,11 @@ async function prepareEnvironment(root, port) {
     LOGOSFORGE_QA_REPORT_DIR: dirs.qaReports,
     LOGOSFORGE_MODELS_DIR: dirs.models,
     LOGOSFORGE_MCP_CONNECTION_FILE: path.join(dirs.userData, 'mcp-runtime.json'),
-    LOGOSFORGE_MCP_LAUNCHER_PATH: path.join(dirs.userData, 'mcp', 'logosforge-mcp.exe'),
+    LOGOSFORGE_MCP_LAUNCHER_PATH: path.join(
+      dirs.userData,
+      'mcp',
+      packagedMcpExecutableName(),
+    ),
     LOGOSFORGE_VOICE_MODEL: path.join(dirs.models, 'acceptance-no-voice-model'),
     LOGOSFORGE_VOICE_DEVICE: 'cpu',
     LOGOSFORGE_VOICE_COMPUTE: 'int8',
@@ -348,7 +407,7 @@ function attachPageDiagnostics(session) {
 }
 
 async function verifyPackagedRuntime(session, exePath) {
-  const expectedResources = path.join(path.dirname(exePath), 'resources');
+  const expectedResources = packagedResourcesPath(exePath);
   const runtime = await session.app.evaluate(({ app, BrowserWindow }) => {
     const windows = BrowserWindow.getAllWindows();
     const preferences = windows[0]?.webContents.getLastWebPreferences() ?? {};
@@ -399,9 +458,12 @@ async function launchPackagedApp({ electron, exePath, root, label }) {
   assert.ok(playwrightElectronLoader && path.isAbsolute(playwrightElectronLoader));
   const port = await allocateStrictPort();
   const { env, dirs } = await prepareEnvironment(root, port);
-  const resources = path.join(path.dirname(exePath), 'resources');
+  const resources = packagedResourcesPath(exePath);
   await assertFile(path.join(resources, 'app.asar'), `${label} app.asar`);
-  await assertFile(path.join(resources, 'core', 'logosforge-core.exe'), `${label} packaged core`);
+  await assertFile(
+    path.join(resources, 'core', packagedCoreExecutableName()),
+    `${label} packaged core`,
+  );
 
   record(label, `launching ${exePath} on isolated port ${port}`);
   const app = await electron.launch({
@@ -779,7 +841,7 @@ async function exerciseCanvasPlot(session) {
     'Canvas Plot block summary field',
   );
   await titleInput.click();
-  await titleInput.press('Control+A');
+  await titleInput.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
   await titleInput.pressSequentially(nodeTitle);
   await summaryInput.click();
   await summaryInput.pressSequentially(nodeSummary);
@@ -1205,16 +1267,39 @@ async function captureScreenshot(session, name) {
 
 async function killOwnedTree(session) {
   assert.equal(session.child.pid, session.pid, `${session.label} root PID ownership changed`);
-  record(session.label, `fallback taskkill for owned root PID ${session.pid}`);
+  if (process.platform === 'win32') {
+    record(session.label, `fallback taskkill for owned root PID ${session.pid}`);
+    try {
+      await execFileAsync(
+        'taskkill.exe',
+        ['/PID', String(session.pid), '/T', '/F'],
+        { windowsHide: true, timeout: 15_000 },
+      );
+    } catch (error) {
+      if (session.child.exitCode == null) throw error;
+      record(session.label, `taskkill raced with process exit: ${errorText(error)}`);
+    }
+    return;
+  }
+
+  assert.equal(process.platform, 'darwin', `Unsupported teardown platform: ${process.platform}`);
+  const waitForExit = () => new Promise((resolve, reject) => {
+    if (session.child.exitCode != null || session.child.signalCode != null) {
+      resolve();
+      return;
+    }
+    session.child.once('exit', resolve);
+    session.child.once('error', reject);
+  });
+  record(session.label, `fallback SIGTERM for owned root PID ${session.pid}`);
+  session.child.kill('SIGTERM');
   try {
-    await execFileAsync(
-      'taskkill.exe',
-      ['/PID', String(session.pid), '/T', '/F'],
-      { windowsHide: true, timeout: 15_000 },
-    );
+    await withTimeout(waitForExit(), 10_000, `${session.label} SIGTERM teardown`);
   } catch (error) {
-    if (session.child.exitCode == null) throw error;
-    record(session.label, `taskkill raced with process exit: ${errorText(error)}`);
+    if (session.child.exitCode != null || session.child.signalCode != null) return;
+    record(session.label, `SIGTERM teardown failed; sending SIGKILL: ${errorText(error)}`);
+    session.child.kill('SIGKILL');
+    await withTimeout(waitForExit(), 5_000, `${session.label} SIGKILL teardown`);
   }
 }
 
@@ -1231,12 +1316,16 @@ async function closeSession(session, { requireGraceful = true } = {}) {
       session.child.once('exit', resolve);
       session.child.once('error', reject);
     });
-    await session.app.evaluate(({ BrowserWindow }) => {
+    await session.app.evaluate(({ app, BrowserWindow }) => {
       const windows = BrowserWindow.getAllWindows();
       if (windows.length !== 1) {
         throw new Error(`Expected one BrowserWindow before close; received ${windows.length}`);
       }
-      windows[0].close();
+      // Closing the last window quits on Windows. macOS intentionally keeps an
+      // app alive with no windows, so request a real app quit there; both paths
+      // enter the same production save handshake in electron/main.ts.
+      if (process.platform === 'darwin') app.quit();
+      else windows[0].close();
     });
     await withTimeout(exited, CLOSE_TIMEOUT_MS, `${session.label} graceful close`);
     graceful = true;
@@ -1274,7 +1363,7 @@ async function removeSuccessfulRoot(root) {
   const stat = await fs.lstat(resolved);
   assert.ok(stat.isDirectory() && !stat.isSymbolicLink(), `Unsafe cleanup root: ${resolved}`);
   const filesystemRoot = path.parse(resolved).root;
-  assert.notEqual(windowsPathKey(resolved), windowsPathKey(filesystemRoot));
+  assert.notEqual(pathKey(resolved), pathKey(filesystemRoot));
   const canonicalRepo = await fs.realpath(REPO_ROOT);
   assert.ok(!isSameOrInside(canonicalRepo, resolved), `Refusing to remove repository ancestor: ${resolved}`);
   assert.ok(!isSameOrInside(resolved, canonicalRepo), `Refusing to remove a directory inside the repository: ${resolved}`);
@@ -1287,7 +1376,10 @@ async function removeSuccessfulRoot(root) {
 }
 
 async function main() {
-  assert.equal(process.platform, 'win32', 'Packaged workspace acceptance currently runs on Windows.');
+  assert.ok(
+    process.platform === 'win32' || process.platform === 'darwin',
+    `Packaged workspace acceptance requires Windows or macOS; received ${process.platform}.`,
+  );
   const exePath = await canonicalExecutable();
   const driver = await loadElectronDriver();
   playwrightElectronLoader = driver.loaderPath;

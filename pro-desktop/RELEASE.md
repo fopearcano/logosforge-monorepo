@@ -41,12 +41,22 @@ invoking the matching npm release script. Build macOS on an available native
 Intel x64 runner and Linux on a native x64 runner; do not reuse a sidecar from
 another job or OS.
 
+After packaging, the Windows and Intel macOS jobs run
+`npm run test:packaged-workspace` against the real unpacked native application.
+The Playwright Electron journey uses an isolated profile, performs pointer
+Canvas and dock mutations, closes through the production save barrier, and
+relaunches to verify the persisted board and project layout. This complements
+the distributable inspection and MCP smoke; it does not replace final human
+installer, Gatekeeper, or system-permission testing.
+
 Build-only macOS runs support the self-hosted Intel Monterey runner without
 JavaScript actions: the job performs an isolated native Git checkout, bootstraps
 a checksum-pinned Node 22 when needed, and leaves the verified DMG plus
 provenance in `macos-build-drop/` on that host. Publishing still requires macOS
 13.5 or newer and Actions Runner 2.327.1 or newer for the Node 24 artifact
-actions. The packaged app's declared consumer floor is macOS 12.0.
+actions. The packaged app's declared consumer floor is macOS 12.0. If the native
+UI journey fails on Monterey, its screenshots, acceptance log and isolated state
+are retained beside that run under `macos-build-drop/` for diagnosis.
 
 - `npm run dist:win` → Windows NSIS + portable.
 - `npm run dist:mac` → Intel x64 DMG (native macOS only).
