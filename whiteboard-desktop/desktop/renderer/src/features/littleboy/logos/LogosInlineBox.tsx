@@ -9,6 +9,7 @@
 import type { Editor } from '@tiptap/react';
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 
+import { useFloatingPanel } from '../../../components/useFloatingPanel';
 import { contextLabel } from '../context/writingModeContext';
 import { contextPreview } from '../context/selectionContext';
 import type { EditorContext, LogosActionId } from '../littleboyTypes';
@@ -57,6 +58,12 @@ export function LogosInlineBox({ editor, context, baseUrl, onClose }: Props) {
   const instructionRef = useRef<HTMLInputElement>(null);
 
   const pos = useMemo(() => clampPosition(context.coords), [context.coords]);
+  const floating = useFloatingPanel({
+    storageKey: 'logosforge-logos-panel-position',
+    width: BOX_WIDTH,
+    defaultSide: 'right',
+    initialPosition: { x: pos.left, y: pos.top },
+  });
   const hasSelection = context.selection.trim().length > 0;
   const preview = contextPreview(context.selection, context.block);
 
@@ -111,39 +118,47 @@ export function LogosInlineBox({ editor, context, baseUrl, onClose }: Props) {
 
   return (
     <div
-      className="logos-box littleboy-box"
+      className={`logos-box littleboy-box floating-panel${floating.dragging ? ' is-dragging' : ''}`}
       style={{
-        left: pos.left,
-        top: pos.top,
+        left: floating.position.x,
+        top: floating.position.y,
         '--logos-opacity': String(1 - transparency / 100),
       } as CSSProperties}
       role="dialog"
       aria-label="Logos inline assistant"
     >
       <div className="logos-head">
+        <button
+          type="button"
+          className="floating-panel-drag"
+          onPointerDown={floating.onPointerDown}
+          onKeyDown={floating.onKeyDown}
+          aria-label="Move Logos panel. Use arrow keys for precise movement."
+          title="Drag to move · Arrow keys move precisely"
+        >
+          ⠿
+        </button>
+        <label className="logos-transparency" title={`Transparency: ${transparency}%`}>
+          <input
+            type="range"
+            min={0}
+            max={LOGOS_TRANSPARENCY_MAX}
+            step={5}
+            value={transparency}
+            onChange={(event) => {
+              const next = Number(event.target.value);
+              setTransparency(next);
+              saveLogosTransparency(next);
+            }}
+            aria-label="Logos panel transparency"
+          />
+          <output>{transparency}%</output>
+        </label>
         <span className="logos-title">Logos · {contextLabel(context.mode, context.screenplayElement)}</span>
         <button type="button" className="logos-close" onClick={onClose} title="Close (Esc)" aria-label="Close">
           ×
         </button>
       </div>
-
-      <label className="logos-transparency">
-        <span>Transparency</span>
-        <output>{transparency}%</output>
-        <input
-          type="range"
-          min={0}
-          max={LOGOS_TRANSPARENCY_MAX}
-          step={5}
-          value={transparency}
-          onChange={(event) => {
-            const next = Number(event.target.value);
-            setTransparency(next);
-            saveLogosTransparency(next);
-          }}
-          aria-label="Logos panel transparency"
-        />
-      </label>
 
       <div className="logos-context" title={context.selection || context.block}>
         {hasSelection ? '“' + preview + '”' : preview || 'Current block'}

@@ -4,9 +4,13 @@
  * no Pro workspace.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 
 import { ConfirmDialog } from '../../components/ConfirmDialog';
+import {
+  PanelTransparencyControl,
+  usePanelTransparency,
+} from '../../components/PanelTransparencyControl';
 import { useFloatingPanel } from '../../components/useFloatingPanel';
 import { getCurrentDocId, subscribeCurrentDoc } from '../../state/currentDocument';
 import { PsykeCreateForm } from './PsykeCreateForm';
@@ -21,6 +25,8 @@ interface Props {
   onClose: () => void;
 }
 
+const TRANSPARENCY_STORAGE_KEY = 'logosforge-psyke-transparency';
+
 export function PsykeWindow({ baseUrl, initialQuery, onClose }: Props) {
   const floating = useFloatingPanel({
     storageKey: 'logosforge-psyke-panel-position',
@@ -28,6 +34,7 @@ export function PsykeWindow({ baseUrl, initialQuery, onClose }: Props) {
     defaultSide: 'left',
     defaultTop: 70,
   });
+  const panelTransparency = usePanelTransparency(TRANSPARENCY_STORAGE_KEY);
   const { query, setQuery, results, loading, error, refresh } = usePsykeSearch({ baseUrl, initialQuery });
   const [selected, setSelected] = useState<PsykeEntry | null>(null);
   const [view, setView] = useState<'search' | 'create' | 'edit'>('search');
@@ -113,8 +120,12 @@ export function PsykeWindow({ baseUrl, initialQuery, onClose }: Props) {
 
   return (
     <aside
-      className={`psyke-window floating-panel${floating.dragging ? ' is-dragging' : ''}`}
-      style={{ left: floating.position.x, top: floating.position.y }}
+      className={`psyke-window floating-panel has-panel-transparency${floating.dragging ? ' is-dragging' : ''}`}
+      style={{
+        left: floating.position.x,
+        top: floating.position.y,
+        '--panel-opacity': String(panelTransparency.opacity),
+      } as CSSProperties}
       aria-label="PSYKE"
     >
       <div className="psyke-header">
@@ -128,6 +139,11 @@ export function PsykeWindow({ baseUrl, initialQuery, onClose }: Props) {
         >
           ⠿
         </button>
+        <PanelTransparencyControl
+          label="PSYKE panel"
+          value={panelTransparency.transparency}
+          onChange={panelTransparency.setTransparency}
+        />
         <span className="psyke-title">PSYKE</span>
         <div className="psyke-header-actions">
           {view === 'search' && (

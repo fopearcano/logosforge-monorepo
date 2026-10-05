@@ -1,7 +1,13 @@
 /** The hideable Comments side panel — comments on the active writing surface. */
 
-import type { Comment } from './commentsApi';
+import type { CSSProperties } from 'react';
+
+import {
+  PanelTransparencyControl,
+  usePanelTransparency,
+} from '../../components/PanelTransparencyControl';
 import { useFloatingPanel } from '../../components/useFloatingPanel';
+import type { Comment } from './commentsApi';
 
 interface Props {
   comments: Comment[];
@@ -13,6 +19,8 @@ interface Props {
   onDelete: (id: string) => void;
   onClose: () => void;
 }
+
+const TRANSPARENCY_STORAGE_KEY = 'logosforge-comments-transparency';
 
 export function CommentsWindow({
   comments,
@@ -30,14 +38,19 @@ export function CommentsWindow({
     defaultSide: 'right',
     defaultTop: 70,
   });
+  const panelTransparency = usePanelTransparency(TRANSPARENCY_STORAGE_KEY);
   const open = comments.filter((c) => !c.resolved);
   const resolved = comments.filter((c) => c.resolved);
   const ordered = hideResolved ? open : [...open, ...resolved];
 
   return (
     <aside
-      className={`comments-window floating-panel${floating.dragging ? ' is-dragging' : ''}`}
-      style={{ left: floating.position.x, top: floating.position.y }}
+      className={`comments-window floating-panel has-panel-transparency${floating.dragging ? ' is-dragging' : ''}`}
+      style={{
+        left: floating.position.x,
+        top: floating.position.y,
+        '--panel-opacity': String(panelTransparency.opacity),
+      } as CSSProperties}
       aria-label={`Comments for ${surfaceLabel}`}
     >
       <header className="comments-head">
@@ -51,6 +64,11 @@ export function CommentsWindow({
         >
           ⠿
         </button>
+        <PanelTransparencyControl
+          label="Comments panel"
+          value={panelTransparency.transparency}
+          onChange={panelTransparency.setTransparency}
+        />
         <span className="comments-title">Comments · {surfaceLabel}</span>
         <span className="comments-count">{open.length}</span>
         {resolved.length > 0 && (

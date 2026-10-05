@@ -3,8 +3,18 @@
  * deliberately small (not a side panel, not a Pro workspace) and theme-aware.
  */
 
-import { useCallback, useEffect, useRef, type MouseEvent as ReactMouseEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
+} from 'react';
 
+import {
+  PanelTransparencyControl,
+  usePanelTransparency,
+} from '../../../components/PanelTransparencyControl';
 import { BillyChatInput } from './BillyChatInput';
 import { BillyMessageList } from './BillyMessageList';
 import type { BillyMessage } from './billyTypes';
@@ -21,6 +31,7 @@ interface Props {
 
 const BOX_WIDTH = 340;
 const BOX_HEIGHT = 420;
+const TRANSPARENCY_STORAGE_KEY = 'logosforge-littleboy-transparency';
 
 export function BillyFloatingChat({
   messages,
@@ -33,12 +44,13 @@ export function BillyFloatingChat({
 }: Props) {
   const dragState = useRef<{ dx: number; dy: number } | null>(null);
   const onPosRef = useRef(onPositionChange);
+  const panelTransparency = usePanelTransparency(TRANSPARENCY_STORAGE_KEY);
   onPosRef.current = onPositionChange;
 
   const onHeaderMouseDown = useCallback(
     (e: ReactMouseEvent) => {
-      // Don't start a drag from the header buttons.
-      if ((e.target as HTMLElement).closest('button')) return;
+      // Header controls adjust/click without accidentally starting a panel drag.
+      if ((e.target as HTMLElement).closest('button, input, label, output')) return;
       dragState.current = { dx: e.clientX - position.x, dy: e.clientY - position.y };
       e.preventDefault();
     },
@@ -66,12 +78,23 @@ export function BillyFloatingChat({
 
   return (
     <div
-      className="billy-box littleboy-box"
-      style={{ left: position.x, top: position.y, width: BOX_WIDTH, height: BOX_HEIGHT }}
+      className="billy-box littleboy-box has-panel-transparency"
+      style={{
+        left: position.x,
+        top: position.y,
+        width: BOX_WIDTH,
+        height: BOX_HEIGHT,
+        '--panel-opacity': String(panelTransparency.opacity),
+      } as CSSProperties}
       role="dialog"
       aria-label="Billy chat"
     >
       <div className="billy-head" onMouseDown={onHeaderMouseDown}>
+        <PanelTransparencyControl
+          label="LittleBoy panel"
+          value={panelTransparency.transparency}
+          onChange={panelTransparency.setTransparency}
+        />
         <div className="billy-titles">
           <span className="billy-title">LITTLEBOY</span>
         </div>

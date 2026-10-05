@@ -8,6 +8,12 @@ export interface FloatingPanelViewport {
   height: number;
 }
 
+interface FloatingPanelInitialOptions {
+  side: 'left' | 'right';
+  top?: number;
+  preferred?: FloatingPanelPosition;
+}
+
 const EDGE_GAP = 8;
 const HEADER_VISIBLE = 56;
 
@@ -38,4 +44,16 @@ export function defaultFloatingPanelPosition(
     panelWidth,
     viewport,
   );
+}
+
+/** Use a contextual anchor when supplied; otherwise fall back to the usual edge position. */
+export function initialFloatingPanelPosition(
+  panelWidth: number,
+  viewport: FloatingPanelViewport,
+  options: FloatingPanelInitialOptions,
+): FloatingPanelPosition {
+  if (options.preferred) {
+    return clampFloatingPanelPosition(options.preferred, panelWidth, viewport);
+  }
+  return defaultFloatingPanelPosition(panelWidth, viewport, options.side, options.top);
 }

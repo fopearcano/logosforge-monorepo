@@ -9,7 +9,7 @@ import {
 
 import {
   clampFloatingPanelPosition,
-  defaultFloatingPanelPosition,
+  initialFloatingPanelPosition,
   type FloatingPanelPosition,
 } from './floatingPanelPosition';
 
@@ -18,6 +18,7 @@ interface Options {
   width: number;
   defaultSide: 'left' | 'right';
   defaultTop?: number;
+  initialPosition?: FloatingPanelPosition;
 }
 
 function viewport() {
@@ -28,11 +29,14 @@ function viewport() {
 }
 
 function loadPosition(options: Options): FloatingPanelPosition {
-  const fallback = defaultFloatingPanelPosition(
+  const fallback = initialFloatingPanelPosition(
     options.width,
     viewport(),
-    options.defaultSide,
-    options.defaultTop,
+    {
+      side: options.defaultSide,
+      top: options.defaultTop,
+      preferred: options.initialPosition,
+    },
   );
   try {
     const raw = localStorage.getItem(options.storageKey);

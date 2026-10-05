@@ -601,6 +601,63 @@ requireMarkers('Movable floating panel contract', appCss, [
   '.floating-panel-drag',
   'touch-action: none',
 ]);
+const logosPanelSource = sourceText('features/littleboy/logos/LogosInlineBox.tsx');
+requireMarkers('Movable Logos panel contract', logosPanelSource, [
+  'useFloatingPanel({',
+  "storageKey: 'logosforge-logos-panel-position'",
+  'initialPosition: { x: pos.left, y: pos.top }',
+  'className="floating-panel-drag"',
+]);
+const logosHeader = logosPanelSource.indexOf('<div className="logos-head">');
+const logosTransparency = logosPanelSource.indexOf('<label className="logos-transparency"');
+const logosTitle = logosPanelSource.indexOf('<span className="logos-title">');
+const logosContext = logosPanelSource.indexOf('<div className="logos-context"');
+if (!(logosHeader >= 0 && logosHeader < logosTransparency && logosTransparency < logosTitle && logosTitle < logosContext)) {
+  failures.push('Logos transparency slider is not compactly placed in the header before its title');
+}
+requireMarkers(
+  'Compact panel transparency control',
+  sourceText('components/PanelTransparencyControl.tsx'),
+  [
+    'type="range"',
+    'aria-label={`${label} transparency`}',
+    'aria-valuetext={`${value}% transparent`}',
+    '<output htmlFor={inputId}',
+  ],
+);
+for (const [label, relative, headerMarker, titleMarker] of [
+  [
+    'LittleBoy panel transparency',
+    'features/littleboy/billy/BillyFloatingChat.tsx',
+    '<div className="billy-head"',
+    '<div className="billy-titles">',
+  ],
+  [
+    'PSYKE panel transparency',
+    'features/psyke/PsykeWindow.tsx',
+    '<div className="psyke-header">',
+    '<span className="psyke-title">',
+  ],
+  [
+    'Comments panel transparency',
+    'features/comments/CommentsWindow.tsx',
+    '<header className="comments-head">',
+    '<span className="comments-title">',
+  ],
+] as const) {
+  const source = sourceText(relative);
+  requireMarkers(label, source, [
+    'has-panel-transparency',
+    '<PanelTransparencyControl',
+    "'--panel-opacity': String(panelTransparency.opacity)",
+  ]);
+  const header = source.indexOf(headerMarker);
+  const transparency = source.indexOf('<PanelTransparencyControl', header);
+  const title = source.indexOf(titleMarker, header);
+  if (!(header >= 0 && header < transparency && transparency < title)) {
+    failures.push(`${label} is not compactly placed in the header before its title`);
+  }
+}
 for (const marker of ['.wb-app-boundary', '.wb-outline-boundary', '.wb-document-boundary']) {
   if (!appCss.includes(marker)) failures.push(`app.css is missing boundary layout rule ${marker}`);
 }
