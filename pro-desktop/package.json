@@ -19,6 +19,7 @@
     "test:layout-persistence": "npm run build:electron && node tests/layout-persistence.test.cjs",
     "test:live-context": "npm run build:electron && node tests/live-context-bridge.test.cjs",
     "test:packaging": "npm run build:electron && node tests/packaging.test.cjs",
+    "test:packaged-workspace": "node scripts/packaged-workspace-acceptance.mjs",
     "test:accessibility": "node tests/accessibility.test.cjs",
     "test:lifecycle": "node tests/lifecycle.test.cjs",
     "test:project-resume": "node tests/project-resume.test.cjs",
@@ -51,6 +52,7 @@
     "electron": "^43.7.0",
     "electron-builder": "^26.15.3",
     "nodemon": "^3.1.7",
+    "playwright-core": "1.63.0",
     "typescript": "^5.5.4",
     "vite": "^8.2.2",
     "wait-on": "^8.0.1"

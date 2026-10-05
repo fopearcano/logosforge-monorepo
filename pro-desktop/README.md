@@ -138,6 +138,14 @@ layouts untouched. Moving a panel changes its grid placement under one stable
 React parent, so editor and AI session state does not remount during workspace
 rearrangement.
 
+The packaged Windows gate also launches `win-unpacked` through Playwright's
+Electron transport with an isolated profile. `npm run test:packaged-workspace`
+uses real mouse input to tear off, move, resize, minimize, restore and dock a
+panel, resizes and collapses a dock, closes through the production save
+handshake, then relaunches the same project and verifies the persisted placement
+and dock width. Failure diagnostics stay inside the explicitly validated run
+directory; successful temporary runs remove only that exact directory.
+
 The shared package + contracts are aliased straight to source (vite + tsconfig
 `paths`), so there's no build/link step in dev and HMR works across the
 monorepo. Their own dependencies still need installing in a fresh checkout.

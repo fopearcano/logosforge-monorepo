@@ -64,6 +64,7 @@ jobs:
             pro-desktop/core/logosforge-mcp.spec \
             pro-desktop/core/mcp_entry.py \
             pro-desktop/scripts/live-context-core-manager-driver.cjs \
+            pro-desktop/scripts/packaged-workspace-acceptance.mjs \
             pro-desktop/scripts/smoke-frozen-mcp.py \
             pro-desktop/scripts/smoke-live-context-bridge.py \
             pro-desktop/scripts/smoke-packaged-mcp.py \
@@ -247,6 +248,12 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: npm run pack
 
+      - name: Exercise packaged Pro pointer workspace and restart persistence
+        working-directory: pro-desktop
+        env:
+          LOGOSFORGE_PRO_WORKSPACE_ACCEPTANCE_ROOT: ${{ runner.temp }}/logosforge-pro-workspace-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+        run: npm run test:packaged-workspace
+
       - name: Verify packaged Pro MCP resource and architecture
         run: |
           set -euo pipefail
@@ -288,7 +295,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: packaged-windows-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/logosforge-packaged-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/logosforge-packaged-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+            ${{ runner.temp }}/logosforge-pro-workspace-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: warn
           include-hidden-files: true
           retention-days: 14

@@ -288,7 +288,7 @@ jobs:
           set -euo pipefail
           test "$RUNNER_OS" = "Windows" && test "$RUNNER_ARCH" = "X64"
           test "$(git rev-parse HEAD)" = "${{ needs.metadata.outputs.source_sha }}"
-          for path in logosforge/pyproject.toml logosforge-ui-contracts/package.json pro-shared-ui/package.json pro-desktop/package.json pro-desktop/core/logosforge-core.spec pro-desktop/core/logosforge-mcp.spec pro-desktop/scripts/live-context-core-manager-driver.cjs pro-desktop/scripts/smoke-live-context-bridge.py; do
+          for path in logosforge/pyproject.toml logosforge-ui-contracts/package.json pro-shared-ui/package.json pro-desktop/package.json pro-desktop/core/logosforge-core.spec pro-desktop/core/logosforge-mcp.spec pro-desktop/scripts/live-context-core-manager-driver.cjs pro-desktop/scripts/packaged-workspace-acceptance.mjs pro-desktop/scripts/smoke-live-context-bridge.py; do
             test -e "$path" || { echo "::error::Missing required monorepo path: $path"; exit 1; }
           done
 
@@ -533,6 +533,22 @@ jobs:
         run: >-
           ./build-venv/Scripts/python.exe pro-desktop/scripts/smoke-packaged-mcp.py
           "pro-desktop/release/win-unpacked/LogosForge Pro.exe"
+
+      - name: Exercise packaged Pro pointer workspace and restart persistence
+        working-directory: pro-desktop
+        env:
+          LOGOSFORGE_PRO_WORKSPACE_ACCEPTANCE_ROOT: ${{ runner.temp }}/logosforge-pro-workspace-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+        run: npm run test:packaged-workspace
+
+      - name: Upload packaged workspace diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (Node 24)
+        with:
+          name: logosforge-pro-windows-workspace-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/logosforge-pro-workspace-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
 
       - name: Exercise portable Windows MCP companion
         run: >-

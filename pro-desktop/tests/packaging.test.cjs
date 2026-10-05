@@ -17,6 +17,16 @@ const releaseWorkflow = fs.readFileSync(
   path.join(process.cwd(), '..', '.github', 'workflows', 'release-windows.yml'),
   'utf8',
 );
+const packagedWindowsWorkflow = fs.readFileSync(
+  path.join(process.cwd(), '..', '.github', 'workflows', 'ci-packaged-windows.yml'),
+  'utf8',
+);
+const packagedWorkspaceScriptPath = path.join(
+  process.cwd(),
+  'scripts',
+  'packaged-workspace-acceptance.mjs',
+);
+const packagedWorkspaceScript = fs.readFileSync(packagedWorkspaceScriptPath, 'utf8');
 const macJobStart = releaseWorkflow.indexOf('\n  build_macos:');
 const macJobEnd = releaseWorkflow.indexOf('\n  publish:', macJobStart);
 const macJob = releaseWorkflow.slice(macJobStart, macJobEnd);
@@ -69,6 +79,24 @@ check('Linux desktop identity is explicit and synchronized',
 check('AppImage desktop launches do not disable the Chromium sandbox',
   Array.isArray(pkg.build.appImage.executableArgs) &&
   pkg.build.appImage.executableArgs.length === 0);
+check('packaged workspace acceptance is an explicit Pro script',
+  pkg.scripts['test:packaged-workspace'] === 'node scripts/packaged-workspace-acceptance.mjs' &&
+  fs.statSync(packagedWorkspaceScriptPath).isFile());
+check('packaged workspace acceptance pins the browserless Electron driver',
+  pkg.devDependencies['playwright-core'] === '1.63.0');
+check('packaged workspace acceptance drives real pointer interactions and relaunch persistence',
+  packagedWorkspaceScript.includes('notesTab.dragTo(workspace') &&
+  packagedWorkspaceScript.includes('page.mouse.down()') &&
+  packagedWorkspaceScript.includes('Resize left workspace dock') &&
+  packagedWorkspaceScript.includes('pointer-authored project layout survived graceful packaged relaunch'));
+check('packaged Windows CI runs and preserves diagnostics for the Pro pointer journey',
+  packagedWindowsWorkflow.includes('npm run test:packaged-workspace') &&
+  packagedWindowsWorkflow.includes('LOGOSFORGE_PRO_WORKSPACE_ACCEPTANCE_ROOT') &&
+  packagedWindowsWorkflow.includes('logosforge-pro-workspace-acceptance-${{ github.run_id }}-${{ github.run_attempt }}'));
+check('Windows release candidates pass the same packaged pointer journey',
+  releaseWorkflow.includes('Exercise packaged Pro pointer workspace and restart persistence') &&
+  releaseWorkflow.includes('npm run test:packaged-workspace') &&
+  releaseWorkflow.includes('logosforge-pro-windows-workspace-diagnostics'));
 check('generic release script verifies the current native x64 sidecar',
   pkg.scripts.dist.includes('verify-native-release.cjs current x64'));
 check('Windows release script verifies a native x64 sidecar',
