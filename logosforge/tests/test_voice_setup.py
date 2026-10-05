@@ -407,7 +407,7 @@ def test_summary_includes_status_mic_and_local_statement():
 # ==========================================================================
 
 
-def _ui_window(**voice_settings):
+def _ui_window(*, open_voice_window=True, **voice_settings):
     from logosforge.settings import get_manager
     mgr = get_manager()
     mgr.set("enable_voice_mode", True)
@@ -419,7 +419,8 @@ def _ui_window(**voice_settings):
     db = Database()
     pid = db.create_project("P", narrative_engine="novel").id
     win = MainWindow(db, pid)
-    win._toggle_voice_panel()
+    if open_voice_window:
+        win._toggle_voice_panel()
     return db, pid, win
 
 
@@ -443,8 +444,15 @@ def test_valid_setup_enables_start():
 
 def test_dictation_works_without_billy_and_glossary():
     from logosforge.settings import get_manager
-    from PySide6.QtWidgets import QTextEdit
-    db, pid, win = _ui_window()
+
+    from logosforge import story_structure as ss
+    db, pid, win = _ui_window(open_voice_window=False)
+    sid = ss.create_scene(
+        db, pid, act="Act 1", chapter="Chapter 1", title="S",
+    ).id
+    win._show_manuscript()
+    editor = win.content_area._editors[sid]
+    win._toggle_voice_panel()
     get_manager().set("ai_provider", "")
     get_manager().set("ai_base_url", "")
     get_manager().set("enable_voice_glossary", False)
@@ -454,9 +462,6 @@ def test_dictation_works_without_billy_and_glossary():
     from logosforge.voice.types import TranscriptSegment
     panel._apply_final_segment(TranscriptSegment(text="still dictating"))
     assert panel._history.entries[0].corrections == []  # glossary absent
-    # Real editors belong to MainWindow; avoid a synthetic second top-level
-    # after the modeless voice window under Qt's Windows offscreen plugin.
-    editor = QTextEdit(win)
     win._voice_commit.note_focus(editor)
     assert panel.commit() is True                       # dictation fine
     assert "still dictating" in editor.toPlainText()
