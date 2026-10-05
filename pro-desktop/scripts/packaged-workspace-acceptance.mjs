@@ -508,6 +508,22 @@ async function pointerDragBy(page, locator, deltaX, deltaY, label, anchor = 'cen
   record('pointer', `${label}: ${deltaX},${deltaY}`);
 }
 
+async function pointerClickCenter(page, locator, label) {
+  const bounds = await locator.boundingBox();
+  assert.ok(bounds && bounds.width > 0 && bounds.height > 0, `${label} has no pointer target bounds`);
+  const point = {
+    x: bounds.x + bounds.width / 2,
+    y: bounds.y + bounds.height / 2,
+  };
+  const receivesPointer = await locator.evaluate((element, target) => {
+    const hit = document.elementFromPoint(target.x, target.y);
+    return hit === element || (hit instanceof Node && element.contains(hit));
+  }, point);
+  assert.ok(receivesPointer, `${label} is obscured at its center point`);
+  await page.mouse.click(point.x, point.y);
+  record('pointer', `${label}: ${Math.round(point.x)},${Math.round(point.y)}`);
+}
+
 function finiteAttribute(raw, attribute, label) {
   assert.ok(typeof raw === 'string' && raw.trim() !== '', `${label} is missing ${attribute}`);
   const value = Number(raw);
@@ -599,6 +615,64 @@ async function dismissCanvasInspector(canvasScreen) {
   }
 }
 
+const CANVAS_POINTER_DOCK_REGIONS = ['right', 'bottom', 'left'];
+
+async function prepareCanvasPointerWorkspace(page, board, label) {
+  const collapsedRegions = [];
+  let bounds = await board.boundingBox();
+  for (const region of CANVAS_POINTER_DOCK_REGIONS) {
+    if (bounds && bounds.width > 420 && bounds.height > 300) break;
+    const collapse = page.getByRole('button', {
+      name: `Collapse ${region} dock`,
+      exact: true,
+    });
+    if (!await collapse.isVisible().catch(() => false)) continue;
+    await collapse.click();
+    const expand = page.getByRole('button', {
+      name: `Expand ${region} dock`,
+      exact: true,
+    });
+    await waitFor(
+      async () => await expand.isVisible() && await expand.isEnabled(),
+      `${label} ${region} dock collapse`,
+    );
+    collapsedRegions.push(region);
+    bounds = await board.boundingBox();
+  }
+  await waitFor(async () => {
+    bounds = await board.boundingBox();
+    return Boolean(bounds && bounds.width > 420 && bounds.height > 300);
+  }, `${label} pointer-safe board size`);
+  assert.ok(bounds, `${label} has no board bounds after workspace preparation`);
+  record(
+    'ui',
+    `${label} pointer area ${Math.round(bounds.width)}x${Math.round(bounds.height)}`
+      + (collapsedRegions.length ? ` after collapsing ${collapsedRegions.join(', ')} docks` : ''),
+  );
+  return { bounds, collapsedRegions };
+}
+
+async function restoreCanvasPointerWorkspace(page, collapsedRegions, label) {
+  for (const region of [...collapsedRegions].reverse()) {
+    const expand = await waitVisible(
+      page.getByRole('button', { name: `Expand ${region} dock`, exact: true }),
+      `${label} ${region} dock expand control`,
+    );
+    await expand.click();
+    const collapse = page.getByRole('button', {
+      name: `Collapse ${region} dock`,
+      exact: true,
+    });
+    await waitFor(
+      async () => await collapse.isVisible() && await collapse.isEnabled(),
+      `${label} ${region} dock restoration`,
+    );
+  }
+  if (collapsedRegions.length) {
+    record('ui', `${label} restored ${[...collapsedRegions].reverse().join(', ')} docks`);
+  }
+}
+
 async function exerciseCanvasPlot(session) {
   const { page } = session;
   await waitProReady(session);
@@ -633,8 +707,8 @@ async function exerciseCanvasPlot(session) {
   assert.equal(await links.count(), 0, 'Fresh packaged profile unexpectedly contained Canvas Plot connections');
 
   const initialViewport = await canvasViewport(board, 'initial Canvas Plot viewport');
-  const boardBounds = await board.boundingBox();
-  assert.ok(boardBounds && boardBounds.width > 420 && boardBounds.height > 300, 'Canvas Plot board is too small for pointer acceptance');
+  const canvasWorkspace = await prepareCanvasPointerWorkspace(page, board, 'Canvas Plot');
+  const boardBounds = canvasWorkspace.bounds;
   await page.mouse.move(
     boardBounds.x + boardBounds.width / 2,
     boardBounds.y + boardBounds.height / 2,
@@ -787,13 +861,13 @@ async function exerciseCanvasPlot(session) {
     await sourceHandle.getAttribute('aria-label'),
     `Start connection from Canvas Plot block ${firstNodeId}`,
   );
-  await sourceHandle.click();
+  await pointerClickCenter(page, sourceHandle, 'start Canvas Plot connection');
   await waitFor(
     async () => await targetHandle.getAttribute('aria-label') === `Connect to Canvas Plot block ${secondNodeId}`,
     'Canvas Plot target connection mode',
   );
-  await targetHandle.click();
-  record('pointer', `connected Canvas Plot block ${firstNodeId} to ${secondNodeId} with two pointer clicks`);
+  await pointerClickCenter(page, targetHandle, 'finish Canvas Plot connection');
+  record('pointer', `connected Canvas Plot block ${firstNodeId} to ${secondNodeId} with two real mouse clicks`);
   const linkId = await waitForAddedCanvasEntity(
     links,
     'data-canvas-link-id',
@@ -808,6 +882,11 @@ async function exerciseCanvasPlot(session) {
   record(
     'journey',
     `Canvas Plot mutations complete (nodes=${firstNodeId},${secondNodeId}; frame=${frameId}; link=${linkId})`,
+  );
+  await restoreCanvasPointerWorkspace(
+    page,
+    canvasWorkspace.collapsedRegions,
+    'Canvas Plot',
   );
   return {
     nodeIds: [firstNodeId, secondNodeId],
@@ -840,6 +919,11 @@ async function verifyPersistedCanvasPlot(session, expected) {
     async () => await board.getAttribute('data-viewport-ready') === 'true',
     'restored Canvas Plot viewport settings hydration',
     STARTUP_TIMEOUT_MS,
+  );
+  const canvasWorkspace = await prepareCanvasPointerWorkspace(
+    page,
+    board,
+    'restored Canvas Plot',
   );
 
   await waitFor(async () => {
@@ -908,6 +992,11 @@ async function verifyPersistedCanvasPlot(session, expected) {
   assert.equal(Number(await link.getAttribute('data-source-node-id')), expected.sourceNodeId);
   assert.equal(Number(await link.getAttribute('data-target-node-id')), expected.targetNodeId);
   assert.deepEqual(session.pageErrors, [], 'Renderer errors occurred while restoring Canvas Plot');
+  await restoreCanvasPointerWorkspace(
+    page,
+    canvasWorkspace.collapsedRegions,
+    'restored Canvas Plot',
+  );
   record('journey', 'pointer-authored Canvas Plot content and viewport survived graceful packaged relaunch');
 }
 

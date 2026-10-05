@@ -107,9 +107,14 @@ check('packaged workspace acceptance covers Canvas Plot pointer authoring and pe
   packagedWorkspaceScript.includes('pointer-flushed Canvas Plot inspector text after relaunch') &&
   packagedWorkspaceScript.includes('expected.nodeTitle') &&
   packagedWorkspaceScript.includes('expected.nodeSummary') &&
-  packagedWorkspaceScript.includes('sourceHandle.click()') &&
-  packagedWorkspaceScript.includes('targetHandle.click()') &&
+  packagedWorkspaceScript.includes("pointerClickCenter(page, sourceHandle, 'start Canvas Plot connection')") &&
+  packagedWorkspaceScript.includes("pointerClickCenter(page, targetHandle, 'finish Canvas Plot connection')") &&
   packagedWorkspaceScript.includes('page.mouse.wheel(0, 360)') &&
+  packagedWorkspaceScript.includes('prepareCanvasPointerWorkspace(page, board') &&
+  packagedWorkspaceScript.includes('restoreCanvasPointerWorkspace(') &&
+  packagedWorkspaceScript.includes('Collapse ${region} dock') &&
+  packagedWorkspaceScript.includes('Expand ${region} dock') &&
+  packagedWorkspaceScript.includes('pointer-safe board size') &&
   packagedWorkspaceScript.includes('pointer-authored Canvas Plot content and viewport survived graceful packaged relaunch'));
 check('packaged Windows CI runs and preserves diagnostics for the Pro pointer journey',
   packagedWindowsWorkflow.includes('npm run test:packaged-workspace') &&
