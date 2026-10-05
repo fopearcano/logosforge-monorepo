@@ -609,10 +609,20 @@ async function exercisePointerWorkspace(session) {
     'pointer-docked Notes in the left workspace region',
   );
 
+  await page.getByRole('button', { name: 'Collapse right dock', exact: true }).click();
+  await waitVisible(
+    page.getByRole('button', { name: 'Expand right dock', exact: true }),
+    'collapsed right dock strip',
+  );
   const leftResizer = await waitVisible(
     page.getByRole('separator', { name: 'Resize left workspace dock', exact: true }),
     'left workspace dock resizer',
   );
+  await waitFor(async () => {
+    const current = Number(await leftResizer.getAttribute('aria-valuenow'));
+    const maximum = Number(await leftResizer.getAttribute('aria-valuemax'));
+    return Number.isFinite(current) && Number.isFinite(maximum) && maximum - current >= 64;
+  }, 'left workspace dock pointer-resize capacity');
   const initialLeftSize = Number(await leftResizer.getAttribute('aria-valuenow'));
   assert.ok(Number.isFinite(initialLeftSize) && initialLeftSize > 0);
   await pointerDragBy(page, leftResizer, 64, 0, 'resize left workspace dock');
@@ -642,6 +652,10 @@ async function verifyPersistedWorkspace(session, expected) {
   const expandLeft = await waitVisible(
     page.getByRole('button', { name: 'Expand left dock', exact: true }),
     'persisted collapsed left dock after relaunch',
+  );
+  await waitVisible(
+    page.getByRole('button', { name: 'Expand right dock', exact: true }),
+    'persisted collapsed right dock after relaunch',
   );
   const notesSurface = page.locator(
     'section[data-panel-id="notes"][data-dock-region="left"][hidden]',
@@ -679,6 +693,7 @@ async function readSavedLayout(session, expected) {
   }, 'saved workspace layout file');
   const layout = JSON.parse(await fs.readFile(layoutPath, 'utf8'));
   assert.equal(layout.docks?.left?.collapsed, true, 'Saved left dock was not collapsed');
+  assert.equal(layout.docks?.right?.collapsed, true, 'Saved right dock was not collapsed');
   assert.equal(layout.docks?.left?.sizePx, expected.leftDockSizePx, 'Saved left dock width changed');
   assert.ok(layout.docks?.left?.panelIds?.includes('notes'), 'Saved left dock lost Notes');
   assert.equal(layout.floatingPanels?.some((entry) => entry?.panelId === 'notes'), false);
