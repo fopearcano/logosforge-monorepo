@@ -41,6 +41,12 @@ import type {
   TimelineOffTimelineSceneDTO,
   TimelineOrderMode,
   TimelineSnapshotDTO,
+  CanvasPlotCommandDTO,
+  CanvasPlotCommandResultDTO,
+  CanvasPlotFrameDTO,
+  CanvasPlotLinkDTO,
+  CanvasPlotNodeDTO,
+  CanvasPlotSnapshotDTO,
   SceneExtractionDTO,
   SettingsDTO,
   VoiceBillyProposalDTO,
@@ -675,6 +681,214 @@ export function validateTimelineSnapshotDTOForProject(
   return snapshot;
 }
 
+function canvasPlotNode(value: unknown, path: string): CanvasPlotNodeDTO {
+  const dto = record(value, path);
+  const id = integerValue(requireField(dto, "id", path), fieldPath(path, "id"));
+  if (id <= 0) fail(fieldPath(path, "id"), "a positive safe integer", id);
+  for (const key of ["title", "body", "color_label", "group_label", "created_at"]) {
+    stringValue(requireField(dto, key, path), fieldPath(path, key));
+  }
+  for (const key of ["x", "y", "width", "height"]) {
+    const number = numberValue(requireField(dto, key, path), fieldPath(path, key));
+    if ((key === "width" || key === "height") && number <= 0) {
+      fail(fieldPath(path, key), "a positive finite number", number);
+    }
+  }
+  const sceneId = nullable(
+    requireField(dto, "scene_id", path),
+    fieldPath(path, "scene_id"),
+    integerValue,
+  );
+  if (sceneId != null && sceneId <= 0) {
+    fail(fieldPath(path, "scene_id"), "a positive safe integer or null", sceneId);
+  }
+  const sortOrder = integerValue(
+    requireField(dto, "sort_order", path),
+    fieldPath(path, "sort_order"),
+  );
+  if (sortOrder < 0) fail(fieldPath(path, "sort_order"), "zero or greater", sortOrder);
+  return value as CanvasPlotNodeDTO;
+}
+
+function canvasPlotLink(value: unknown, path: string): CanvasPlotLinkDTO {
+  const dto = record(value, path);
+  for (const key of ["id", "source_node_id", "target_node_id"]) {
+    const id = integerValue(requireField(dto, key, path), fieldPath(path, key));
+    if (id <= 0) fail(fieldPath(path, key), "a positive safe integer", id);
+  }
+  for (const key of ["label", "color_label", "link_type", "created_at"]) {
+    stringValue(requireField(dto, key, path), fieldPath(path, key));
+  }
+  return value as CanvasPlotLinkDTO;
+}
+
+function canvasPlotFrame(value: unknown, path: string): CanvasPlotFrameDTO {
+  const dto = record(value, path);
+  const id = integerValue(requireField(dto, "id", path), fieldPath(path, "id"));
+  if (id <= 0) fail(fieldPath(path, "id"), "a positive safe integer", id);
+  for (const key of ["title", "color_label", "created_at"]) {
+    stringValue(requireField(dto, key, path), fieldPath(path, key));
+  }
+  for (const key of ["x", "y", "width", "height"]) {
+    const number = numberValue(requireField(dto, key, path), fieldPath(path, key));
+    if ((key === "width" || key === "height") && number <= 0) {
+      fail(fieldPath(path, key), "a positive finite number", number);
+    }
+  }
+  return value as CanvasPlotFrameDTO;
+}
+
+function canvasPlotSnapshot(value: unknown, path: string): CanvasPlotSnapshotDTO {
+  const dto = record(value, path);
+  const projectId = integerValue(
+    requireField(dto, "project_id", path),
+    fieldPath(path, "project_id"),
+  );
+  if (projectId <= 0) fail(fieldPath(path, "project_id"), "a positive safe integer", projectId);
+  const revision = stringValue(requireField(dto, "revision", path), fieldPath(path, "revision"));
+  if (!/^[0-9a-f]{64}$/.test(revision)) {
+    fail(fieldPath(path, "revision"), "a 64-character lowercase hexadecimal revision", revision);
+  }
+
+  const nodesPath = fieldPath(path, "nodes");
+  const nodes = arrayOf(requireField(dto, "nodes", path), nodesPath, canvasPlotNode);
+  const nodeIds = new Set<number>();
+  nodes.forEach((node, index) => {
+    if (nodeIds.has(node.id)) fail(`${nodesPath}[${index}].id`, "a unique node id", node.id);
+    nodeIds.add(node.id);
+  });
+
+  const linksPath = fieldPath(path, "links");
+  const links = arrayOf(requireField(dto, "links", path), linksPath, canvasPlotLink);
+  const linkIds = new Set<number>();
+  const pairs = new Set<string>();
+  links.forEach((link, index) => {
+    const linkPath = `${linksPath}[${index}]`;
+    if (linkIds.has(link.id)) fail(`${linkPath}.id`, "a unique link id", link.id);
+    if (!nodeIds.has(link.source_node_id)) {
+      fail(`${linkPath}.source_node_id`, "an id present in nodes", link.source_node_id);
+    }
+    if (!nodeIds.has(link.target_node_id)) {
+      fail(`${linkPath}.target_node_id`, "an id present in nodes", link.target_node_id);
+    }
+    if (link.source_node_id === link.target_node_id) {
+      fail(`${linkPath}.target_node_id`, "a different node id", link.target_node_id);
+    }
+    const pair = [link.source_node_id, link.target_node_id].sort((a, b) => a - b).join(":");
+    if (pairs.has(pair)) fail(linkPath, "a unique undirected node pair", link);
+    pairs.add(pair);
+    linkIds.add(link.id);
+  });
+
+  const framesPath = fieldPath(path, "frames");
+  const frames = arrayOf(requireField(dto, "frames", path), framesPath, canvasPlotFrame);
+  const frameIds = new Set<number>();
+  frames.forEach((frame, index) => {
+    if (frameIds.has(frame.id)) fail(`${framesPath}[${index}].id`, "a unique frame id", frame.id);
+    frameIds.add(frame.id);
+  });
+  return value as CanvasPlotSnapshotDTO;
+}
+
+function canvasPlotCommandResult(value: unknown, path: string): CanvasPlotCommandResultDTO {
+  const dto = record(value, path);
+  const canvasPlot = canvasPlotSnapshot(
+    requireField(dto, "canvas_plot", path),
+    fieldPath(path, "canvas_plot"),
+  );
+  const changed = booleanValue(requireField(dto, "changed", path), fieldPath(path, "changed"));
+  const affected = [
+    ["affected_node_ids", "node"],
+    ["affected_link_ids", "link"],
+    ["affected_frame_ids", "frame"],
+  ] as const;
+  for (const [field, label] of affected) {
+    const ids = integerArray(requireField(dto, field, path), fieldPath(path, field));
+    const seen = new Set<number>();
+    ids.forEach((id, index) => {
+      if (id <= 0) fail(`${fieldPath(path, field)}[${index}]`, `a positive ${label} id`, id);
+      if (seen.has(id)) fail(`${fieldPath(path, field)}[${index}]`, `a unique ${label} id`, id);
+      seen.add(id);
+    });
+    if (!changed && ids.length) fail(fieldPath(path, field), "an empty array when changed is false", ids);
+  }
+  for (const field of ["created_node_id", "created_link_id", "created_frame_id"] as const) {
+    const id = nullable(requireField(dto, field, path), fieldPath(path, field), integerValue);
+    if (id != null && id <= 0) fail(fieldPath(path, field), "a positive safe integer or null", id);
+    if (!changed && id != null) fail(fieldPath(path, field), "null when changed is false", id);
+  }
+  const createdNodeId = dto.created_node_id as number | null;
+  const createdLinkId = dto.created_link_id as number | null;
+  const createdFrameId = dto.created_frame_id as number | null;
+  if (createdNodeId != null && !canvasPlot.nodes.some((node) => node.id === createdNodeId)) {
+    fail(fieldPath(path, "created_node_id"), "an id present in canvas_plot.nodes", createdNodeId);
+  }
+  if (createdLinkId != null && !canvasPlot.links.some((link) => link.id === createdLinkId)) {
+    fail(fieldPath(path, "created_link_id"), "an id present in canvas_plot.links", createdLinkId);
+  }
+  if (createdFrameId != null && !canvasPlot.frames.some((frame) => frame.id === createdFrameId)) {
+    fail(fieldPath(path, "created_frame_id"), "an id present in canvas_plot.frames", createdFrameId);
+  }
+  return value as CanvasPlotCommandResultDTO;
+}
+
+export function validateCanvasPlotSnapshotDTOForProject(
+  value: unknown,
+  projectId: number,
+): CanvasPlotSnapshotDTO {
+  const snapshot = canvasPlotSnapshot(value, "$");
+  if (snapshot.project_id !== projectId) {
+    fail("$.project_id", `the requested project id ${projectId}`, snapshot.project_id);
+  }
+  return snapshot;
+}
+
+export function validateCanvasPlotCommandResultDTOForRequest(
+  value: unknown,
+  projectId: number,
+  command: CanvasPlotCommandDTO,
+): CanvasPlotCommandResultDTO {
+  const result = canvasPlotCommandResult(value, "$");
+  if (result.canvas_plot.project_id !== projectId) {
+    fail(
+      "$.canvas_plot.project_id",
+      `the requested project id ${projectId}`,
+      result.canvas_plot.project_id,
+    );
+  }
+  if (!result.changed && result.canvas_plot.revision !== command.expected_revision) {
+    fail(
+      "$.canvas_plot.revision",
+      "the command's expected revision when changed is false",
+      result.canvas_plot.revision,
+    );
+  }
+  if (result.changed && result.canvas_plot.revision === command.expected_revision) {
+    fail(
+      "$.canvas_plot.revision",
+      "a new revision when changed is true",
+      result.canvas_plot.revision,
+    );
+  }
+  const expectedCreatedField = command.kind === "create_node"
+    ? "created_node_id"
+    : command.kind === "create_link"
+      ? "created_link_id"
+      : command.kind === "create_frame"
+        ? "created_frame_id"
+        : null;
+  for (const field of ["created_node_id", "created_link_id", "created_frame_id"] as const) {
+    const id = result[field];
+    if (field === expectedCreatedField && result.changed && id == null) {
+      fail(`$.${field}`, `a created id for ${command.kind}`, id);
+    }
+    if (field !== expectedCreatedField && id != null) {
+      fail(`$.${field}`, `null for ${command.kind}`, id);
+    }
+  }
+  return result;
+}
+
 export function validateStoryStructureCommandResultDTOForRequest(
   value: unknown,
   projectId: number,
@@ -1054,6 +1268,10 @@ export const validateTimelineSnapshotDTO: RuntimeDtoValidator<TimelineSnapshotDT
   timelineSnapshot(value, "$");
 export const validateTimelineCommandResultDTO: RuntimeDtoValidator<TimelineCommandResultDTO> = (value) =>
   timelineCommandResult(value, "$");
+export const validateCanvasPlotSnapshotDTO: RuntimeDtoValidator<CanvasPlotSnapshotDTO> = (value) =>
+  canvasPlotSnapshot(value, "$");
+export const validateCanvasPlotCommandResultDTO: RuntimeDtoValidator<CanvasPlotCommandResultDTO> = (value) =>
+  canvasPlotCommandResult(value, "$");
 export const validateSettingsDTO: RuntimeDtoValidator<SettingsDTO> = (value) => settings(value, "$");
 export const validatePsykeConsoleCommandPlanDTO: RuntimeDtoValidator<PsykeConsoleCommandPlanDTO> = (value) =>
   psykeConsoleCommandPlan(value, "$");

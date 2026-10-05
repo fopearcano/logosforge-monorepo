@@ -89,6 +89,28 @@ check('packaged workspace acceptance drives real pointer interactions and relaun
   packagedWorkspaceScript.includes('page.mouse.down()') &&
   packagedWorkspaceScript.includes('Resize left workspace dock') &&
   packagedWorkspaceScript.includes('pointer-authored project layout survived graceful packaged relaunch'));
+check('packaged workspace acceptance covers Canvas Plot pointer authoring and persistence',
+  packagedWorkspaceScript.includes("selectPanel(page, 'Canvas Plot', 'canvas-plot'") &&
+  packagedWorkspaceScript.includes("name: 'Add Canvas Plot block', exact: true") &&
+  packagedWorkspaceScript.includes('[data-canvas-node-move-handle]') &&
+  packagedWorkspaceScript.includes('[data-canvas-frame-move-handle]') &&
+  packagedWorkspaceScript.includes('[data-canvas-frame-resize-handle]') &&
+  packagedWorkspaceScript.includes('selected Canvas Plot frame inspector') &&
+  packagedWorkspaceScript.includes('move selected Canvas Plot frame away from inspector') &&
+  packagedWorkspaceScript.includes('[data-canvas-node-connect-handle]') &&
+  packagedWorkspaceScript.includes("getAttribute('data-viewport-ready')") &&
+  packagedWorkspaceScript.includes("name: 'Block title', exact: true") &&
+  packagedWorkspaceScript.includes("name: 'Block summary', exact: true") &&
+  packagedWorkspaceScript.includes('pressSequentially(nodeTitle)') &&
+  packagedWorkspaceScript.includes('pressSequentially(nodeSummary)') &&
+  packagedWorkspaceScript.includes('pointer-moved Canvas Plot block and flushed its inspector draft') &&
+  packagedWorkspaceScript.includes('pointer-flushed Canvas Plot inspector text after relaunch') &&
+  packagedWorkspaceScript.includes('expected.nodeTitle') &&
+  packagedWorkspaceScript.includes('expected.nodeSummary') &&
+  packagedWorkspaceScript.includes('sourceHandle.click()') &&
+  packagedWorkspaceScript.includes('targetHandle.click()') &&
+  packagedWorkspaceScript.includes('page.mouse.wheel(0, 360)') &&
+  packagedWorkspaceScript.includes('pointer-authored Canvas Plot content and viewport survived graceful packaged relaunch'));
 check('packaged Windows CI runs and preserves diagnostics for the Pro pointer journey',
   packagedWindowsWorkflow.includes('npm run test:packaged-workspace') &&
   packagedWindowsWorkflow.includes('LOGOSFORGE_PRO_WORKSPACE_ACCEPTANCE_ROOT') &&

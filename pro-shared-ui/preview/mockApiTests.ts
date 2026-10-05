@@ -34,9 +34,132 @@ check(typeof api.voiceBillyCancel === "function", "preview mock must implement B
 check(typeof api.planPsykeConsoleCommand === "function", "preview mock must implement PSYKE command planning");
 check(typeof api.executePsykeConsoleCommand === "function", "preview mock must implement PSYKE command execution");
 check(typeof api.executeTimelineCommand === "function", "preview mock must implement guarded Timeline commands");
+check(typeof api.executeCanvasPlotCommand === "function", "preview mock must implement guarded Canvas Plot commands");
 
 const health = await api.health();
-check(health.status === "ok" && health.api_version === "1.4.0", "preview health must satisfy the core contract");
+check(health.status === "ok" && health.api_version === "1.5.0", "preview health must satisfy the core contract");
+const canvasApi = createMockApiClient();
+const initialCanvas = await canvasApi.getCanvasPlot(1);
+check(
+  initialCanvas.nodes.length === 3
+    && initialCanvas.links.length === 2
+    && initialCanvas.frames.length === 1
+    && initialCanvas.nodes.map((node) => node.sort_order).join(",") === "0,1,2",
+  "preview Canvas Plot must expose independent nodes, links, frames, and dense zero-based z-order",
+);
+const createdCanvasNode = await canvasApi.executeCanvasPlotCommand(1, {
+  kind: "create_node",
+  expected_revision: initialCanvas.revision,
+  x: 120,
+  y: 160,
+});
+const defaultCanvasNode = createdCanvasNode.canvas_plot.nodes.find(
+  (node) => node.id === createdCanvasNode.created_node_id,
+)!;
+check(
+  createdCanvasNode.changed
+    && createdCanvasNode.created_node_id != null
+    && defaultCanvasNode.title === ""
+    && defaultCanvasNode.body === ""
+    && defaultCanvasNode.width === 180
+    && defaultCanvasNode.height === 110
+    && defaultCanvasNode.sort_order === 3,
+  "preview Canvas Plot commands must use the live node defaults and append in dense order",
+);
+let staleCanvasError: unknown = null;
+try {
+  await canvasApi.executeCanvasPlotCommand(1, {
+    kind: "create_frame",
+    expected_revision: initialCanvas.revision,
+    title: "Stale frame",
+  });
+} catch (error) {
+  staleCanvasError = error;
+}
+check(
+  staleCanvasError instanceof ApiRequestError
+    && staleCanvasError.status === 409
+    && staleCanvasError.code === "canvas_plot_conflict"
+    && !(await canvasApi.getCanvasPlot(1)).frames.some((frame) => frame.title === "Stale frame"),
+  "preview Canvas Plot commands must reject stale revisions without partial mutation",
+);
+const deletedCanvasNode = await canvasApi.executeCanvasPlotCommand(1, {
+  kind: "delete_node",
+  expected_revision: createdCanvasNode.canvas_plot.revision,
+  node_id: createdCanvasNode.created_node_id!,
+});
+const recreatedCanvasNode = await canvasApi.executeCanvasPlotCommand(1, {
+  kind: "create_node",
+  expected_revision: deletedCanvasNode.canvas_plot.revision,
+});
+check(
+  recreatedCanvasNode.created_node_id! > createdCanvasNode.created_node_id!
+    && recreatedCanvasNode.canvas_plot.nodes.map((node) => node.sort_order).join(",") === "0,1,2,3",
+  "preview Canvas Plot deletion must re-densify order and must not reuse an ID in one mock session",
+);
+const reverseDuplicate = await canvasApi.executeCanvasPlotCommand(1, {
+  kind: "create_link",
+  expected_revision: recreatedCanvasNode.canvas_plot.revision,
+  source_node_id: 2,
+  target_node_id: 1,
+});
+check(
+  !reverseDuplicate.changed
+    && reverseDuplicate.created_link_id === null
+    && reverseDuplicate.canvas_plot.revision === recreatedCanvasNode.canvas_plot.revision,
+  "preview Canvas Plot links must preserve the live undirected duplicate no-op semantics",
+);
+let foreignCanvasSceneError: unknown = null;
+try {
+  await canvasApi.executeCanvasPlotCommand(1, {
+    kind: "create_node",
+    expected_revision: reverseDuplicate.canvas_plot.revision,
+    scene_id: 999_999,
+  });
+} catch (error) {
+  foreignCanvasSceneError = error;
+}
+check(
+  foreignCanvasSceneError instanceof ApiRequestError
+    && foreignCanvasSceneError.status === 404
+    && (await canvasApi.getCanvasPlot(1)).revision === reverseDuplicate.canvas_plot.revision,
+  "preview Canvas Plot nodes must reject Scene ids outside the scoped project without mutating state",
+);
+const emptyProjectCanvas = await canvasApi.getCanvasPlot(2);
+check(
+  emptyProjectCanvas.nodes.length === 0
+    && emptyProjectCanvas.links.length === 0
+    && emptyProjectCanvas.frames.length === 0,
+  "preview Canvas Plot state must be isolated per project",
+);
+
+const canvasRevisionBeforeViewport = (await canvasApi.getCanvasPlot(1)).revision;
+const firstProjectSettings = await canvasApi.patchSettings(1, {
+  settings: { canvas_plot_view: { zoom: 1.25, cx: 40, cy: -15 } },
+});
+(firstProjectSettings.settings.canvas_plot_view as Record<string, unknown>).zoom = 99;
+const storedFirstProjectSettings = await canvasApi.getSettings(1);
+const untouchedSecondProjectSettings = await canvasApi.getSettings(2);
+check(
+  (storedFirstProjectSettings.settings.canvas_plot_view as { zoom: number }).zoom === 1.25
+    && untouchedSecondProjectSettings.settings.canvas_plot_view === undefined,
+  "preview viewport settings must be deep-cloned and isolated per project",
+);
+check(
+  (await canvasApi.getCanvasPlot(1)).revision === canvasRevisionBeforeViewport,
+  "preview viewport settings must not participate in the structural Canvas Plot revision",
+);
+await canvasApi.patchSettings(2, {
+  settings: { canvas_plot_view: { zoom: 2, cx: 900, cy: 450 } },
+});
+check(
+  ((await canvasApi.getSettings(1)).settings.canvas_plot_view as { zoom: number }).zoom === 1.25,
+  "patching one preview project's viewport must not overwrite another project's viewport",
+);
+check(
+  (await createMockApiClient().getSettings(1)).settings.canvas_plot_view === undefined,
+  "a fresh preview client must not inherit project settings from a prior mock session",
+);
 const timelineApi = createMockApiClient();
 const initialTimeline = await timelineApi.getTimeline(1);
 check(

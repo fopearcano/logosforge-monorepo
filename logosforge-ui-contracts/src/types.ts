@@ -862,6 +862,163 @@ export interface TimelineCommandReceiptDTO {
   committed_at: string;
 }
 
+// ── Canvas Plot (independent spatial thinking board) ───────────────────────
+
+export interface CanvasPlotNodeDTO {
+  id: number;
+  title: string;
+  body: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  color_label: string;
+  group_label: string;
+  scene_id: number | null;
+  sort_order: number;
+  created_at: string;
+}
+
+export interface CanvasPlotLinkDTO {
+  id: number;
+  source_node_id: number;
+  target_node_id: number;
+  label: string;
+  color_label: string;
+  link_type: string;
+  created_at: string;
+}
+
+export interface CanvasPlotFrameDTO {
+  id: number;
+  title: string;
+  color_label: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  created_at: string;
+}
+
+/** One coherent project-owned Canvas Plot read guarded by one content revision. */
+export interface CanvasPlotSnapshotDTO {
+  project_id: number;
+  revision: string;
+  nodes: CanvasPlotNodeDTO[];
+  links: CanvasPlotLinkDTO[];
+  frames: CanvasPlotFrameDTO[];
+}
+
+interface CanvasPlotCommandBase {
+  expected_revision: string;
+}
+
+export interface CanvasPlotCreateNodeCommandDTO extends CanvasPlotCommandBase {
+  kind: "create_node";
+  title?: string;
+  body?: string;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  color_label?: string;
+  group_label?: string;
+  scene_id?: number | null;
+  /** Zero-based dense z-order insertion position. */
+  index?: number;
+}
+
+export interface CanvasPlotUpdateNodeCommandDTO extends CanvasPlotCommandBase {
+  kind: "update_node";
+  node_id: number;
+  title?: string;
+  body?: string;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  color_label?: string;
+  group_label?: string;
+  scene_id?: number | null;
+  /** Zero-based dense z-order position. */
+  index?: number;
+}
+
+export interface CanvasPlotDeleteNodeCommandDTO extends CanvasPlotCommandBase {
+  kind: "delete_node";
+  node_id: number;
+}
+
+export interface CanvasPlotCreateLinkCommandDTO extends CanvasPlotCommandBase {
+  kind: "create_link";
+  source_node_id: number;
+  target_node_id: number;
+  label?: string;
+  color_label?: string;
+  link_type?: string;
+}
+
+export interface CanvasPlotUpdateLinkCommandDTO extends CanvasPlotCommandBase {
+  kind: "update_link";
+  link_id: number;
+  label?: string;
+  color_label?: string;
+  link_type?: string;
+}
+
+export interface CanvasPlotDeleteLinkCommandDTO extends CanvasPlotCommandBase {
+  kind: "delete_link";
+  link_id: number;
+}
+
+export interface CanvasPlotCreateFrameCommandDTO extends CanvasPlotCommandBase {
+  kind: "create_frame";
+  title?: string;
+  color_label?: string;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+}
+
+export interface CanvasPlotUpdateFrameCommandDTO extends CanvasPlotCommandBase {
+  kind: "update_frame";
+  frame_id: number;
+  title?: string;
+  color_label?: string;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+}
+
+export interface CanvasPlotDeleteFrameCommandDTO extends CanvasPlotCommandBase {
+  kind: "delete_frame";
+  frame_id: number;
+}
+
+export type CanvasPlotCommandDTO =
+  | CanvasPlotCreateNodeCommandDTO
+  | CanvasPlotUpdateNodeCommandDTO
+  | CanvasPlotDeleteNodeCommandDTO
+  | CanvasPlotCreateLinkCommandDTO
+  | CanvasPlotUpdateLinkCommandDTO
+  | CanvasPlotDeleteLinkCommandDTO
+  | CanvasPlotCreateFrameCommandDTO
+  | CanvasPlotUpdateFrameCommandDTO
+  | CanvasPlotDeleteFrameCommandDTO;
+
+export interface CanvasPlotCommandResultDTO {
+  canvas_plot: CanvasPlotSnapshotDTO;
+  changed: boolean;
+  affected_node_ids: number[];
+  affected_link_ids: number[];
+  affected_frame_ids: number[];
+  created_node_id: number | null;
+  created_link_id: number | null;
+  created_frame_id: number | null;
+}
+
 // ── PSYKE (the story bible) ────────────────────────────────────────────────
 export interface PsykeEntryDTO {
   id: number;

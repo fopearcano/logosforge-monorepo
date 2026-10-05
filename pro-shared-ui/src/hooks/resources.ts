@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import type { NoteDTO, InlineCommentDTO, CharacterDTO, SceneDTO, ManuscriptSnapshotDTO, StoryStructureDTO, PsykeEntryDTO, PsykeRelationDTO, PsykeProgressionDTO, OutlineNodeDTO, ProjectDTO, TimelineSnapshotDTO, PlotBlockDTO, ExportRequestDTO, ExportResponseDTO, NarrativeDashboardDTO, ContinuityReportDTO, PacingInsightDTO, BalanceDataDTO, StoryHealthDTO, StructuralAnalysisDTO, WorkflowRunDTO, DecisionRadarDTO, GraphGravityDTO, AdaptDTO, ReviewReportDTO, FormatReviewDTO, QuantumResultDTO, AssistantResponseDTO, ExtractionResultDTO, ExtractionApplyRequestDTO, ExtractionApplyReportDTO } from "@logosforge/ui-contracts";
+import type { NoteDTO, InlineCommentDTO, CharacterDTO, SceneDTO, ManuscriptSnapshotDTO, StoryStructureDTO, PsykeEntryDTO, PsykeRelationDTO, PsykeProgressionDTO, OutlineNodeDTO, ProjectDTO, TimelineSnapshotDTO, CanvasPlotSnapshotDTO, PlotBlockDTO, ExportRequestDTO, ExportResponseDTO, NarrativeDashboardDTO, ContinuityReportDTO, PacingInsightDTO, BalanceDataDTO, StoryHealthDTO, StructuralAnalysisDTO, WorkflowRunDTO, DecisionRadarDTO, GraphGravityDTO, AdaptDTO, ReviewReportDTO, FormatReviewDTO, QuantumResultDTO, AssistantResponseDTO, ExtractionResultDTO, ExtractionApplyRequestDTO, ExtractionApplyReportDTO } from "@logosforge/ui-contracts";
 import type { ExtractionJobDTO } from "@logosforge/ui-contracts";
 import { useStudio } from "../adapters/StudioProvider";
 import { useResource, type Resource } from "./useResource";
@@ -116,6 +116,16 @@ export function useSettings(): {
 export function useTimeline(): Resource<TimelineSnapshotDTO> {
   const { api, projectId } = useStudio();
   return useResource(projectId ?? null, () => api.getTimeline(projectId as number), ["timeline_changed", "scenes_changed", "scene_changed"]);
+}
+
+/** Independent revisioned nodes, links, and frames for the active project. */
+export function useCanvasPlot(): Resource<CanvasPlotSnapshotDTO> {
+  const { api, projectId } = useStudio();
+  return useResource(
+    projectId ?? null,
+    () => api.getCanvasPlot(projectId as number),
+    ["canvas_plot_changed"],
+  );
 }
 
 /** Plot-lane blocks (plotline → scenes) for the active project. */

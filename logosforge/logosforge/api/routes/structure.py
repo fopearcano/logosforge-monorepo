@@ -99,6 +99,7 @@ def execute_story_structure_command(
             broker.publish("outline_changed", project_id=project.id)
             broker.publish("timeline_changed", project_id=project.id)
             broker.publish("plot_changed", project_id=project.id)
+            broker.publish("canvas_plot_changed", project_id=project.id)
             broker.publish("project_data_changed", project_id=project.id)
 
     return schemas.StoryStructureCommandResultDTO(

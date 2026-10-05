@@ -33,6 +33,8 @@ import {
   validateStoryStructureCommandResultDTOForRequest,
   validateTimelineSnapshotDTOForProject,
   validateTimelineCommandResultDTOForRequest,
+  validateCanvasPlotSnapshotDTOForProject,
+  validateCanvasPlotCommandResultDTOForRequest,
   validateSettingsDTO,
   validateVoiceBillyProposalDTO,
   validateWhiteboardImportResultDTO,
@@ -481,6 +483,15 @@ export function createHttpApiClient(
       ROUTES.timelineCommands(p),
       b,
       (value) => validateTimelineCommandResultDTOForRequest(value, p, b),
+    ),
+    getCanvasPlot: (p) => get(
+      ROUTES.canvasPlot(p),
+      (value) => validateCanvasPlotSnapshotDTOForProject(value, p),
+    ),
+    executeCanvasPlotCommand: (p, b) => writePost(
+      ROUTES.canvasPlotCommands(p),
+      b,
+      (value) => validateCanvasPlotCommandResultDTOForRequest(value, p, b),
     ),
 
     listPsyke: (p) => get(ROUTES.psykeEntries(p)),

@@ -12,6 +12,7 @@ get_all_places). All session management stays inside this module.
 import hashlib
 import hmac
 import json
+import math
 import os
 import re
 import shutil
@@ -444,6 +445,39 @@ class TimelineLaneNotFound(LookupError):
     """The requested lane is absent from the path-scoped Project."""
 
 
+class CanvasPlotRevisionConflict(RuntimeError):
+    """Raised when a Canvas Plot command targets an older board state."""
+
+    def __init__(self, expected: str, current: str) -> None:
+        super().__init__("canvas-plot revision does not match")
+        self.expected = expected
+        self.current = current
+
+
+class CanvasPlotCommandError(ValueError):
+    """A requested Canvas Plot mutation is invalid or ambiguous."""
+
+
+class CanvasPlotProjectNotFound(LookupError):
+    """The path-scoped Project disappeared before the transaction began."""
+
+
+class CanvasPlotNodeNotFound(LookupError):
+    """The requested node is absent from the path-scoped Project."""
+
+
+class CanvasPlotLinkNotFound(LookupError):
+    """The requested link is absent from the path-scoped Project."""
+
+
+class CanvasPlotFrameNotFound(LookupError):
+    """The requested frame is absent from the path-scoped Project."""
+
+
+class CanvasPlotSceneNotFound(LookupError):
+    """The requested Scene is absent from the path-scoped Project."""
+
+
 @dataclass(frozen=True)
 class ManuscriptReadSnapshot:
     """One coherent manuscript read detached from its SQLite transaction.
@@ -528,6 +562,32 @@ class TimelineCommandReceiptData:
     created_at: datetime
 
 
+@dataclass(frozen=True)
+class CanvasPlotReadSnapshot:
+    """One coherent, detached read of the canonical Canvas Plot board."""
+
+    project: Project
+    nodes: tuple[CanvasPlotNode, ...]
+    links: tuple[CanvasPlotLink, ...]
+    frames: tuple[CanvasPlotFrame, ...]
+    valid_scene_ids: frozenset[int]
+    revision: str
+
+
+@dataclass(frozen=True)
+class CanvasPlotCommandResult:
+    """Committed Canvas Plot state plus focused invalidation metadata."""
+
+    snapshot: CanvasPlotReadSnapshot
+    changed: bool
+    affected_node_ids: tuple[int, ...] = ()
+    affected_link_ids: tuple[int, ...] = ()
+    affected_frame_ids: tuple[int, ...] = ()
+    created_node_id: int | None = None
+    created_link_id: int | None = None
+    created_frame_id: int | None = None
+
+
 _TIMELINE_RECEIPT_SCHEMA_VERSION = 1
 _TIMELINE_COMMAND_KINDS = frozenset({
     "create_lane",
@@ -536,6 +596,17 @@ _TIMELINE_COMMAND_KINDS = frozenset({
     "place_event",
     "remove_event",
     "set_order_mode",
+})
+_CANVAS_PLOT_COMMAND_KINDS = frozenset({
+    "create_node",
+    "update_node",
+    "delete_node",
+    "create_link",
+    "update_link",
+    "delete_link",
+    "create_frame",
+    "update_frame",
+    "delete_frame",
 })
 _TIMELINE_IDEMPOTENCY_KEY_RE = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$"
@@ -707,6 +778,8 @@ class Database:
         self._scene_write_locks: dict[int, threading.RLock] = {}
         self._plot_locks_guard = threading.RLock()
         self._plot_write_locks: dict[int, threading.RLock] = {}
+        self._canvas_plot_locks_guard = threading.RLock()
+        self._canvas_plot_write_locks: dict[int, threading.RLock] = {}
         self._structure_locks_guard = threading.RLock()
         self._structure_write_locks: dict[int, threading.RLock] = {}
         # ``check_same_thread=False`` lets FastAPI's threadpool use pooled
@@ -792,6 +865,15 @@ class Database:
     def comment_write_lock(self):
         """Serialize comment transactions sharing an in-memory SQLite handle."""
         with self._comment_write_lock:
+            yield
+
+    @contextmanager
+    def canvas_plot_write_lock(self, project_id: int):
+        """Serialize Canvas Plot writers for one project inside this process."""
+        key = int(project_id)
+        with self._canvas_plot_locks_guard:
+            lock = self._canvas_plot_write_locks.setdefault(key, threading.RLock())
+        with lock:
             yield
 
     @contextmanager
@@ -4792,6 +4874,563 @@ class Database:
             return list(session.exec(stmt).all())
 
     # -- Canvas Plot (free visual board; project-owned, not scene-derived) ---
+
+    def _canvas_plot_snapshot_in_session(
+        self, session: Session, project_id: int,
+    ) -> CanvasPlotReadSnapshot | None:
+        """Build one Canvas Plot snapshot without opening a nested Session."""
+        from logosforge.canvas_plot import canvas_plot_revision
+
+        project = session.get(Project, project_id)
+        if project is None:
+            return None
+        nodes = list(session.exec(
+            select(CanvasPlotNode)
+            .where(CanvasPlotNode.project_id == project_id)
+            .order_by(CanvasPlotNode.sort_order, CanvasPlotNode.id)
+        ).all())
+        raw_links = list(session.exec(
+            select(CanvasPlotLink)
+            .where(CanvasPlotLink.project_id == project_id)
+            .order_by(CanvasPlotLink.id)
+        ).all())
+        # Legacy direct CRUD did not validate endpoint ownership, self-links,
+        # or duplicates. Canonical reads fail closed by exposing only the first
+        # valid undirected pair and never returning a foreign node id.
+        node_ids = {int(node.id) for node in nodes}
+        links: list[CanvasPlotLink] = []
+        seen_pairs: set[tuple[int, int]] = set()
+        for link in raw_links:
+            source_id = int(link.source_node_id)
+            target_id = int(link.target_node_id)
+            pair = tuple(sorted((source_id, target_id)))
+            if (
+                source_id == target_id
+                or source_id not in node_ids
+                or target_id not in node_ids
+                or pair in seen_pairs
+            ):
+                continue
+            seen_pairs.add(pair)
+            links.append(link)
+        frames = list(session.exec(
+            select(CanvasPlotFrame)
+            .where(CanvasPlotFrame.project_id == project_id)
+            .order_by(CanvasPlotFrame.id)
+        ).all())
+        valid_scene_ids = frozenset(int(value) for value in session.exec(
+            select(Scene.id).where(Scene.project_id == project_id)
+        ).all())
+        return CanvasPlotReadSnapshot(
+            project=project,
+            nodes=tuple(nodes),
+            links=tuple(links),
+            frames=tuple(frames),
+            valid_scene_ids=valid_scene_ids,
+            revision=canvas_plot_revision(
+                project,
+                nodes,
+                links,
+                frames,
+                valid_scene_ids=valid_scene_ids,
+            ),
+        )
+
+    def read_canvas_plot_snapshot(
+        self, project_id: int,
+    ) -> CanvasPlotReadSnapshot | None:
+        """Read every canonical Canvas Plot row in one SQLite snapshot."""
+        with Session(self._engine, expire_on_commit=False) as session:
+            session.connection().exec_driver_sql("BEGIN")
+            try:
+                snapshot = self._canvas_plot_snapshot_in_session(
+                    session, project_id,
+                )
+                if snapshot is not None:
+                    session.expunge_all()
+            finally:
+                session.rollback()
+        return snapshot
+
+    def execute_canvas_plot_command(
+        self,
+        project_id: int,
+        *,
+        kind: str,
+        expected_revision: str,
+        **fields,
+    ) -> CanvasPlotCommandResult:
+        """Apply one revision-guarded Canvas Plot mutation atomically."""
+        if kind not in _CANVAS_PLOT_COMMAND_KINDS:
+            raise CanvasPlotCommandError(
+                f"Unsupported Canvas Plot command: {kind!r}"
+            )
+
+        allowed_fields = {
+            "create_node": {
+                "title", "body", "x", "y", "width", "height",
+                "color_label", "group_label", "scene_id", "index",
+            },
+            "update_node": {
+                "node_id", "title", "body", "x", "y", "width", "height",
+                "color_label", "group_label", "scene_id", "index",
+            },
+            "delete_node": {"node_id"},
+            "create_link": {
+                "source_node_id", "target_node_id", "label", "color_label",
+                "link_type",
+            },
+            "update_link": {"link_id", "label", "color_label", "link_type"},
+            "delete_link": {"link_id"},
+            "create_frame": {
+                "title", "color_label", "x", "y", "width", "height",
+            },
+            "update_frame": {
+                "frame_id", "title", "color_label", "x", "y", "width",
+                "height",
+            },
+            "delete_frame": {"frame_id"},
+        }
+        unexpected = set(fields).difference(allowed_fields[kind])
+        if unexpected:
+            raise CanvasPlotCommandError(
+                "Unexpected Canvas Plot command fields: "
+                + ", ".join(sorted(unexpected))
+            )
+
+        with self.canvas_plot_write_lock(project_id):
+            with Session(self._engine, expire_on_commit=False) as session:
+                session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+                try:
+                    current = self._canvas_plot_snapshot_in_session(
+                        session, project_id,
+                    )
+                    if current is None:
+                        raise CanvasPlotProjectNotFound(project_id)
+                    if expected_revision != current.revision:
+                        raise CanvasPlotRevisionConflict(
+                            expected_revision, current.revision,
+                        )
+
+                    nodes = list(current.nodes)
+                    links = list(current.links)
+                    frames = list(current.frames)
+                    changed = False
+                    affected_node_ids: list[int] = []
+                    affected_link_ids: list[int] = []
+                    affected_frame_ids: list[int] = []
+                    created_node_id: int | None = None
+                    created_link_id: int | None = None
+                    created_frame_id: int | None = None
+
+                    def checked_id(value, label: str) -> int:
+                        if (
+                            isinstance(value, bool)
+                            or not isinstance(value, int)
+                            or value <= 0
+                        ):
+                            raise CanvasPlotCommandError(
+                                f"{label} must be a positive integer"
+                            )
+                        return value
+
+                    def checked_string(
+                        value, label: str, maximum: int,
+                    ) -> str:
+                        if not isinstance(value, str):
+                            raise CanvasPlotCommandError(
+                                f"{label} must be a string"
+                            )
+                        if len(value) > maximum:
+                            raise CanvasPlotCommandError(
+                                f"{label} cannot exceed {maximum} characters"
+                            )
+                        return value
+
+                    def checked_number(value, label: str) -> float:
+                        if (
+                            isinstance(value, bool)
+                            or not isinstance(value, (int, float))
+                            or not math.isfinite(float(value))
+                        ):
+                            raise CanvasPlotCommandError(
+                                f"{label} must be a finite number"
+                            )
+                        return float(value)
+
+                    def checked_dimension(value, label: str) -> float:
+                        number = checked_number(value, label)
+                        if number <= 0:
+                            raise CanvasPlotCommandError(
+                                f"{label} must be greater than zero"
+                            )
+                        return number
+
+                    def checked_index(value, maximum: int) -> int:
+                        if (
+                            isinstance(value, bool)
+                            or not isinstance(value, int)
+                            or value < 0
+                            or value > maximum
+                        ):
+                            raise CanvasPlotCommandError(
+                                "Node index is outside the available range"
+                            )
+                        return value
+
+                    def node_or_error(value) -> CanvasPlotNode:
+                        node_id = checked_id(value, "node_id")
+                        node = next(
+                            (row for row in nodes if row.id == node_id), None,
+                        )
+                        if node is None:
+                            raise CanvasPlotNodeNotFound(node_id)
+                        return node
+
+                    def link_or_error(value) -> CanvasPlotLink:
+                        link_id = checked_id(value, "link_id")
+                        link = next(
+                            (row for row in links if row.id == link_id), None,
+                        )
+                        if link is None:
+                            raise CanvasPlotLinkNotFound(link_id)
+                        return link
+
+                    def frame_or_error(value) -> CanvasPlotFrame:
+                        frame_id = checked_id(value, "frame_id")
+                        frame = next(
+                            (row for row in frames if row.id == frame_id), None,
+                        )
+                        if frame is None:
+                            raise CanvasPlotFrameNotFound(frame_id)
+                        return frame
+
+                    def scene_reference(value) -> int | None:
+                        if value is None:
+                            return None
+                        scene_id = checked_id(value, "scene_id")
+                        scene = session.get(Scene, scene_id)
+                        if scene is None or scene.project_id != project_id:
+                            raise CanvasPlotSceneNotFound(scene_id)
+                        return scene_id
+
+                    def dense_node_order(ordered: list[CanvasPlotNode]) -> None:
+                        for index, row in enumerate(ordered):
+                            row.sort_order = index
+
+                    if kind == "create_node":
+                        title = checked_string(
+                            fields.get("title", ""), "title", 500,
+                        )
+                        body = checked_string(
+                            fields.get("body", ""), "body", 100_000,
+                        )
+                        color_label = checked_string(
+                            fields.get("color_label", ""), "color_label", 100,
+                        )
+                        group_label = checked_string(
+                            fields.get("group_label", ""), "group_label", 500,
+                        )
+                        node = CanvasPlotNode(
+                            project_id=project_id,
+                            title=title,
+                            body=body,
+                            x=checked_number(fields.get("x", 0.0), "x"),
+                            y=checked_number(fields.get("y", 0.0), "y"),
+                            width=checked_dimension(
+                                fields.get("width", 180.0), "width",
+                            ),
+                            height=checked_dimension(
+                                fields.get("height", 110.0), "height",
+                            ),
+                            color_label=color_label,
+                            group_label=group_label,
+                            scene_id=scene_reference(fields.get("scene_id")),
+                            sort_order=max(
+                                (int(row.sort_order or 0) for row in nodes),
+                                default=0,
+                            ) + 1,
+                        )
+                        session.add(node)
+                        session.flush()
+                        insertion = checked_index(
+                            fields.get("index", len(nodes)), len(nodes),
+                        )
+                        nodes.insert(insertion, node)
+                        dense_node_order(nodes)
+                        created_node_id = int(node.id)
+                        affected_node_ids.append(created_node_id)
+                        changed = True
+
+                    elif kind == "update_node":
+                        node = node_or_error(fields.get("node_id"))
+                        updates = set(fields).difference({"node_id"})
+                        if not updates:
+                            raise CanvasPlotCommandError(
+                                "update_node must change at least one field"
+                            )
+                        string_fields = {
+                            "title": 500,
+                            "body": 100_000,
+                            "color_label": 100,
+                            "group_label": 500,
+                        }
+                        for field, maximum in string_fields.items():
+                            if field in updates:
+                                value = checked_string(
+                                    fields[field], field, maximum,
+                                )
+                                if getattr(node, field) != value:
+                                    setattr(node, field, value)
+                                    changed = True
+                        for field in ("x", "y"):
+                            if field in updates:
+                                value = checked_number(fields[field], field)
+                                if getattr(node, field) != value:
+                                    setattr(node, field, value)
+                                    changed = True
+                        for field in ("width", "height"):
+                            if field in updates:
+                                value = checked_dimension(fields[field], field)
+                                if getattr(node, field) != value:
+                                    setattr(node, field, value)
+                                    changed = True
+                        if "scene_id" in updates:
+                            value = scene_reference(fields["scene_id"])
+                            if node.scene_id != value:
+                                node.scene_id = value
+                                changed = True
+                        if "index" in updates:
+                            old_index = nodes.index(node)
+                            new_index = checked_index(
+                                fields["index"], len(nodes) - 1,
+                            )
+                            if old_index != new_index:
+                                nodes.pop(old_index)
+                                nodes.insert(new_index, node)
+                                dense_node_order(nodes)
+                                changed = True
+                        if changed:
+                            affected_node_ids.append(int(node.id))
+
+                    elif kind == "delete_node":
+                        node = node_or_error(fields.get("node_id"))
+                        canonical_incident_ids = {
+                            int(link.id) for link in links
+                            if link.source_node_id == node.id
+                            or link.target_node_id == node.id
+                        }
+                        all_incident = list(session.exec(
+                            select(CanvasPlotLink)
+                            .where(
+                                (CanvasPlotLink.source_node_id == node.id)
+                                | (CanvasPlotLink.target_node_id == node.id)
+                            )
+                        ).all())
+                        # A malformed legacy row owned by another project must
+                        # never be mutated through this project-scoped command.
+                        # It also prevents the node delete under SQLite's FK
+                        # policy, so reject before staging any local cleanup.
+                        if any(
+                            link.project_id != project_id
+                            for link in all_incident
+                        ):
+                            raise CanvasPlotCommandError(
+                                "Canvas Plot node cannot be deleted because "
+                                "the board contains inconsistent link ownership"
+                            )
+                        incident = [
+                            link for link in all_incident
+                            if link.project_id == project_id
+                        ]
+                        for link in incident:
+                            if int(link.id) in canonical_incident_ids:
+                                affected_link_ids.append(int(link.id))
+                            session.delete(link)
+                        affected_node_ids.append(int(node.id))
+                        session.delete(node)
+                        nodes.remove(node)
+                        dense_node_order(nodes)
+                        changed = True
+
+                    elif kind == "create_link":
+                        source = node_or_error(fields.get("source_node_id"))
+                        target = node_or_error(fields.get("target_node_id"))
+                        if source.id == target.id:
+                            raise CanvasPlotCommandError(
+                                "A Canvas Plot node cannot link to itself"
+                            )
+                        duplicate = next((
+                            row for row in links
+                            if {
+                                int(row.source_node_id), int(row.target_node_id),
+                            } == {int(source.id), int(target.id)}
+                        ), None)
+                        if duplicate is None:
+                            link = CanvasPlotLink(
+                                project_id=project_id,
+                                source_node_id=int(source.id),
+                                target_node_id=int(target.id),
+                                label=checked_string(
+                                    fields.get("label", ""), "label", 500,
+                                ),
+                                color_label=checked_string(
+                                    fields.get("color_label", "gray"),
+                                    "color_label", 100,
+                                ) or "gray",
+                                link_type=checked_string(
+                                    fields.get("link_type", ""),
+                                    "link_type", 100,
+                                ),
+                            )
+                            session.add(link)
+                            session.flush()
+                            created_link_id = int(link.id)
+                            affected_link_ids.append(created_link_id)
+                            changed = True
+
+                    elif kind == "update_link":
+                        link = link_or_error(fields.get("link_id"))
+                        updates = set(fields).difference({"link_id"})
+                        if not updates:
+                            raise CanvasPlotCommandError(
+                                "update_link must change at least one field"
+                            )
+                        for field, maximum in (
+                            ("label", 500),
+                            ("color_label", 100),
+                            ("link_type", 100),
+                        ):
+                            if field in updates:
+                                value = checked_string(
+                                    fields[field], field, maximum,
+                                )
+                                if field == "color_label":
+                                    value = value or "gray"
+                                if getattr(link, field) != value:
+                                    setattr(link, field, value)
+                                    changed = True
+                        if changed:
+                            affected_link_ids.append(int(link.id))
+
+                    elif kind == "delete_link":
+                        link = link_or_error(fields.get("link_id"))
+                        # One canonical link represents an undirected pair.
+                        # Delete any hidden legacy duplicates in either direction.
+                        duplicates = list(session.exec(
+                            select(CanvasPlotLink)
+                            .where(CanvasPlotLink.project_id == project_id)
+                            .where(
+                                (
+                                    (CanvasPlotLink.source_node_id == link.source_node_id)
+                                    & (CanvasPlotLink.target_node_id == link.target_node_id)
+                                )
+                                | (
+                                    (CanvasPlotLink.source_node_id == link.target_node_id)
+                                    & (CanvasPlotLink.target_node_id == link.source_node_id)
+                                )
+                            )
+                        ).all())
+                        for duplicate in duplicates:
+                            affected_link_ids.append(int(duplicate.id))
+                            session.delete(duplicate)
+                        changed = True
+
+                    elif kind == "create_frame":
+                        frame = CanvasPlotFrame(
+                            project_id=project_id,
+                            title=checked_string(
+                                fields.get("title", ""), "title", 500,
+                            ),
+                            color_label=checked_string(
+                                fields.get("color_label", ""),
+                                "color_label", 100,
+                            ),
+                            x=checked_number(fields.get("x", 0.0), "x"),
+                            y=checked_number(fields.get("y", 0.0), "y"),
+                            width=checked_dimension(
+                                fields.get("width", 360.0), "width",
+                            ),
+                            height=checked_dimension(
+                                fields.get("height", 260.0), "height",
+                            ),
+                        )
+                        session.add(frame)
+                        session.flush()
+                        created_frame_id = int(frame.id)
+                        affected_frame_ids.append(created_frame_id)
+                        changed = True
+
+                    elif kind == "update_frame":
+                        frame = frame_or_error(fields.get("frame_id"))
+                        updates = set(fields).difference({"frame_id"})
+                        if not updates:
+                            raise CanvasPlotCommandError(
+                                "update_frame must change at least one field"
+                            )
+                        for field, maximum in (
+                            ("title", 500), ("color_label", 100),
+                        ):
+                            if field in updates:
+                                value = checked_string(
+                                    fields[field], field, maximum,
+                                )
+                                if getattr(frame, field) != value:
+                                    setattr(frame, field, value)
+                                    changed = True
+                        for field in ("x", "y"):
+                            if field in updates:
+                                value = checked_number(fields[field], field)
+                                if getattr(frame, field) != value:
+                                    setattr(frame, field, value)
+                                    changed = True
+                        for field in ("width", "height"):
+                            if field in updates:
+                                value = checked_dimension(fields[field], field)
+                                if getattr(frame, field) != value:
+                                    setattr(frame, field, value)
+                                    changed = True
+                        if changed:
+                            affected_frame_ids.append(int(frame.id))
+
+                    elif kind == "delete_frame":
+                        frame = frame_or_error(fields.get("frame_id"))
+                        affected_frame_ids.append(int(frame.id))
+                        session.delete(frame)
+                        changed = True
+
+                    if not changed:
+                        session.expunge_all()
+                        session.rollback()
+                        return CanvasPlotCommandResult(
+                            snapshot=current,
+                            changed=False,
+                        )
+
+                    session.flush()
+                    updated = self._canvas_plot_snapshot_in_session(
+                        session, project_id,
+                    )
+                    assert updated is not None
+                    if updated.revision == current.revision:
+                        raise RuntimeError(
+                            "Canvas Plot mutation did not advance its revision"
+                        )
+                    session.commit()
+                    session.expunge_all()
+                    return CanvasPlotCommandResult(
+                        snapshot=updated,
+                        changed=True,
+                        affected_node_ids=tuple(affected_node_ids),
+                        affected_link_ids=tuple(affected_link_ids),
+                        affected_frame_ids=tuple(affected_frame_ids),
+                        created_node_id=created_node_id,
+                        created_link_id=created_link_id,
+                        created_frame_id=created_frame_id,
+                    )
+                except Exception:
+                    session.rollback()
+                    raise
 
     def get_canvas_plot_nodes(self, project_id: int) -> list["CanvasPlotNode"]:
         with Session(self._engine) as session:

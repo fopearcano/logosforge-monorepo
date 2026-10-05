@@ -68,6 +68,9 @@ import type {
   TimelineSnapshotDTO,
   TimelineCommandDTO,
   TimelineCommandResultDTO,
+  CanvasPlotSnapshotDTO,
+  CanvasPlotCommandDTO,
+  CanvasPlotCommandResultDTO,
   PsykeEntryDTO,
   PsykeEntryCreateDTO,
   PsykeEntryUpdateDTO,
@@ -208,6 +211,13 @@ export interface ApiClient {
     p: number,
     body: TimelineCommandDTO,
   ): Promise<TimelineCommandResultDTO>;
+  /** Independent project-owned spatial board, never derived from Scene order. */
+  getCanvasPlot(p: number): Promise<CanvasPlotSnapshotDTO>;
+  /** Apply one revision-guarded, atomic Canvas Plot mutation. */
+  executeCanvasPlotCommand(
+    p: number,
+    body: CanvasPlotCommandDTO,
+  ): Promise<CanvasPlotCommandResultDTO>;
 
   // PSYKE
   listPsyke(p: number): Promise<PsykeEntryDTO[]>;

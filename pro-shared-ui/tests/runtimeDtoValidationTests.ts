@@ -165,6 +165,41 @@ const timelineCommandResult = (overrides: Record<string, unknown> = {}) => {
   };
 };
 
+const canvasPlotSnapshot = (overrides: Record<string, unknown> = {}) => ({
+  project_id: 1,
+  revision: "d".repeat(64),
+  nodes: [{
+    id: 10, title: "Signal", body: "A message arrives.", x: 10, y: 20,
+    width: 180, height: 110, color_label: "cyan", group_label: "Act I",
+    scene_id: 2, sort_order: 1, created_at: "2026-10-05T09:00:00Z",
+  }, {
+    id: 11, title: "Choice", body: "", x: 320, y: 40,
+    width: 190, height: 120, color_label: "violet", group_label: "Act II",
+    scene_id: null, sort_order: 2, created_at: "2026-10-05T09:01:00Z",
+  }],
+  links: [{
+    id: 20, source_node_id: 10, target_node_id: 11, label: "causes",
+    color_label: "amber", link_type: "causality", created_at: "2026-10-05T09:02:00Z",
+  }],
+  frames: [{
+    id: 30, title: "Act I", color_label: "blue", x: 0, y: 0,
+    width: 600, height: 340, created_at: "2026-10-05T09:03:00Z",
+  }],
+  ...overrides,
+});
+
+const canvasPlotCommandResult = (overrides: Record<string, unknown> = {}) => ({
+  canvas_plot: canvasPlotSnapshot({ revision: "e".repeat(64) }),
+  changed: true,
+  affected_node_ids: [10],
+  affected_link_ids: [],
+  affected_frame_ids: [],
+  created_node_id: null,
+  created_link_id: null,
+  created_frame_id: null,
+  ...overrides,
+});
+
 const inlineCommentAnchor = (overrides: Record<string, unknown> = {}) => ({
   start_scene_id: 2,
   start_field: "content",
@@ -1044,6 +1079,94 @@ try {
     "POST",
     "/api/projects/1/timeline/commands",
     "$.timeline.project_id",
+  );
+
+  await expectValid(
+    "Canvas Plot snapshots validate project-owned nodes, links, and frames",
+    () => client.getCanvasPlot(1),
+    canvasPlotSnapshot(),
+    (value) => value.nodes.length === 2 && value.links[0]?.target_node_id === 11,
+  );
+  await expectInvalid(
+    "Canvas Plot links must reference returned nodes",
+    () => client.getCanvasPlot(1),
+    json(canvasPlotSnapshot({
+      links: [{
+        id: 20, source_node_id: 10, target_node_id: 99, label: "causes",
+        color_label: "amber", link_type: "causality", created_at: "2026-10-05T09:02:00Z",
+      }],
+    })),
+    "GET",
+    "/api/projects/1/canvas-plot",
+    "$.links[0].target_node_id",
+  );
+  await expectInvalid(
+    "Canvas Plot snapshots reject non-finite geometry",
+    () => client.getCanvasPlot(1),
+    json(canvasPlotSnapshot({
+      nodes: [{
+        id: 10, title: "Signal", body: "", x: null, y: 20,
+        width: 180, height: 110, color_label: "", group_label: "",
+        scene_id: null, sort_order: 1, created_at: "2026-10-05T09:00:00Z",
+      }],
+      links: [],
+    })),
+    "GET",
+    "/api/projects/1/canvas-plot",
+    "$.nodes[0].x",
+  );
+  await expectValid(
+    "Canvas Plot commands validate revision transitions and created ids",
+    () => client.executeCanvasPlotCommand(1, {
+      kind: "create_node",
+      expected_revision: "d".repeat(64),
+      title: "Signal",
+    }),
+    canvasPlotCommandResult({
+      affected_node_ids: [10],
+      created_node_id: 10,
+    }),
+    (value) => value.created_node_id === 10,
+  );
+  await expectInvalid(
+    "changed Canvas Plot commands require a new revision",
+    () => client.executeCanvasPlotCommand(1, {
+      kind: "update_node",
+      expected_revision: "d".repeat(64),
+      node_id: 10,
+      x: 50,
+    }),
+    json(canvasPlotCommandResult({ canvas_plot: canvasPlotSnapshot() })),
+    "POST",
+    "/api/projects/1/canvas-plot/commands",
+    "$.canvas_plot.revision",
+  );
+  await expectInvalid(
+    "Canvas Plot created ids must match the command kind",
+    () => client.executeCanvasPlotCommand(1, {
+      kind: "update_node",
+      expected_revision: "d".repeat(64),
+      node_id: 10,
+      x: 50,
+    }),
+    json(canvasPlotCommandResult({ created_node_id: 10 })),
+    "POST",
+    "/api/projects/1/canvas-plot/commands",
+    "$.created_node_id",
+  );
+  await expectValid(
+    "unchanged Canvas Plot commands retain the guarded revision",
+    () => client.executeCanvasPlotCommand(1, {
+      kind: "update_node",
+      expected_revision: "d".repeat(64),
+      node_id: 10,
+      x: 10,
+    }),
+    canvasPlotCommandResult({
+      canvas_plot: canvasPlotSnapshot(),
+      changed: false,
+      affected_node_ids: [],
+    }),
   );
 
   await expectValid(

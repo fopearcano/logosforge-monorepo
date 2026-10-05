@@ -359,6 +359,65 @@ try {
     throw new Error('Timeline command response was not validated');
   }
 
+  let releaseCanvasCommand!: (response: Response) => void;
+  globalThis.fetch = (input: RequestInfo | URL, init: RequestInit = {}) => {
+    requests.push({ input: String(input), init });
+    return new Promise<Response>((resolve) => { releaseCanvasCommand = resolve; });
+  };
+  const canvasCommandBody = {
+    kind: 'create_node' as const,
+    expected_revision: 'a'.repeat(64),
+    title: 'Inciting signal',
+    x: 40,
+    y: 72,
+  };
+  const pendingCanvasCommand = browser.executeCanvasPlotCommand(7, canvasCommandBody);
+  for (let i = 0; i < 6; i++) await Promise.resolve();
+  const canvasCommandRequest = requests.at(-1);
+  if (canvasCommandRequest?.input !== '/api/projects/7/canvas-plot/commands'
+      || canvasCommandRequest.init.method !== 'POST') {
+    throw new Error('Canvas Plot command used the wrong route or method');
+  }
+  const serializedCanvasCommand = JSON.parse(String(canvasCommandRequest.init.body));
+  if (serializedCanvasCommand.kind !== 'create_node'
+      || serializedCanvasCommand.expected_revision !== 'a'.repeat(64)
+      || serializedCanvasCommand.title !== 'Inciting signal'
+      || serializedCanvasCommand.x !== 40
+      || serializedCanvasCommand.y !== 72) {
+    throw new Error('Canvas Plot command did not preserve its discriminated payload');
+  }
+  let canvasBarrierDone = false;
+  const canvasBarrier = flushPendingProjectSaves().then(() => { canvasBarrierDone = true; });
+  for (let i = 0; i < 6; i++) await Promise.resolve();
+  if (canvasBarrierDone) throw new Error('Canvas Plot command escaped the persistence barrier');
+  releaseCanvasCommand(new Response(JSON.stringify({
+    canvas_plot: {
+      project_id: 7,
+      revision: 'b'.repeat(64),
+      nodes: [{
+        id: 21, title: 'Inciting signal', body: '', x: 40, y: 72,
+        width: 180, height: 110, color_label: '', group_label: '',
+        scene_id: null, sort_order: 1, created_at: '2026-10-05T09:00:00Z',
+      }],
+      links: [],
+      frames: [],
+    },
+    changed: true,
+    affected_node_ids: [21],
+    affected_link_ids: [],
+    affected_frame_ids: [],
+    created_node_id: 21,
+    created_link_id: null,
+    created_frame_id: null,
+  }), { status: 200, headers: { 'content-type': 'application/json' } }));
+  const canvasCommandResult = await pendingCanvasCommand;
+  await canvasBarrier;
+  if (!canvasCommandResult.changed
+      || canvasCommandResult.canvas_plot.revision !== 'b'.repeat(64)
+      || canvasCommandResult.created_node_id !== 21) {
+    throw new Error('Canvas Plot command response was not validated');
+  }
+
   let releaseRead!: (response: Response) => void;
   globalThis.fetch = () => new Promise<Response>((resolve) => { releaseRead = resolve; });
   const pendingRead = browser.health();

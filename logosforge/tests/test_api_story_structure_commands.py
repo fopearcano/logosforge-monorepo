@@ -255,6 +255,7 @@ def test_delete_scene_is_guarded_dense_and_publishes_delete_events():
         "outline_changed",
         "timeline_changed",
         "plot_changed",
+        "canvas_plot_changed",
         "project_data_changed",
     ]
 
@@ -1045,6 +1046,7 @@ def test_delete_scrubs_scene_references_and_invalidates_survivors():
         "outline_changed",
         "timeline_changed",
         "plot_changed",
+        "canvas_plot_changed",
         "project_data_changed",
     ]
 
@@ -1112,5 +1114,6 @@ def test_legacy_scene_delete_scrubs_and_invalidates_survivors():
         "outline_changed",
         "timeline_changed",
         "plot_changed",
+        "canvas_plot_changed",
         "project_data_changed",
     ]

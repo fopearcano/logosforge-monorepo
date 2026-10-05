@@ -102,7 +102,7 @@ GET  /api/health → { status, service, mode, version, api_version, core_version
 `core_version` is the Logosforge build (e.g. `0.9.0-alpha`). Clients (Electron
 desktop and Web/PWA) read these to verify they're talking to a compatible
 backend. `version` mirrors `api_version` for backward compatibility.
-The current additive contract version is **1.4.0**.
+The current additive contract version is **1.5.0**.
 
 ### Packaged-desktop live context
 ```
@@ -294,6 +294,28 @@ DELETE /api/projects/{project_id}/outline/nodes/{node_id}
 GET    /api/projects/{project_id}/plot
 PATCH  /api/projects/{project_id}/plot/blocks/{block_id}          { plotline?, color_label? }
 ```
+
+### Canvas Plot (independent, project-owned spatial board)
+```
+GET    /api/projects/{project_id}/canvas-plot
+POST   /api/projects/{project_id}/canvas-plot/commands
+```
+
+The read returns one coherent `CanvasPlotSnapshotDTO` containing `project_id`,
+a SHA-256 `revision`, and the board's nodes, undirected links, and frames. Nodes
+own their text, geometry, colour/group labels, and dense zero-based stacking
+order; an optional `scene_id` is a reference only and does not make the board
+scene-derived. Viewport zoom and centre are stored separately in the project's
+`canvas_plot_view` setting and therefore never advance the structural revision.
+
+Every command includes the snapshot's `expected_revision` and is applied under
+the project Canvas lock in one `BEGIN IMMEDIATE` transaction. A stale token
+returns `409 canvas_plot_conflict`; missing or foreign entities return 404;
+malformed geometry, references, or indexes return 400/422. Supported command
+kinds are `create_node`, `update_node`, `delete_node`, `create_link`,
+`update_link`, `delete_link`, `create_frame`, `update_frame`, and
+`delete_frame`. Successful changes return the committed snapshot plus affected
+and created ids and publish `canvas_plot_changed`; exact no-ops publish nothing.
 
 ### Timeline (scene-derived; event id = scene id)
 ```
@@ -498,7 +520,7 @@ Clients keep the last `cursor` and pass it as `since` to get only new events.
 **Event names**
 ```
 project_loaded, project_data_changed, scene_changed, scenes_changed,
-outline_changed, plot_changed, timeline_changed, psyke_changed,
+outline_changed, plot_changed, canvas_plot_changed, timeline_changed, psyke_changed,
 notes_changed, dashboard_changed, assistant_action_completed
 ```
 

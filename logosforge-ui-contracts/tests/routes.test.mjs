@@ -72,6 +72,18 @@ if ('timelineEvents' in ROUTES || 'timelineEvent' in ROUTES) {
   throw new Error('legacy unguarded Timeline mutation routes must not be advertised');
 }
 
+const canvasPlotRoutes = [ROUTES.canvasPlot(42), ROUTES.canvasPlotCommands(42)];
+const expectedCanvasPlotRoutes = [
+  '/api/projects/42/canvas-plot',
+  '/api/projects/42/canvas-plot/commands',
+];
+if (JSON.stringify(canvasPlotRoutes) !== JSON.stringify(expectedCanvasPlotRoutes)) {
+  throw new Error(`Canvas Plot route mismatch: ${canvasPlotRoutes}`);
+}
+if (!KNOWN_EVENTS.includes('canvas_plot_changed')) {
+  throw new Error('canvas_plot_changed is missing from the known project events');
+}
+
 const psykeCommandRoutes = [
   ROUTES.psykeConsolePlan(42),
   ROUTES.psykeConsoleExecute(42),
@@ -84,7 +96,7 @@ if (JSON.stringify(psykeCommandRoutes) !== JSON.stringify(expectedPsykeCommandRo
   throw new Error(`PSYKE command route mismatch: ${psykeCommandRoutes}`);
 }
 
-console.log('Contract route/event tests: 13 passed, 0 failed');
+console.log('Contract route/event tests: 15 passed, 0 failed');
 
 const pythonSchemas = readFileSync('../logosforge/logosforge/api/schemas.py', 'utf8');
 const typescriptSchemas = readFileSync('src/types.ts', 'utf8');

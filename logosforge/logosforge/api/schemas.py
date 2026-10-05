@@ -937,6 +937,239 @@ class PlotBlockUpdateDTO(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Canvas Plot (independent spatial board)
+# ---------------------------------------------------------------------------
+
+
+class CanvasPlotNodeDTO(BaseModel):
+    id: int
+    title: str = ""
+    body: str = ""
+    x: float = 0.0
+    y: float = 0.0
+    width: float = 180.0
+    height: float = 110.0
+    color_label: str = ""
+    group_label: str = ""
+    scene_id: int | None = None
+    sort_order: int = 0
+    created_at: datetime
+
+
+class CanvasPlotLinkDTO(BaseModel):
+    id: int
+    source_node_id: int
+    target_node_id: int
+    label: str = ""
+    color_label: str = "gray"
+    link_type: str = ""
+    created_at: datetime
+
+
+class CanvasPlotFrameDTO(BaseModel):
+    id: int
+    title: str = ""
+    color_label: str = ""
+    x: float = 0.0
+    y: float = 0.0
+    width: float = 360.0
+    height: float = 260.0
+    created_at: datetime
+
+
+class CanvasPlotSnapshotDTO(BaseModel):
+    project_id: int
+    revision: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    nodes: list[CanvasPlotNodeDTO] = Field(default_factory=list)
+    links: list[CanvasPlotLinkDTO] = Field(default_factory=list)
+    frames: list[CanvasPlotFrameDTO] = Field(default_factory=list)
+
+
+class _CanvasPlotCommandBase(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+
+class CanvasPlotCreateNodeCommandDTO(_CanvasPlotCommandBase):
+    kind: Literal["create_node"]
+    title: str = Field(default="", max_length=500)
+    body: str = Field(default="", max_length=100_000)
+    x: float = Field(default=0.0, strict=True, allow_inf_nan=False)
+    y: float = Field(default=0.0, strict=True, allow_inf_nan=False)
+    width: float = Field(default=180.0, gt=0, strict=True, allow_inf_nan=False)
+    height: float = Field(default=110.0, gt=0, strict=True, allow_inf_nan=False)
+    color_label: str = Field(default="", max_length=100)
+    group_label: str = Field(default="", max_length=500)
+    scene_id: int | None = Field(default=None, gt=0, strict=True)
+    index: int | None = Field(default=None, ge=0, strict=True)
+
+
+class CanvasPlotUpdateNodeCommandDTO(_CanvasPlotCommandBase):
+    kind: Literal["update_node"]
+    node_id: int = Field(gt=0, strict=True)
+    title: str | None = Field(default=None, max_length=500)
+    body: str | None = Field(default=None, max_length=100_000)
+    x: float | None = Field(default=None, strict=True, allow_inf_nan=False)
+    y: float | None = Field(default=None, strict=True, allow_inf_nan=False)
+    width: float | None = Field(
+        default=None, gt=0, strict=True, allow_inf_nan=False,
+    )
+    height: float | None = Field(
+        default=None, gt=0, strict=True, allow_inf_nan=False,
+    )
+    color_label: str | None = Field(default=None, max_length=100)
+    group_label: str | None = Field(default=None, max_length=500)
+    # Explicit null clears the optional Scene reference.
+    scene_id: int | None = Field(default=None, gt=0, strict=True)
+    index: int | None = Field(default=None, ge=0, strict=True)
+
+    @model_validator(mode="after")
+    def _requires_change(self):
+        updates = self.model_fields_set.intersection({
+            "title", "body", "x", "y", "width", "height", "color_label",
+            "group_label", "scene_id", "index",
+        })
+        if not updates:
+            raise ValueError("update_node must change at least one field")
+        null_fields = sorted(
+            field for field in updates
+            if field != "scene_id" and getattr(self, field) is None
+        )
+        if null_fields:
+            raise ValueError(
+                "update_node fields must not be null: " + ", ".join(null_fields)
+            )
+        return self
+
+
+class CanvasPlotDeleteNodeCommandDTO(_CanvasPlotCommandBase):
+    kind: Literal["delete_node"]
+    node_id: int = Field(gt=0, strict=True)
+
+
+class CanvasPlotCreateLinkCommandDTO(_CanvasPlotCommandBase):
+    kind: Literal["create_link"]
+    source_node_id: int = Field(gt=0, strict=True)
+    target_node_id: int = Field(gt=0, strict=True)
+    label: str = Field(default="", max_length=500)
+    color_label: str = Field(default="gray", max_length=100)
+    link_type: str = Field(default="", max_length=100)
+
+
+class CanvasPlotUpdateLinkCommandDTO(_CanvasPlotCommandBase):
+    kind: Literal["update_link"]
+    link_id: int = Field(gt=0, strict=True)
+    label: str | None = Field(default=None, max_length=500)
+    color_label: str | None = Field(default=None, max_length=100)
+    link_type: str | None = Field(default=None, max_length=100)
+
+    @model_validator(mode="after")
+    def _requires_change(self):
+        updates = self.model_fields_set.intersection({
+            "label", "color_label", "link_type",
+        })
+        if not updates:
+            raise ValueError("update_link must change at least one field")
+        null_fields = sorted(
+            field for field in updates if getattr(self, field) is None
+        )
+        if null_fields:
+            raise ValueError(
+                "update_link fields must not be null: " + ", ".join(null_fields)
+            )
+        return self
+
+
+class CanvasPlotDeleteLinkCommandDTO(_CanvasPlotCommandBase):
+    kind: Literal["delete_link"]
+    link_id: int = Field(gt=0, strict=True)
+
+
+class CanvasPlotCreateFrameCommandDTO(_CanvasPlotCommandBase):
+    kind: Literal["create_frame"]
+    title: str = Field(default="", max_length=500)
+    color_label: str = Field(default="", max_length=100)
+    x: float = Field(default=0.0, strict=True, allow_inf_nan=False)
+    y: float = Field(default=0.0, strict=True, allow_inf_nan=False)
+    width: float = Field(default=360.0, gt=0, strict=True, allow_inf_nan=False)
+    height: float = Field(default=260.0, gt=0, strict=True, allow_inf_nan=False)
+
+
+class CanvasPlotUpdateFrameCommandDTO(_CanvasPlotCommandBase):
+    kind: Literal["update_frame"]
+    frame_id: int = Field(gt=0, strict=True)
+    title: str | None = Field(default=None, max_length=500)
+    color_label: str | None = Field(default=None, max_length=100)
+    x: float | None = Field(default=None, strict=True, allow_inf_nan=False)
+    y: float | None = Field(default=None, strict=True, allow_inf_nan=False)
+    width: float | None = Field(
+        default=None, gt=0, strict=True, allow_inf_nan=False,
+    )
+    height: float | None = Field(
+        default=None, gt=0, strict=True, allow_inf_nan=False,
+    )
+
+    @model_validator(mode="after")
+    def _requires_change(self):
+        updates = self.model_fields_set.intersection({
+            "title", "color_label", "x", "y", "width", "height",
+        })
+        if not updates:
+            raise ValueError("update_frame must change at least one field")
+        null_fields = sorted(
+            field for field in updates if getattr(self, field) is None
+        )
+        if null_fields:
+            raise ValueError(
+                "update_frame fields must not be null: " + ", ".join(null_fields)
+            )
+        return self
+
+
+class CanvasPlotDeleteFrameCommandDTO(_CanvasPlotCommandBase):
+    kind: Literal["delete_frame"]
+    frame_id: int = Field(gt=0, strict=True)
+
+
+_CanvasPlotCommandUnion = Annotated[
+    CanvasPlotCreateNodeCommandDTO
+    | CanvasPlotUpdateNodeCommandDTO
+    | CanvasPlotDeleteNodeCommandDTO
+    | CanvasPlotCreateLinkCommandDTO
+    | CanvasPlotUpdateLinkCommandDTO
+    | CanvasPlotDeleteLinkCommandDTO
+    | CanvasPlotCreateFrameCommandDTO
+    | CanvasPlotUpdateFrameCommandDTO
+    | CanvasPlotDeleteFrameCommandDTO,
+    Field(discriminator="kind"),
+]
+
+
+class CanvasPlotCommandDTO(RootModel[_CanvasPlotCommandUnion]):
+    """Unwrapped discriminated Canvas Plot command request."""
+
+
+class CanvasPlotCommandResultDTO(BaseModel):
+    canvas_plot: CanvasPlotSnapshotDTO
+    changed: bool
+    affected_node_ids: list[int] = Field(default_factory=list)
+    affected_link_ids: list[int] = Field(default_factory=list)
+    affected_frame_ids: list[int] = Field(default_factory=list)
+    created_node_id: int | None = None
+    created_link_id: int | None = None
+    created_frame_id: int | None = None
+
+
+# ---------------------------------------------------------------------------
 # Timeline
 # ---------------------------------------------------------------------------
 

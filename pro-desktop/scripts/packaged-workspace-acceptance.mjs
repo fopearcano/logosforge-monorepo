@@ -5,9 +5,10 @@
  *
  * This launches electron-builder's unpacked Windows application through
  * Playwright's Electron transport. It uses a fresh, isolated profile, drives
- * real mouse input through tear-off/move/resize/minimize/dock interactions,
+ * real mouse input through Canvas Plot and workspace move/resize interactions,
  * closes through the application's save handshake, and relaunches the same
- * profile to prove that the project-scoped layout was restored from disk.
+ * profile to prove that project data and the project-scoped layout were
+ * restored from disk.
  *
  * Optional overrides:
  *   LOGOSFORGE_PRO_WORKSPACE_ACCEPTANCE_EXE=C:\...\LogosForge Pro.exe
@@ -469,7 +470,7 @@ async function waitProReady(session) {
   return { workspace, projectSelect, projectId };
 }
 
-async function selectPanel(page, name, screenLabel) {
+async function selectPanel(page, name, panelId, screenLabel) {
   const button = page.locator('aside.rail nav').getByRole('button', { name, exact: true });
   await waitFor(
     async () => await button.isVisible() && await button.isEnabled(),
@@ -477,7 +478,6 @@ async function selectPanel(page, name, screenLabel) {
     STARTUP_TIMEOUT_MS,
   );
   await button.click();
-  const panelId = name.toLocaleLowerCase('en-US');
   const surface = page.locator(`section[data-panel-id="${panelId}"]`).first();
   await waitVisible(surface, `${screenLabel} workspace surface`);
   await waitFor(
@@ -508,11 +508,414 @@ async function pointerDragBy(page, locator, deltaX, deltaY, label, anchor = 'cen
   record('pointer', `${label}: ${deltaX},${deltaY}`);
 }
 
+function finiteAttribute(raw, attribute, label) {
+  assert.ok(typeof raw === 'string' && raw.trim() !== '', `${label} is missing ${attribute}`);
+  const value = Number(raw);
+  assert.ok(Number.isFinite(value), `${label} has invalid ${attribute}: ${raw}`);
+  return value;
+}
+
+async function canvasEntityIds(locator, attribute, label) {
+  const count = await locator.count();
+  const ids = new Set();
+  for (let index = 0; index < count; index += 1) {
+    const raw = await locator.nth(index).getAttribute(attribute);
+    const id = finiteAttribute(raw, attribute, label);
+    assert.ok(Number.isSafeInteger(id) && id > 0, `${label} has invalid ${attribute}: ${raw}`);
+    assert.ok(!ids.has(id), `${label} repeats ${attribute}=${id}`);
+    ids.add(id);
+  }
+  return ids;
+}
+
+async function waitForAddedCanvasEntity(locator, attribute, before, label) {
+  let createdId = null;
+  await waitFor(async () => {
+    const current = await canvasEntityIds(locator, attribute, label);
+    const added = [...current].filter((id) => !before.has(id));
+    if (added.length !== 1) return false;
+    createdId = added[0];
+    return true;
+  }, label);
+  assert.ok(Number.isSafeInteger(createdId) && createdId > 0, `${label} did not expose a created id`);
+  return createdId;
+}
+
+async function canvasGeometry(locator, label) {
+  const attributes = {
+    x: 'data-x',
+    y: 'data-y',
+    width: 'data-width',
+    height: 'data-height',
+  };
+  const geometry = {};
+  for (const [key, attribute] of Object.entries(attributes)) {
+    geometry[key] = finiteAttribute(await locator.getAttribute(attribute), attribute, label);
+  }
+  assert.ok(geometry.width > 0 && geometry.height > 0, `${label} has invalid geometry`);
+  return geometry;
+}
+
+async function canvasViewport(board, label) {
+  const viewport = {
+    zoom: finiteAttribute(await board.getAttribute('data-zoom'), 'data-zoom', label),
+    cx: finiteAttribute(await board.getAttribute('data-center-x'), 'data-center-x', label),
+    cy: finiteAttribute(await board.getAttribute('data-center-y'), 'data-center-y', label),
+  };
+  assert.ok(viewport.zoom > 0, `${label} has invalid zoom`);
+  return viewport;
+}
+
+function differsBy(left, right, minimum) {
+  return Math.abs(left - right) >= minimum;
+}
+
+function assertNear(actual, expected, tolerance, label) {
+  assert.ok(
+    Math.abs(actual - expected) <= tolerance,
+    `${label}: expected ${expected} +/- ${tolerance}, received ${actual}`,
+  );
+}
+
+async function waitCanvasCommandSettled(addBlock, label) {
+  await waitFor(
+    async () => await addBlock.isVisible() && await addBlock.isEnabled(),
+    label,
+    UI_TIMEOUT_MS,
+  );
+}
+
+async function dismissCanvasInspector(canvasScreen) {
+  const closeButton = canvasScreen.getByRole('button', {
+    name: 'Close Canvas Plot inspector',
+    exact: true,
+  });
+  if (await closeButton.isVisible().catch(() => false)) {
+    await closeButton.click();
+    await waitFor(
+      async () => !await closeButton.isVisible().catch(() => false),
+      'Canvas Plot inspector dismissal',
+    );
+  }
+}
+
+async function exerciseCanvasPlot(session) {
+  const { page } = session;
+  await waitProReady(session);
+  const canvasSurface = await selectPanel(page, 'Canvas Plot', 'canvas-plot', 'Canvas Plot');
+  const canvasScreen = await waitVisible(
+    canvasSurface.locator('[data-screen-label="Canvas Plot"]'),
+    'Canvas Plot screen',
+  );
+  const board = await waitVisible(
+    canvasScreen.locator('[data-canvas-plot-board]'),
+    'Canvas Plot board',
+  );
+  await waitFor(
+    async () => await board.getAttribute('data-viewport-ready') === 'true',
+    'Canvas Plot viewport settings hydration',
+    STARTUP_TIMEOUT_MS,
+  );
+  const nodes = canvasScreen.locator('[data-canvas-node-id]');
+  const frames = canvasScreen.locator('[data-canvas-frame-id]');
+  const links = canvasScreen.locator('[data-canvas-link-id]');
+  const addBlock = await waitVisible(
+    canvasScreen.getByRole('button', { name: 'Add Canvas Plot block', exact: true }),
+    'Add Canvas Plot block control',
+  );
+  const addFrame = await waitVisible(
+    canvasScreen.getByRole('button', { name: 'Add Canvas Plot frame', exact: true }),
+    'Add Canvas Plot frame control',
+  );
+
+  assert.equal(await nodes.count(), 0, 'Fresh packaged profile unexpectedly contained Canvas Plot blocks');
+  assert.equal(await frames.count(), 0, 'Fresh packaged profile unexpectedly contained Canvas Plot frames');
+  assert.equal(await links.count(), 0, 'Fresh packaged profile unexpectedly contained Canvas Plot connections');
+
+  const initialViewport = await canvasViewport(board, 'initial Canvas Plot viewport');
+  const boardBounds = await board.boundingBox();
+  assert.ok(boardBounds && boardBounds.width > 420 && boardBounds.height > 300, 'Canvas Plot board is too small for pointer acceptance');
+  await page.mouse.move(
+    boardBounds.x + boardBounds.width / 2,
+    boardBounds.y + boardBounds.height / 2,
+  );
+  await page.mouse.wheel(0, 360);
+  await waitFor(async () => {
+    const current = await canvasViewport(board, 'wheel-zoomed Canvas Plot viewport');
+    return differsBy(current.zoom, initialViewport.zoom, 0.04);
+  }, 'real-wheel Canvas Plot zoom');
+  const zoomedViewport = await canvasViewport(board, 'wheel-zoomed Canvas Plot viewport');
+
+  await pointerDragBy(page, board, 68, 44, 'pan empty Canvas Plot board');
+  await waitFor(async () => {
+    const current = await canvasViewport(board, 'pointer-panned Canvas Plot viewport');
+    return differsBy(current.cx, zoomedViewport.cx, 2)
+      || differsBy(current.cy, zoomedViewport.cy, 2);
+  }, 'real-pointer Canvas Plot pan');
+  const viewport = await canvasViewport(board, 'pointer-authored Canvas Plot viewport');
+
+  let beforeIds = await canvasEntityIds(nodes, 'data-canvas-node-id', 'Canvas Plot block');
+  await addBlock.click();
+  const firstNodeId = await waitForAddedCanvasEntity(
+    nodes,
+    'data-canvas-node-id',
+    beforeIds,
+    'first created Canvas Plot block',
+  );
+  await waitCanvasCommandSettled(addBlock, 'first Canvas Plot block command to settle');
+
+  beforeIds = await canvasEntityIds(nodes, 'data-canvas-node-id', 'Canvas Plot block');
+  await addBlock.click();
+  const secondNodeId = await waitForAddedCanvasEntity(
+    nodes,
+    'data-canvas-node-id',
+    beforeIds,
+    'second created Canvas Plot block',
+  );
+  await waitCanvasCommandSettled(addBlock, 'second Canvas Plot block command to settle');
+  assert.notEqual(firstNodeId, secondNodeId, 'Canvas Plot block ids must be distinct');
+  await dismissCanvasInspector(canvasScreen);
+
+  const firstNode = await waitVisible(
+    canvasScreen.locator(`[data-canvas-node-id="${firstNodeId}"]`),
+    'first Canvas Plot block',
+  );
+  const secondNode = await waitVisible(
+    canvasScreen.locator(`[data-canvas-node-id="${secondNodeId}"]`),
+    'second Canvas Plot block',
+  );
+  const nodeBeforeMove = await canvasGeometry(firstNode, 'first Canvas Plot block before move');
+  const nodeMoveHandle = await waitVisible(
+    firstNode.locator('[data-canvas-node-move-handle]'),
+    'first Canvas Plot block move handle',
+  );
+  await nodeMoveHandle.click();
+  const nodeInspector = await waitVisible(
+    canvasScreen.getByRole('form', { name: 'Canvas Plot inspector', exact: true }),
+    'first Canvas Plot block inspector',
+  );
+  const nodeTitle = `Pointer-flushed Canvas Plot block ${firstNodeId}`;
+  const nodeSummary = `Distinctive unsaved inspector draft for block ${firstNodeId}.`;
+  const titleInput = await waitVisible(
+    nodeInspector.getByRole('textbox', { name: 'Block title', exact: true }),
+    'Canvas Plot block title field',
+  );
+  const summaryInput = await waitVisible(
+    nodeInspector.getByRole('textbox', { name: 'Block summary', exact: true }),
+    'Canvas Plot block summary field',
+  );
+  await titleInput.click();
+  await titleInput.press('Control+A');
+  await titleInput.pressSequentially(nodeTitle);
+  await summaryInput.click();
+  await summaryInput.pressSequentially(nodeSummary);
+  assert.equal(await titleInput.inputValue(), nodeTitle);
+  assert.equal(await summaryInput.inputValue(), nodeSummary);
+  await waitFor(
+    async () => await nodeInspector.getByRole('button', { name: 'REVERT', exact: true }).isEnabled(),
+    'dirty Canvas Plot inspector draft',
+  );
+  await pointerDragBy(page, nodeMoveHandle, -112, -66, 'move first Canvas Plot block');
+  await waitFor(async () => {
+    const current = await canvasGeometry(firstNode, 'first Canvas Plot block after move');
+    return (differsBy(current.x, nodeBeforeMove.x, 40) || differsBy(current.y, nodeBeforeMove.y, 28))
+      && await addBlock.isEnabled()
+      && (await nodeMoveHandle.textContent())?.includes(nodeTitle);
+  }, 'pointer-moved Canvas Plot block and flushed its inspector draft');
+  const nodeGeometry = await canvasGeometry(firstNode, 'persisted first Canvas Plot block');
+  record('journey', `Canvas Plot geometry command flushed unsaved inspector text for node ${firstNodeId}`);
+  await dismissCanvasInspector(canvasScreen);
+
+  const beforeFrameIds = await canvasEntityIds(frames, 'data-canvas-frame-id', 'Canvas Plot frame');
+  await addFrame.click();
+  const frameId = await waitForAddedCanvasEntity(
+    frames,
+    'data-canvas-frame-id',
+    beforeFrameIds,
+    'created Canvas Plot frame',
+  );
+  await waitCanvasCommandSettled(addBlock, 'Canvas Plot frame command to settle');
+  await dismissCanvasInspector(canvasScreen);
+  const frame = await waitVisible(
+    canvasScreen.locator(`[data-canvas-frame-id="${frameId}"]`),
+    'created Canvas Plot frame',
+  );
+  const frameBeforeResize = await canvasGeometry(frame, 'Canvas Plot frame before resize');
+  const frameResizeHandle = await waitVisible(
+    frame.locator('[data-canvas-frame-resize-handle]'),
+    'Canvas Plot frame resize handle',
+  );
+  const frameMoveHandle = await waitVisible(
+    frame.locator('[data-canvas-frame-move-handle]'),
+    'Canvas Plot frame move handle for selection',
+  );
+  const frameMoveBounds = await frameMoveHandle.boundingBox();
+  assert.ok(frameMoveBounds && frameMoveBounds.width > 80 && frameMoveBounds.height > 8, 'Canvas Plot frame move handle has no safe selection bounds');
+  await page.mouse.click(
+    frameMoveBounds.x + frameMoveBounds.width - 24,
+    frameMoveBounds.y + frameMoveBounds.height / 2,
+  );
+  await waitVisible(
+    canvasScreen.getByRole('form', { name: 'Canvas Plot inspector', exact: true }),
+    'selected Canvas Plot frame inspector',
+  );
+  const frameBeforeMove = await canvasGeometry(frame, 'Canvas Plot frame before move');
+  await pointerDragBy(page, frameMoveHandle, -180, 0, 'move selected Canvas Plot frame away from inspector');
+  await waitFor(async () => {
+    const current = await canvasGeometry(frame, 'Canvas Plot frame after move');
+    return current.x <= frameBeforeMove.x - 100 && await addBlock.isEnabled();
+  }, 'pointer-moved Canvas Plot frame to expose its resize handle');
+  await pointerDragBy(page, frameResizeHandle, 84, 58, 'resize Canvas Plot frame');
+  await waitFor(async () => {
+    const current = await canvasGeometry(frame, 'Canvas Plot frame after resize');
+    return (current.width >= frameBeforeResize.width + 40 || current.height >= frameBeforeResize.height + 28)
+      && await addBlock.isEnabled();
+  }, 'pointer-resized Canvas Plot frame to persist');
+  const frameGeometry = await canvasGeometry(frame, 'persisted Canvas Plot frame');
+  await dismissCanvasInspector(canvasScreen);
+
+  const sourceHandle = await waitVisible(
+    firstNode.locator('[data-canvas-node-connect-handle]'),
+    'first Canvas Plot connection handle',
+  );
+  const targetHandle = await waitVisible(
+    secondNode.locator('[data-canvas-node-connect-handle]'),
+    'second Canvas Plot connection handle',
+  );
+  const beforeLinkIds = await canvasEntityIds(links, 'data-canvas-link-id', 'Canvas Plot connection');
+  assert.equal(
+    await sourceHandle.getAttribute('aria-label'),
+    `Start connection from Canvas Plot block ${firstNodeId}`,
+  );
+  await sourceHandle.click();
+  await waitFor(
+    async () => await targetHandle.getAttribute('aria-label') === `Connect to Canvas Plot block ${secondNodeId}`,
+    'Canvas Plot target connection mode',
+  );
+  await targetHandle.click();
+  record('pointer', `connected Canvas Plot block ${firstNodeId} to ${secondNodeId} with two pointer clicks`);
+  const linkId = await waitForAddedCanvasEntity(
+    links,
+    'data-canvas-link-id',
+    beforeLinkIds,
+    'created Canvas Plot connection',
+  );
+  await waitCanvasCommandSettled(addBlock, 'Canvas Plot connection command to settle');
+  const link = canvasScreen.locator(`[data-canvas-link-id="${linkId}"]`);
+  assert.equal(Number(await link.getAttribute('data-source-node-id')), firstNodeId);
+  assert.equal(Number(await link.getAttribute('data-target-node-id')), secondNodeId);
+  assert.deepEqual(session.pageErrors, [], 'Renderer errors occurred during Canvas Plot pointer exercise');
+  record(
+    'journey',
+    `Canvas Plot mutations complete (nodes=${firstNodeId},${secondNodeId}; frame=${frameId}; link=${linkId})`,
+  );
+  return {
+    nodeIds: [firstNodeId, secondNodeId],
+    movedNodeId: firstNodeId,
+    nodeGeometry,
+    nodeTitle,
+    nodeSummary,
+    frameId,
+    frameGeometry,
+    linkId,
+    sourceNodeId: firstNodeId,
+    targetNodeId: secondNodeId,
+    viewport,
+  };
+}
+
+async function verifyPersistedCanvasPlot(session, expected) {
+  const { page } = session;
+  await waitProReady(session);
+  const canvasSurface = await selectPanel(page, 'Canvas Plot', 'canvas-plot', 'Canvas Plot');
+  const canvasScreen = await waitVisible(
+    canvasSurface.locator('[data-screen-label="Canvas Plot"]'),
+    'restored Canvas Plot screen',
+  );
+  const board = await waitVisible(
+    canvasScreen.locator('[data-canvas-plot-board]'),
+    'restored Canvas Plot board',
+  );
+  await waitFor(
+    async () => await board.getAttribute('data-viewport-ready') === 'true',
+    'restored Canvas Plot viewport settings hydration',
+    STARTUP_TIMEOUT_MS,
+  );
+
+  await waitFor(async () => {
+    const current = await canvasViewport(board, 'restored Canvas Plot viewport');
+    return Math.abs(current.zoom - expected.viewport.zoom) <= 0.01
+      && Math.abs(current.cx - expected.viewport.cx) <= 0.25
+      && Math.abs(current.cy - expected.viewport.cy) <= 0.25;
+  }, 'project-scoped Canvas Plot viewport after relaunch', STARTUP_TIMEOUT_MS);
+  const viewport = await canvasViewport(board, 'restored Canvas Plot viewport');
+  assertNear(viewport.zoom, expected.viewport.zoom, 0.01, 'restored Canvas Plot zoom');
+  assertNear(viewport.cx, expected.viewport.cx, 0.25, 'restored Canvas Plot center x');
+  assertNear(viewport.cy, expected.viewport.cy, 0.25, 'restored Canvas Plot center y');
+
+  const nodes = canvasScreen.locator('[data-canvas-node-id]');
+  const frames = canvasScreen.locator('[data-canvas-frame-id]');
+  const links = canvasScreen.locator('[data-canvas-link-id]');
+  await waitFor(
+    async () => (await nodes.count()) === expected.nodeIds.length
+      && (await frames.count()) === 1
+      && (await links.count()) === 1,
+    'persisted Canvas Plot entity counts after relaunch',
+    STARTUP_TIMEOUT_MS,
+  );
+  const restoredNodeIds = await canvasEntityIds(nodes, 'data-canvas-node-id', 'restored Canvas Plot block');
+  assert.deepEqual([...restoredNodeIds].sort((left, right) => left - right), [...expected.nodeIds].sort((left, right) => left - right));
+
+  const movedNode = await waitVisible(
+    canvasScreen.locator(`[data-canvas-node-id="${expected.movedNodeId}"]`),
+    'restored moved Canvas Plot block',
+  );
+  const nodeGeometry = await canvasGeometry(movedNode, 'restored moved Canvas Plot block');
+  for (const key of ['x', 'y', 'width', 'height']) {
+    assertNear(nodeGeometry[key], expected.nodeGeometry[key], 0.25, `restored Canvas Plot block ${key}`);
+  }
+  const restoredMoveHandle = await waitVisible(
+    movedNode.locator('[data-canvas-node-move-handle]'),
+    'restored moved Canvas Plot block handle',
+  );
+  await restoredMoveHandle.click();
+  const restoredInspector = await waitVisible(
+    canvasScreen.getByRole('form', { name: 'Canvas Plot inspector', exact: true }),
+    'restored Canvas Plot block inspector',
+  );
+  const restoredTitle = restoredInspector.getByRole('textbox', { name: 'Block title', exact: true });
+  const restoredSummary = restoredInspector.getByRole('textbox', { name: 'Block summary', exact: true });
+  await waitFor(
+    async () => await restoredTitle.inputValue() === expected.nodeTitle
+      && await restoredSummary.inputValue() === expected.nodeSummary,
+    'pointer-flushed Canvas Plot inspector text after relaunch',
+  );
+  assert.equal(await restoredTitle.inputValue(), expected.nodeTitle);
+  assert.equal(await restoredSummary.inputValue(), expected.nodeSummary);
+  await dismissCanvasInspector(canvasScreen);
+
+  const frame = await waitVisible(
+    canvasScreen.locator(`[data-canvas-frame-id="${expected.frameId}"]`),
+    'restored resized Canvas Plot frame',
+  );
+  const frameGeometry = await canvasGeometry(frame, 'restored resized Canvas Plot frame');
+  for (const key of ['x', 'y', 'width', 'height']) {
+    assertNear(frameGeometry[key], expected.frameGeometry[key], 0.25, `restored Canvas Plot frame ${key}`);
+  }
+
+  const link = canvasScreen.locator(`[data-canvas-link-id="${expected.linkId}"]`);
+  await waitFor(async () => (await link.count()) === 1, 'restored Canvas Plot connection');
+  assert.equal(Number(await link.getAttribute('data-source-node-id')), expected.sourceNodeId);
+  assert.equal(Number(await link.getAttribute('data-target-node-id')), expected.targetNodeId);
+  assert.deepEqual(session.pageErrors, [], 'Renderer errors occurred while restoring Canvas Plot');
+  record('journey', 'pointer-authored Canvas Plot content and viewport survived graceful packaged relaunch');
+}
+
 async function exercisePointerWorkspace(session) {
   const { page } = session;
   const { workspace, projectId } = await waitProReady(session);
 
-  const notesSurface = await selectPanel(page, 'Notes', 'Notes Panel');
+  const notesSurface = await selectPanel(page, 'Notes', 'notes', 'Notes Panel');
   assert.equal(await notesSurface.getAttribute('data-dock-region'), 'center');
   const notesTab = await waitVisible(
     page.locator('[data-dock-drop-region="center"]')
@@ -817,7 +1220,10 @@ async function main() {
       root: productRoot,
       label: 'pro-pointer-1',
     });
-    const expected = await exercisePointerWorkspace(first);
+    const canvasExpected = await exerciseCanvasPlot(first);
+    await captureScreenshot(first, 'canvas-plot');
+    const workspaceExpected = await exercisePointerWorkspace(first);
+    const expected = { ...workspaceExpected, canvas: canvasExpected };
     await captureScreenshot(first, 'pointer-layout');
     await closeSession(first);
     await readSavedLayout(first, expected);
@@ -828,6 +1234,7 @@ async function main() {
       root: productRoot,
       label: 'pro-pointer-2',
     });
+    await verifyPersistedCanvasPlot(second, expected.canvas);
     await verifyPersistedWorkspace(second, expected);
     await captureScreenshot(second, 'restored-layout');
     await closeSession(second);

@@ -36,6 +36,9 @@ import type {
   TimelineSnapshotDTO,
   TimelineCommandDTO,
   TimelineCommandResultDTO,
+  CanvasPlotSnapshotDTO,
+  CanvasPlotCommandDTO,
+  CanvasPlotCommandResultDTO,
   PlotBlockDTO,
   PlotSceneDTO,
   ExportRequestDTO,
@@ -151,6 +154,7 @@ const MOCK_PERSISTENT_METHODS = new Set([
   "cancelExtractJob",
   "executeStoryStructureCommand",
   "executeTimelineCommand",
+  "executeCanvasPlotCommand",
 ]);
 
 function mockMethodPersists(name: string): boolean {
@@ -304,8 +308,7 @@ const PLOT: PlotBlockDTO[] = [
   ] },
 ];
 
-// mutable so the mock persists toggles within a session (project settings bag)
-let SETTINGS: Record<string, unknown> = {
+const DEFAULT_SETTINGS: Record<string, unknown> = {
   focus_mode: false,
   typewriter_mode: false,
   writing_language_code: "en",
@@ -424,6 +427,17 @@ export function createMockApiClient(): ApiClient {
   // client (for example, when switching mock/live source) starts from the same
   // deterministic fixtures instead of inheriting mutations from an old client.
   const projects = PROJECTS.map(cloneProject);
+  const settingsByProject = new Map<number, Record<string, unknown>>(
+    projects.map((project) => [project.id, structuredClone(DEFAULT_SETTINGS)]),
+  );
+  const settingsFor = (projectId: number): Record<string, unknown> => {
+    let settings = settingsByProject.get(projectId);
+    if (!settings) {
+      settings = structuredClone(DEFAULT_SETTINGS);
+      settingsByProject.set(projectId, settings);
+    }
+    return settings;
+  };
   const scenesByProject = new Map<number, SceneDTO[]>(
     projects.map((project) => [
       project.id,
@@ -516,6 +530,70 @@ export function createMockApiClient(): ApiClient {
     state.explicitEventIds.delete(sceneId);
     state.customOrder = state.customOrder.filter((id) => id !== sceneId);
     state.details.delete(sceneId);
+  };
+  const canvasSeed = (projectId: number): CanvasPlotSnapshotDTO => {
+    const created_at = "2026-01-01T00:00:00Z";
+    const nodes = projectId === fixtureProjectId ? [
+      { id: 1, title: "Inciting signal", body: "A message arrives before it is sent.", x: -260, y: -90, width: 220, height: 132, color_label: "cyan", group_label: "ACT I", scene_id: 1, sort_order: 0, created_at },
+      { id: 2, title: "Impossible choice", body: "Vesper must decide which timeline survives.", x: 60, y: 30, width: 230, height: 140, color_label: "violet", group_label: "ACT II", scene_id: 12, sort_order: 1, created_at },
+      { id: 3, title: "The return", body: "The station remembers a different ending.", x: 390, y: -120, width: 220, height: 132, color_label: "amber", group_label: "ACT III", scene_id: 21, sort_order: 2, created_at },
+    ] : [];
+    const links = projectId === fixtureProjectId ? [
+      { id: 1, source_node_id: 1, target_node_id: 2, label: "forces", color_label: "cyan", link_type: "causality", created_at },
+      { id: 2, source_node_id: 2, target_node_id: 3, label: "echoes", color_label: "violet", link_type: "echo", created_at },
+    ] : [];
+    const frames = projectId === fixtureProjectId ? [
+      { id: 1, title: "CORE CAUSAL CHAIN", color_label: "blue", x: -310, y: -170, width: 980, height: 390, created_at },
+    ] : [];
+    return { project_id: projectId, revision: "0".repeat(64), nodes, links, frames };
+  };
+  const canvasStates = new Map<number, CanvasPlotSnapshotDTO>(
+    projects.map((project) => [project.id, canvasSeed(project.id)]),
+  );
+  interface MockCanvasIds {
+    nextNodeId: number;
+    nextLinkId: number;
+    nextFrameId: number;
+  }
+  const canvasIdsFrom = (snapshot: CanvasPlotSnapshotDTO): MockCanvasIds => ({
+    nextNodeId: snapshot.nodes.reduce((maximum, node) => Math.max(maximum, node.id), 0) + 1,
+    nextLinkId: snapshot.links.reduce((maximum, link) => Math.max(maximum, link.id), 0) + 1,
+    nextFrameId: snapshot.frames.reduce((maximum, frame) => Math.max(maximum, frame.id), 0) + 1,
+  });
+  const canvasIds = new Map<number, MockCanvasIds>(
+    [...canvasStates.entries()].map(([projectId, snapshot]) => [projectId, canvasIdsFrom(snapshot)]),
+  );
+  const canvasIdsFor = (projectId: number): MockCanvasIds => {
+    let ids = canvasIds.get(projectId);
+    if (!ids) {
+      ids = canvasIdsFrom(canvasFor(projectId));
+      canvasIds.set(projectId, ids);
+    }
+    return ids;
+  };
+  const canvasRevision = (snapshot: Omit<CanvasPlotSnapshotDTO, "revision">): string => {
+    let hash = 0x811c9dc5;
+    for (const char of JSON.stringify(snapshot)) {
+      hash ^= char.charCodeAt(0);
+      hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+    return hash.toString(16).padStart(8, "0").repeat(8);
+  };
+  const canvasFor = (projectId: number): CanvasPlotSnapshotDTO => {
+    let snapshot = canvasStates.get(projectId);
+    if (!snapshot) {
+      snapshot = canvasSeed(projectId);
+      canvasStates.set(projectId, snapshot);
+    }
+    const revision = canvasRevision({
+      project_id: snapshot.project_id,
+      nodes: snapshot.nodes,
+      links: snapshot.links,
+      frames: snapshot.frames,
+    });
+    if (snapshot.revision !== revision) snapshot = { ...snapshot, revision };
+    canvasStates.set(projectId, snapshot);
+    return snapshot;
   };
   const structureRevisionFor = (projectId: number): string => {
     const payload = {
@@ -1237,6 +1315,256 @@ export function createMockApiClient(): ApiClient {
       affected_scene_ids: changed ? affectedSceneIds : [],
     };
   };
+  const executeCanvasPlotCommand = (
+    projectId: number,
+    command: CanvasPlotCommandDTO,
+  ): CanvasPlotCommandResultDTO => {
+    const requestPath = `/api/projects/${projectId}/canvas-plot/commands`;
+    const current = structuredClone(canvasFor(projectId));
+    if (command.expected_revision !== current.revision) {
+      throw new ApiRequestError("POST", requestPath, 409, "The Canvas Plot changed after it was loaded.", "canvas_plot_conflict");
+    }
+    const next = structuredClone(current);
+    const affectedNodeIds: number[] = [];
+    const affectedLinkIds: number[] = [];
+    const affectedFrameIds: number[] = [];
+    let createdNodeId: number | null = null;
+    let createdLinkId: number | null = null;
+    let createdFrameId: number | null = null;
+    let changed = false;
+    const created_at = new Date().toISOString();
+    const badRequest = (message: string): never => {
+      throw new ApiRequestError("POST", requestPath, 400, message, "bad_request");
+    };
+    const missing = (kind: string, id: number): never => {
+      throw new ApiRequestError("POST", requestPath, 404, `${kind} ${id} was not found.`, "not_found");
+    };
+    const checkedString = (value: unknown, label: string, maximum: number): string => {
+      if (typeof value !== "string") return badRequest(`${label} must be a string`);
+      if (value.length > maximum) return badRequest(`${label} cannot exceed ${maximum} characters`);
+      return value;
+    };
+    const checkedNumber = (value: unknown, label: string): number => {
+      if (typeof value !== "number" || !Number.isFinite(value)) {
+        return badRequest(`${label} must be a finite number`);
+      }
+      return value;
+    };
+    const checkedDimension = (value: unknown, label: string): number => {
+      const number = checkedNumber(value, label);
+      if (number <= 0) return badRequest(`${label} must be greater than zero`);
+      return number;
+    };
+    const checkedIndex = (value: unknown, maximum: number): number => {
+      if (!Number.isInteger(value) || (value as number) < 0 || (value as number) > maximum) {
+        return badRequest("Node index is outside the available range");
+      }
+      return value as number;
+    };
+    const checkedSceneReference = (value: number | null | undefined): number | null => {
+      if (value == null) return null;
+      if (!Number.isInteger(value) || value <= 0 || !scenesFor(projectId).some((sceneRow) => sceneRow.id === value)) {
+        return missing("Scene", value);
+      }
+      return value;
+    };
+    const denseNodeOrder = (): void => {
+      next.nodes.forEach((node, index) => { node.sort_order = index; });
+    };
+    const nodeById = (id: number) => next.nodes.find((node) => node.id === id) ?? missing("Canvas Plot node", id);
+    const linkById = (id: number) => next.links.find((link) => link.id === id) ?? missing("Canvas Plot link", id);
+    const frameById = (id: number) => next.frames.find((frame) => frame.id === id) ?? missing("Canvas Plot frame", id);
+
+    switch (command.kind) {
+      case "create_node": {
+        const insertion = checkedIndex(command.index ?? next.nodes.length, next.nodes.length);
+        const node = {
+          id: canvasIdsFor(projectId).nextNodeId,
+          title: checkedString(command.title ?? "", "title", 500),
+          body: checkedString(command.body ?? "", "body", 100_000),
+          x: checkedNumber(command.x ?? 0, "x"),
+          y: checkedNumber(command.y ?? 0, "y"),
+          width: checkedDimension(command.width ?? 180, "width"),
+          height: checkedDimension(command.height ?? 110, "height"),
+          color_label: checkedString(command.color_label ?? "", "color_label", 100),
+          group_label: checkedString(command.group_label ?? "", "group_label", 500),
+          scene_id: checkedSceneReference(command.scene_id),
+          sort_order: insertion,
+          created_at,
+        };
+        createdNodeId = node.id;
+        canvasIdsFor(projectId).nextNodeId += 1;
+        next.nodes.splice(insertion, 0, node);
+        denseNodeOrder();
+        affectedNodeIds.push(createdNodeId);
+        changed = true;
+        break;
+      }
+      case "update_node": {
+        const updates = [
+          command.title,
+          command.body,
+          command.x,
+          command.y,
+          command.width,
+          command.height,
+          command.color_label,
+          command.group_label,
+          command.scene_id,
+          command.index,
+        ];
+        if (!updates.some((value) => value !== undefined)) {
+          return badRequest("update_node must change at least one field");
+        }
+        const node = nodeById(command.node_id);
+        const before = JSON.stringify(next.nodes);
+        if (command.title !== undefined) node.title = checkedString(command.title, "title", 500);
+        if (command.body !== undefined) node.body = checkedString(command.body, "body", 100_000);
+        if (command.x !== undefined) node.x = checkedNumber(command.x, "x");
+        if (command.y !== undefined) node.y = checkedNumber(command.y, "y");
+        if (command.width !== undefined) node.width = checkedDimension(command.width, "width");
+        if (command.height !== undefined) node.height = checkedDimension(command.height, "height");
+        if (command.color_label !== undefined) node.color_label = checkedString(command.color_label, "color_label", 100);
+        if (command.group_label !== undefined) node.group_label = checkedString(command.group_label, "group_label", 500);
+        if (command.scene_id !== undefined) node.scene_id = checkedSceneReference(command.scene_id);
+        if (command.index !== undefined) {
+          const oldIndex = next.nodes.indexOf(node);
+          const newIndex = checkedIndex(command.index, next.nodes.length - 1);
+          if (oldIndex !== newIndex) {
+            next.nodes.splice(oldIndex, 1);
+            next.nodes.splice(newIndex, 0, node);
+            denseNodeOrder();
+          }
+        }
+        changed = before !== JSON.stringify(next.nodes);
+        if (changed) affectedNodeIds.push(node.id);
+        break;
+      }
+      case "delete_node": {
+        nodeById(command.node_id);
+        const removedLinks = next.links.filter((link) => link.source_node_id === command.node_id || link.target_node_id === command.node_id);
+        next.links = next.links.filter((link) => !removedLinks.includes(link));
+        next.nodes = next.nodes.filter((node) => node.id !== command.node_id);
+        denseNodeOrder();
+        affectedNodeIds.push(command.node_id);
+        affectedLinkIds.push(...removedLinks.map((link) => link.id));
+        changed = true;
+        break;
+      }
+      case "create_link": {
+        nodeById(command.source_node_id);
+        nodeById(command.target_node_id);
+        if (command.source_node_id === command.target_node_id) {
+          return badRequest("A Canvas Plot node cannot link to itself");
+        }
+        const duplicate = next.links.some((link) => (
+          (link.source_node_id === command.source_node_id && link.target_node_id === command.target_node_id)
+          || (link.source_node_id === command.target_node_id && link.target_node_id === command.source_node_id)
+        ));
+        if (!duplicate) {
+          const ids = canvasIdsFor(projectId);
+          createdLinkId = ids.nextLinkId;
+          ids.nextLinkId += 1;
+          next.links.push({
+            id: createdLinkId,
+            source_node_id: command.source_node_id,
+            target_node_id: command.target_node_id,
+            label: checkedString(command.label ?? "", "label", 500),
+            color_label: checkedString(command.color_label ?? "gray", "color_label", 100) || "gray",
+            link_type: checkedString(command.link_type ?? "", "link_type", 100),
+            created_at,
+          });
+          affectedLinkIds.push(createdLinkId);
+          changed = true;
+        }
+        break;
+      }
+      case "update_link": {
+        if (command.label === undefined && command.color_label === undefined && command.link_type === undefined) {
+          return badRequest("update_link must change at least one field");
+        }
+        const link = linkById(command.link_id);
+        const before = JSON.stringify(link);
+        if (command.label !== undefined) link.label = checkedString(command.label, "label", 500);
+        if (command.color_label !== undefined) {
+          link.color_label = checkedString(command.color_label, "color_label", 100) || "gray";
+        }
+        if (command.link_type !== undefined) link.link_type = checkedString(command.link_type, "link_type", 100);
+        changed = before !== JSON.stringify(link);
+        if (changed) affectedLinkIds.push(link.id);
+        break;
+      }
+      case "delete_link": {
+        linkById(command.link_id);
+        next.links = next.links.filter((link) => link.id !== command.link_id);
+        affectedLinkIds.push(command.link_id);
+        changed = true;
+        break;
+      }
+      case "create_frame": {
+        const ids = canvasIdsFor(projectId);
+        createdFrameId = ids.nextFrameId;
+        const frame = {
+          id: createdFrameId,
+          title: checkedString(command.title ?? "", "title", 500),
+          color_label: checkedString(command.color_label ?? "", "color_label", 100),
+          x: checkedNumber(command.x ?? 0, "x"),
+          y: checkedNumber(command.y ?? 0, "y"),
+          width: checkedDimension(command.width ?? 360, "width"),
+          height: checkedDimension(command.height ?? 260, "height"),
+          created_at,
+        };
+        ids.nextFrameId += 1;
+        next.frames.push(frame);
+        affectedFrameIds.push(createdFrameId);
+        changed = true;
+        break;
+      }
+      case "update_frame": {
+        const updates = [command.title, command.color_label, command.x, command.y, command.width, command.height];
+        if (!updates.some((value) => value !== undefined)) {
+          return badRequest("update_frame must change at least one field");
+        }
+        const frame = frameById(command.frame_id);
+        const before = JSON.stringify(frame);
+        if (command.title !== undefined) frame.title = checkedString(command.title, "title", 500);
+        if (command.color_label !== undefined) frame.color_label = checkedString(command.color_label, "color_label", 100);
+        if (command.x !== undefined) frame.x = checkedNumber(command.x, "x");
+        if (command.y !== undefined) frame.y = checkedNumber(command.y, "y");
+        if (command.width !== undefined) frame.width = checkedDimension(command.width, "width");
+        if (command.height !== undefined) frame.height = checkedDimension(command.height, "height");
+        changed = before !== JSON.stringify(frame);
+        if (changed) affectedFrameIds.push(frame.id);
+        break;
+      }
+      case "delete_frame": {
+        frameById(command.frame_id);
+        next.frames = next.frames.filter((frame) => frame.id !== command.frame_id);
+        affectedFrameIds.push(command.frame_id);
+        changed = true;
+        break;
+      }
+    }
+    if (changed) {
+      next.revision = canvasRevision({
+        project_id: next.project_id,
+        nodes: next.nodes,
+        links: next.links,
+        frames: next.frames,
+      });
+      canvasStates.set(projectId, next);
+    }
+    return {
+      canvas_plot: structuredClone(changed ? next : current),
+      changed,
+      affected_node_ids: affectedNodeIds,
+      affected_link_ids: affectedLinkIds,
+      affected_frame_ids: affectedFrameIds,
+      created_node_id: createdNodeId,
+      created_link_id: createdLinkId,
+      created_frame_id: createdFrameId,
+    };
+  };
   const fixtureRowsFor = <T>(projectId: number, rows: readonly T[]): readonly T[] => (
     projectId === fixtureProjectId ? rows : []
   );
@@ -1250,8 +1578,8 @@ export function createMockApiClient(): ApiClient {
         service: "logosforge-api",
         instance_nonce: "preview-mock",
         mode: "preview-mock",
-        version: "1.4.0",
-        api_version: "1.4.0",
+        version: "1.5.0",
+        api_version: "1.5.0",
         core_version: "preview",
       };
     },
@@ -1275,6 +1603,10 @@ export function createMockApiClient(): ApiClient {
       scenesByProject.set(project.id, []);
       episodesByProject.set(project.id, new Map());
       timelineStates.set(project.id, emptyTimelineState());
+      const canvas = canvasSeed(project.id);
+      canvasStates.set(project.id, canvas);
+      canvasIds.set(project.id, canvasIdsFrom(canvas));
+      settingsByProject.set(project.id, structuredClone(DEFAULT_SETTINGS));
       return project;
     },
     async importWhiteboard(body: WhiteboardImportDTO): Promise<WhiteboardImportResultDTO> {
@@ -1368,6 +1700,9 @@ export function createMockApiClient(): ApiClient {
       scenesByProject.delete(id);
       episodesByProject.delete(id);
       timelineStates.delete(id);
+      canvasStates.delete(id);
+      canvasIds.delete(id);
+      settingsByProject.delete(id);
       return { ok: true, deleted: id };
     },
     async openProject(id: number) {
@@ -1854,6 +2189,16 @@ export function createMockApiClient(): ApiClient {
       await delay(120);
       return executeTimelineCommand(p, body);
     },
+    async getCanvasPlot(p: number) {
+      await delay();
+      findMockProject(projects, p, "GET", `/api/projects/${p}/canvas-plot`);
+      return structuredClone(canvasFor(p));
+    },
+    async executeCanvasPlotCommand(p: number, body: CanvasPlotCommandDTO) {
+      await delay(120);
+      findMockProject(projects, p, "POST", `/api/projects/${p}/canvas-plot/commands`);
+      return executeCanvasPlotCommand(p, body);
+    },
     async getPlot() { await delay(); return PLOT.map((b) => ({ ...b })); },
     async getDashboard(p: number) {
       await delay();
@@ -2262,8 +2607,21 @@ export function createMockApiClient(): ApiClient {
     async createEpisodePlotline(_p: number, episodeId: number, b: Record<string, unknown>) { await delay(300); const row = { id: ++MOCK_FD_SEQ, episode_id: episodeId, type: (b.type as string) || "A", title: (b.title as string) || "", resolution_state: "" }; MOCK_PLOTLINES.push(row); return row; },
     async getSeriesMemory(_p: number, entryId: number) { await delay(); return MOCK_SERIES_MEM[entryId] ?? { entry_id: entryId, continuity_flags: "", current_status_by_episode: {} }; },
     async setSeriesMemory(_p: number, entryId: number, b: Record<string, unknown>) { await delay(200); const row = { entry_id: entryId, continuity_flags: (b.continuity_flags as string) || "", current_status_by_episode: (b.current_status_by_episode as Record<string, string>) || {} }; MOCK_SERIES_MEM[entryId] = row; return row; },
-    async getSettings() { await delay(); return { settings: { ...SETTINGS } }; },
-    async patchSettings(_p: number, body: { settings?: Record<string, unknown> }) { await delay(); SETTINGS = { ...SETTINGS, ...(body?.settings ?? {}) }; return { settings: { ...SETTINGS } }; },
+    async getSettings(p: number) {
+      await delay();
+      findMockProject(projects, p, "GET", `/api/projects/${p}/settings`);
+      return { settings: structuredClone(settingsFor(p)) };
+    },
+    async patchSettings(p: number, body: { settings?: Record<string, unknown> }) {
+      await delay();
+      findMockProject(projects, p, "PATCH", `/api/projects/${p}/settings`);
+      const settings = {
+        ...structuredClone(settingsFor(p)),
+        ...structuredClone(body?.settings ?? {}),
+      };
+      settingsByProject.set(p, settings);
+      return { settings: structuredClone(settings) };
+    },
     async export(_p: number, req: ExportRequestDTO): Promise<ExportResponseDTO> {
       await delay();
       const projectScenes = scenesFor(_p);

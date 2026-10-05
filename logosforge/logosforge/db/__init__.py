@@ -1,4 +1,13 @@
 from logosforge.db.database import (
+    CanvasPlotCommandError,
+    CanvasPlotCommandResult,
+    CanvasPlotFrameNotFound,
+    CanvasPlotLinkNotFound,
+    CanvasPlotNodeNotFound,
+    CanvasPlotProjectNotFound,
+    CanvasPlotReadSnapshot,
+    CanvasPlotRevisionConflict,
+    CanvasPlotSceneNotFound,
     CommentRevisionConflict,
     Database,
     InMemoryTransactionReentryError,
@@ -23,6 +32,15 @@ from logosforge.db.database import (
 )
 
 __all__ = [
+    "CanvasPlotCommandError",
+    "CanvasPlotCommandResult",
+    "CanvasPlotFrameNotFound",
+    "CanvasPlotLinkNotFound",
+    "CanvasPlotNodeNotFound",
+    "CanvasPlotProjectNotFound",
+    "CanvasPlotReadSnapshot",
+    "CanvasPlotRevisionConflict",
+    "CanvasPlotSceneNotFound",
     "CommentRevisionConflict",
     "Database",
     "InMemoryTransactionReentryError",

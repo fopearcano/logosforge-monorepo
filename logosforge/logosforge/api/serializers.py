@@ -12,6 +12,7 @@ import json
 from logosforge.api import schemas
 from logosforge.comment_revision import comment_revision
 from logosforge.db import (
+    CanvasPlotReadSnapshot,
     Database,
     ManuscriptReadSnapshot,
     StoryStructureReadSnapshot,
@@ -364,6 +365,66 @@ def plot_blocks(db: Database, project_id: int) -> list[schemas.PlotBlockDTO]:
         schemas.PlotBlockDTO(id=name, plotline=name, scenes=blocks[name])
         for name in order
     ]
+
+
+# -- Canvas Plot -------------------------------------------------------------
+
+
+def canvas_plot_snapshot_to_dto(
+    snapshot: CanvasPlotReadSnapshot,
+) -> schemas.CanvasPlotSnapshotDTO:
+    """Serialize the isolated board projection captured by one atomic read."""
+    return schemas.CanvasPlotSnapshotDTO(
+        project_id=int(snapshot.project.id),
+        revision=snapshot.revision,
+        nodes=[
+            schemas.CanvasPlotNodeDTO(
+                id=int(node.id),
+                title=node.title or "",
+                body=node.body or "",
+                x=float(node.x),
+                y=float(node.y),
+                width=float(node.width),
+                height=float(node.height),
+                color_label=node.color_label or "",
+                group_label=node.group_label or "",
+                scene_id=(
+                    int(node.scene_id)
+                    if node.scene_id is not None
+                    and int(node.scene_id) in snapshot.valid_scene_ids
+                    else None
+                ),
+                sort_order=int(node.sort_order or 0),
+                created_at=node.created_at,
+            )
+            for node in snapshot.nodes
+        ],
+        links=[
+            schemas.CanvasPlotLinkDTO(
+                id=int(link.id),
+                source_node_id=int(link.source_node_id),
+                target_node_id=int(link.target_node_id),
+                label=link.label or "",
+                color_label=link.color_label or "gray",
+                link_type=link.link_type or "",
+                created_at=link.created_at,
+            )
+            for link in snapshot.links
+        ],
+        frames=[
+            schemas.CanvasPlotFrameDTO(
+                id=int(frame.id),
+                title=frame.title or "",
+                color_label=frame.color_label or "",
+                x=float(frame.x),
+                y=float(frame.y),
+                width=float(frame.width),
+                height=float(frame.height),
+                created_at=frame.created_at,
+            )
+            for frame in snapshot.frames
+        ],
+    )
 
 
 # -- Timeline ----------------------------------------------------------------

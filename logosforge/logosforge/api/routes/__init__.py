@@ -2,6 +2,7 @@
 
 from logosforge.api.routes import (
     assistant,
+    canvas_plot,
     characters,
     comments,
     connector,
@@ -39,6 +40,7 @@ ALL_ROUTERS = [
     structure.router,
     outline.router,
     plot.router,
+    canvas_plot.router,
     timeline.router,
     psyke.router,
     notes.router,
