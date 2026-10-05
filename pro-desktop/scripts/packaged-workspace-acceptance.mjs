@@ -539,16 +539,46 @@ async function exercisePointerWorkspace(session) {
     'Notes floating titlebar',
   );
   const beforeMove = await numericInlineBounds(notesSurface);
-  assert.ok(Number.isFinite(beforeMove.left) && Number.isFinite(beforeMove.top));
-  await pointerDragBy(page, titlebar, 56, 40, 'move Notes floating panel', 'leading');
+  assert.ok(Object.values(beforeMove).every(Number.isFinite));
+  const containedPosition = {
+    left: Math.max(0, Math.min(16, Math.floor(workspaceBounds.width - beforeMove.width))),
+    top: Math.max(0, Math.min(16, Math.floor(workspaceBounds.height - beforeMove.height))),
+  };
+  const moveDeltaX = containedPosition.left - beforeMove.left;
+  const moveDeltaY = containedPosition.top - beforeMove.top;
+  assert.ok(
+    Math.abs(moveDeltaX) >= 32 || Math.abs(moveDeltaY) >= 32,
+    'Tear-off did not leave enough distance for a meaningful pointer move',
+  );
+  await pointerDragBy(
+    page,
+    titlebar,
+    moveDeltaX,
+    moveDeltaY,
+    'move Notes floating panel fully into the workspace',
+    'leading',
+  );
   await waitFor(async () => {
     const current = await numericInlineBounds(notesSurface);
-    return current.left >= beforeMove.left + 40 && current.top >= beforeMove.top + 28;
-  }, 'pointer-moved Notes bounds');
+    return Math.abs(current.left - containedPosition.left) <= 2
+      && Math.abs(current.top - containedPosition.top) <= 2;
+  }, 'pointer-moved Notes bounds fully inside the workspace');
 
   const resizeHandle = await waitVisible(
     page.getByRole('button', { name: 'Resize Notes floating panel', exact: true }),
     'Notes floating resize handle',
+  );
+  const resizeHandleBounds = await resizeHandle.boundingBox();
+  assert.ok(resizeHandleBounds, 'Notes floating resize handle has no pointer bounds');
+  assert.ok(
+    resizeHandleBounds.x >= workspaceBounds.x
+      && resizeHandleBounds.y >= workspaceBounds.y
+      && resizeHandleBounds.x + resizeHandleBounds.width <= workspaceBounds.x + workspaceBounds.width
+      && resizeHandleBounds.y + resizeHandleBounds.height <= workspaceBounds.y + workspaceBounds.height,
+    `Notes floating resize handle is outside the workspace: ${JSON.stringify({
+      resizeHandleBounds,
+      workspaceBounds,
+    })}`,
   );
   const beforeResize = await numericInlineBounds(notesSurface);
   assert.ok(Number.isFinite(beforeResize.width) && Number.isFinite(beforeResize.height));
