@@ -8,6 +8,7 @@ import {
   type WorkspacePanelDefinition,
 } from "../src/components/shell/DockWorkspace";
 import { TopBar } from "../src/components/shell/Chrome";
+import { ShellStyles } from "../src/components/shell/ShellStyles";
 import { StudioProvider } from "../src/adapters/StudioProvider";
 import { workspacePanelDomToken } from "../src/components/shell/workspaceInteraction";
 import {
@@ -404,11 +405,66 @@ check(cockpitButton?.props["aria-pressed"] === false, "Cockpit mode button shoul
 act(() => { cockpitButton?.props.onClick(); });
 check(modeToggleCalls === 1, "unselected workspace mode should remain keyboard/click operable");
 
+// Responsive Studio chrome depends on stable semantic regions: the shared CSS
+// rearranges these nodes at the compact breakpoint without changing TopBar's
+// platform-neutral markup or hiding an always-on control.
+const topBarRegions = [
+  "lf-topbar",
+  "lf-topbar-brand",
+  "lf-topbar-format",
+  "lf-topbar-command",
+  "lf-topbar-adaptive",
+  "lf-topbar-layout",
+  "lf-topbar-status",
+] as const;
+for (const className of topBarRegions) {
+  check(
+    topBarRenderer.root.findAllByProps({ className }).length === 1,
+    `${className} should identify exactly one responsive top-bar region`,
+  );
+}
+const commandButton = topBarRenderer.root.findByProps({ className: "lf-cmd" });
+check(
+  commandButton.props.style.width === "100%"
+    && commandButton.props.style.maxWidth === 560
+    && commandButton.props.style.minWidth === 0,
+  "command palette control should shrink below its preferred desktop width",
+);
+const commandShortcut = topBarRenderer.root.findByProps({ className: "lf-topbar-command-shortcut" });
+check(commandShortcut.children.join("") === "Ctrl/⌘ K", "command palette should display a cross-platform shortcut hint");
+
+let shellStylesRenderer!: ReactTestRenderer;
+act(() => { shellStylesRenderer = create(<ShellStyles />); });
+const shellCss = shellStylesRenderer.root.findByType("style").children.join("");
+check(
+  /\.lf-topbar-command\{[^}]*min-width:0;/.test(shellCss)
+    && /\.lf-topbar-command \.lf-cmd\{[^}]*min-width:0;/.test(shellCss),
+  "shell CSS should allow both the command region and command control to shrink",
+);
+const compactTopBarStart = shellCss.indexOf("@media (max-width:1280px)");
+const mobileWorkspaceStart = shellCss.indexOf("@media (max-width:760px)", compactTopBarStart);
+check(
+  compactTopBarStart >= 0 && mobileWorkspaceStart > compactTopBarStart,
+  "shell CSS should define the compact top-bar breakpoint at 1280px",
+);
+const compactTopBarCss = shellCss.slice(compactTopBarStart, mobileWorkspaceStart);
+check(
+  /\.lf-topbar\{[^}]*height:78px;[^}]*display:grid;[^}]*grid-template-areas:"brand format command" "adaptive layout status";/.test(compactTopBarCss),
+  "compact top bar should use the documented two-row grid",
+);
+check(
+  ["brand", "format", "command", "adaptive", "layout", "status"].every((area) => (
+    new RegExp(`\\.lf-topbar-${area}\\{[^}]*grid-area:${area};`).test(compactTopBarCss)
+  )),
+  "each compact top-bar region should be assigned to its semantic grid area",
+);
+
 act(() => {
   renderer.unmount();
   accessibleRenderer.unmount();
   navigatorRenderer.unmount();
   topBarRenderer.unmount();
+  shellStylesRenderer.unmount();
 });
 
 console.log(`${assertions} workspace dock render assertions passed.`);

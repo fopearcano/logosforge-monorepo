@@ -10,7 +10,7 @@ export { PsykeConsole } from "./PsykeConsole";
 export function CommandPalette({ onOpen }: { onOpen?: () => void }) {
   const available = typeof onOpen === "function";
   return (
-    <div style={{ flex: 1, display: "flex", justifyContent: "center" }}>
+    <div className="lf-topbar-command" style={{ flex: 1, display: "flex", justifyContent: "center" }}>
       <button
         type="button"
         onClick={onOpen}
@@ -18,11 +18,11 @@ export function CommandPalette({ onOpen }: { onOpen?: () => void }) {
         aria-label={available ? "Open command palette" : "Command palette is available in the desktop host"}
         title={available ? "Open command palette" : "The browser preview does not host desktop commands"}
         className="lf-cmd"
-        style={{ display: "flex", alignItems: "center", gap: 10, width: 560, height: 30, padding: "0 12px", background: "var(--tint)", border: "1px solid var(--line2)", borderRadius: 2, color: "var(--txt3)", transition: ".15s", cursor: available ? "text" : "not-allowed", font: "inherit", textAlign: "left", opacity: available ? 1 : 0.62 }}
+        style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", maxWidth: 560, minWidth: 0, height: 30, padding: "0 12px", background: "var(--tint)", border: "1px solid var(--line2)", borderRadius: 2, color: "var(--txt3)", transition: ".15s", cursor: available ? "text" : "not-allowed", font: "inherit", textAlign: "left", opacity: available ? 1 : 0.62 }}
       >
-        <span style={{ display: "grid", placeItems: "center", width: 18, height: 16, border: "1px solid var(--line2)", fontSize: 9, color: "var(--txt2)" }}>⌘K</span>
+        <span className="lf-topbar-command-shortcut" style={{ display: "grid", placeItems: "center", minWidth: 46, height: 16, border: "1px solid var(--line2)", fontSize: 8, color: "var(--txt2)", whiteSpace: "nowrap" }}>Ctrl/⌘ K</span>
         <span style={{ color: "var(--accent)" }}>❯</span>
-        <span style={{ fontSize: 11, letterSpacing: ".04em", flex: 1 }}>{available ? "Run a command · jump to a section · open an AI tool…" : "Command palette is hosted by the desktop app"}</span>
+        <span className="lf-topbar-command-copy" style={{ fontSize: 11, letterSpacing: ".04em", flex: 1 }}>{available ? "Run a command · jump to a section · open an AI tool…" : "Command palette is hosted by the desktop app"}</span>
         <span style={{ fontSize: 8, letterSpacing: ".2em", color: "var(--txt3)", border: "1px solid var(--line2)", padding: "1px 5px" }}>{available ? "PALETTE" : "DESKTOP"}</span>
       </button>
     </div>
@@ -110,7 +110,7 @@ export function ModeStrip() {
     ? `Adaptive AI coaching mode — ${override ? `forced to ${override}` : `auto: ${adapt.mode} (from stage ${adapt.stage} × health ${adapt.health})`}. ${adapt.description}`
     : "Adaptive AI coaching mode — auto from stage × health, or override it.";
   return (
-    <div title={error ? `Adaptive mode failed: ${error}` : tip} style={{ display: "flex", alignItems: "center", gap: 7, height: 26, padding: "0 8px", border: `1px solid ${error ? "var(--blocking)" : "var(--line2)"}`, background: "var(--tint)" }}>
+    <div className="lf-topbar-adaptive" title={error ? `Adaptive mode failed: ${error}` : tip} style={{ display: "flex", alignItems: "center", gap: 7, height: 26, padding: "0 8px", border: `1px solid ${error ? "var(--blocking)" : "var(--line2)"}`, background: "var(--tint)" }}>
       <span style={{ fontSize: 8, letterSpacing: ".2em", color: "var(--txt3)" }}>ADAPTIVE</span>
       <span style={{ width: 7, height: 7, borderRadius: "50%", background: col, boxShadow: `0 0 8px ${col}`, animation: "lf-pulse 2.6s ease-in-out infinite" }} />
       <select
@@ -146,7 +146,7 @@ function FocusToggle({ layout, onToggle }: { layout: ShellLayout; onToggle?: () 
     >{label}</button>
   );
   return (
-    <div role="group" aria-label="Workspace mode" style={{ display: "flex", height: 26, border: "1px solid var(--line2)", fontSize: 9 }} title="Focus mode hides the rails; Cockpit shows everything">
+    <div className="lf-topbar-layout" role="group" aria-label="Workspace mode" style={{ display: "flex", height: 26, border: "1px solid var(--line2)", fontSize: 9 }} title="Focus mode hides the rails; Cockpit shows everything">
       {seg("FOCUS", layout === "focus", "focus")}
       {seg("COCKPIT", layout === "cockpit", "cockpit")}
     </div>
@@ -182,7 +182,7 @@ function SyncHud({ status = UNKNOWN_STATUS }: { status?: WorkspaceStatusModel })
       <span role="status" aria-live="polite" aria-atomic="true" style={{ position: "absolute", width: 1, height: 1, padding: 0, margin: -1, overflow: "hidden", clip: "rect(0,0,0,0)", whiteSpace: "nowrap", border: 0 }}>
         {status.copy}. {status.detail}
       </span>
-      <details style={{ position: "relative", height: 26 }}>
+      <details className="lf-topbar-status" style={{ position: "relative", height: 26 }}>
         <summary aria-label={`Workspace status: ${status.copy}`} style={{ listStyle: "none", display: "flex", alignItems: "center", gap: 9, height: 26, padding: "0 11px", border: `1px solid color-mix(in srgb, ${color} 38%, transparent)`, background: "var(--tint)", cursor: "pointer" }}>
           <span aria-hidden="true" style={{ width: 7, height: 7, borderRadius: "50%", background: color, boxShadow: `0 0 8px ${color}` }} />
           <span style={{ fontSize: 9, letterSpacing: ".13em", color }}>{status.copy}</span>
@@ -213,9 +213,9 @@ export function TopBar({
   onToggleFocus?: () => void;
 }) {
   return (
-    <div style={{ position: "relative", zIndex: 30, height: 46, flex: "none", display: "flex", alignItems: "center", gap: 14, padding: "0 14px", background: "linear-gradient(180deg,var(--raised),var(--panel2))", borderBottom: "1px solid var(--line)" }}>
+    <div className="lf-topbar">
       {/* brand */}
-      <div style={{ display: "flex", alignItems: "center", gap: 9, paddingRight: 14, borderRight: "1px solid var(--line2)" }}>
+      <div className="lf-topbar-brand" style={{ display: "flex", alignItems: "center", gap: 9, paddingRight: 14, borderRight: "1px solid var(--line2)" }}>
         <div style={{ position: "relative", width: 22, height: 22, display: "grid", placeItems: "center", border: "1px solid var(--crimson)", boxShadow: "0 0 10px rgba(232,68,58,.5) inset,0 0 8px rgba(232,68,58,.35)" }}>
           <div style={{ width: 8, height: 8, background: "var(--crimson)", boxShadow: "0 0 8px var(--crimson)" }} />
           <div style={{ position: "absolute", top: -1, left: -1, width: 5, height: 5, borderTop: "1px solid var(--crimson)", borderLeft: "1px solid var(--crimson)" }} />
@@ -228,7 +228,7 @@ export function TopBar({
       </div>
 
       {/* active writing format */}
-      <div style={{ display: "flex", alignItems: "center", gap: 6, height: 20, padding: "0 9px", border: "1px solid var(--accent)", background: "linear-gradient(180deg,rgba(76,194,255,.10),transparent)", color: "var(--accent)", fontSize: 9.5, letterSpacing: ".18em", boxShadow: "0 0 10px rgba(76,194,255,.18)" }}>
+      <div className="lf-topbar-format" style={{ display: "flex", alignItems: "center", gap: 6, height: 20, padding: "0 9px", border: "1px solid var(--accent)", background: "linear-gradient(180deg,rgba(76,194,255,.10),transparent)", color: "var(--accent)", fontSize: 9.5, letterSpacing: ".18em", boxShadow: "0 0 10px rgba(76,194,255,.18)" }}>
         <span style={{ width: 5, height: 5, background: "var(--accent)", boxShadow: "0 0 6px var(--accent)" }} />{formatBadge}
       </div>
 

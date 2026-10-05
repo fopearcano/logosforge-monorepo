@@ -38,6 +38,14 @@ const CSS = `
 .lf-shell .lf-opp:hover{background:rgba(98,217,154,.12);}
 .lf-shell .lf-row:hover{background:var(--tint2);}
 .lf-shell .lf-row2:hover{background:var(--tint2);}
+/* Studio chrome stays on one cinematic row when space permits. At the desktop
+   app's supported minimum width it becomes two deliberate rows instead of
+   clipping the always-on command, adaptive, layout, or save-status controls. */
+.lf-topbar{position:relative;z-index:30;display:flex;align-items:center;flex:none;height:46px;min-width:0;gap:14px;padding:0 14px;background:linear-gradient(180deg,var(--raised),var(--panel2));border-bottom:1px solid var(--line);}
+.lf-topbar-brand,.lf-topbar-format,.lf-topbar-adaptive,.lf-topbar-layout,.lf-topbar-status{flex:none;}
+.lf-topbar-command{min-width:0;}
+.lf-topbar-command .lf-cmd{min-width:0;}
+.lf-topbar-command-copy{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 /* Real Studio dock workspace. The panel layer uses display:contents so every
    opened panel keeps one stable DOM/React parent while its grid coordinates move. */
 .lf-dock-workspace{position:relative;isolation:isolate;display:grid;flex:1;min-width:0;min-height:0;overflow:hidden;background:var(--base);}
@@ -200,6 +208,15 @@ const CSS = `
 .lf-studio-scene-filter-notice{display:flex;align-items:center;gap:6px;border-bottom:1px solid var(--line2);background:var(--tint2);text-align:left;}
 .lf-studio-scene-filter-notice span{min-width:0;flex:1;}
 .lf-studio-scene-filter-notice button{padding:2px 4px;border:1px solid var(--line2);background:transparent;color:var(--accent);font:inherit;font-size:7px;cursor:pointer;}
+@media (max-width:1280px){
+  .lf-topbar{height:78px;display:grid;grid-template-columns:max-content max-content minmax(0,1fr);grid-template-rows:39px 39px;grid-template-areas:"brand format command" "adaptive layout status";column-gap:10px;row-gap:0;padding:0 10px;}
+  .lf-topbar-brand{grid-area:brand;}
+  .lf-topbar-format{grid-area:format;}
+  .lf-topbar-command{grid-area:command;}
+  .lf-topbar-adaptive{grid-area:adaptive;}
+  .lf-topbar-layout{grid-area:layout;}
+  .lf-topbar-status{grid-area:status;justify-self:end;}
+}
 @media (max-width:760px){
   .lf-floating-panel{min-width:min(220px,calc(100% - 16px));max-width:calc(100% - 8px);max-height:calc(100% - 8px);}
   .lf-floating-panel-titlebar{height:36px;}

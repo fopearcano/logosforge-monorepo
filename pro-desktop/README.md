@@ -209,6 +209,9 @@ Codex configuration and the proposal/review/apply safety model.
   modeless floating panels, per-project versioned persistence, Focus/Cockpit
   projections and safe reset. Window bounds, z-order, minimization and every
   dock's active/collapsed state survive project changes and application restarts.
+  At the supported 1024 px minimum window width, the Studio chrome reflows into
+  two rows so the command palette, Adaptive mode, Focus/Cockpit controls and
+  local-save status all remain visible and operable.
 - **Packaging** is configured for self-contained Windows installer/portable,
   macOS 12+ Intel DMG, and Linux x64 AppImage builds. The Monterey build uses
   Electron 43, the final Electron line that supports macOS 12. Electron starts
