@@ -4,9 +4,12 @@
  */
 
 import type { FountainBlock } from '../screenplay/fountainTypes';
+import { DEFAULT_EDITOR_TOOLS, EDITOR_TYPEFACES } from './editorToolTypes';
+import { EDITOR_TYPEFACE_STACKS, editorToolsAttrs, editorToolsVars } from './editorToolsSurface';
 import { findFoldableRegions, headingLevel, hiddenBlocks, isFoldHead } from './folding/foldingModel';
 import { gutterDigits, lineNumbersForCount } from './lineNumbers/lineNumbers';
 import { classifySyntax } from './syntax/syntaxClassifier';
+import { normalizeEditorTools } from './useEditorTools';
 
 let passed = 0;
 const failures: string[] = [];
@@ -137,6 +140,50 @@ check(
   json(tokens(lines('PAGE ONE', 'PANEL 1', 'CAPTION: Later', 'SFX: BOOM', 'MARA: Go.'), 'graphic_novel')) ===
     json(['chapter', 'subheading', 'note', 'transition', 'dialogue']),
 );
+
+// 10. Editor-view typography + persisted preference normalization.
+{
+  const tools = {
+    ...DEFAULT_EDITOR_TOOLS,
+    typeface: 'handwritten' as const,
+    textColor: '#A1B2C3',
+  };
+  const attrs = editorToolsAttrs(tools);
+  const vars = editorToolsVars(tools);
+  check('typeface emits its surface gate', attrs['data-editor-typeface'] === 'handwritten');
+  check('handwritten stack reaches CSS', /cursive/.test(vars['--wb-editor-typeface'] ?? ''));
+  check('manuscript colour reaches CSS', vars['--wb-editor-ink'] === '#A1B2C3');
+  check(
+    'every non-default typeface has a stack',
+    EDITOR_TYPEFACES.filter((face) => face !== 'default').every((face) => Boolean(EDITOR_TYPEFACE_STACKS[face])),
+  );
+  check(
+    'typewriter stack stays distinct from bundled screenplay Courier',
+    EDITOR_TYPEFACE_STACKS.typewriter !== EDITOR_TYPEFACE_STACKS['courier-prime'] &&
+      !EDITOR_TYPEFACE_STACKS.typewriter.includes("'Courier Prime'"),
+  );
+  check(
+    'chalkboard and handwritten stacks prefer different platform faces',
+    EDITOR_TYPEFACE_STACKS.chalkboard.split(',')[0] !== EDITOR_TYPEFACE_STACKS.handwritten.split(',')[0],
+  );
+
+  const normalized = normalizeEditorTools({
+    syntax: false,
+    typeface: 'courier-prime',
+    textColor: '#ABCDEF',
+    fontSize: 20,
+    lineHeight: 1.7,
+    layout: 'paged',
+  });
+  check('normalizer keeps valid typeface', normalized.typeface === 'courier-prime');
+  check('normalizer canonicalizes colour', normalized.textColor === '#abcdef');
+  check('normalizer keeps valid typography', normalized.fontSize === 20 && normalized.lineHeight === 1.7);
+  const rejected = normalizeEditorTools({ typeface: 'remote-font', textColor: 'url(evil)', fontSize: 99 });
+  check(
+    'normalizer rejects invalid CSS preferences',
+    rejected.typeface === 'default' && rejected.textColor === null && rejected.fontSize === null,
+  );
+}
 
 // --- report ---
 console.log(`Editor tools tests: ${passed} passed, ${failures.length} failed`);

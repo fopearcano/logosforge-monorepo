@@ -1,7 +1,7 @@
 /** localStorage persistence for the selected theme id + Custom theme fields. */
 
 import { DEFAULT_CUSTOM_FIELDS, DEFAULT_THEME_ID, resolveTheme } from './predefinedThemes';
-import { applySyntaxVars } from './syntaxThemes';
+import { applySyntaxVars, syntaxModeForTheme } from './syntaxThemes';
 import { applyThemeVars, type CustomThemeFields } from './themeTokens';
 
 const ID_KEY = 'lf-theme-id';
@@ -44,6 +44,7 @@ export function saveCustomFields(fields: CustomThemeFields): void {
 /** Apply the persisted theme immediately (call before React renders → no flash). */
 export function applyStoredTheme(): void {
   const id = loadThemeId();
-  applyThemeVars(resolveTheme(id, loadCustomFields()));
-  applySyntaxVars(id);
+  const theme = resolveTheme(id, loadCustomFields());
+  applyThemeVars(theme);
+  applySyntaxVars(theme.id, document.documentElement, syntaxModeForTheme(theme));
 }

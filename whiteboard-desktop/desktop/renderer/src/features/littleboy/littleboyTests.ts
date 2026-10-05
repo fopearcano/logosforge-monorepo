@@ -18,6 +18,10 @@ import {
   isTransformAction,
 } from './logos/logosTypes';
 import {
+  LOGOS_TRANSPARENCY_MAX,
+  normalizeLogosTransparency,
+} from './logos/logosTransparency';
+import {
   buildProjectContext,
   buildWritingSurfaceContext,
   prependProjectContext,
@@ -93,6 +97,13 @@ check('apply when replacement + selection', applyModeFor({ suggested_replacement
 check('insert when replacement but no selection', applyModeFor({ suggested_replacement: 'x' }, false) === 'insert');
 check('insert when no replacement', applyModeFor({ suggested_replacement: null }, true) === 'insert');
 check('insert when empty replacement', applyModeFor({ suggested_replacement: '' }, true) === 'insert');
+check('Logos transparency parses persisted values', normalizeLogosTransparency('35') === 35);
+check('Logos transparency clamps low', normalizeLogosTransparency(-5) === 0);
+check(
+  'Logos transparency clamps high',
+  normalizeLogosTransparency(999) === LOGOS_TRANSPARENCY_MAX,
+);
+check('Logos transparency rejects invalid values', normalizeLogosTransparency('not-a-number') === 0);
 
 // N. project context (outline + cast digest, prepended to nearby_context)
 const wbDoc = (texts: string[]): WhiteboardBlock[] =>

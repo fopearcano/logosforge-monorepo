@@ -9,6 +9,8 @@
  * One palette per shipped theme (keyed by theme id) so syntax tracks the theme.
  * ========================================================================== */
 
+import { isDark, type WhiteboardTheme } from './themeTokens';
+
 export type SynToken =
   | 'keyword'   // scene headings, chapter/heading markers, fountain sections
   | 'string'    // strings, character names
@@ -101,9 +103,26 @@ export const SYNTAX_THEMES: Record<string, SynPalette> = {
   blueprint: BLUEPRINT_SYN,
 };
 
-/** Write the `--syn-*` vars for a theme id (falls back to manuscript). */
-export function applySyntaxVars(themeId: string, root: HTMLElement = document.documentElement): void {
-  const p = SYNTAX_THEMES[themeId] ?? MANUSCRIPT_SYN;
+/** Syntax is painted on the manuscript page, whose luminance may intentionally
+ * differ from the surrounding app chrome in mixed custom themes. */
+export function syntaxModeForTheme(theme: Pick<WhiteboardTheme, 'editorBg'>): 'light' | 'dark' {
+  return isDark(theme.editorBg) ? 'dark' : 'light';
+}
+
+/** Resolve custom themes by page luminance instead of silently applying a light
+ * palette to a dark custom page. Unknown predefined ids remain conservative. */
+export function syntaxPaletteForTheme(themeId: string, mode?: 'light' | 'dark'): SynPalette {
+  if (themeId === 'custom') return mode === 'dark' ? DEEPDARK_SYN : CHROMA_SYN;
+  return SYNTAX_THEMES[themeId] ?? (mode === 'dark' ? DEEPDARK_SYN : MANUSCRIPT_SYN);
+}
+
+/** Write the `--syn-*` vars for a theme id (custom themes also pass their mode). */
+export function applySyntaxVars(
+  themeId: string,
+  root: HTMLElement = document.documentElement,
+  mode?: 'light' | 'dark',
+): void {
+  const p = syntaxPaletteForTheme(themeId, mode);
   const set = (k: string, v: string) => root.style.setProperty(k, v);
   set('--syn-keyword', p.keyword);
   set('--syn-string', p.string);

@@ -6,6 +6,7 @@
  */
 
 import { Popover } from '../../components/Popover';
+import { useTheme } from '../../styles/themes/useTheme';
 import {
   FONT_SIZE_MAX,
   FONT_SIZE_MIN,
@@ -24,9 +25,17 @@ interface Props {
 
 const TYPEFACES: { value: EditorTypeface; label: string }[] = [
   { value: 'default', label: 'Mode default' },
-  { value: 'serif', label: 'Serif' },
-  { value: 'mono', label: 'Monospace' },
-  { value: 'system', label: 'System' },
+  { value: 'serif', label: 'Literary serif · Spectral' },
+  { value: 'book', label: 'Book serif · Palatino' },
+  { value: 'classic', label: 'Classic serif · Georgia' },
+  { value: 'sans', label: 'Humanist sans · IBM Plex' },
+  { value: 'system', label: 'System sans' },
+  { value: 'mono', label: 'Modern mono · IBM Plex' },
+  { value: 'courier-prime', label: 'Screenplay · Courier Prime' },
+  { value: 'typewriter', label: 'Typewriter · Vintage' },
+  { value: 'handwritten', label: 'Handwritten · Print' },
+  { value: 'script', label: 'Handwritten · Script' },
+  { value: 'chalkboard', label: 'Handwritten · Chalkboard' },
 ];
 
 const FONT_SIZES = [13, 14, 15, 16, 17, 18, 20, 22, 24].filter(
@@ -38,6 +47,7 @@ const LINE_HEIGHTS = [1.3, 1.5, 1.7, 1.9, 2.1].filter(
 
 export function EditorSettingsPopover({ api, onReset }: Props) {
   const { tools, update, toggle } = api;
+  const { theme } = useTheme();
 
   return (
     <Popover label="Editor" title="Editor Settings" align="right">
@@ -118,6 +128,25 @@ export function EditorSettingsPopover({ api, onReset }: Props) {
               ))}
             </select>
           </label>
+
+          <div className="wb-field wb-color-field">
+            <label htmlFor="wb-editor-text-color">Manuscript text</label>
+            <input
+              id="wb-editor-text-color"
+              type="color"
+              value={tools.textColor ?? theme.editorText}
+              onChange={(e) => update('textColor', e.target.value)}
+              aria-label="Manuscript text color"
+            />
+            <button
+              type="button"
+              className="wb-color-reset"
+              onClick={() => update('textColor', null)}
+              disabled={tools.textColor === null}
+            >
+              Theme default
+            </button>
+          </div>
 
           <label className="wb-field">
             <span>Layout</span>

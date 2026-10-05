@@ -1,6 +1,7 @@
 /** The hideable Comments side panel — comments on the active writing surface. */
 
 import type { Comment } from './commentsApi';
+import { useFloatingPanel } from '../../components/useFloatingPanel';
 
 interface Props {
   comments: Comment[];
@@ -23,13 +24,33 @@ export function CommentsWindow({
   onDelete,
   onClose,
 }: Props) {
+  const floating = useFloatingPanel({
+    storageKey: 'logosforge-comments-panel-position',
+    width: 336,
+    defaultSide: 'right',
+    defaultTop: 70,
+  });
   const open = comments.filter((c) => !c.resolved);
   const resolved = comments.filter((c) => c.resolved);
   const ordered = hideResolved ? open : [...open, ...resolved];
 
   return (
-    <aside className="comments-window" aria-label={`Comments for ${surfaceLabel}`}>
+    <aside
+      className={`comments-window floating-panel${floating.dragging ? ' is-dragging' : ''}`}
+      style={{ left: floating.position.x, top: floating.position.y }}
+      aria-label={`Comments for ${surfaceLabel}`}
+    >
       <header className="comments-head">
+        <button
+          type="button"
+          className="floating-panel-drag"
+          onPointerDown={floating.onPointerDown}
+          onKeyDown={floating.onKeyDown}
+          aria-label="Move Comments panel. Use arrow keys for precise movement."
+          title="Drag to move · Arrow keys move precisely"
+        >
+          ⠿
+        </button>
         <span className="comments-title">Comments · {surfaceLabel}</span>
         <span className="comments-count">{open.length}</span>
         {resolved.length > 0 && (

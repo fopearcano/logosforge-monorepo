@@ -11,6 +11,7 @@ import {
   resolveTheme,
 } from './predefinedThemes';
 import { customToTheme, isDark, rgba } from './themeTokens';
+import { syntaxModeForTheme, syntaxPaletteForTheme } from './syntaxThemes';
 
 let passed = 0;
 const failures: string[] = [];
@@ -65,6 +66,26 @@ check('getPredefinedTheme', getPredefinedTheme('forge')?.name === 'Forge');
   check('custom mode from appBg (light)', customToTheme({ ...DEFAULT_CUSTOM_FIELDS, appBg: '#ffffff' }).mode === 'light');
   check('custom mode from appBg (dark)', customToTheme({ ...DEFAULT_CUSTOM_FIELDS, appBg: '#101010' }).mode === 'dark');
   check('custom caret follows accent', customToTheme(DEFAULT_CUSTOM_FIELDS).caret === DEFAULT_CUSTOM_FIELDS.accent);
+}
+
+// 6. Custom syntax follows the page luminance instead of always choosing a
+// light-paper palette (which made a custom dark page unreadable).
+check(
+  'custom dark syntax uses dark-page palette',
+  syntaxPaletteForTheme('custom', 'dark') === syntaxPaletteForTheme('deepdark'),
+);
+check(
+  'custom light syntax uses vivid light-page palette',
+  syntaxPaletteForTheme('custom', 'light') === syntaxPaletteForTheme('chroma'),
+);
+{
+  const mixedCustom = customToTheme(DEFAULT_CUSTOM_FIELDS);
+  check('default custom theme has mixed dark chrome and light paper', mixedCustom.mode === 'dark');
+  check('custom syntax mode follows its light paper', syntaxModeForTheme(mixedCustom) === 'light');
+  check(
+    'default mixed custom theme receives a light-page syntax palette',
+    syntaxPaletteForTheme('custom', syntaxModeForTheme(mixedCustom)) === syntaxPaletteForTheme('chroma'),
+  );
 }
 
 // --- report ---

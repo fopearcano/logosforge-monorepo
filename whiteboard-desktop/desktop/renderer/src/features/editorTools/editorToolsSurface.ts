@@ -6,6 +6,22 @@
 
 import type { EditorToolsState } from './editorToolTypes';
 
+/** Offline-safe stacks. Bundled faces lead where available; platform faces add
+ * several distinct book, handwriting and typewriter voices without networking. */
+export const EDITOR_TYPEFACE_STACKS: Record<Exclude<EditorToolsState['typeface'], 'default'>, string> = {
+  serif: "'Spectral', 'Iowan Old Style', Georgia, serif",
+  book: "'Palatino Linotype', 'Book Antiqua', Palatino, 'URW Palladio L', serif",
+  classic: "Georgia, 'Times New Roman', 'Liberation Serif', serif",
+  sans: "'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif",
+  system: "system-ui, -apple-system, 'Segoe UI', sans-serif",
+  mono: "'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace",
+  'courier-prime': "'Courier Prime', 'Courier New', 'Liberation Mono', monospace",
+  typewriter: "'American Typewriter', 'Lucida Console', Monaco, 'URW Typewriter L', 'DejaVu Sans Mono', monospace",
+  handwritten: "'Segoe Print', 'Bradley Hand', 'Comic Sans MS', 'Comic Sans', 'Comic Neue', Chilanka, cursive",
+  script: "'Segoe Script', 'Snell Roundhand', 'Brush Script MT', cursive",
+  chalkboard: "'Chalkboard SE', Chalkboard, Noteworthy, 'Kristen ITC', 'Comic Sans MS', 'Comic Sans', 'URW Chancery L', cursive",
+};
+
 /** Gating attributes for the writing surface (only the active tools appear). */
 export function editorToolsAttrs(tools: EditorToolsState): Record<string, string> {
   const a: Record<string, string> = {};
@@ -27,5 +43,7 @@ export function editorToolsVars(tools: EditorToolsState): Record<string, string>
   const v: Record<string, string> = {};
   if (tools.fontSize != null) v['--wb-font-px'] = `${tools.fontSize}px`;
   if (tools.lineHeight != null) v['--wb-line-height'] = String(tools.lineHeight);
+  if (tools.typeface !== 'default') v['--wb-editor-typeface'] = EDITOR_TYPEFACE_STACKS[tools.typeface];
+  if (tools.textColor) v['--wb-editor-ink'] = tools.textColor;
   return v;
 }

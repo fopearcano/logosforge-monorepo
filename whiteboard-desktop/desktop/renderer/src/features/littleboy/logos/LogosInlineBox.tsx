@@ -7,13 +7,18 @@
  */
 
 import type { Editor } from '@tiptap/react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 
 import { contextLabel } from '../context/writingModeContext';
 import { contextPreview } from '../context/selectionContext';
 import type { EditorContext, LogosActionId } from '../littleboyTypes';
 import { LogosActionMenu } from './LogosActionMenu';
 import { applyModeFor } from './logosTypes';
+import {
+  loadLogosTransparency,
+  LOGOS_TRANSPARENCY_MAX,
+  saveLogosTransparency,
+} from './logosTransparency';
 import { useLogosInline } from './useLogosInline';
 
 interface Props {
@@ -48,6 +53,7 @@ function clampPosition(coords: EditorContext['coords']) {
 export function LogosInlineBox({ editor, context, baseUrl, onClose }: Props) {
   const { status, response, error, run } = useLogosInline({ baseUrl });
   const [instruction, setInstruction] = useState('');
+  const [transparency, setTransparency] = useState(loadLogosTransparency);
   const instructionRef = useRef<HTMLInputElement>(null);
 
   const pos = useMemo(() => clampPosition(context.coords), [context.coords]);
@@ -106,7 +112,11 @@ export function LogosInlineBox({ editor, context, baseUrl, onClose }: Props) {
   return (
     <div
       className="logos-box littleboy-box"
-      style={{ left: pos.left, top: pos.top }}
+      style={{
+        left: pos.left,
+        top: pos.top,
+        '--logos-opacity': String(1 - transparency / 100),
+      } as CSSProperties}
       role="dialog"
       aria-label="Logos inline assistant"
     >
@@ -116,6 +126,24 @@ export function LogosInlineBox({ editor, context, baseUrl, onClose }: Props) {
           ×
         </button>
       </div>
+
+      <label className="logos-transparency">
+        <span>Transparency</span>
+        <output>{transparency}%</output>
+        <input
+          type="range"
+          min={0}
+          max={LOGOS_TRANSPARENCY_MAX}
+          step={5}
+          value={transparency}
+          onChange={(event) => {
+            const next = Number(event.target.value);
+            setTransparency(next);
+            saveLogosTransparency(next);
+          }}
+          aria-label="Logos panel transparency"
+        />
+      </label>
 
       <div className="logos-context" title={context.selection || context.block}>
         {hasSelection ? '“' + preview + '”' : preview || 'Current block'}

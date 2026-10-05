@@ -589,6 +589,18 @@ requireMarkers('Guarded Electron reload', fs.readFileSync(path.join(process.cwd(
 const appCss = sourceText('styles/app.css');
 if (!appCss.includes(':focus-visible')) failures.push('app.css has no visible keyboard focus rule');
 if (!appCss.includes('prefers-reduced-motion: reduce')) failures.push('app.css does not honor reduced motion');
+requireMarkers('Editor view style contract', appCss, [
+  '.wb-surface[data-editor-typeface] .wb-editor',
+  'font-family: var(--wb-editor-typeface)',
+  'var(--wb-editor-ink, var(--ink))',
+  '.wb-surface[data-syntax="on"] .wb-syn-string',
+  '.wb-surface[data-syntax="on"] .sp-scene_heading',
+]);
+requireMarkers('Movable floating panel contract', appCss, [
+  '.floating-panel',
+  '.floating-panel-drag',
+  'touch-action: none',
+]);
 for (const marker of ['.wb-app-boundary', '.wb-outline-boundary', '.wb-document-boundary']) {
   if (!appCss.includes(marker)) failures.push(`app.css is missing boundary layout rule ${marker}`);
 }

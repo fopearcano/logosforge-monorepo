@@ -7,6 +7,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { ConfirmDialog } from '../../components/ConfirmDialog';
+import { useFloatingPanel } from '../../components/useFloatingPanel';
 import { getCurrentDocId, subscribeCurrentDoc } from '../../state/currentDocument';
 import { PsykeCreateForm } from './PsykeCreateForm';
 import { deletePsykeElement } from './psykeApi';
@@ -21,6 +22,12 @@ interface Props {
 }
 
 export function PsykeWindow({ baseUrl, initialQuery, onClose }: Props) {
+  const floating = useFloatingPanel({
+    storageKey: 'logosforge-psyke-panel-position',
+    width: 320,
+    defaultSide: 'left',
+    defaultTop: 70,
+  });
   const { query, setQuery, results, loading, error, refresh } = usePsykeSearch({ baseUrl, initialQuery });
   const [selected, setSelected] = useState<PsykeEntry | null>(null);
   const [view, setView] = useState<'search' | 'create' | 'edit'>('search');
@@ -105,8 +112,22 @@ export function PsykeWindow({ baseUrl, initialQuery, onClose }: Props) {
   };
 
   return (
-    <aside className="psyke-window" aria-label="PSYKE">
+    <aside
+      className={`psyke-window floating-panel${floating.dragging ? ' is-dragging' : ''}`}
+      style={{ left: floating.position.x, top: floating.position.y }}
+      aria-label="PSYKE"
+    >
       <div className="psyke-header">
+        <button
+          type="button"
+          className="floating-panel-drag"
+          onPointerDown={floating.onPointerDown}
+          onKeyDown={floating.onKeyDown}
+          aria-label="Move PSYKE panel. Use arrow keys for precise movement."
+          title="Drag to move · Arrow keys move precisely"
+        >
+          ⠿
+        </button>
         <span className="psyke-title">PSYKE</span>
         <div className="psyke-header-actions">
           {view === 'search' && (

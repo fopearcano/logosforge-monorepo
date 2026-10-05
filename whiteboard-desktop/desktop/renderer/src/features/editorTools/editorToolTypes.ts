@@ -9,7 +9,22 @@
  */
 
 /** General editor typeface override ('default' = keep the per-mode typeface). */
-export type EditorTypeface = 'default' | 'serif' | 'mono' | 'system';
+export const EDITOR_TYPEFACES = [
+  'default',
+  'serif',
+  'book',
+  'classic',
+  'sans',
+  'system',
+  'mono',
+  'courier-prime',
+  'typewriter',
+  'handwritten',
+  'script',
+  'chalkboard',
+] as const;
+
+export type EditorTypeface = (typeof EDITOR_TYPEFACES)[number];
 
 /** How the manuscript is laid out: one continuous column, or framed as pages. */
 export type EditorLayout = 'flow' | 'paged';
@@ -25,6 +40,8 @@ export interface EditorToolsState {
   lineHeight: number | null;
   /** General typeface override across all modes. */
   typeface: EditorTypeface;
+  /** Optional manuscript ink override (#rrggbb); null follows the active theme. */
+  textColor: string | null;
   /** 'flow' = continuous scroll (default); 'paged' = a page sheet with page breaks. */
   layout: EditorLayout;
 }
@@ -39,6 +56,7 @@ export const DEFAULT_EDITOR_TOOLS: EditorToolsState = {
   fontSize: null,
   lineHeight: null,
   typeface: 'default',
+  textColor: null,
   layout: 'flow',
 };
 

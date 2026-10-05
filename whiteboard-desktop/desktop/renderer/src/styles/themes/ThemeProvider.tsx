@@ -9,7 +9,7 @@ import {
   saveThemeId,
 } from './customThemeStorage';
 import { resolveTheme } from './predefinedThemes';
-import { applySyntaxVars } from './syntaxThemes';
+import { applySyntaxVars, syntaxModeForTheme } from './syntaxThemes';
 import { applyThemeVars, type CustomThemeFields } from './themeTokens';
 import { ThemeContext, type ThemeContextValue } from './useTheme';
 
@@ -25,7 +25,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     applyThemeVars(theme);
     // Base syntax/screenplay colours track the active theme; a Nerd-Mode syntax
     // override (editorTools) may still set --syn-* afterward.
-    applySyntaxVars(theme.id);
+    applySyntaxVars(theme.id, document.documentElement, syntaxModeForTheme(theme));
   }, [theme]);
 
   const setThemeId = useCallback((id: string) => {
