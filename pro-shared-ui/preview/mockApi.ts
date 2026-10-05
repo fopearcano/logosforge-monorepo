@@ -1554,8 +1554,11 @@ export function createMockApiClient(): ApiClient {
       });
       canvasStates.set(projectId, next);
     }
+    const canvasPlot = structuredClone(changed ? next : current);
     return {
-      canvas_plot: structuredClone(changed ? next : current),
+      canvas_plot: canvasPlot,
+      replayed: false,
+      applied_revision: canvasPlot.revision,
       changed,
       affected_node_ids: affectedNodeIds,
       affected_link_ids: affectedLinkIds,

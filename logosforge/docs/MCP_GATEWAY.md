@@ -240,23 +240,20 @@ also cleans up hidden same-project legacy reverse/duplicate rows for that
 undirected pair. Deleting a frame does not delete nodes, links, or scenes. All
 three delete operations are identified as destructive in the proposal review.
 
-Unlike Timeline commands, Canvas Plot commands do not yet have a durable core
-receipt. A definite Canvas conflict is safe to reread and repropose, but a
-timeout, HTTP 5xx, lost response, or other ambiguous apply result is terminally
-`indeterminate`. Inspect the board and do not retry that proposal, because the
-original mutation may already have committed.
-
-Timeline proposals also have a durable core receipt. The gateway uses the
-opaque proposal id itself as the command's `Idempotency-Key`; callers cannot
-choose or replace it. If a Timeline apply response is lost after commit, the
-gateway asks the core for that exact receipt. A receipt proves the original
-command committed, even after the MCP process restarts, without applying a
-second mutation. Recovery returns the current coherent Timeline together with
-the original `applied_revision`; it does not replace newer state with an old
-snapshot. If the receipt-capable core explicitly reports
-`timeline_receipt_not_found`, the gateway may resend that exact stored command
-once with the same proposal id. It never creates a fresh key for recovery.
-Receipts live for the project lifetime and are deleted with it.
+Timeline and Canvas Plot proposals have durable core receipts. The gateway uses
+the opaque proposal id itself as the command's `Idempotency-Key`; callers cannot
+choose or replace it. If a board apply response is lost after commit, the
+gateway asks the core for that exact family receipt. A receipt proves the
+original command committed, even after the MCP process restarts, without
+applying a second mutation. Recovery returns the current coherent board
+together with the original `applied_revision`; it does not replace newer state
+with an old snapshot. If the receipt-capable core explicitly reports the
+family-specific `timeline_receipt_not_found` or
+`canvas_plot_receipt_not_found`, the gateway may resend that exact stored
+command once with the same proposal id. It never creates a fresh key for
+recovery. A fresh gateway resolving an unknown proposal id probes both receipt
+families: exactly one match recovers the proposal, while conflicting matches
+fail closed. Receipts live for the project lifetime and are deleted with it.
 
 Comment bodies, quotes, replies, scene titles, lane labels, and Canvas Plot
 node bodies and labels are
@@ -273,13 +270,14 @@ before applying; clients should reread after a successful mutation.
 A definite API rejection (HTTP 4xx, including a Timeline or Canvas Plot
 revision conflict)
 marks the proposal failed. Inspect the error and reread current state before
-creating a fresh proposal where appropriate. For a Timeline proposal only, an
-ambiguous response enters receipt recovery: a proven receipt miss permits one
-bounded resend of the exact proposal/key, while a second ambiguous outcome
-remains `recovery_pending` for a later same-id reconciliation. A legacy or
-generic 404, failed lookup, or malformed receipt cannot prove a miss and never
-authorizes a resend. Every non-Timeline timeout, lost response, HTTP 5xx, or
-other outcome that does not prove rejection remains terminally
+creating a fresh proposal where appropriate. For a Timeline or Canvas Plot
+proposal, an ambiguous response enters receipt recovery: a proven,
+family-specific receipt miss permits one bounded resend of the exact
+proposal/key, while a second ambiguous outcome remains `recovery_pending` for
+a later same-id reconciliation. A legacy or generic 404, failed lookup, or
+malformed receipt cannot prove a miss and never authorizes a resend. Every
+non-receipted proposal timeout, lost response, HTTP 5xx, or other outcome that
+does not prove rejection remains terminally
 `indeterminate`; inspect current project state and never retry it because its
 mutation may already have committed. Successful proposals remain single-use,
 and the global apply tool is not generally idempotent.
@@ -294,9 +292,9 @@ The layers are cumulative:
 - Writes require API authentication by default.
 - A mutation must be proposed first, remains bound to its exact stored
   payload, expires, and is single-use.
-- Durable retry/recovery is limited to the same Timeline proposal id and exact
-  stored request. Canvas Plot and other proposal families have no core receipt
-  in this phase.
+- Durable retry/recovery is limited to the same Timeline or Canvas Plot
+  proposal id and exact stored request. Other proposal families have no core
+  receipt in this phase.
 - The apply tool is marked as mutating/destructive for MCP clients that honor
   tool annotations. Client approval is an additional safeguard; it does not
   replace server validation.

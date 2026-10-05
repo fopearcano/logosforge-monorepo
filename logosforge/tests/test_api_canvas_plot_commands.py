@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import json
 import threading
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from logosforge.api import create_api
-from logosforge.db import Database
-from logosforge.models import CanvasPlotLink
+from logosforge.db import (
+    CanvasPlotCommandError,
+    Database,
+)
+from logosforge.models import CanvasPlotCommandReceipt, CanvasPlotLink
 
 
 def _project(*, path: str | None = None):
@@ -31,10 +35,20 @@ def _snapshot(client: TestClient, project_id: int) -> dict:
     return response.json()
 
 
-def _command(client: TestClient, project_id: int, **body):
+def _command(
+    client: TestClient,
+    project_id: int,
+    *,
+    idempotency_key: str | None = None,
+    **body,
+):
     return client.post(
         f"/api/projects/{project_id}/canvas-plot/commands",
         json=body,
+        headers=(
+            {"Idempotency-Key": idempotency_key}
+            if idempotency_key is not None else None
+        ),
     )
 
 
@@ -235,6 +249,704 @@ def test_all_nine_commands_return_canonical_persisted_snapshots(tmp_path):
 
     reopened = TestClient(create_api(db=Database(path)))
     assert _snapshot(reopened, project_id) == deleted["canvas_plot"]
+
+
+def test_idempotency_receipt_replays_current_board_and_survives_restart(tmp_path):
+    path = str(tmp_path / "canvas-receipt.db")
+    client, db, project_id = _project(path=path)
+    current = _snapshot(client, project_id)
+    key = "canvas-retry-00001"
+    body = {
+        "kind": "create_node",
+        "expected_revision": current["revision"],
+        "title": "Exactly once",
+    }
+    cursor = client.app.state.broker.latest_id()
+
+    first = _command(
+        client,
+        project_id,
+        idempotency_key=key,
+        **body,
+    )
+    assert first.status_code == 200, first.text
+    applied = first.json()
+    created_id = applied["created_node_id"]
+    assert applied["changed"] is True
+    assert applied["replayed"] is False
+    assert applied["applied_revision"] == applied["canvas_plot"]["revision"]
+
+    later = _create_node(
+        client,
+        project_id,
+        applied["canvas_plot"],
+        "Later node",
+    )
+    replay = _command(
+        client,
+        project_id,
+        idempotency_key=key,
+        **body,
+    )
+    assert replay.status_code == 200, replay.text
+    replayed = replay.json()
+    assert replayed["changed"] is False
+    assert replayed["affected_node_ids"] == []
+    assert replayed["affected_link_ids"] == []
+    assert replayed["affected_frame_ids"] == []
+    assert replayed["created_node_id"] is None
+    assert replayed["created_link_id"] is None
+    assert replayed["created_frame_id"] is None
+    assert replayed["replayed"] is True
+    assert replayed["applied_revision"] == applied["applied_revision"]
+    assert replayed["canvas_plot"] == later["canvas_plot"]
+    events = client.app.state.broker.events_since(cursor, project_id)
+    assert [event["event"] for event in events] == [
+        "canvas_plot_changed",
+        "canvas_plot_changed",
+    ]
+
+    receipt = client.get(
+        f"/api/projects/{project_id}/canvas-plot/command-receipt",
+        headers={"Idempotency-Key": key},
+    )
+    assert receipt.status_code == 200, receipt.text
+    assert receipt.headers["cache-control"] == "no-store"
+    vary = {value.strip() for value in receipt.headers["vary"].split(",")}
+    assert {"Authorization", "Idempotency-Key"} <= vary
+    receipt_body = receipt.json()
+    assert receipt_body | {"committed_at": "ignored"} == {
+        "project_id": project_id,
+        "request_digest": receipt_body["request_digest"],
+        "command_kind": "create_node",
+        "expected_revision": current["revision"],
+        "applied_revision": applied["applied_revision"],
+        "original_changed": True,
+        "original_affected_node_ids": [created_id],
+        "original_affected_link_ids": [],
+        "original_affected_frame_ids": [],
+        "original_created_node_id": created_id,
+        "original_created_link_id": None,
+        "original_created_frame_id": None,
+        "committed_at": "ignored",
+    }
+    assert len(receipt_body["request_digest"]) == 64
+    with db._engine.connect() as connection:
+        stored = connection.execute(text(
+            "SELECT idempotency_key_hash, result_json "
+            "FROM canvasplotcommandreceipt"
+        )).fetchone()
+    assert stored is not None
+    assert len(stored[0]) == 64
+    assert key not in stored[0] and key not in stored[1]
+    stored_result = json.loads(stored[1])
+    assert stored_result["schema_version"] == 1
+    assert set(stored_result) == {
+        "schema_version",
+        "kind",
+        "expected_revision",
+        "applied_revision",
+        "original_changed",
+        "original_affected_node_ids",
+        "original_affected_link_ids",
+        "original_affected_frame_ids",
+        "original_created_node_id",
+        "original_created_link_id",
+        "original_created_frame_id",
+    }
+
+    db._engine.dispose()
+    reopened = Database(path)
+    restarted = TestClient(create_api(db=reopened))
+    after_restart = _command(
+        restarted,
+        project_id,
+        idempotency_key=key,
+        **body,
+    )
+    assert after_restart.status_code == 200, after_restart.text
+    assert after_restart.json()["replayed"] is True
+    assert [node.title for node in reopened.get_canvas_plot_nodes(project_id)] == [
+        "Exactly once",
+        "Later node",
+    ]
+
+
+def test_idempotency_key_reuse_with_another_canvas_request_conflicts():
+    client, db, project_id = _project()
+    current = _snapshot(client, project_id)
+    key = "canvas-conflict-001"
+    first = _command(
+        client,
+        project_id,
+        idempotency_key=key,
+        kind="create_node",
+        expected_revision=current["revision"],
+        title="First",
+    )
+    assert first.status_code == 200, first.text
+
+    mismatched = _command(
+        client,
+        project_id,
+        idempotency_key=key,
+        kind="create_node",
+        expected_revision=current["revision"],
+        title="Different",
+    )
+    assert mismatched.status_code == 409
+    assert mismatched.json()["error"]["code"] == "idempotency_key_conflict"
+    assert [node.title for node in db.get_canvas_plot_nodes(project_id)] == [
+        "First",
+    ]
+
+
+def test_idempotency_key_and_canvas_receipt_validation_is_fail_closed():
+    client, db, project_id = _project()
+    current = _snapshot(client, project_id)
+    body = {
+        "kind": "create_node",
+        "expected_revision": current["revision"],
+        "title": "Never created",
+    }
+    for key in (
+        "",
+        "A" * 15,
+        "A" * 129,
+        " leading-space-key",
+        "trailing-space-key ",
+        "unsafe/key-value",
+    ):
+        response = _command(
+            client,
+            project_id,
+            idempotency_key=key,
+            **body,
+        )
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "bad_request"
+
+    with pytest.raises(CanvasPlotCommandError):
+        db.execute_canvas_plot_command(
+            project_id,
+            kind="create_node",
+            expected_revision=current["revision"],
+            idempotency_key="é" * 16,
+            title="Never created",
+        )
+
+    minimum = _command(
+        client,
+        project_id,
+        idempotency_key="A" * 16,
+        **body,
+    )
+    assert minimum.status_code == 200, minimum.text
+    maximum = _command(
+        client,
+        project_id,
+        idempotency_key="Z" * 128,
+        kind="create_frame",
+        expected_revision=minimum.json()["canvas_plot"]["revision"],
+        title="Maximum key",
+    )
+    assert maximum.status_code == 200, maximum.text
+
+    missing_header = client.get(
+        f"/api/projects/{project_id}/canvas-plot/command-receipt",
+    )
+    missing_receipt = client.get(
+        f"/api/projects/{project_id}/canvas-plot/command-receipt",
+        headers={"Idempotency-Key": "unknown-receipt-01"},
+    )
+    invalid_receipt = client.get(
+        f"/api/projects/{project_id}/canvas-plot/command-receipt",
+        headers={"Idempotency-Key": "A" * 15},
+    )
+    assert missing_header.status_code == 400
+    assert missing_receipt.status_code == 404
+    assert invalid_receipt.status_code == 400
+    assert missing_receipt.json()["error"]["code"] == (
+        "canvas_plot_receipt_not_found"
+    )
+    for response in (missing_header, missing_receipt, invalid_receipt):
+        assert response.headers["cache-control"] == "no-store"
+        vary = {value.strip() for value in response.headers["vary"].split(",")}
+        assert {"Authorization", "Idempotency-Key"} <= vary
+
+
+def test_idempotent_canvas_no_op_commits_receipt_and_replays_current_board():
+    client, db, project_id = _project()
+    created = _create_node(
+        client,
+        project_id,
+        _snapshot(client, project_id),
+        "Stable",
+        x=50,
+    )
+    key = "canvas-noop-00001"
+    body = {
+        "kind": "update_node",
+        "expected_revision": created["canvas_plot"]["revision"],
+        "node_id": created["created_node_id"],
+        "x": 50,
+    }
+    no_op = _command(
+        client,
+        project_id,
+        idempotency_key=key,
+        **body,
+    )
+    assert no_op.status_code == 200, no_op.text
+    assert no_op.json()["changed"] is False
+    assert no_op.json()["replayed"] is False
+    receipt = db.get_canvas_plot_command_receipt(project_id, key)
+    assert receipt is not None
+    assert receipt.original_changed is False
+    assert receipt.original_affected_node_ids == ()
+    assert receipt.original_affected_link_ids == ()
+    assert receipt.original_affected_frame_ids == ()
+    assert receipt.original_created_node_id is None
+    assert receipt.original_created_link_id is None
+    assert receipt.original_created_frame_id is None
+
+    later = _create_node(
+        client,
+        project_id,
+        no_op.json()["canvas_plot"],
+        "Later",
+    )
+    replay = _command(
+        client,
+        project_id,
+        idempotency_key=key,
+        **body,
+    )
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["replayed"] is True
+    assert replay.json()["changed"] is False
+    assert replay.json()["canvas_plot"] == later["canvas_plot"]
+
+
+def test_receipt_insert_failure_rolls_back_canvas_mutation(tmp_path):
+    _client, db, project_id = _project(
+        path=str(tmp_path / "canvas-receipt-rollback.db"),
+    )
+    snapshot = db.read_canvas_plot_snapshot(project_id)
+    assert snapshot is not None
+    key = "canvas-insert-fail-001"
+    with db._engine.begin() as connection:
+        connection.execute(text("""
+            CREATE TRIGGER reject_canvas_receipt
+            BEFORE INSERT ON canvasplotcommandreceipt
+            BEGIN
+                SELECT RAISE(ABORT, 'forced receipt rollback');
+            END;
+        """))
+
+    try:
+        with pytest.raises(IntegrityError):
+            db.execute_canvas_plot_command(
+                project_id,
+                kind="create_node",
+                expected_revision=snapshot.revision,
+                idempotency_key=key,
+                title="Must roll back",
+            )
+    finally:
+        with db._engine.begin() as connection:
+            connection.execute(text("DROP TRIGGER reject_canvas_receipt"))
+
+    assert db.get_canvas_plot_nodes(project_id) == []
+    assert db.get_canvas_plot_command_receipt(project_id, key) is None
+    assert db.read_canvas_plot_snapshot(project_id).revision == snapshot.revision
+
+    retried = db.execute_canvas_plot_command(
+        project_id,
+        kind="create_node",
+        expected_revision=snapshot.revision,
+        idempotency_key=key,
+        title="Must roll back",
+    )
+    assert retried.changed is True
+    assert retried.replayed is False
+    assert [node.title for node in db.get_canvas_plot_nodes(project_id)] == [
+        "Must roll back",
+    ]
+
+
+def test_same_canvas_key_is_exactly_once_across_database_instances(tmp_path):
+    path = str(tmp_path / "canvas-independent-databases.db")
+    _client, seed, project_id = _project(path=path)
+    snapshot = seed.read_canvas_plot_snapshot(project_id)
+    assert snapshot is not None
+    first_db = Database(path)
+    second_db = Database(path)
+    barrier = threading.Barrier(3)
+    results = []
+    errors = []
+
+    def apply(database: Database) -> None:
+        barrier.wait()
+        try:
+            results.append(database.execute_canvas_plot_command(
+                project_id,
+                kind="create_node",
+                expected_revision=snapshot.revision,
+                idempotency_key="canvas-cross-core-001",
+                title="One durable node",
+            ))
+        except Exception as exc:
+            errors.append(exc)
+
+    one = threading.Thread(target=apply, args=(first_db,))
+    two = threading.Thread(target=apply, args=(second_db,))
+    one.start()
+    two.start()
+    barrier.wait()
+    one.join(timeout=10)
+    two.join(timeout=10)
+
+    assert not one.is_alive() and not two.is_alive()
+    assert errors == []
+    assert sorted((result.changed, result.replayed) for result in results) == [
+        (False, True),
+        (True, False),
+    ]
+    assert [node.title for node in seed.get_canvas_plot_nodes(project_id)] == [
+        "One durable node",
+    ]
+    with seed._engine.connect() as connection:
+        assert connection.execute(text(
+            "SELECT COUNT(*) FROM canvasplotcommandreceipt"
+        )).scalar_one() == 1
+    first_db._engine.dispose()
+    second_db._engine.dispose()
+
+
+def test_canvas_receipt_is_project_scoped_and_removed_before_id_reuse():
+    client, db, project_id = _project()
+    original = _snapshot(client, project_id)
+    key = "canvas-project-aba-001"
+    applied = _command(
+        client,
+        project_id,
+        idempotency_key=key,
+        kind="create_node",
+        expected_revision=original["revision"],
+        title="Old project node",
+    )
+    assert applied.status_code == 200, applied.text
+    other = db.create_project("Other", narrative_engine="novel")
+    scoped_missing = client.get(
+        f"/api/projects/{other.id}/canvas-plot/command-receipt",
+        headers={"Idempotency-Key": key},
+    )
+    assert scoped_missing.status_code == 404
+    assert scoped_missing.json()["error"]["code"] == (
+        "canvas_plot_receipt_not_found"
+    )
+
+    db.delete_project(other.id)
+    db.delete_project(project_id)
+    replacement = db.create_project(
+        "Canvas commands",
+        narrative_engine="novel",
+        default_writing_format="novel",
+    )
+    assert replacement.id == project_id
+    assert db.get_canvas_plot_command_receipt(project_id, key) is None
+
+    delayed = _command(
+        client,
+        project_id,
+        idempotency_key=key,
+        kind="create_node",
+        expected_revision=original["revision"],
+        title="Old project node",
+    )
+    assert delayed.status_code == 409
+    assert delayed.json()["error"]["code"] == "canvas_plot_conflict"
+    assert db.get_canvas_plot_nodes(project_id) == []
+
+    replacement_snapshot = _snapshot(client, project_id)
+    reused = _command(
+        client,
+        project_id,
+        idempotency_key=key,
+        kind="create_node",
+        expected_revision=replacement_snapshot["revision"],
+        title="Replacement project node",
+    )
+    assert reused.status_code == 200, reused.text
+    assert reused.json()["replayed"] is False
+
+
+def test_canvas_domain_failure_has_no_receipt_and_corruption_fails_closed():
+    client, db, project_id = _project()
+    current = _snapshot(client, project_id)
+    bad_key = "canvas-domain-fail-001"
+    rejected = _command(
+        client,
+        project_id,
+        idempotency_key=bad_key,
+        kind="create_link",
+        expected_revision=current["revision"],
+        source_node_id=999_991,
+        target_node_id=999_992,
+    )
+    assert rejected.status_code == 404
+    assert db.get_canvas_plot_command_receipt(project_id, bad_key) is None
+
+    good_key = "canvas-corrupt-proof-001"
+    applied = _command(
+        client,
+        project_id,
+        idempotency_key=good_key,
+        kind="create_node",
+        expected_revision=current["revision"],
+        title="Committed",
+    )
+    assert applied.status_code == 200, applied.text
+    with Session(db._engine) as session:
+        receipt = session.exec(
+            select(CanvasPlotCommandReceipt).where(
+                CanvasPlotCommandReceipt.project_id == project_id
+            )
+        ).one()
+        payload = json.loads(receipt.result_json)
+        payload["original_created_node_id"] = None
+        receipt.result_json = json.dumps(payload)
+        session.add(receipt)
+        session.commit()
+
+    with pytest.raises(RuntimeError, match="invalid result data"):
+        db.get_canvas_plot_command_receipt(project_id, good_key)
+    with pytest.raises(RuntimeError, match="invalid result data"):
+        db.execute_canvas_plot_command(
+            project_id,
+            kind="create_node",
+            expected_revision=current["revision"],
+            idempotency_key=good_key,
+            title="Committed",
+        )
+    assert [node.title for node in db.get_canvas_plot_nodes(project_id)] == [
+        "Committed",
+    ]
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    ["same_revision", "empty_family_effects", "foreign_family_effects"],
+)
+def test_changed_canvas_receipt_outcome_invariants_fail_closed(corruption: str):
+    client, db, project_id = _project()
+    created = _create_node(
+        client,
+        project_id,
+        _snapshot(client, project_id),
+        "Before",
+    )
+    key = "canvas-changed-proof-001"
+    updated = _command(
+        client,
+        project_id,
+        idempotency_key=key,
+        kind="update_node",
+        expected_revision=created["canvas_plot"]["revision"],
+        node_id=created["created_node_id"],
+        title="After",
+    )
+    assert updated.status_code == 200, updated.text
+
+    with Session(db._engine) as session:
+        receipt = session.exec(
+            select(CanvasPlotCommandReceipt).where(
+                CanvasPlotCommandReceipt.project_id == project_id
+            )
+        ).one()
+        payload = json.loads(receipt.result_json)
+        if corruption == "same_revision":
+            payload["applied_revision"] = payload["expected_revision"]
+        elif corruption == "empty_family_effects":
+            payload["original_affected_node_ids"] = []
+        else:
+            payload["original_affected_link_ids"] = [
+                created["created_node_id"],
+            ]
+        receipt.result_json = json.dumps(payload)
+        session.add(receipt)
+        session.commit()
+
+    with pytest.raises(RuntimeError, match="invalid result data"):
+        db.get_canvas_plot_command_receipt(project_id, key)
+
+
+@pytest.mark.parametrize(
+    "impossible_kind",
+    [
+        "create_node",
+        "delete_node",
+        "delete_link",
+        "create_frame",
+        "delete_frame",
+    ],
+)
+def test_impossible_canvas_no_op_receipt_fails_closed(impossible_kind: str):
+    client, db, project_id = _project()
+    created = _create_node(
+        client,
+        project_id,
+        _snapshot(client, project_id),
+        "Stable",
+    )
+    key = "canvas-noop-proof-001"
+    no_op = _command(
+        client,
+        project_id,
+        idempotency_key=key,
+        kind="update_node",
+        expected_revision=created["canvas_plot"]["revision"],
+        node_id=created["created_node_id"],
+        title="Stable",
+    )
+    assert no_op.status_code == 200, no_op.text
+
+    with Session(db._engine) as session:
+        receipt = session.exec(
+            select(CanvasPlotCommandReceipt).where(
+                CanvasPlotCommandReceipt.project_id == project_id
+            )
+        ).one()
+        payload = json.loads(receipt.result_json)
+        payload["kind"] = impossible_kind
+        receipt.result_json = json.dumps(payload)
+        session.add(receipt)
+        session.commit()
+
+    with pytest.raises(RuntimeError, match="invalid result data"):
+        db.get_canvas_plot_command_receipt(project_id, key)
+
+
+def test_no_op_canvas_receipt_cannot_claim_an_advanced_revision():
+    client, db, project_id = _project()
+    created = _create_node(
+        client,
+        project_id,
+        _snapshot(client, project_id),
+        "Stable",
+    )
+    key = "canvas-noop-revision-001"
+    no_op = _command(
+        client,
+        project_id,
+        idempotency_key=key,
+        kind="update_node",
+        expected_revision=created["canvas_plot"]["revision"],
+        node_id=created["created_node_id"],
+        title="Stable",
+    )
+    assert no_op.status_code == 200, no_op.text
+
+    with Session(db._engine) as session:
+        receipt = session.exec(
+            select(CanvasPlotCommandReceipt).where(
+                CanvasPlotCommandReceipt.project_id == project_id
+            )
+        ).one()
+        payload = json.loads(receipt.result_json)
+        payload["applied_revision"] = "0" * 64
+        assert payload["applied_revision"] != payload["expected_revision"]
+        receipt.result_json = json.dumps(payload)
+        session.add(receipt)
+        session.commit()
+
+    with pytest.raises(RuntimeError, match="invalid result data"):
+        db.get_canvas_plot_command_receipt(project_id, key)
+
+
+def test_delete_node_receipt_allows_incident_link_effects():
+    client, db, project_id = _project()
+    first = _create_node(
+        client,
+        project_id,
+        _snapshot(client, project_id),
+        "First",
+    )
+    second = _create_node(
+        client,
+        project_id,
+        first["canvas_plot"],
+        "Second",
+    )
+    linked = _command(
+        client,
+        project_id,
+        kind="create_link",
+        expected_revision=second["canvas_plot"]["revision"],
+        source_node_id=first["created_node_id"],
+        target_node_id=second["created_node_id"],
+    )
+    assert linked.status_code == 200, linked.text
+    key = "canvas-delete-proof-001"
+    deleted = _command(
+        client,
+        project_id,
+        idempotency_key=key,
+        kind="delete_node",
+        expected_revision=linked.json()["canvas_plot"]["revision"],
+        node_id=first["created_node_id"],
+    )
+    assert deleted.status_code == 200, deleted.text
+
+    receipt = db.get_canvas_plot_command_receipt(project_id, key)
+    assert receipt is not None
+    assert receipt.original_affected_node_ids == (first["created_node_id"],)
+    assert receipt.original_affected_link_ids == (linked.json()["created_link_id"],)
+    assert receipt.original_affected_frame_ids == ()
+
+
+def test_duplicate_create_link_is_a_valid_receipted_no_op():
+    client, db, project_id = _project()
+    first = _create_node(
+        client,
+        project_id,
+        _snapshot(client, project_id),
+        "First",
+    )
+    second = _create_node(
+        client,
+        project_id,
+        first["canvas_plot"],
+        "Second",
+    )
+    linked = _command(
+        client,
+        project_id,
+        kind="create_link",
+        expected_revision=second["canvas_plot"]["revision"],
+        source_node_id=first["created_node_id"],
+        target_node_id=second["created_node_id"],
+    )
+    assert linked.status_code == 200, linked.text
+    key = "canvas-link-noop-001"
+    duplicate = _command(
+        client,
+        project_id,
+        idempotency_key=key,
+        kind="create_link",
+        expected_revision=linked.json()["canvas_plot"]["revision"],
+        source_node_id=second["created_node_id"],
+        target_node_id=first["created_node_id"],
+    )
+    assert duplicate.status_code == 200, duplicate.text
+    assert duplicate.json()["changed"] is False
+
+    receipt = db.get_canvas_plot_command_receipt(project_id, key)
+    assert receipt is not None
+    assert receipt.kind == "create_link"
+    assert receipt.original_changed is False
+    assert receipt.applied_revision == receipt.expected_revision
 
 
 def test_stale_and_exact_no_op_commands_do_not_mutate_or_publish():

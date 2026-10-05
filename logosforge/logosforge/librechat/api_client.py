@@ -227,6 +227,25 @@ class LogosForgeApiClient:
             idempotency_key=idempotency_key,
         )
 
+    def get_canvas_plot_command_receipt(
+        self,
+        idempotency_key: str,
+        project_id: int | None = None,
+    ) -> dict:
+        """Return one durable project-scoped Canvas Plot command receipt.
+
+        The opaque key is deliberately sent only in the request header.  A
+        ``canvas_plot_receipt_not_found`` API error is meaningful to recovery
+        callers; other 404 responses may come from an older Core API that does
+        not implement the receipt endpoint.
+        """
+        pid = int(project_id) if project_id is not None else self.require_project_id()
+        return self.request(
+            "GET",
+            f"{self._prefix}/projects/{pid}/canvas-plot/command-receipt",
+            idempotency_key=idempotency_key,
+        )
+
     def list_characters(self, project_id: int | None = None) -> list[dict]:
         pid = int(project_id) if project_id is not None else self.require_project_id()
         return self.request("GET", f"{self._prefix}/projects/{pid}/characters")

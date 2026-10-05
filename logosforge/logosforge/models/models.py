@@ -1262,6 +1262,21 @@ class TimelineStructureLink(SQLModel, table=True):
     created_at: datetime = Field(default_factory=_now)
 
 
+class CanvasPlotCommandReceipt(SQLModel, table=True):
+    """Durable exactly-once receipt for a project Canvas Plot command.
+
+    The raw ``Idempotency-Key`` is never stored. Its SHA-256 digest and a
+    compact description of the committed result are sufficient to recognize
+    an exact retry without retaining a stale board snapshot.
+    """
+
+    project_id: int = Field(foreign_key="project.id", primary_key=True)
+    idempotency_key_hash: str = Field(primary_key=True, max_length=64)
+    request_digest: str = Field(max_length=64)
+    result_json: str
+    created_at: datetime = Field(default_factory=_now)
+
+
 class CanvasPlotNode(SQLModel, table=True):
     """A free-form block on the Canvas Plot board (Miro-style thinking canvas).
 

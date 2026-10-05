@@ -110,6 +110,8 @@ function apply(projectId: number, command: CanvasPlotCommandDTO): CanvasPlotComm
   snapshots.set(projectId, current);
   return {
     canvas_plot: clone(current),
+    replayed: false,
+    applied_revision: current.revision,
     changed: true,
     affected_node_ids: command.kind.includes("node") ? ["node_id" in command ? command.node_id : created.node!].filter((value) => value != null) : [],
     affected_link_ids: command.kind.includes("link") ? ["link_id" in command ? command.link_id : created.link!].filter((value) => value != null) : [],

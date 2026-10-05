@@ -49,6 +49,7 @@ def _digest(value: Any) -> str:
 _LOWER_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _IDEMPOTENCY_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$")
 _TIMELINE_RECEIPT_MISS_CODE = "timeline_receipt_not_found"
+_CANVAS_PLOT_RECEIPT_MISS_CODE = "canvas_plot_receipt_not_found"
 
 
 def _timeline_receipt_request_digest(
@@ -66,6 +67,40 @@ def _timeline_receipt_request_digest(
             for key, value in command.items()
             if key not in {"kind", "expected_revision"}
         },
+    })
+
+
+_CANVAS_PLOT_GEOMETRY_FIELDS = frozenset({"x", "y", "width", "height"})
+
+
+def _canvas_plot_receipt_request_digest(
+    project_id: int,
+    command: dict[str, Any],
+) -> str:
+    """Match Core's canonical identity for a validated Canvas Plot command.
+
+    Pydantic validates Canvas geometry as finite floats before Core computes
+    its receipt digest.  Canonicalising the same fields here prevents JSON's
+    distinct ``1`` and ``1.0`` encodings from creating a false mismatch when
+    a caller supplied an integral coordinate.
+    """
+    fields = {
+        key: (
+            float(value)
+            if key in _CANVAS_PLOT_GEOMETRY_FIELDS
+            and isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            else value
+        )
+        for key, value in command.items()
+        if key not in {"kind", "expected_revision"}
+    }
+    return _digest({
+        "scope": "canvas-plot-command-v1",
+        "project_id": int(project_id),
+        "kind": command["kind"],
+        "expected_revision": command["expected_revision"],
+        "fields": fields,
     })
 
 
@@ -366,7 +401,9 @@ def _canvas_plot_number(
         raise GatewayError(f"{name} must be a finite number.")
     if positive and value <= 0:
         raise GatewayError(f"{name} must be greater than zero.")
-    return value
+    # Core's strict command DTO and receipt digest both use floats for Canvas
+    # geometry. Keep the reviewed wire body and recovery digest identical.
+    return float(value)
 
 
 def _normalize_canvas_plot_command(command: dict[str, Any]) -> dict[str, Any]:
@@ -535,14 +572,17 @@ class Proposal:
     guard_digest: str = ""
     review: dict[str, Any] = field(default_factory=dict)
     # ``indeterminate`` is terminal because no durable protocol proved that a
-    # retry is safe. ``recovery_pending`` is Timeline-only: Core proved receipt
-    # support, so the same proposal id may be reconciled or resent later.
+    # retry is safe. ``recovery_pending`` is reserved for Timeline and Canvas
+    # Plot commands: Core proved receipt support, so the same proposal id may
+    # be reconciled or resent later.
     state: str = "pending"  # pending | applying | recovery_pending | applied | failed | indeterminate | discarded
     result: Any = None
     receipt: dict[str, Any] | None = None
     recovered_from_core: bool = False
     timeline_resend_attempted: bool = False
     timeline_receipt_observed: bool = False
+    canvas_plot_resend_attempted: bool = False
+    canvas_plot_receipt_observed: bool = False
     error: str = ""
 
     def public(self, include_result: bool = False) -> dict[str, Any]:
@@ -840,10 +880,12 @@ class LogosForgeMcpGateway:
                 self._expire(proposal)
                 return proposal.public(include_result=True)
 
-        # Proposals are intentionally held in memory, but Timeline receipts
-        # survive an MCP gateway restart in Core. Recovery is strictly scoped
-        # to the selected project; never scan projects with a capability key.
-        return self._recover_unknown_timeline_proposal(proposal_id)
+        # Proposals are intentionally held in memory, but Timeline and Canvas
+        # Plot receipts survive an MCP gateway restart in Core. Recovery is
+        # strictly scoped to the selected project; never scan projects with a
+        # capability key. Probe both receipt families so a cross-family key
+        # collision can never be resolved to whichever endpoint was tried first.
+        return self._recover_unknown_durable_proposal(proposal_id)
 
     def list_proposals(self, include_finished: bool = False) -> dict[str, Any]:
         now = time.time()
@@ -885,7 +927,10 @@ class LogosForgeMcpGateway:
                 self._expire(proposal)
             recovering = (
                 proposal.state == "recovery_pending"
-                and self._is_timeline_proposal(proposal)
+                and (
+                    self._is_timeline_proposal(proposal)
+                    or self._is_canvas_plot_proposal(proposal)
+                )
             )
             if proposal.state != "pending" and not recovering:
                 raise GatewayError(f"Proposal is {proposal.state}, not pending.")
@@ -917,13 +962,15 @@ class LogosForgeMcpGateway:
                     )
                     raise GatewayError(proposal.error)
             # Mark before network I/O so a concurrent call cannot race the same
-            # proposal. Timeline recovery is safe only because the exact
+            # proposal. Timeline/Canvas recovery is safe only because the exact
             # proposal id is also Core's durable idempotency capability.
             proposal.state = "applying"
             proposal.error = ""
 
         if recovering:
-            return self._resume_timeline_recovery(proposal)
+            if self._is_timeline_proposal(proposal):
+                return self._resume_timeline_recovery(proposal)
+            return self._resume_canvas_plot_recovery(proposal)
 
         try:
             result = self._execute_proposal_request(proposal)
@@ -932,6 +979,8 @@ class LogosForgeMcpGateway:
                 self._raise_rejected_apply(proposal, exc)
             if self._is_timeline_proposal(proposal):
                 return self._recover_ambiguous_timeline_apply(proposal, exc)
+            if self._is_canvas_plot_proposal(proposal):
+                return self._recover_ambiguous_canvas_plot_apply(proposal, exc)
             self._raise_indeterminate_apply(proposal, exc)
 
         return self._complete_proposal(proposal, result)
@@ -953,8 +1002,26 @@ class LogosForgeMcpGateway:
             == self.client.project_path("timeline/commands", proposal.project_id)
         )
 
+    def _is_canvas_plot_proposal(self, proposal: Proposal) -> bool:
+        if (
+            proposal.project_id is None
+            or not proposal.operation.startswith("canvas_plot_")
+        ):
+            return False
+        return (
+            proposal.method == "POST"
+            and proposal.path
+            == self.client.project_path(
+                "canvas-plot/commands",
+                proposal.project_id,
+            )
+        )
+
     def _execute_proposal_request(self, proposal: Proposal) -> Any:
-        if self._is_timeline_proposal(proposal):
+        if (
+            self._is_timeline_proposal(proposal)
+            or self._is_canvas_plot_proposal(proposal)
+        ):
             return self.client.request(
                 proposal.method,
                 proposal.path,
@@ -1301,7 +1368,403 @@ class LogosForgeMcpGateway:
         except Exception as exc:  # noqa: BLE001 - fresh snapshot transport
             self._mark_recovery_pending(proposal, exc)
 
-    def _recover_unknown_timeline_proposal(
+    def _canvas_plot_receipt(
+        self,
+        proposal_id: str,
+        project_id: int,
+    ) -> dict[str, Any] | None:
+        """Read a Canvas receipt, distinguishing a supported miss from 404."""
+        try:
+            return self.client.get_canvas_plot_command_receipt(
+                proposal_id,
+                project_id,
+            )
+        except LogosForgeApiError as exc:
+            if (
+                exc.status_code == 404
+                and exc.error_code == _CANVAS_PLOT_RECEIPT_MISS_CODE
+            ):
+                return None
+            raise
+
+    @staticmethod
+    def _validate_canvas_plot_receipt_shape(
+        receipt: Any,
+        project_id: int,
+    ) -> dict[str, Any]:
+        if not isinstance(receipt, dict):
+            raise GatewayError("Core returned an invalid Canvas Plot receipt.")
+        receipt_project_id = receipt.get("project_id")
+        affected_nodes = receipt.get("original_affected_node_ids")
+        affected_links = receipt.get("original_affected_link_ids")
+        affected_frames = receipt.get("original_affected_frame_ids")
+        created_node_id = receipt.get("original_created_node_id")
+        created_link_id = receipt.get("original_created_link_id")
+        created_frame_id = receipt.get("original_created_frame_id")
+        canonical = {
+            "project_id": receipt_project_id,
+            "request_digest": receipt.get("request_digest"),
+            "command_kind": receipt.get("command_kind"),
+            "expected_revision": receipt.get("expected_revision"),
+            "applied_revision": receipt.get("applied_revision"),
+            "original_changed": receipt.get("original_changed"),
+            "original_affected_node_ids": affected_nodes,
+            "original_affected_link_ids": affected_links,
+            "original_affected_frame_ids": affected_frames,
+            "original_created_node_id": created_node_id,
+            "original_created_link_id": created_link_id,
+            "original_created_frame_id": created_frame_id,
+            "committed_at": receipt.get("committed_at"),
+        }
+
+        def valid_ids(values: Any) -> bool:
+            return (
+                isinstance(values, list)
+                and all(
+                    not isinstance(value, bool)
+                    and isinstance(value, int)
+                    and value > 0
+                    for value in values
+                )
+                and len(set(values)) == len(values)
+            )
+
+        def valid_optional_id(value: Any) -> bool:
+            return value is None or (
+                not isinstance(value, bool)
+                and isinstance(value, int)
+                and value > 0
+            )
+
+        valid = (
+            isinstance(receipt_project_id, int)
+            and not isinstance(receipt_project_id, bool)
+            and receipt_project_id == project_id
+            and isinstance(canonical["request_digest"], str)
+            and _LOWER_SHA256_RE.fullmatch(canonical["request_digest"]) is not None
+            and isinstance(canonical["command_kind"], str)
+            and canonical["command_kind"] in _CANVAS_PLOT_COMMAND_FIELDS
+            and isinstance(canonical["expected_revision"], str)
+            and _LOWER_SHA256_RE.fullmatch(canonical["expected_revision"]) is not None
+            and isinstance(canonical["applied_revision"], str)
+            and _LOWER_SHA256_RE.fullmatch(canonical["applied_revision"]) is not None
+            and isinstance(canonical["original_changed"], bool)
+            and valid_ids(affected_nodes)
+            and valid_ids(affected_links)
+            and valid_ids(affected_frames)
+            and valid_optional_id(created_node_id)
+            and valid_optional_id(created_link_id)
+            and valid_optional_id(created_frame_id)
+            and isinstance(canonical["committed_at"], str)
+            and bool(canonical["committed_at"])
+        )
+        if valid:
+            created_by_kind = {
+                "create_node": created_node_id,
+                "create_link": created_link_id,
+                "create_frame": created_frame_id,
+            }
+            created_ids = [
+                value
+                for value in (created_node_id, created_link_id, created_frame_id)
+                if value is not None
+            ]
+            kind = canonical["command_kind"]
+            changed = canonical["original_changed"]
+            node_kind = kind in {"create_node", "update_node", "delete_node"}
+            link_kind = kind in {"create_link", "update_link", "delete_link"}
+            frame_kind = kind in {
+                "create_frame", "update_frame", "delete_frame",
+            }
+            invalid_created_ids = (
+                len(created_ids) > 1
+                or bool(
+                    created_ids
+                    and created_by_kind.get(kind) != created_ids[0]
+                )
+                or (
+                    created_node_id is not None
+                    and created_node_id not in affected_nodes
+                )
+                or (
+                    created_link_id is not None
+                    and created_link_id not in affected_links
+                )
+                or (
+                    created_frame_id is not None
+                    and created_frame_id not in affected_frames
+                )
+                or (
+                    changed
+                    and kind in created_by_kind
+                    and created_by_kind[kind] is None
+                )
+            )
+            invalid_changed_effects = changed and (
+                canonical["applied_revision"]
+                == canonical["expected_revision"]
+                or (
+                    node_kind
+                    and (
+                        not affected_nodes
+                        or bool(affected_frames)
+                        or (kind != "delete_node" and bool(affected_links))
+                    )
+                )
+                or (
+                    link_kind
+                    and (
+                        not affected_links
+                        or bool(affected_nodes)
+                        or bool(affected_frames)
+                    )
+                )
+                or (
+                    frame_kind
+                    and (
+                        not affected_frames
+                        or bool(affected_nodes)
+                        or bool(affected_links)
+                    )
+                )
+            )
+            invalid_noop = not changed and (
+                canonical["applied_revision"]
+                != canonical["expected_revision"]
+                or bool(affected_nodes)
+                or bool(affected_links)
+                or bool(affected_frames)
+                or bool(created_ids)
+                or kind not in {
+                    "update_node",
+                    "update_link",
+                    "update_frame",
+                    "create_link",
+                }
+            )
+            if (
+                invalid_created_ids
+                or invalid_changed_effects
+                or invalid_noop
+            ):
+                valid = False
+        if not valid:
+            raise GatewayError("Core returned an invalid Canvas Plot receipt.")
+        return copy.deepcopy(canonical)
+
+    def _validate_canvas_plot_receipt_for_proposal(
+        self,
+        proposal: Proposal,
+        receipt: Any,
+    ) -> dict[str, Any]:
+        assert proposal.project_id is not None
+        canonical = self._validate_canvas_plot_receipt_shape(
+            receipt,
+            proposal.project_id,
+        )
+        expected_digest = _canvas_plot_receipt_request_digest(
+            proposal.project_id,
+            proposal.body,
+        )
+        if (
+            canonical["command_kind"] != proposal.body.get("kind")
+            or canonical["expected_revision"]
+            != proposal.body.get("expected_revision")
+            or not secrets.compare_digest(
+                canonical["request_digest"],
+                expected_digest,
+            )
+        ):
+            raise GatewayError(
+                "Durable Canvas Plot receipt integrity check failed; do not retry."
+            )
+        return canonical
+
+    def _recovered_canvas_plot_result(
+        self,
+        project_id: int,
+        proposal_id: str,
+        receipt: dict[str, Any],
+        *,
+        proposal: Proposal | None = None,
+    ) -> dict[str, Any]:
+        """Read one Canvas board bracketed by the same durable receipt."""
+        current = self.client.get_canvas_plot(project_id)
+        raw_confirmation = self._canvas_plot_receipt(proposal_id, project_id)
+        if raw_confirmation is None:
+            raise GatewayError(
+                "The durable Canvas Plot receipt disappeared during recovery; "
+                "the project lifetime may have changed."
+            )
+        confirmation = (
+            self._validate_canvas_plot_receipt_for_proposal(
+                proposal,
+                raw_confirmation,
+            )
+            if proposal is not None
+            else self._validate_canvas_plot_receipt_shape(
+                raw_confirmation,
+                project_id,
+            )
+        )
+        if confirmation != receipt:
+            raise GatewayError(
+                "The durable Canvas Plot receipt changed during recovery; "
+                "the project lifetime may have changed."
+            )
+        return {
+            "canvas_plot": current,
+            "replayed": True,
+            "applied_revision": receipt["applied_revision"],
+            "changed": False,
+            "affected_node_ids": [],
+            "affected_link_ids": [],
+            "affected_frame_ids": [],
+            "created_node_id": None,
+            "created_link_id": None,
+            "created_frame_id": None,
+        }
+
+    def _complete_canvas_plot_recovery(
+        self,
+        proposal: Proposal,
+        raw_receipt: Any,
+    ) -> dict[str, Any]:
+        receipt = self._validate_canvas_plot_receipt_for_proposal(
+            proposal,
+            raw_receipt,
+        )
+        assert proposal.project_id is not None
+        with self._lock:
+            # Once commit proof is visible no later snapshot failure may make
+            # another mutation attempt safe.
+            proposal.receipt = receipt
+            proposal.recovered_from_core = True
+            proposal.canvas_plot_receipt_observed = True
+        result = self._recovered_canvas_plot_result(
+            proposal.project_id,
+            proposal.proposal_id,
+            receipt,
+            proposal=proposal,
+        )
+        with self._lock:
+            proposal.state = "applied"
+            proposal.error = ""
+            proposal.result = result
+            return proposal.public(include_result=True)
+
+    def _mark_canvas_plot_recovery_pending(
+        self,
+        proposal: Proposal,
+        exc: Exception,
+    ) -> None:
+        public_error = (
+            "The Canvas Plot apply is still awaiting durable recovery after "
+            "an ambiguous retry. Later, call logosforge_apply_proposal again "
+            "with this same proposal_id; do not create a replacement proposal: "
+            f"{exc}"
+        )
+        with self._lock:
+            proposal.state = "recovery_pending"
+            proposal.error = public_error
+        raise GatewayError(public_error) from exc
+
+    def _keep_canvas_plot_recovery_pending(
+        self,
+        proposal: Proposal,
+        detail: str,
+        *,
+        cause: Exception | None = None,
+    ) -> None:
+        public_error = (
+            "The Canvas Plot apply remains recovery_pending. No additional "
+            "mutation was sent. Later, call logosforge_apply_proposal again "
+            "with this same proposal_id to poll its durable receipt: "
+            f"{detail}"
+        )
+        with self._lock:
+            proposal.state = "recovery_pending"
+            proposal.error = public_error
+        if cause is not None:
+            raise GatewayError(public_error) from cause
+        raise GatewayError(public_error)
+
+    def _retry_canvas_plot_once(self, proposal: Proposal) -> dict[str, Any]:
+        with self._lock:
+            if (
+                proposal.canvas_plot_resend_attempted
+                or proposal.canvas_plot_receipt_observed
+            ):
+                self._keep_canvas_plot_recovery_pending(
+                    proposal,
+                    "No durable receipt is currently visible; the single "
+                    "bounded resend has already been consumed.",
+                )
+            proposal.canvas_plot_resend_attempted = True
+        try:
+            result = self._execute_proposal_request(proposal)
+        except Exception as exc:  # noqa: BLE001 - transport boundary
+            if self._is_definite_http_rejection(exc):
+                self._raise_rejected_apply(proposal, exc)
+            self._mark_canvas_plot_recovery_pending(proposal, exc)
+        return self._complete_proposal(proposal, result)
+
+    def _recover_ambiguous_canvas_plot_apply(
+        self,
+        proposal: Proposal,
+        original_error: Exception,
+    ) -> dict[str, Any]:
+        assert proposal.project_id is not None
+        try:
+            receipt = self._canvas_plot_receipt(
+                proposal.proposal_id,
+                proposal.project_id,
+            )
+        except Exception as lookup_error:  # noqa: BLE001 - transport boundary
+            self._raise_indeterminate_apply(
+                proposal,
+                original_error,
+                receipt_error=lookup_error,
+            )
+        if receipt is None:
+            return self._retry_canvas_plot_once(proposal)
+        try:
+            return self._complete_canvas_plot_recovery(proposal, receipt)
+        except GatewayError as exc:
+            self._mark_receipt_validation_failed(proposal, exc)
+        except Exception as exc:  # noqa: BLE001 - fresh snapshot transport
+            self._mark_canvas_plot_recovery_pending(proposal, exc)
+
+    def _resume_canvas_plot_recovery(
+        self,
+        proposal: Proposal,
+    ) -> dict[str, Any]:
+        assert proposal.project_id is not None
+        try:
+            receipt = self._canvas_plot_receipt(
+                proposal.proposal_id,
+                proposal.project_id,
+            )
+        except Exception as lookup_error:  # noqa: BLE001 - transport boundary
+            self._keep_canvas_plot_recovery_pending(
+                proposal,
+                f"Receipt lookup was inconclusive: {lookup_error}",
+                cause=lookup_error,
+            )
+        if receipt is None:
+            self._keep_canvas_plot_recovery_pending(
+                proposal,
+                "Core reported that no receipt is currently available and "
+                "the single bounded resend has already been consumed.",
+            )
+        try:
+            return self._complete_canvas_plot_recovery(proposal, receipt)
+        except GatewayError as exc:
+            self._mark_receipt_validation_failed(proposal, exc)
+        except Exception as exc:  # noqa: BLE001 - fresh snapshot transport
+            self._mark_canvas_plot_recovery_pending(proposal, exc)
+
+    def _recover_unknown_durable_proposal(
         self,
         proposal_id: str,
     ) -> dict[str, Any]:
@@ -1309,34 +1772,68 @@ class LogosForgeMcpGateway:
             raise GatewayError("Unknown proposal id.")
         project_id = self._project_id()
         try:
-            raw_receipt = self._timeline_receipt(proposal_id, project_id)
+            timeline_receipt = self._timeline_receipt(proposal_id, project_id)
+            canvas_receipt = self._canvas_plot_receipt(proposal_id, project_id)
         except Exception as exc:
             raise GatewayError(
-                "Unknown proposal id; durable Timeline receipt recovery could "
-                f"not be verified: {exc}"
+                "Unknown proposal id; durable command receipt recovery could "
+                f"not be verified across Timeline and Canvas Plot: {exc}"
             ) from exc
-        if raw_receipt is None:
-            raise GatewayError("Unknown proposal id.")
-        receipt = self._validate_timeline_receipt_shape(raw_receipt, project_id)
-        result = self._recovered_timeline_result(
-            project_id,
-            proposal_id,
-            receipt,
-        )
-        return {
-            "proposal_id": proposal_id,
-            "operation": f"timeline_{receipt['command_kind']}",
-            "summary": "Recovered durable Timeline command receipt.",
-            "project_id": project_id,
-            "state": "applied",
-            "recovered_from_core": True,
-            "request_digest": receipt["request_digest"],
-            "request": None,
-            "review": {"recovered_receipt": copy.deepcopy(receipt)},
-            "requires_user_approval": True,
-            "receipt": receipt,
-            "result": result,
-        }
+
+        if timeline_receipt is not None and canvas_receipt is not None:
+            raise GatewayError(
+                "Durable receipt capability collision across Timeline and "
+                "Canvas Plot; recovery failed closed."
+            )
+        if timeline_receipt is not None:
+            receipt = self._validate_timeline_receipt_shape(
+                timeline_receipt,
+                project_id,
+            )
+            result = self._recovered_timeline_result(
+                project_id,
+                proposal_id,
+                receipt,
+            )
+            return {
+                "proposal_id": proposal_id,
+                "operation": f"timeline_{receipt['command_kind']}",
+                "summary": "Recovered durable Timeline command receipt.",
+                "project_id": project_id,
+                "state": "applied",
+                "recovered_from_core": True,
+                "request_digest": receipt["request_digest"],
+                "request": None,
+                "review": {"recovered_receipt": copy.deepcopy(receipt)},
+                "requires_user_approval": True,
+                "receipt": receipt,
+                "result": result,
+            }
+        if canvas_receipt is not None:
+            receipt = self._validate_canvas_plot_receipt_shape(
+                canvas_receipt,
+                project_id,
+            )
+            result = self._recovered_canvas_plot_result(
+                project_id,
+                proposal_id,
+                receipt,
+            )
+            return {
+                "proposal_id": proposal_id,
+                "operation": f"canvas_plot_{receipt['command_kind']}",
+                "summary": "Recovered durable Canvas Plot command receipt.",
+                "project_id": project_id,
+                "state": "applied",
+                "recovered_from_core": True,
+                "request_digest": receipt["request_digest"],
+                "request": None,
+                "review": {"recovered_receipt": copy.deepcopy(receipt)},
+                "requires_user_approval": True,
+                "receipt": receipt,
+                "result": result,
+            }
+        raise GatewayError("Unknown proposal id.")
 
     def _proposal(self, proposal_id: str) -> Proposal:
         proposal = self._proposals.get(proposal_id)

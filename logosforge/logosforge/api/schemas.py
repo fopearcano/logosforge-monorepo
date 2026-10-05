@@ -1167,6 +1167,50 @@ class CanvasPlotCommandResultDTO(BaseModel):
     created_node_id: int | None = None
     created_link_id: int | None = None
     created_frame_id: int | None = None
+    replayed: bool
+    applied_revision: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+
+class CanvasPlotCommandReceiptDTO(BaseModel):
+    project_id: int
+    request_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    command_kind: Literal[
+        "create_node",
+        "update_node",
+        "delete_node",
+        "create_link",
+        "update_link",
+        "delete_link",
+        "create_frame",
+        "update_frame",
+        "delete_frame",
+    ]
+    expected_revision: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    applied_revision: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    original_changed: bool
+    original_affected_node_ids: list[int] = Field(default_factory=list)
+    original_affected_link_ids: list[int] = Field(default_factory=list)
+    original_affected_frame_ids: list[int] = Field(default_factory=list)
+    original_created_node_id: int | None = None
+    original_created_link_id: int | None = None
+    original_created_frame_id: int | None = None
+    committed_at: datetime
 
 
 # ---------------------------------------------------------------------------

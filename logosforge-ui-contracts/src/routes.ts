@@ -45,6 +45,7 @@ export const ROUTES = {
   timelineCommandReceipt: (p: number) => `/api/projects/${p}/timeline/command-receipt`,
   canvasPlot: (p: number) => `/api/projects/${p}/canvas-plot`,
   canvasPlotCommands: (p: number) => `/api/projects/${p}/canvas-plot/commands`,
+  canvasPlotCommandReceipt: (p: number) => `/api/projects/${p}/canvas-plot/command-receipt`,
   psykeEntries: (p: number) => `/api/projects/${p}/psyke/entries`,
   psykeEntry: (p: number, entryId: number) => `/api/projects/${p}/psyke/entries/${entryId}`,
   psykeRelations: (p: number) => `/api/projects/${p}/psyke/relations`,

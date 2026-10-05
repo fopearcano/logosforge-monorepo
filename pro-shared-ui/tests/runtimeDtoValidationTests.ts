@@ -188,17 +188,22 @@ const canvasPlotSnapshot = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-const canvasPlotCommandResult = (overrides: Record<string, unknown> = {}) => ({
-  canvas_plot: canvasPlotSnapshot({ revision: "e".repeat(64) }),
-  changed: true,
-  affected_node_ids: [10],
-  affected_link_ids: [],
-  affected_frame_ids: [],
-  created_node_id: null,
-  created_link_id: null,
-  created_frame_id: null,
-  ...overrides,
-});
+const canvasPlotCommandResult = (overrides: Record<string, unknown> = {}) => {
+  const canvasPlot = overrides.canvas_plot ?? canvasPlotSnapshot({ revision: "e".repeat(64) });
+  return {
+    canvas_plot: canvasPlot,
+    replayed: false,
+    applied_revision: (canvasPlot as { revision: string }).revision,
+    changed: true,
+    affected_node_ids: [10],
+    affected_link_ids: [],
+    affected_frame_ids: [],
+    created_node_id: null,
+    created_link_id: null,
+    created_frame_id: null,
+    ...overrides,
+  };
+};
 
 const inlineCommentAnchor = (overrides: Record<string, unknown> = {}) => ({
   start_scene_id: 2,
@@ -1167,6 +1172,49 @@ try {
       changed: false,
       affected_node_ids: [],
     }),
+  );
+  await expectValid(
+    "replayed Canvas Plot commands may return a newer coherent board",
+    () => client.executeCanvasPlotCommand(1, {
+      kind: "update_node",
+      expected_revision: "d".repeat(64),
+      node_id: 10,
+      x: 50,
+    }),
+    canvasPlotCommandResult({
+      canvas_plot: canvasPlotSnapshot({ revision: "f".repeat(64) }),
+      replayed: true,
+      applied_revision: "e".repeat(64),
+      changed: false,
+      affected_node_ids: [],
+    }),
+    (value) => value.replayed && value.applied_revision === "e".repeat(64),
+  );
+  await expectInvalid(
+    "replayed Canvas Plot commands cannot claim a fresh mutation",
+    () => client.executeCanvasPlotCommand(1, {
+      kind: "update_node",
+      expected_revision: "d".repeat(64),
+      node_id: 10,
+      x: 50,
+    }),
+    json(canvasPlotCommandResult({ replayed: true })),
+    "POST",
+    "/api/projects/1/canvas-plot/commands",
+    "$.changed",
+  );
+  await expectInvalid(
+    "fresh Canvas Plot commands bind applied revision to the returned board",
+    () => client.executeCanvasPlotCommand(1, {
+      kind: "update_node",
+      expected_revision: "d".repeat(64),
+      node_id: 10,
+      x: 50,
+    }),
+    json(canvasPlotCommandResult({ applied_revision: "f".repeat(64) })),
+    "POST",
+    "/api/projects/1/canvas-plot/commands",
+    "$.applied_revision",
   );
 
   await expectValid(

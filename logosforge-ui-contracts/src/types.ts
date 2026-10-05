@@ -924,8 +924,8 @@ export interface CanvasPlotCreateNodeCommandDTO extends CanvasPlotCommandBase {
   color_label?: string;
   group_label?: string;
   scene_id?: number | null;
-  /** Zero-based dense z-order insertion position. */
-  index?: number;
+  /** Zero-based dense z-order insertion position; omission or null appends. */
+  index?: number | null;
 }
 
 export interface CanvasPlotUpdateNodeCommandDTO extends CanvasPlotCommandBase {
@@ -1010,6 +1010,10 @@ export type CanvasPlotCommandDTO =
 
 export interface CanvasPlotCommandResultDTO {
   canvas_plot: CanvasPlotSnapshotDTO;
+  /** True when this call returned a previously committed idempotent command. */
+  replayed: boolean;
+  /** Revision produced by the original command, even if the board changed later. */
+  applied_revision: string;
   changed: boolean;
   affected_node_ids: number[];
   affected_link_ids: number[];
@@ -1017,6 +1021,23 @@ export interface CanvasPlotCommandResultDTO {
   created_node_id: number | null;
   created_link_id: number | null;
   created_frame_id: number | null;
+}
+
+/** Durable, project-scoped receipt for one idempotent Canvas Plot command. */
+export interface CanvasPlotCommandReceiptDTO {
+  project_id: number;
+  request_digest: string;
+  command_kind: CanvasPlotCommandDTO["kind"];
+  expected_revision: string;
+  applied_revision: string;
+  original_changed: boolean;
+  original_affected_node_ids: number[];
+  original_affected_link_ids: number[];
+  original_affected_frame_ids: number[];
+  original_created_node_id: number | null;
+  original_created_link_id: number | null;
+  original_created_frame_id: number | null;
+  committed_at: string;
 }
 
 // ── PSYKE (the story bible) ────────────────────────────────────────────────

@@ -58,6 +58,8 @@ const defaultCanvasNode = createdCanvasNode.canvas_plot.nodes.find(
 )!;
 check(
   createdCanvasNode.changed
+    && createdCanvasNode.replayed === false
+    && createdCanvasNode.applied_revision === createdCanvasNode.canvas_plot.revision
     && createdCanvasNode.created_node_id != null
     && defaultCanvasNode.title === ""
     && defaultCanvasNode.body === ""

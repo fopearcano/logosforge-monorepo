@@ -200,7 +200,7 @@ async def _exercise_installed_mcp(
     project_id: int,
     comment_id: int,
     comment_revision: str,
-) -> tuple[str, str, str, dict]:
+) -> tuple[str, str, str, str, str, dict]:
     params = mcp.StdioServerParameters(
         command=str(command),
         args=command_args,
@@ -426,6 +426,15 @@ async def _exercise_installed_mcp(
             or applied_canvas_revision == canvas_revision
         ):
             raise RuntimeError("Canvas Plot apply did not rotate the revision")
+        if (
+            applied_canvas_result.get("replayed") is not False
+            or applied_canvas_result.get("applied_revision")
+            != applied_canvas_revision
+            or applied_canvas_result.get("changed") is not True
+        ):
+            raise RuntimeError(
+                "Canvas Plot apply returned an invalid fresh command receipt"
+            )
         canvas_nodes = applied_canvas_snapshot.get("nodes")
         if not isinstance(canvas_nodes, list) or len(canvas_nodes) != 1:
             raise RuntimeError("Canvas Plot apply did not create exactly one node")
@@ -662,24 +671,33 @@ async def _exercise_installed_mcp(
         timeline_proposal_id = timeline_proposal.get("proposal_id")
         if not isinstance(timeline_proposal_id, str) or not timeline_proposal_id:
             raise RuntimeError("installed MCP Timeline proposal returned no proposal ID")
+        canvas_proposal_id = canvas_proposal.get("proposal_id")
+        if not isinstance(canvas_proposal_id, str) or not canvas_proposal_id:
+            raise RuntimeError(
+                "installed MCP Canvas Plot proposal returned no proposal ID"
+            )
         return (
             resolved_revision,
             timeline_proposal_id,
             applied_revision,
+            canvas_proposal_id,
+            applied_canvas_revision,
             applied_canvas_snapshot,
         )
 
 
-async def _recover_installed_timeline_receipt(
+async def _recover_installed_board_receipts(
     command: Path,
     command_args: list[str],
     env: dict[str, str],
     project_id: int,
     timeline_proposal_id: str,
-    applied_revision: str,
+    applied_timeline_revision: str,
+    canvas_proposal_id: str,
+    applied_canvas_revision: str,
     expected_canvas_plot: dict,
 ) -> None:
-    """Recover Timeline receipt and verify Canvas data in a fresh companion."""
+    """Recover Timeline and Canvas receipts in a fresh companion."""
     params = mcp.StdioServerParameters(
         command=str(command),
         args=command_args,
@@ -730,7 +748,8 @@ async def _recover_installed_timeline_receipt(
         recovered_receipt = recovered.get("receipt")
         if (
             not isinstance(recovered_receipt, dict)
-            or recovered_receipt.get("applied_revision") != applied_revision
+            or recovered_receipt.get("applied_revision")
+            != applied_timeline_revision
         ):
             raise RuntimeError("restarted MCP returned the wrong canonical receipt")
         recovered_result = recovered.get("result")
@@ -738,7 +757,7 @@ async def _recover_installed_timeline_receipt(
             raise RuntimeError("restarted MCP recovered no Timeline result receipt")
         if recovered_result.get("replayed") is not True:
             raise RuntimeError("restarted MCP Timeline receipt was not marked replayed")
-        if recovered_result.get("applied_revision") != applied_revision:
+        if recovered_result.get("applied_revision") != applied_timeline_revision:
             raise RuntimeError(
                 "restarted MCP Timeline receipt returned the wrong applied revision"
             )
@@ -766,6 +785,78 @@ async def _recover_installed_timeline_receipt(
         if packaged_lane_count != 1:
             raise RuntimeError(
                 "restarted MCP recovery did not preserve exactly one packaged lane"
+            )
+
+        recovered_canvas = _structured(
+            await session.call_tool(
+                "logosforge_get_proposal",
+                {"proposal_id": canvas_proposal_id},
+            ),
+            "restarted MCP durable Canvas Plot receipt recovery",
+        )
+        if recovered_canvas.get("state") != "applied":
+            raise RuntimeError(
+                "restarted MCP did not recover the Canvas Plot proposal as applied"
+            )
+        if (
+            recovered_canvas.get("recovered_from_core") is not True
+            or recovered_canvas.get("request") is not None
+        ):
+            raise RuntimeError(
+                "restarted MCP did not identify Core as the Canvas receipt source"
+            )
+        recovered_canvas_receipt = recovered_canvas.get("receipt")
+        expected_canvas_nodes = expected_canvas_plot.get("nodes")
+        expected_created_node_id = (
+            expected_canvas_nodes[0].get("id")
+            if isinstance(expected_canvas_nodes, list)
+            and len(expected_canvas_nodes) == 1
+            and isinstance(expected_canvas_nodes[0], dict)
+            else None
+        )
+        if (
+            not isinstance(recovered_canvas_receipt, dict)
+            or not isinstance(expected_created_node_id, int)
+            or recovered_canvas_receipt.get("project_id") != project_id
+            or recovered_canvas_receipt.get("command_kind") != "create_node"
+            or recovered_canvas_receipt.get("applied_revision")
+            != applied_canvas_revision
+            or recovered_canvas_receipt.get("original_changed") is not True
+            or recovered_canvas_receipt.get("original_affected_node_ids")
+            != [expected_created_node_id]
+            or recovered_canvas_receipt.get("original_affected_link_ids") != []
+            or recovered_canvas_receipt.get("original_affected_frame_ids") != []
+            or recovered_canvas_receipt.get("original_created_node_id")
+            != expected_created_node_id
+            or recovered_canvas_receipt.get("original_created_link_id") is not None
+            or recovered_canvas_receipt.get("original_created_frame_id") is not None
+        ):
+            raise RuntimeError(
+                "restarted MCP returned the wrong canonical Canvas Plot receipt"
+            )
+        recovered_canvas_result = recovered_canvas.get("result")
+        if not isinstance(recovered_canvas_result, dict):
+            raise RuntimeError(
+                "restarted MCP recovered no Canvas Plot result receipt"
+            )
+        if (
+            recovered_canvas_result.get("replayed") is not True
+            or recovered_canvas_result.get("applied_revision")
+            != applied_canvas_revision
+            or recovered_canvas_result.get("changed") is not False
+            or recovered_canvas_result.get("affected_node_ids") != []
+            or recovered_canvas_result.get("affected_link_ids") != []
+            or recovered_canvas_result.get("affected_frame_ids") != []
+            or recovered_canvas_result.get("created_node_id") is not None
+            or recovered_canvas_result.get("created_link_id") is not None
+            or recovered_canvas_result.get("created_frame_id") is not None
+        ):
+            raise RuntimeError(
+                "restarted MCP Canvas Plot receipt was not a non-mutating replay"
+            )
+        if recovered_canvas_result.get("canvas_plot") != restarted_canvas_plot:
+            raise RuntimeError(
+                "restarted MCP Canvas receipt did not return the current board"
             )
 
 
@@ -1030,6 +1121,8 @@ def _smoke_app(app: Path, timeout: int, codex_command: str | None = None) -> Non
                     final_comment_revision,
                     timeline_proposal_id,
                     applied_timeline_revision,
+                    canvas_proposal_id,
+                    applied_canvas_revision,
                     applied_canvas_plot,
                 ) = asyncio.run(
                     asyncio.wait_for(
@@ -1046,13 +1139,15 @@ def _smoke_app(app: Path, timeout: int, codex_command: str | None = None) -> Non
                 )
                 asyncio.run(
                     asyncio.wait_for(
-                        _recover_installed_timeline_receipt(
+                        _recover_installed_board_receipts(
                             installed_mcp_path,
                             [],
                             env,
                             project_id,
                             timeline_proposal_id,
                             applied_timeline_revision,
+                            canvas_proposal_id,
+                            applied_canvas_revision,
                             applied_canvas_plot,
                         ),
                         timeout=20,

@@ -20,12 +20,16 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
-from logosforge.db.database import _timeline_command_request_digest
+from logosforge.db.database import (
+    _canvas_plot_command_request_digest,
+    _timeline_command_request_digest,
+)
 from logosforge.librechat import api_client as ac
 from logosforge.librechat.api_client import LogosForgeApiClient, LogosForgeApiError
 from logosforge.librechat.mcp_gateway import (
     GatewayError,
     LogosForgeMcpGateway,
+    _canvas_plot_receipt_request_digest,
     _timeline_receipt_request_digest,
 )
 
@@ -185,6 +189,50 @@ def test_api_client_timeline_receipt_keeps_idempotency_key_out_of_url():
     assert result == receipt
 
 
+def test_api_client_canvas_receipt_keeps_idempotency_key_out_of_url():
+    client = LogosForgeApiClient(
+        base_url="http://127.0.0.1:8765", project_id=7, auth_token="secret",
+    )
+    proposal_id = "lfp_abcdefghijklmnopqrstuvwx"
+    captured = {}
+    receipt = {
+        "project_id": 7,
+        "request_digest": "a" * 64,
+        "command_kind": "create_node",
+        "expected_revision": "b" * 64,
+        "applied_revision": "c" * 64,
+        "original_changed": True,
+        "original_affected_node_ids": [81],
+        "original_affected_link_ids": [],
+        "original_affected_frame_ids": [],
+        "original_created_node_id": 81,
+        "original_created_link_id": None,
+        "original_created_frame_id": None,
+        "committed_at": "2026-10-04T10:00:00Z",
+    }
+
+    def fake_urlopen(request, timeout=None):
+        captured.update(
+            url=request.full_url,
+            method=request.get_method(),
+            headers={key.lower(): value for key, value in request.header_items()},
+            timeout=timeout,
+        )
+        return _response(receipt)
+
+    with mock.patch.object(ac.urllib.request, "urlopen", fake_urlopen):
+        result = client.get_canvas_plot_command_receipt(proposal_id)
+
+    assert captured["url"] == (
+        "http://127.0.0.1:8765/api/projects/7/canvas-plot/command-receipt"
+    )
+    assert proposal_id not in captured["url"]
+    assert captured["method"] == "GET"
+    assert captured["headers"]["idempotency-key"] == proposal_id
+    assert captured["headers"]["authorization"] == "Bearer secret"
+    assert result == receipt
+
+
 def test_api_client_preserves_http_status_and_machine_error_code():
     client = LogosForgeApiClient(
         base_url="http://127.0.0.1:8765", project_id=7,
@@ -288,6 +336,33 @@ def _timeline_request_digest(project_id: int, body: dict) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _canvas_request_digest(project_id: int, body: dict) -> str:
+    geometry = {"x", "y", "width", "height"}
+    raw = json.dumps(
+        {
+            "scope": "canvas-plot-command-v1",
+            "project_id": project_id,
+            "kind": body["kind"],
+            "expected_revision": body["expected_revision"],
+            "fields": {
+                key: (
+                    float(value)
+                    if key in geometry
+                    and isinstance(value, (int, float))
+                    and not isinstance(value, bool)
+                    else value
+                )
+                for key, value in body.items()
+                if key not in {"kind", "expected_revision"}
+            },
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 @pytest.mark.parametrize(
     "body",
     [
@@ -348,6 +423,63 @@ def test_timeline_receipt_request_digest_matches_core_canonical_wire(body):
             fields,
         )
     )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {
+            "kind": "create_node",
+            "expected_revision": "a" * 64,
+            "title": "Card café ∞",
+            "x": 1,
+            "y": -2.5,
+            "width": 180,
+            "height": 110.0,
+        },
+        {
+            "kind": "update_node",
+            "expected_revision": "b" * 64,
+            "node_id": 7,
+            "x": 0.0,
+            "scene_id": None,
+        },
+        {
+            "kind": "create_frame",
+            "expected_revision": "c" * 64,
+            "x": -10,
+            "y": 20,
+            "width": 500,
+            "height": 320,
+        },
+        {
+            "kind": "delete_link",
+            "expected_revision": "d" * 64,
+            "link_id": 19,
+        },
+    ],
+    ids=["create-node-float-wire", "update-node", "create-frame", "delete-link"],
+)
+def test_canvas_receipt_request_digest_matches_core_canonical_wire(body):
+    fields = {
+        key: (
+            float(value)
+            if key in {"x", "y", "width", "height"}
+            and isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            else value
+        )
+        for key, value in body.items()
+        if key not in {"kind", "expected_revision"}
+    }
+    expected = _canvas_plot_command_request_digest(
+        7,
+        body["kind"],
+        body["expected_revision"],
+        fields,
+    )
+    assert _canvas_plot_receipt_request_digest(7, body) == expected
+    assert _canvas_request_digest(7, body) == expected
 
 
 class _FakeApiClient:
@@ -482,6 +614,7 @@ class _FakeApiClient:
             },
         }
         self._canvas_plot_revision_sequence = 6
+        self.canvas_plot_receipts: dict[tuple[int, str], dict] = {}
         self.comments = {
             1: [
                 {
@@ -638,6 +771,18 @@ class _FakeApiClient:
             idempotency_key=idempotency_key,
         )
 
+    def get_canvas_plot_command_receipt(
+        self,
+        idempotency_key: str,
+        project_id: int | None = None,
+    ) -> dict:
+        pid = int(project_id) if project_id is not None else self.require_project_id()
+        return self.request(
+            "GET",
+            self.project_path("canvas-plot/command-receipt", pid),
+            idempotency_key=idempotency_key,
+        )
+
     def list_characters(self, project_id: int | None = None) -> list[dict]:
         pid = int(project_id) if project_id is not None else self.require_project_id()
         if pid == 1:
@@ -710,6 +855,18 @@ class _FakeApiClient:
                         "Timeline command receipt not found",
                         status_code=404,
                         error_code="timeline_receipt_not_found",
+                    )
+                return copy.deepcopy(receipt)
+            if path.endswith("/canvas-plot/command-receipt"):
+                project_id = int(path.split("/")[3])
+                receipt = self.canvas_plot_receipts.get(
+                    (project_id, idempotency_key)
+                )
+                if receipt is None:
+                    raise LogosForgeApiError(
+                        "Canvas Plot command receipt not found",
+                        status_code=404,
+                        error_code="canvas_plot_receipt_not_found",
                     )
                 return copy.deepcopy(receipt)
             if path == "/api/projects/1/timeline":
@@ -830,6 +987,27 @@ class _FakeApiClient:
         if method == "POST" and path == "/api/projects/1/canvas-plot/commands":
             canvas_plot = self.canvas_plots[1]
             assert body is not None
+            receipt_key = (1, idempotency_key)
+            if idempotency_key and receipt_key in self.canvas_plot_receipts:
+                receipt = self.canvas_plot_receipts[receipt_key]
+                if receipt["request_digest"] != _canvas_request_digest(1, body):
+                    raise LogosForgeApiError(
+                        "Idempotency-Key was reused",
+                        status_code=409,
+                        error_code="idempotency_key_conflict",
+                    )
+                return {
+                    "canvas_plot": copy.deepcopy(canvas_plot),
+                    "replayed": True,
+                    "applied_revision": receipt["applied_revision"],
+                    "changed": False,
+                    "affected_node_ids": [],
+                    "affected_link_ids": [],
+                    "affected_frame_ids": [],
+                    "created_node_id": None,
+                    "created_link_id": None,
+                    "created_frame_id": None,
+                }
             if body.get("expected_revision") != canvas_plot["revision"]:
                 raise LogosForgeApiError(
                     "HTTP 409: The Canvas Plot changed.",
@@ -863,8 +1041,26 @@ class _FakeApiClient:
                 f"{self._canvas_plot_revision_sequence:064x}"
             )
             self._canvas_plot_revision_sequence += 1
+            if idempotency_key:
+                self.canvas_plot_receipts[receipt_key] = {
+                    "project_id": 1,
+                    "request_digest": _canvas_request_digest(1, body),
+                    "command_kind": body["kind"],
+                    "expected_revision": body["expected_revision"],
+                    "applied_revision": canvas_plot["revision"],
+                    "original_changed": True,
+                    "original_affected_node_ids": [created_node_id],
+                    "original_affected_link_ids": [],
+                    "original_affected_frame_ids": [],
+                    "original_created_node_id": created_node_id,
+                    "original_created_link_id": None,
+                    "original_created_frame_id": None,
+                    "committed_at": "2026-10-04T10:00:00Z",
+                }
             return {
                 "canvas_plot": copy.deepcopy(canvas_plot),
+                "replayed": False,
+                "applied_revision": canvas_plot["revision"],
                 "changed": True,
                 "affected_node_ids": [created_node_id],
                 "affected_link_ids": [],
@@ -1075,7 +1271,7 @@ def test_canvas_plot_read_and_proposal_apply_are_revision_bound_and_single_use()
     assert fake.request_idempotency_keys[-1] == (
         "POST",
         "/api/projects/1/canvas-plot/commands",
-        "",
+        first["proposal_id"],
     )
 
     with pytest.raises(GatewayError, match="canvas_plot_conflict.*will not be retried"):
@@ -1471,6 +1667,289 @@ def test_timeline_recovery_pending_can_later_observe_the_committed_receipt():
     ]
 
 
+@pytest.mark.parametrize("status_code", [None, 500], ids=["no-response", "server-error"])
+def test_canvas_ambiguous_apply_recovers_a_committed_receipt(status_code):
+    gateway, fake = _gateway(allow_writes=True)
+    proposal = gateway.propose_canvas_plot_command({
+        "kind": "create_node",
+        "expected_revision": fake.canvas_plots[1]["revision"],
+        "title": "Possibly committed",
+        "x": 12,
+        "y": -5,
+    })
+    request = fake.request
+    post_keys = []
+
+    def lose_response(
+        method, path, body=None, query=None, *, idempotency_key="",
+    ):
+        result = request(
+            method, path, body, query, idempotency_key=idempotency_key,
+        )
+        if method == "POST" and path.endswith("/canvas-plot/commands"):
+            post_keys.append(idempotency_key)
+            del result
+            raise LogosForgeApiError(
+                "connection reset after request",
+                status_code=status_code,
+            )
+        return result
+
+    fake.request = lose_response
+    applied = gateway.apply_proposal(proposal["proposal_id"])
+
+    assert applied["state"] == "applied"
+    assert applied["recovered_from_core"] is True
+    assert applied["result"] == {
+        "canvas_plot": fake.canvas_plots[1],
+        "replayed": True,
+        "applied_revision": applied["receipt"]["applied_revision"],
+        "changed": False,
+        "affected_node_ids": [],
+        "affected_link_ids": [],
+        "affected_frame_ids": [],
+        "created_node_id": None,
+        "created_link_id": None,
+        "created_frame_id": None,
+    }
+    assert applied["receipt"]["command_kind"] == "create_node"
+    assert applied["receipt"]["original_created_node_id"] == 504
+    assert [node["title"] for node in fake.canvas_plots[1]["nodes"]].count(
+        "Possibly committed"
+    ) == 1
+    assert post_keys == [proposal["proposal_id"]]
+
+
+def test_canvas_supported_receipt_miss_allows_one_bounded_same_key_resend():
+    gateway, fake = _gateway(allow_writes=True)
+    proposal = gateway.propose_canvas_plot_command({
+        "kind": "create_node",
+        "expected_revision": fake.canvas_plots[1]["revision"],
+        "title": "Retry exactly once",
+    })
+    request = fake.request
+    post_keys = []
+
+    def lose_first_before_commit(
+        method, path, body=None, query=None, *, idempotency_key="",
+    ):
+        if method == "POST" and path.endswith("/canvas-plot/commands"):
+            post_keys.append(idempotency_key)
+            if len(post_keys) == 1:
+                raise LogosForgeApiError("connection reset before commit")
+        return request(
+            method, path, body, query, idempotency_key=idempotency_key,
+        )
+
+    fake.request = lose_first_before_commit
+    applied = gateway.apply_proposal(proposal["proposal_id"])
+
+    assert applied["state"] == "applied"
+    assert post_keys == [proposal["proposal_id"], proposal["proposal_id"]]
+    assert [node["title"] for node in fake.canvas_plots[1]["nodes"]].count(
+        "Retry exactly once"
+    ) == 1
+
+
+def test_canvas_recovery_pending_never_resends_more_than_once_total():
+    gateway, fake = _gateway(allow_writes=True)
+    proposal = gateway.propose_canvas_plot_command({
+        "kind": "create_node",
+        "expected_revision": fake.canvas_plots[1]["revision"],
+        "title": "No unbounded retries",
+    })
+    request = fake.request
+    post_keys = []
+
+    def lose_both_before_commit(
+        method, path, body=None, query=None, *, idempotency_key="",
+    ):
+        if method == "POST" and path.endswith("/canvas-plot/commands"):
+            post_keys.append(idempotency_key)
+            raise LogosForgeApiError("connection reset before commit")
+        return request(
+            method, path, body, query, idempotency_key=idempotency_key,
+        )
+
+    fake.request = lose_both_before_commit
+    with pytest.raises(GatewayError, match="awaiting durable recovery"):
+        gateway.apply_proposal(proposal["proposal_id"])
+    assert gateway.get_proposal(proposal["proposal_id"])["state"] == (
+        "recovery_pending"
+    )
+
+    fake.request = request
+    for _ in range(2):
+        with pytest.raises(GatewayError, match="remains recovery_pending"):
+            gateway.apply_proposal(proposal["proposal_id"])
+    assert post_keys == [proposal["proposal_id"], proposal["proposal_id"]]
+    assert all(
+        node["title"] != "No unbounded retries"
+        for node in fake.canvas_plots[1]["nodes"]
+    )
+
+
+def test_canvas_observed_receipt_blocks_resend_after_fresh_board_failure():
+    gateway, fake = _gateway(allow_writes=True)
+    proposal = gateway.propose_canvas_plot_command({
+        "kind": "create_node",
+        "expected_revision": fake.canvas_plots[1]["revision"],
+        "title": "Committed before read failure",
+    })
+    request = fake.request
+    get_canvas_plot = fake.get_canvas_plot
+    post_count = 0
+
+    def lose_response(
+        method, path, body=None, query=None, *, idempotency_key="",
+    ):
+        nonlocal post_count
+        result = request(
+            method, path, body, query, idempotency_key=idempotency_key,
+        )
+        if method == "POST" and path.endswith("/canvas-plot/commands"):
+            post_count += 1
+            del result
+            raise LogosForgeApiError("response lost")
+        return result
+
+    def board_read_fails(_project_id=None):
+        raise LogosForgeApiError("fresh board unavailable")
+
+    fake.request = lose_response
+    fake.get_canvas_plot = board_read_fails
+    with pytest.raises(GatewayError, match="awaiting durable recovery"):
+        gateway.apply_proposal(proposal["proposal_id"])
+    assert post_count == 1
+
+    fake.request = request
+    fake.get_canvas_plot = get_canvas_plot
+    applied = gateway.apply_proposal(proposal["proposal_id"])
+    assert applied["state"] == "applied"
+    assert applied["recovered_from_core"] is True
+    assert post_count == 1
+    assert [node["title"] for node in fake.canvas_plots[1]["nodes"]].count(
+        "Committed before read failure"
+    ) == 1
+
+
+def test_canvas_receipt_integrity_mismatch_fails_closed():
+    gateway, fake = _gateway(allow_writes=True)
+    proposal = gateway.propose_canvas_plot_command({
+        "kind": "create_node",
+        "expected_revision": fake.canvas_plots[1]["revision"],
+        "title": "Tampered receipt",
+    })
+    request = fake.request
+
+    def commit_then_tamper(
+        method, path, body=None, query=None, *, idempotency_key="",
+    ):
+        result = request(
+            method, path, body, query, idempotency_key=idempotency_key,
+        )
+        if method == "POST" and path.endswith("/canvas-plot/commands"):
+            fake.canvas_plot_receipts[(1, idempotency_key)][
+                "request_digest"
+            ] = "f" * 64
+            del result
+            raise LogosForgeApiError("response lost")
+        return result
+
+    fake.request = commit_then_tamper
+    with pytest.raises(GatewayError, match="receipt integrity check failed"):
+        gateway.apply_proposal(proposal["proposal_id"])
+    assert gateway.get_proposal(proposal["proposal_id"])["state"] == "failed"
+
+
+def _valid_canvas_update_receipt(**overrides):
+    receipt = {
+        "project_id": 1,
+        "request_digest": "d" * 64,
+        "command_kind": "update_node",
+        "expected_revision": "a" * 64,
+        "applied_revision": "b" * 64,
+        "original_changed": True,
+        "original_affected_node_ids": [501],
+        "original_affected_link_ids": [],
+        "original_affected_frame_ids": [],
+        "original_created_node_id": None,
+        "original_created_link_id": None,
+        "original_created_frame_id": None,
+        "committed_at": "2026-10-05T10:00:00Z",
+    }
+    receipt.update(overrides)
+    return receipt
+
+
+@pytest.mark.parametrize(
+    "receipt",
+    [
+        _valid_canvas_update_receipt(applied_revision="a" * 64),
+        _valid_canvas_update_receipt(original_affected_node_ids=[]),
+        _valid_canvas_update_receipt(
+            original_affected_node_ids=[],
+            original_affected_link_ids=[601],
+        ),
+        _valid_canvas_update_receipt(
+            command_kind="delete_node",
+            original_affected_frame_ids=[701],
+        ),
+    ],
+    ids=[
+        "changed-same-revision",
+        "changed-empty-command-family",
+        "changed-cross-family-only",
+        "delete-node-frame-cross-family",
+    ],
+)
+def test_canvas_receipt_shape_rejects_impossible_changed_effects(receipt):
+    with pytest.raises(GatewayError, match="invalid Canvas Plot receipt"):
+        LogosForgeMcpGateway._validate_canvas_plot_receipt_shape(receipt, 1)
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "create_node",
+        "delete_node",
+        "delete_link",
+        "create_frame",
+        "delete_frame",
+    ],
+)
+def test_canvas_receipt_shape_rejects_impossible_noop_kinds(kind):
+    receipt = _valid_canvas_update_receipt(
+        command_kind=kind,
+        applied_revision="a" * 64,
+        original_changed=False,
+        original_affected_node_ids=[],
+    )
+
+    with pytest.raises(GatewayError, match="invalid Canvas Plot receipt"):
+        LogosForgeMcpGateway._validate_canvas_plot_receipt_shape(receipt, 1)
+
+
+@pytest.mark.parametrize(
+    "kind",
+    ["update_node", "update_link", "update_frame", "create_link"],
+)
+def test_canvas_receipt_shape_accepts_only_protocol_permitted_noops(kind):
+    receipt = _valid_canvas_update_receipt(
+        command_kind=kind,
+        applied_revision="a" * 64,
+        original_changed=False,
+        original_affected_node_ids=[],
+    )
+
+    canonical = LogosForgeMcpGateway._validate_canvas_plot_receipt_shape(
+        receipt,
+        1,
+    )
+    assert canonical["command_kind"] == kind
+    assert canonical["original_changed"] is False
+
+
 def test_timeline_legacy_receipt_404_keeps_ambiguous_apply_terminal():
     gateway, fake = _gateway(allow_writes=True)
     proposal = gateway.propose_timeline_command({
@@ -1581,6 +2060,66 @@ def test_unknown_timeline_proposal_recovers_from_selected_project_after_restart(
         wrong_project.get_proposal(proposal["proposal_id"])
 
 
+def test_unknown_canvas_proposal_recovers_from_selected_project_after_restart():
+    gateway, fake = _gateway(allow_writes=True)
+    proposal = gateway.propose_canvas_plot_command({
+        "kind": "create_node",
+        "expected_revision": fake.canvas_plots[1]["revision"],
+        "title": "Survives gateway restart",
+    })
+    gateway.apply_proposal(proposal["proposal_id"])
+
+    restarted, _ = _gateway(fake)
+    recovered = restarted.get_proposal(proposal["proposal_id"])
+
+    assert recovered["state"] == "applied"
+    assert recovered["recovered_from_core"] is True
+    assert recovered["request"] is None
+    assert recovered["receipt"]["command_kind"] == "create_node"
+    assert recovered["review"]["recovered_receipt"] == recovered["receipt"]
+    assert recovered["result"] == {
+        "canvas_plot": fake.canvas_plots[1],
+        "replayed": True,
+        "applied_revision": recovered["receipt"]["applied_revision"],
+        "changed": False,
+        "affected_node_ids": [],
+        "affected_link_ids": [],
+        "affected_frame_ids": [],
+        "created_node_id": None,
+        "created_link_id": None,
+        "created_frame_id": None,
+    }
+
+    fake.project_id = 2
+    wrong_project, _ = _gateway(fake)
+    with pytest.raises(GatewayError, match="Unknown proposal id"):
+        wrong_project.get_proposal(proposal["proposal_id"])
+
+
+def test_restart_recovery_fails_closed_on_cross_family_receipt_collision():
+    gateway, fake = _gateway(allow_writes=True)
+    proposal = gateway.propose_canvas_plot_command({
+        "kind": "create_node",
+        "expected_revision": fake.canvas_plots[1]["revision"],
+        "title": "Canvas receipt",
+    })
+    gateway.apply_proposal(proposal["proposal_id"])
+    fake.timeline_receipts[(1, proposal["proposal_id"])] = {
+        "project_id": 1,
+        "request_digest": "a" * 64,
+        "command_kind": "create_lane",
+        "expected_revision": "b" * 64,
+        "applied_revision": "c" * 64,
+        "original_changed": True,
+        "original_affected_scene_ids": [],
+        "committed_at": "2026-10-04T10:00:00Z",
+    }
+
+    restarted, _ = _gateway(fake)
+    with pytest.raises(GatewayError, match="capability collision.*failed closed"):
+        restarted.get_proposal(proposal["proposal_id"])
+
+
 def test_restart_recovery_rejects_project_id_reuse_between_receipt_and_board():
     gateway, fake = _gateway(allow_writes=True)
     proposal = gateway.propose_timeline_command({
@@ -1618,6 +2157,48 @@ def test_restart_recovery_rejects_project_id_reuse_between_receipt_and_board():
         restarted.get_proposal(proposal["proposal_id"])
 
 
+def test_canvas_restart_recovery_brackets_board_with_same_receipt():
+    gateway, fake = _gateway(allow_writes=True)
+    proposal = gateway.propose_canvas_plot_command({
+        "kind": "create_node",
+        "expected_revision": fake.canvas_plots[1]["revision"],
+        "title": "Old project card",
+    })
+    gateway.apply_proposal(proposal["proposal_id"])
+
+    restarted, _ = _gateway(fake)
+    replacement = {
+        "project_id": 1,
+        "revision": "9" * 64,
+        "nodes": [{
+            "id": 1,
+            "title": "Replacement project card",
+            "body": "",
+            "x": 0.0,
+            "y": 0.0,
+            "width": 180.0,
+            "height": 110.0,
+            "color_label": "",
+            "group_label": "",
+            "scene_id": None,
+            "sort_order": 0,
+            "created_at": "2026-10-04T10:00:00Z",
+        }],
+        "links": [],
+        "frames": [],
+    }
+
+    def replace_project_during_canvas_read(project_id=None):
+        assert int(project_id or fake.require_project_id()) == 1
+        fake.canvas_plot_receipts.clear()
+        fake.canvas_plots[1] = copy.deepcopy(replacement)
+        return copy.deepcopy(replacement)
+
+    fake.get_canvas_plot = replace_project_during_canvas_read
+    with pytest.raises(GatewayError, match="project lifetime may have changed"):
+        restarted.get_proposal(proposal["proposal_id"])
+
+
 def test_unknown_proposal_receipt_miss_stays_unknown():
     gateway, fake = _gateway()
     before = len(fake.requests)
@@ -1627,9 +2208,13 @@ def test_unknown_proposal_receipt_miss_stays_unknown():
 
     with pytest.raises(GatewayError, match="Unknown proposal id"):
         gateway.get_proposal("lfp_abcdefghijklmnopqrstuvwx")
-    assert fake.requests[-1][:2] == (
+    assert fake.requests[-2][0:2] == (
         "GET",
         "/api/projects/1/timeline/command-receipt",
+    )
+    assert fake.requests[-1][0:2] == (
+        "GET",
+        "/api/projects/1/canvas-plot/command-receipt",
     )
 
 
@@ -2564,7 +3149,7 @@ def test_real_mcp_stdio_initializes_and_advertises_structured_tools():
 
     initialized, listed = asyncio.run(exercise())
     assert initialized.serverInfo.name == "logosforge"
-    assert initialized.serverInfo.version == "1.4.0"
+    assert initialized.serverInfo.version == "1.5.0"
     tools = {tool.name: tool for tool in listed.tools}
     assert len(tools) == 42
     assert {

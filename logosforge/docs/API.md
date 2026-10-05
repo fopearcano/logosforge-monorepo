@@ -299,6 +299,7 @@ PATCH  /api/projects/{project_id}/plot/blocks/{block_id}          { plotline?, c
 ```
 GET    /api/projects/{project_id}/canvas-plot
 POST   /api/projects/{project_id}/canvas-plot/commands
+GET    /api/projects/{project_id}/canvas-plot/command-receipt
 ```
 
 The read returns one coherent `CanvasPlotSnapshotDTO` containing `project_id`,
@@ -318,6 +319,25 @@ kinds are `create_node`, `update_node`, `delete_node`, `create_link`,
 `update_link`, `delete_link`, `create_frame`, `update_frame`, and
 `delete_frame`. Successful changes return the committed snapshot plus affected
 and created ids and publish `canvas_plot_changed`; exact no-ops publish nothing.
+
+Canvas Plot command clients may send the same 16–128-character
+`Idempotency-Key` accepted by Timeline commands. The first keyed command and
+its compact receipt commit atomically; the result has `replayed: false` and an
+`applied_revision` equal to the committed board revision. Sending the exact
+same command with the same key returns the current coherent board with
+`changed: false`, empty affected-id arrays, null created ids, `replayed: true`,
+and the original `applied_revision`. Receipt lookup precedes the revision
+comparison, so a replay remains safe after later board changes. Reusing a key
+for a different command returns `409 idempotency_key_conflict` without a
+mutation.
+
+`GET /canvas-plot/command-receipt` requires the same `Idempotency-Key` header
+and returns the canonical request digest, command kind, expected and applied
+revisions, original changed/affected/created outcome, and commit timestamp. A
+genuine miss returns `404 canvas_plot_receipt_not_found`; responses are
+non-cacheable. Receipts include exact no-op commands, last for the project
+lifetime, and are deleted with the project. Failed commands leave no receipt;
+calls without a key retain the original revision-guarded behavior.
 
 ### Timeline (scene-derived; event id = scene id)
 ```

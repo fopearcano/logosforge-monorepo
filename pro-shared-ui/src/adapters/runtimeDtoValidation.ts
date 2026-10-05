@@ -796,7 +796,25 @@ function canvasPlotCommandResult(value: unknown, path: string): CanvasPlotComman
     requireField(dto, "canvas_plot", path),
     fieldPath(path, "canvas_plot"),
   );
+  const replayed = booleanValue(
+    requireField(dto, "replayed", path),
+    fieldPath(path, "replayed"),
+  );
+  const appliedRevision = stringValue(
+    requireField(dto, "applied_revision", path),
+    fieldPath(path, "applied_revision"),
+  );
+  if (!/^[0-9a-f]{64}$/.test(appliedRevision)) {
+    fail(
+      fieldPath(path, "applied_revision"),
+      "a 64-character lowercase hexadecimal revision",
+      appliedRevision,
+    );
+  }
   const changed = booleanValue(requireField(dto, "changed", path), fieldPath(path, "changed"));
+  if (replayed && changed) {
+    fail(fieldPath(path, "changed"), "false when replayed is true", changed);
+  }
   const affected = [
     ["affected_node_ids", "node"],
     ["affected_link_ids", "link"],
@@ -856,14 +874,29 @@ export function validateCanvasPlotCommandResultDTOForRequest(
       result.canvas_plot.project_id,
     );
   }
-  if (!result.changed && result.canvas_plot.revision !== command.expected_revision) {
+  if (!result.replayed && result.applied_revision !== result.canvas_plot.revision) {
+    fail(
+      "$.applied_revision",
+      "the returned Canvas Plot revision for a fresh command",
+      result.applied_revision,
+    );
+  }
+  if (
+    !result.replayed
+    && !result.changed
+    && result.canvas_plot.revision !== command.expected_revision
+  ) {
     fail(
       "$.canvas_plot.revision",
       "the command's expected revision when changed is false",
       result.canvas_plot.revision,
     );
   }
-  if (result.changed && result.canvas_plot.revision === command.expected_revision) {
+  if (
+    !result.replayed
+    && result.changed
+    && result.canvas_plot.revision === command.expected_revision
+  ) {
     fail(
       "$.canvas_plot.revision",
       "a new revision when changed is true",
@@ -879,7 +912,7 @@ export function validateCanvasPlotCommandResultDTOForRequest(
         : null;
   for (const field of ["created_node_id", "created_link_id", "created_frame_id"] as const) {
     const id = result[field];
-    if (field === expectedCreatedField && result.changed && id == null) {
+    if (field === expectedCreatedField && !result.replayed && result.changed && id == null) {
       fail(`$.${field}`, `a created id for ${command.kind}`, id);
     }
     if (field !== expectedCreatedField && id != null) {

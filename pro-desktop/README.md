@@ -186,17 +186,18 @@ no token or changing package-extraction path belongs in Codex configuration.
 Writes remain disabled unless the MCP client explicitly sets
 `LOGOSFORGE_MCP_ALLOW_WRITES=1`.
 
-Gateway version 1.4 exposes 42 named tools. In addition to paged/filterable
+Gateway version 1.5 exposes 42 named tools. In addition to paged/filterable
 comment-thread reads and revision-bound Reply/Resolve/Reopen proposals, it can
 read the canonical Timeline and Canvas Plot and propose strict revision-bound
 commands for either board. The core rechecks board and comment revisions
 atomically with apply, rejecting intervening changes. Canvas node deletion
 removes incident Canvas links but preserves linked manuscript scenes. Timeline
 lane deletion preserves events as Unassigned and event removal preserves the
-manuscript scene. Timeline proposals use their opaque proposal id for a durable
-core receipt, so an ambiguous apply can recover the exact committed outcome
-across an MCP companion restart without duplicating the command. Canvas Plot
-and other proposal families keep their terminal indeterminate-response rule.
+manuscript scene. Timeline and Canvas Plot proposals use their opaque proposal
+id for a durable core receipt, so an ambiguous board apply can recover the
+exact committed outcome across an MCP companion restart without duplicating
+the command. Other proposal families keep their terminal
+indeterminate-response rule.
 Canvas reads use bounded node-body previews by default and require an explicit
 `include_bodies` opt-in for complete card text. All project text is
 user-authored data, never agent instructions.
@@ -206,8 +207,8 @@ remain in the Pro UI and are not MCP tools.
 The required packaged-Windows CI gate builds the core and MCP sidecars from a
 clean checkout, verifies that the native companion is present in the Electron
 package, then exercises authenticated reads, applied Timeline and Canvas Plot
-commands with rejected stale siblings, Timeline durable receipt recovery from
-a fresh MCP process, Canvas persistence across a companion restart, a
+commands with rejected stale siblings, durable Timeline and Canvas Plot receipt
+recovery from a fresh MCP process, Canvas persistence across that restart, a
 revision-guarded comment reply and resolution, stale-write rejection, and
 single-use proposal replay protection. The optional Codex subprocess used by
 the smoke remains read-only.

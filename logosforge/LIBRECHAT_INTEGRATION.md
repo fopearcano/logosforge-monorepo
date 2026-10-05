@@ -129,12 +129,12 @@ even if SQLite reuses a deleted row's numeric ID, while unrelated prose/title
 edits do not invalidate a safe board operation. Lane deletion preserves its
 events as Unassigned, and event removal preserves the manuscript scene.
 
-Gateway 1.3 uses each opaque Timeline proposal id as a durable core
-idempotency key. If the apply response is lost, the gateway can reconcile the
-same proposal through its project-scoped receipt—even after the MCP process
-restarts—without duplicating the mutation. A replay returns current Timeline
-state plus the original applied revision, never a stale stored snapshot.
-Receipts last for the project lifetime and disappear with it.
+Gateway 1.5 uses each opaque Timeline or Canvas Plot proposal id as a durable
+core idempotency key. If the apply response is lost, the gateway can reconcile
+the same proposal through its project-scoped receipt—even after the MCP process
+restarts—without duplicating the mutation. A replay returns the current board
+plus the original applied revision, never a stale stored snapshot. Receipts
+last for the project lifetime and disappear with it.
 
 `logosforge_search` delegates to the core's typed, project-scoped search route
 in one authenticated request. Results remain bounded and include authoritative
@@ -157,16 +157,16 @@ creation, anchor/root-body editing, and reply/thread deletion remain available
 only in Pro's own UI.
 
 If apply receives an explicit HTTP 4xx rejection, the proposal is terminally
-failed and the agent must reread before proposing again. Only Timeline
-proposals have durable recovery in this phase: a unique receipt miss from a
-receipt-capable core permits one bounded resend of the exact same proposal and
-key. An old-core/generic 404 makes that original ambiguous apply terminally
-`indeterminate`; it cannot prove a safe resend. If the one authorized resend is
-also ambiguous, later same-id receipt checks stay `recovery_pending` but never
-send another mutation or invent a fresh proposal/key. For every other proposal
-type, a lost response or HTTP 5xx remains terminally `indeterminate`; inspect
-current state and never retry because the mutation may already have committed.
-The shared apply tool is therefore still not generally idempotent.
+failed and the agent must reread before proposing again. Timeline and Canvas
+Plot proposals have durable recovery: a unique, family-specific receipt miss
+from a receipt-capable core permits one bounded resend of the exact same
+proposal and key. An old-core/generic 404 makes that original ambiguous apply
+terminally `indeterminate`; it cannot prove a safe resend. If the one authorized
+resend is also ambiguous, later same-id receipt checks stay `recovery_pending`
+but never send another mutation or invent a fresh proposal/key. For every other
+proposal type, a lost response or HTTP 5xx remains terminally `indeterminate`;
+inspect current state and never retry because the mutation may already have
+committed. The shared apply tool is therefore still not generally idempotent.
 
 See [Pro MCP gateway](docs/MCP_GATEWAY.md) for the complete tool model,
 environment variables, Codex setup, remote-host restrictions, and checkpoint

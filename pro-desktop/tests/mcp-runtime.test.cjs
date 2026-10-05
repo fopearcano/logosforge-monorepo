@@ -232,21 +232,29 @@ check('packaged smoke applies one Canvas Plot proposal and rejects its stale sib
   packagedSmoke.includes('installed MCP Canvas Plot apply') &&
   packagedSmoke.includes('installed MCP stale Canvas Plot sibling apply') &&
   packagedSmoke.includes('after_stale_canvas != applied_canvas_snapshot'));
-check('packaged smoke recovers one durable Timeline receipt after companion restart',
-  packagedSmoke.includes('async def _recover_installed_timeline_receipt(') &&
+check('packaged smoke recovers durable Timeline and Canvas receipts after companion restart',
+  packagedSmoke.includes('async def _recover_installed_board_receipts(') &&
   packagedSmoke.includes('restarted MCP durable Timeline receipt recovery') &&
+  packagedSmoke.includes('restarted MCP durable Canvas Plot receipt recovery') &&
   packagedSmoke.includes('recovered.get("recovered_from_core") is not True') &&
   packagedSmoke.includes('recovered_result.get("replayed") is not True') &&
-  packagedSmoke.includes('recovered_result.get("applied_revision") != applied_revision') &&
+  packagedSmoke.includes('recovered_result.get("applied_revision") != applied_timeline_revision') &&
   packagedSmoke.includes('recovered_result.get("affected_scene_ids") != []') &&
+  packagedSmoke.includes('recovered_canvas.get("recovered_from_core") is not True') &&
+  packagedSmoke.includes('recovered_canvas_receipt.get("original_created_node_id")') &&
+  packagedSmoke.includes('recovered_canvas_receipt.get("original_affected_node_ids")') &&
+  packagedSmoke.includes('recovered_canvas_result.get("replayed") is not True') &&
+  packagedSmoke.includes('recovered_canvas_result.get("affected_node_ids") != []') &&
+  packagedSmoke.includes('recovered_canvas_result.get("created_node_id") is not None') &&
   packagedSmoke.includes('packaged_lane_count != 1') &&
   packagedSmoke.indexOf('_exercise_installed_mcp(') <
-    packagedSmoke.lastIndexOf('_recover_installed_timeline_receipt('));
-check('companion restart re-reads Canvas data but keeps receipt recovery Timeline-only',
+    packagedSmoke.lastIndexOf('_recover_installed_board_receipts('));
+check('fresh companion recovers the applied Canvas proposal against its persisted board',
   packagedSmoke.includes('restarted MCP Canvas Plot persistence read') &&
   packagedSmoke.includes('restarted_canvas_plot != expected_canvas_plot') &&
   packagedSmoke.includes('{"proposal_id": timeline_proposal_id}') &&
-  !packagedSmoke.includes('canvas_proposal_id'));
+  packagedSmoke.includes('{"proposal_id": canvas_proposal_id}') &&
+  packagedSmoke.includes('recovered_canvas_result.get("canvas_plot") != restarted_canvas_plot'));
 check('real CoreManager smoke publishes Canvas Plot focus and reads its selected board',
   liveContextSmoke.includes('"activePanelId": "canvas-plot"') &&
   liveContextSmoke.includes('"activeSceneId": None') &&

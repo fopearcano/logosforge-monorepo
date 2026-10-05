@@ -32,7 +32,7 @@ from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
 
-DB_SCHEMA_VERSION = 4
+DB_SCHEMA_VERSION = 5
 SQLITE_BUSY_TIMEOUT_MS = 5000
 BACKUP_INSTALL_WAIT_SECONDS = 10.0
 
@@ -362,6 +362,7 @@ from logosforge.models import (
     TimelineCommandReceipt,
     TimelineLink,
     TimelineStructureLink,
+    CanvasPlotCommandReceipt,
     CanvasPlotNode,
     CanvasPlotLink,
     CanvasPlotFrame,
@@ -456,6 +457,10 @@ class CanvasPlotRevisionConflict(RuntimeError):
 
 class CanvasPlotCommandError(ValueError):
     """A requested Canvas Plot mutation is invalid or ambiguous."""
+
+
+class CanvasPlotIdempotencyKeyConflict(RuntimeError):
+    """An Idempotency-Key was already committed for another Canvas command."""
 
 
 class CanvasPlotProjectNotFound(LookupError):
@@ -586,9 +591,31 @@ class CanvasPlotCommandResult:
     created_node_id: int | None = None
     created_link_id: int | None = None
     created_frame_id: int | None = None
+    replayed: bool = False
+    applied_revision: str = ""
+
+
+@dataclass(frozen=True)
+class CanvasPlotCommandReceiptData:
+    """Decoded durable Canvas Plot receipt safe for the typed API."""
+
+    project_id: int
+    request_digest: str
+    kind: str
+    expected_revision: str
+    applied_revision: str
+    original_changed: bool
+    original_affected_node_ids: tuple[int, ...]
+    original_affected_link_ids: tuple[int, ...]
+    original_affected_frame_ids: tuple[int, ...]
+    original_created_node_id: int | None
+    original_created_link_id: int | None
+    original_created_frame_id: int | None
+    created_at: datetime
 
 
 _TIMELINE_RECEIPT_SCHEMA_VERSION = 1
+_CANVAS_PLOT_RECEIPT_SCHEMA_VERSION = 1
 _TIMELINE_COMMAND_KINDS = frozenset({
     "create_lane",
     "update_lane",
@@ -609,6 +636,9 @@ _CANVAS_PLOT_COMMAND_KINDS = frozenset({
     "delete_frame",
 })
 _TIMELINE_IDEMPOTENCY_KEY_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$"
+)
+_CANVAS_PLOT_IDEMPOTENCY_KEY_RE = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$"
 )
 _LOWER_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -728,6 +758,266 @@ def _decode_timeline_command_receipt(
         applied_revision=applied_revision,
         original_changed=original_changed,
         original_affected_scene_ids=tuple(affected),
+        created_at=row.created_at,
+    )
+
+
+def _canvas_plot_idempotency_key_hash(value: str) -> str:
+    """Validate and irreversibly identify one Canvas retry capability."""
+    if not isinstance(value, str):
+        raise CanvasPlotCommandError("Idempotency-Key must be a string")
+    if (
+        value != value.strip()
+        or _CANVAS_PLOT_IDEMPOTENCY_KEY_RE.fullmatch(value) is None
+    ):
+        raise CanvasPlotCommandError(
+            "Idempotency-Key must contain 16-128 safe ASCII characters"
+        )
+    return hashlib.sha256(value.encode("ascii")).hexdigest()
+
+
+def _canvas_plot_command_request_digest(
+    project_id: int,
+    kind: str,
+    expected_revision: str,
+    fields: dict,
+) -> str:
+    """Content-address the exact Canvas command bound to a retry key."""
+    try:
+        encoded = json.dumps(
+            {
+                "scope": "canvas-plot-command-v1",
+                "project_id": int(project_id),
+                "kind": kind,
+                "expected_revision": expected_revision,
+                "fields": fields,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise CanvasPlotCommandError(
+            "Canvas Plot command contains a value that cannot be persisted"
+        ) from exc
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _canvas_plot_receipt_result_json(
+    *,
+    kind: str,
+    expected_revision: str,
+    applied_revision: str,
+    original_changed: bool,
+    original_affected_node_ids: tuple[int, ...],
+    original_affected_link_ids: tuple[int, ...],
+    original_affected_frame_ids: tuple[int, ...],
+    original_created_node_id: int | None,
+    original_created_link_id: int | None,
+    original_created_frame_id: int | None,
+) -> str:
+    return json.dumps(
+        {
+            "schema_version": _CANVAS_PLOT_RECEIPT_SCHEMA_VERSION,
+            "kind": kind,
+            "expected_revision": expected_revision,
+            "applied_revision": applied_revision,
+            "original_changed": original_changed,
+            "original_affected_node_ids": list(original_affected_node_ids),
+            "original_affected_link_ids": list(original_affected_link_ids),
+            "original_affected_frame_ids": list(original_affected_frame_ids),
+            "original_created_node_id": original_created_node_id,
+            "original_created_link_id": original_created_link_id,
+            "original_created_frame_id": original_created_frame_id,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _decode_canvas_plot_command_receipt(
+    row: CanvasPlotCommandReceipt,
+) -> CanvasPlotCommandReceiptData:
+    """Decode a Canvas receipt fail-closed; corrupt proof cannot replay."""
+    try:
+        payload = json.loads(row.result_json)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise RuntimeError("Canvas Plot command receipt is corrupt") from exc
+    if (
+        not isinstance(payload, dict)
+        or not isinstance(payload.get("schema_version"), int)
+        or isinstance(payload.get("schema_version"), bool)
+        or payload.get("schema_version") != _CANVAS_PLOT_RECEIPT_SCHEMA_VERSION
+    ):
+        raise RuntimeError(
+            "Canvas Plot command receipt has an unsupported schema"
+        )
+
+    kind = payload.get("kind")
+    expected_revision = payload.get("expected_revision")
+    applied_revision = payload.get("applied_revision")
+    original_changed = payload.get("original_changed")
+    affected_node_ids = payload.get("original_affected_node_ids")
+    affected_link_ids = payload.get("original_affected_link_ids")
+    affected_frame_ids = payload.get("original_affected_frame_ids")
+    created_node_id = payload.get("original_created_node_id")
+    created_link_id = payload.get("original_created_link_id")
+    created_frame_id = payload.get("original_created_frame_id")
+
+    def valid_ids(value) -> bool:
+        return (
+            isinstance(value, list)
+            and not any(
+                isinstance(item, bool)
+                or not isinstance(item, int)
+                or item <= 0
+                for item in value
+            )
+            and len(set(value)) == len(value)
+        )
+
+    def valid_optional_id(value) -> bool:
+        return value is None or (
+            not isinstance(value, bool)
+            and isinstance(value, int)
+            and value > 0
+        )
+
+    if (
+        not isinstance(kind, str)
+        or kind not in _CANVAS_PLOT_COMMAND_KINDS
+        or not isinstance(expected_revision, str)
+        or _LOWER_SHA256_RE.fullmatch(expected_revision) is None
+        or not isinstance(applied_revision, str)
+        or _LOWER_SHA256_RE.fullmatch(applied_revision) is None
+        or not isinstance(original_changed, bool)
+        or not valid_ids(affected_node_ids)
+        or not valid_ids(affected_link_ids)
+        or not valid_ids(affected_frame_ids)
+        or not valid_optional_id(created_node_id)
+        or not valid_optional_id(created_link_id)
+        or not valid_optional_id(created_frame_id)
+    ):
+        raise RuntimeError("Canvas Plot command receipt has invalid result data")
+
+    created_ids = (created_node_id, created_link_id, created_frame_id)
+    node_command = kind in {"create_node", "update_node", "delete_node"}
+    link_command = kind in {"create_link", "update_link", "delete_link"}
+    frame_command = kind in {"create_frame", "update_frame", "delete_frame"}
+    no_op_kinds = {
+        "update_node",
+        "create_link",
+        "update_link",
+        "update_frame",
+    }
+    if (
+        sum(value is not None for value in created_ids) > 1
+        or (original_changed and applied_revision == expected_revision)
+        or (
+            not original_changed
+            and applied_revision != expected_revision
+        )
+        or (not original_changed and kind not in no_op_kinds)
+        or (
+            not original_changed
+            and (
+                affected_node_ids
+                or affected_link_ids
+                or affected_frame_ids
+                or any(value is not None for value in created_ids)
+            )
+        )
+        or (
+            original_changed
+            and node_command
+            and not affected_node_ids
+        )
+        or (
+            original_changed
+            and link_command
+            and not affected_link_ids
+        )
+        or (
+            original_changed
+            and frame_command
+            and not affected_frame_ids
+        )
+        or (node_command and affected_frame_ids)
+        or (
+            node_command
+            and kind != "delete_node"
+            and affected_link_ids
+        )
+        or (
+            link_command
+            and (affected_node_ids or affected_frame_ids)
+        )
+        or (
+            frame_command
+            and (affected_node_ids or affected_link_ids)
+        )
+        or (
+            created_node_id is not None
+            and (
+                kind != "create_node"
+                or created_node_id not in affected_node_ids
+            )
+        )
+        or (
+            created_link_id is not None
+            and (
+                kind != "create_link"
+                or created_link_id not in affected_link_ids
+            )
+        )
+        or (
+            created_frame_id is not None
+            and (
+                kind != "create_frame"
+                or created_frame_id not in affected_frame_ids
+            )
+        )
+        or (
+            kind not in {"create_node", "create_link", "create_frame"}
+            and any(value is not None for value in created_ids)
+        )
+        or (
+            original_changed
+            and kind == "create_node"
+            and created_node_id is None
+        )
+        or (
+            original_changed
+            and kind == "create_link"
+            and created_link_id is None
+        )
+        or (
+            original_changed
+            and kind == "create_frame"
+            and created_frame_id is None
+        )
+    ):
+        raise RuntimeError("Canvas Plot command receipt has invalid result data")
+    if (
+        _LOWER_SHA256_RE.fullmatch(row.idempotency_key_hash or "") is None
+        or _LOWER_SHA256_RE.fullmatch(row.request_digest or "") is None
+    ):
+        raise RuntimeError("Canvas Plot command receipt has invalid digest data")
+    return CanvasPlotCommandReceiptData(
+        project_id=int(row.project_id),
+        request_digest=row.request_digest,
+        kind=kind,
+        expected_revision=expected_revision,
+        applied_revision=applied_revision,
+        original_changed=original_changed,
+        original_affected_node_ids=tuple(affected_node_ids),
+        original_affected_link_ids=tuple(affected_link_ids),
+        original_affected_frame_ids=tuple(affected_frame_ids),
+        original_created_node_id=created_node_id,
+        original_created_link_id=created_link_id,
+        original_created_frame_id=created_frame_id,
         created_at=row.created_at,
     )
 
@@ -4952,12 +5242,36 @@ class Database:
                 session.rollback()
         return snapshot
 
+    def get_canvas_plot_command_receipt(
+        self,
+        project_id: int,
+        idempotency_key: str,
+    ) -> CanvasPlotCommandReceiptData | None:
+        """Return one completed Canvas command receipt in its project scope."""
+        key_hash = _canvas_plot_idempotency_key_hash(idempotency_key)
+        with Session(self._engine, expire_on_commit=False) as session:
+            session.connection().exec_driver_sql("BEGIN")
+            try:
+                if session.get(Project, project_id) is None:
+                    return None
+                row = session.get(
+                    CanvasPlotCommandReceipt,
+                    (int(project_id), key_hash),
+                )
+                if row is None:
+                    return None
+                receipt = _decode_canvas_plot_command_receipt(row)
+            finally:
+                session.rollback()
+        return receipt
+
     def execute_canvas_plot_command(
         self,
         project_id: int,
         *,
         kind: str,
         expected_revision: str,
+        idempotency_key: str | None = None,
         **fields,
     ) -> CanvasPlotCommandResult:
         """Apply one revision-guarded Canvas Plot mutation atomically."""
@@ -4998,6 +5312,17 @@ class Database:
                 + ", ".join(sorted(unexpected))
             )
 
+        key_hash: str | None = None
+        request_digest: str | None = None
+        if idempotency_key is not None:
+            key_hash = _canvas_plot_idempotency_key_hash(idempotency_key)
+            request_digest = _canvas_plot_command_request_digest(
+                project_id,
+                kind,
+                expected_revision,
+                fields,
+            )
+
         with self.canvas_plot_write_lock(project_id):
             with Session(self._engine, expire_on_commit=False) as session:
                 session.connection().exec_driver_sql("BEGIN IMMEDIATE")
@@ -5007,6 +5332,32 @@ class Database:
                     )
                     if current is None:
                         raise CanvasPlotProjectNotFound(project_id)
+                    if key_hash is not None:
+                        receipt_row = session.get(
+                            CanvasPlotCommandReceipt,
+                            (int(project_id), key_hash),
+                        )
+                        if receipt_row is not None:
+                            receipt = _decode_canvas_plot_command_receipt(
+                                receipt_row,
+                            )
+                            assert request_digest is not None
+                            if not hmac.compare_digest(
+                                receipt.request_digest,
+                                request_digest,
+                            ):
+                                raise CanvasPlotIdempotencyKeyConflict(
+                                    "Idempotency-Key was already used for a "
+                                    "different Canvas Plot command"
+                                )
+                            session.expunge_all()
+                            session.rollback()
+                            return CanvasPlotCommandResult(
+                                snapshot=current,
+                                changed=False,
+                                replayed=True,
+                                applied_revision=receipt.applied_revision,
+                            )
                     if expected_revision != current.revision:
                         raise CanvasPlotRevisionConflict(
                             expected_revision, current.revision,
@@ -5022,6 +5373,11 @@ class Database:
                     created_node_id: int | None = None
                     created_link_id: int | None = None
                     created_frame_id: int | None = None
+                    # Even an exact no-op must commit its receipt. Keep command
+                    # writes behind a savepoint so the no-op branch can discard
+                    # incidental ORM normalization while retaining the outer
+                    # transaction for the receipt insert.
+                    command_savepoint = session.begin_nested()
 
                     def checked_id(value, label: str) -> int:
                         if (
@@ -5403,11 +5759,39 @@ class Database:
                         changed = True
 
                     if not changed:
-                        session.expunge_all()
-                        session.rollback()
+                        command_savepoint.rollback()
+                        stable = self._canvas_plot_snapshot_in_session(
+                            session, project_id,
+                        )
+                        assert stable is not None
+                        if key_hash is not None:
+                            assert request_digest is not None
+                            session.add(CanvasPlotCommandReceipt(
+                                project_id=project_id,
+                                idempotency_key_hash=key_hash,
+                                request_digest=request_digest,
+                                result_json=_canvas_plot_receipt_result_json(
+                                    kind=kind,
+                                    expected_revision=expected_revision,
+                                    applied_revision=stable.revision,
+                                    original_changed=False,
+                                    original_affected_node_ids=(),
+                                    original_affected_link_ids=(),
+                                    original_affected_frame_ids=(),
+                                    original_created_node_id=None,
+                                    original_created_link_id=None,
+                                    original_created_frame_id=None,
+                                ),
+                            ))
+                            session.commit()
+                            session.expunge_all()
+                        else:
+                            session.expunge_all()
+                            session.rollback()
                         return CanvasPlotCommandResult(
-                            snapshot=current,
+                            snapshot=stable,
                             changed=False,
+                            applied_revision=stable.revision,
                         )
 
                     session.flush()
@@ -5419,17 +5803,41 @@ class Database:
                         raise RuntimeError(
                             "Canvas Plot mutation did not advance its revision"
                         )
+                    command_savepoint.commit()
+                    unique_node_ids = tuple(dict.fromkeys(affected_node_ids))
+                    unique_link_ids = tuple(dict.fromkeys(affected_link_ids))
+                    unique_frame_ids = tuple(dict.fromkeys(affected_frame_ids))
+                    if key_hash is not None:
+                        assert request_digest is not None
+                        session.add(CanvasPlotCommandReceipt(
+                            project_id=project_id,
+                            idempotency_key_hash=key_hash,
+                            request_digest=request_digest,
+                            result_json=_canvas_plot_receipt_result_json(
+                                kind=kind,
+                                expected_revision=expected_revision,
+                                applied_revision=updated.revision,
+                                original_changed=True,
+                                original_affected_node_ids=unique_node_ids,
+                                original_affected_link_ids=unique_link_ids,
+                                original_affected_frame_ids=unique_frame_ids,
+                                original_created_node_id=created_node_id,
+                                original_created_link_id=created_link_id,
+                                original_created_frame_id=created_frame_id,
+                            ),
+                        ))
                     session.commit()
                     session.expunge_all()
                     return CanvasPlotCommandResult(
                         snapshot=updated,
                         changed=True,
-                        affected_node_ids=tuple(affected_node_ids),
-                        affected_link_ids=tuple(affected_link_ids),
-                        affected_frame_ids=tuple(affected_frame_ids),
+                        affected_node_ids=unique_node_ids,
+                        affected_link_ids=unique_link_ids,
+                        affected_frame_ids=unique_frame_ids,
                         created_node_id=created_node_id,
                         created_link_id=created_link_id,
                         created_frame_id=created_frame_id,
+                        applied_revision=updated.revision,
                     )
                 except Exception:
                     session.rollback()

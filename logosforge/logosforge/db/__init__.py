@@ -1,7 +1,9 @@
 from logosforge.db.database import (
     CanvasPlotCommandError,
+    CanvasPlotCommandReceiptData,
     CanvasPlotCommandResult,
     CanvasPlotFrameNotFound,
+    CanvasPlotIdempotencyKeyConflict,
     CanvasPlotLinkNotFound,
     CanvasPlotNodeNotFound,
     CanvasPlotProjectNotFound,
@@ -33,8 +35,10 @@ from logosforge.db.database import (
 
 __all__ = [
     "CanvasPlotCommandError",
+    "CanvasPlotCommandReceiptData",
     "CanvasPlotCommandResult",
     "CanvasPlotFrameNotFound",
+    "CanvasPlotIdempotencyKeyConflict",
     "CanvasPlotLinkNotFound",
     "CanvasPlotNodeNotFound",
     "CanvasPlotProjectNotFound",

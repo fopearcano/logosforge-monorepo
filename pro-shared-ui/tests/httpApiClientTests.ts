@@ -402,6 +402,8 @@ try {
       links: [],
       frames: [],
     },
+    replayed: false,
+    applied_revision: 'b'.repeat(64),
     changed: true,
     affected_node_ids: [21],
     affected_link_ids: [],
@@ -413,6 +415,8 @@ try {
   const canvasCommandResult = await pendingCanvasCommand;
   await canvasBarrier;
   if (!canvasCommandResult.changed
+      || canvasCommandResult.replayed
+      || canvasCommandResult.applied_revision !== 'b'.repeat(64)
       || canvasCommandResult.canvas_plot.revision !== 'b'.repeat(64)
       || canvasCommandResult.created_node_id !== 21) {
     throw new Error('Canvas Plot command response was not validated');
