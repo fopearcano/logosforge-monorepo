@@ -102,7 +102,10 @@ GET  /api/health → { status, service, mode, version, api_version, core_version
 `core_version` is the Logosforge build (e.g. `0.9.0-alpha`). Clients (Electron
 desktop and Web/PWA) read these to verify they're talking to a compatible
 backend. `version` mirrors `api_version` for backward compatibility.
-The current additive contract version is **1.5.0**.
+The current additive HTTP contract version is **1.6.0**. This version is
+deliberately independent from the local MCP server contract: adding the
+Knowledge Graph HTTP read below does not add or change an MCP tool, so the MCP
+server remains at **1.5.0**.
 
 ### Packaged-desktop live context
 ```
@@ -163,6 +166,36 @@ with any of `scene`, `note`, `psyke`, or `comment`; omitting it searches all fou
 `limit` is bounded to 1–100. Results are returned best-first as compact
 `{ kind, id, title, excerpt, revision?, resolved? }` records; the revision and
 resolution fields are present only for comment matches.
+
+### Narrative Knowledge Graph (bounded read)
+```
+GET /api/projects/{project_id}/knowledge-graph
+    ?focus_key={node_key}&depth=1&limit=100&include_inferred=true
+```
+
+Without `focus_key`, this returns the canonical deterministic Project Map.
+Supplying a returned node key selects its one- or two-hop neighborhood.
+`depth` is bounded to 1–2 and `limit` to 1–200; the limit independently caps
+the returned node and edge collections. Graph construction, focus resolution,
+and all diagnostics are scoped to the project in the path. An unknown, stale,
+or foreign focus key returns the same generic 404 without consulting or naming
+another project.
+
+The response contains typed nodes and edges with confidence, provenance,
+source-system, confirmation, and inference state. Per-node `degree` is the
+node's degree in the complete project graph after applying
+`include_inferred`, before focus or response truncation; it therefore remains a
+stable global signal inside a focused neighborhood. Total counts,
+`orphan_count`, and `weak_link_count` are computed against the complete
+filtered map/neighborhood before response truncation. `orphan_keys` and the
+bounded `weak_links` diagnostics reference only nodes included in the response,
+so a client never has to infer diagnostics from a partial slice. `truncated`
+signals that any primary or diagnostic collection was capped. Overlong legacy
+structural identifiers are represented by stable `kg:sha256:...` wire keys;
+those returned keys remain valid `focus_key` values.
+
+This endpoint is read-only, rebuilds once per request without an LLM, emits no
+change event, and never persists a graph snapshot.
 
 ### Scenes / manuscript
 ```

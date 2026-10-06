@@ -38,6 +38,18 @@ if (projectSearchRoute !== '/api/projects/42/search') {
   throw new Error(`project search route mismatch: ${projectSearchRoute}`);
 }
 
+const knowledgeGraphRoute = ROUTES.knowledgeGraph(42);
+if (knowledgeGraphRoute !== '/api/projects/42/knowledge-graph') {
+  throw new Error(`knowledge graph route mismatch: ${knowledgeGraphRoute}`);
+}
+const pythonKnowledgeGraphRoute = readFileSync(
+  '../logosforge/logosforge/api/routes/knowledge_graph.py',
+  'utf8',
+);
+if (!pythonKnowledgeGraphRoute.includes('"/projects/{project_id}/knowledge-graph"')) {
+  throw new Error('Python knowledge graph route is missing or drifted');
+}
+
 if (ROUTES.liveContext !== '/api/live-context') {
   throw new Error(`live context route mismatch: ${ROUTES.liveContext}`);
 }
@@ -160,3 +172,37 @@ for (const field of ['surface', 'drafter_page_id']) {
 }
 
 console.log('Whiteboard comment-scope parity tests: 2 fields mirrored');
+
+const graphDtoFields = {
+  KnowledgeGraphQueryDTO: ['focus_key', 'depth', 'limit', 'include_inferred'],
+  KnowledgeGraphNodeDTO: [
+    'key', 'node_type', 'source_type', 'source_id', 'label', 'summary', 'metadata', 'degree',
+  ],
+  KnowledgeGraphEdgeDTO: [
+    'source', 'target', 'edge_type', 'confidence', 'provenance', 'source_system',
+    'explanation', 'is_user_confirmed', 'is_inferred', 'metadata',
+  ],
+  KnowledgeGraphReadDTO: [
+    'project_id', 'writing_mode', 'focus_key', 'depth', 'include_inferred', 'nodes', 'edges',
+    'node_count', 'edge_count', 'returned_node_count', 'returned_edge_count', 'truncated',
+    'orphan_keys', 'orphan_count', 'weak_links', 'weak_link_count', 'warnings', 'unavailable',
+  ],
+};
+for (const [dtoName, fields] of Object.entries(graphDtoFields)) {
+  const pythonBody = pythonSchemas.match(new RegExp(
+    `class ${dtoName}\\([^)]*\\):([\\s\\S]*?)\\n\\n(?:class |[A-Z][A-Za-z]+ = )`,
+  ))?.[1] ?? '';
+  const typescriptBody = typescriptSchemas.match(new RegExp(
+    `export interface ${dtoName}[^\\{]*\\{([\\s\\S]*?)\\n\\}`,
+  ))?.[1] ?? '';
+  for (const field of fields) {
+    if (!pythonBody.includes(`${field}:`)) {
+      throw new Error(`Python ${dtoName} is missing ${field}`);
+    }
+    if (!typescriptBody.includes(`${field}`)) {
+      throw new Error(`TypeScript ${dtoName} is missing ${field}`);
+    }
+  }
+}
+
+console.log('Knowledge Graph contract parity tests: route + 4 DTOs mirrored');

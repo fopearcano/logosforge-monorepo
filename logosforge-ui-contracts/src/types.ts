@@ -1676,6 +1676,62 @@ export interface GrammarCheckResultDTO {
 }
 
 // ── Story gravity (graph node weights) + Counterpart (reflective AI) ─────────
+/** Bounded read options for a Project Map or focused graph neighborhood. */
+export interface KnowledgeGraphQueryDTO {
+  focus_key?: string | null;
+  /** 1..2 */
+  depth?: number;
+  /** 1..200; caps each primary response collection. */
+  limit?: number;
+  include_inferred?: boolean;
+}
+export interface KnowledgeGraphNodeDTO {
+  key: string;
+  node_type: string;
+  source_type: string;
+  source_id: string | null;
+  label: string;
+  summary: string;
+  metadata: Record<string, unknown>;
+  /** Full-project degree after the inferred-edge filter, before focus/truncation. */
+  degree: number;
+}
+export interface KnowledgeGraphEdgeDTO {
+  source: string;
+  target: string;
+  edge_type: string;
+  confidence: string;
+  provenance: string;
+  source_system: string;
+  explanation: string;
+  is_user_confirmed: boolean;
+  is_inferred: boolean;
+  metadata: Record<string, unknown>;
+}
+export interface KnowledgeGraphReadDTO {
+  project_id: number;
+  writing_mode: string;
+  focus_key: string | null;
+  depth: number;
+  include_inferred: boolean;
+  nodes: KnowledgeGraphNodeDTO[];
+  edges: KnowledgeGraphEdgeDTO[];
+  /** Complete query counts before response truncation. */
+  node_count: number;
+  edge_count: number;
+  returned_node_count: number;
+  returned_edge_count: number;
+  truncated: boolean;
+  /** Returned canonical orphan keys; every key is also present in nodes. */
+  orphan_keys: string[];
+  orphan_count: number;
+  /** Independently bounded inferred edges that merit confirmation. */
+  weak_links: KnowledgeGraphEdgeDTO[];
+  weak_link_count: number;
+  warnings: string[];
+  unavailable: string[];
+}
+
 export interface StoryGravityNodeDTO {
   /** "etype:entity_id", e.g. "Character:5" */
   node_id: string;

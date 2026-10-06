@@ -18,7 +18,12 @@ _STORY_TYPES = {P.NT_SCENE, P.NT_CHARACTER, P.NT_PLACE, P.NT_OBJECT, P.NT_LORE,
                 P.NT_PLOT_BLOCK}
 
 
-def orphan_nodes(graph: KnowledgeGraph, *, cap: int = 50) -> list[KGNode]:
+def orphan_nodes(
+    graph: KnowledgeGraph,
+    *,
+    cap: int = 50,
+    include_inferred: bool = True,
+) -> list[KGNode]:
     """Story nodes with no visible (non-inferred-or-inferred) connections.
 
     A node connected only to the project via a structural ``contains`` edge is
@@ -29,7 +34,9 @@ def orphan_nodes(graph: KnowledgeGraph, *, cap: int = 50) -> list[KGNode]:
         if node.node_type in _NON_ORPHAN_TYPES or node.node_type not in _STORY_TYPES:
             continue
         meaningful = 0
-        for e in graph.neighbors(node.key):
+        for e in graph.neighbors(
+            node.key, include_inferred=include_inferred,
+        ):
             other = e.target if e.source == node.key else e.source
             on = graph.get_node(other)
             if on is None:

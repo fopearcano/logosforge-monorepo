@@ -2089,8 +2089,106 @@ class QuantumSettingsUpdateDTO(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Story gravity (graph node weights) + Counterpart (reflective AI)
+# Narrative Knowledge Graph + story gravity + Counterpart (reflective AI)
 # ---------------------------------------------------------------------------
+
+
+class KnowledgeGraphQueryDTO(BaseModel):
+    """Bounded read options for the canonical Narrative Knowledge Graph.
+
+    ``focus_key`` selects a 1- or 2-hop neighborhood.  Without it, the route
+    returns a bounded project map.  The same ``limit`` caps every primary
+    response collection so clients cannot accidentally request an unbounded
+    whole-project graph.
+    """
+
+    focus_key: str | None = Field(default=None, min_length=1, max_length=512)
+    depth: int = Field(default=1, ge=1, le=2)
+    limit: int = Field(default=100, ge=1, le=200)
+    include_inferred: bool = True
+
+
+KnowledgeGraphKey = Annotated[str, Field(min_length=1, max_length=512)]
+KnowledgeGraphShortText = Annotated[str, Field(max_length=128)]
+KnowledgeGraphText = Annotated[str, Field(max_length=512)]
+KnowledgeGraphLongText = Annotated[str, Field(max_length=1000)]
+
+
+class KnowledgeGraphNodeDTO(BaseModel):
+    key: KnowledgeGraphKey
+    node_type: KnowledgeGraphShortText
+    source_type: KnowledgeGraphShortText = ""
+    source_id: KnowledgeGraphText | None = None
+    label: KnowledgeGraphText = ""
+    summary: KnowledgeGraphLongText = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    # Degree is computed against the complete project graph after applying the
+    # inferred-edge filter, before focus and response truncation.  UIs must not
+    # infer global centrality from the returned neighborhood slice.
+    degree: int = Field(default=0, ge=0)
+
+
+class KnowledgeGraphEdgeDTO(BaseModel):
+    source: KnowledgeGraphKey
+    target: KnowledgeGraphKey
+    edge_type: KnowledgeGraphShortText
+    confidence: Annotated[str, Field(max_length=32)]
+    provenance: KnowledgeGraphText = ""
+    source_system: KnowledgeGraphShortText = ""
+    explanation: KnowledgeGraphLongText = ""
+    is_user_confirmed: bool = False
+    is_inferred: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class KnowledgeGraphReadDTO(BaseModel):
+    project_id: int
+    writing_mode: KnowledgeGraphShortText
+    focus_key: KnowledgeGraphKey | None = None
+    depth: int = Field(ge=1, le=2)
+    include_inferred: bool
+    nodes: list[KnowledgeGraphNodeDTO] = Field(default_factory=list, max_length=200)
+    edges: list[KnowledgeGraphEdgeDTO] = Field(default_factory=list, max_length=200)
+    # Counts describe the complete project-map or neighborhood query before
+    # response truncation; returned_* describe the arrays above.
+    node_count: int = Field(ge=0)
+    edge_count: int = Field(ge=0)
+    returned_node_count: int = Field(ge=0)
+    returned_edge_count: int = Field(ge=0)
+    truncated: bool = False
+    # Diagnostics are computed before truncation.  orphan_keys only references
+    # nodes retained in ``nodes``; weak_links is independently bounded.
+    orphan_keys: list[KnowledgeGraphKey] = Field(default_factory=list, max_length=200)
+    orphan_count: int = Field(default=0, ge=0)
+    weak_links: list[KnowledgeGraphEdgeDTO] = Field(default_factory=list, max_length=25)
+    weak_link_count: int = Field(default=0, ge=0)
+    warnings: list[KnowledgeGraphText] = Field(default_factory=list, max_length=25)
+    unavailable: list[KnowledgeGraphShortText] = Field(
+        default_factory=list, max_length=25,
+    )
+
+    @model_validator(mode="after")
+    def validate_bounded_graph_invariants(self) -> KnowledgeGraphReadDTO:
+        node_keys = {node.key for node in self.nodes}
+        if self.returned_node_count != len(self.nodes):
+            raise ValueError("returned_node_count must match nodes")
+        if self.returned_edge_count != len(self.edges):
+            raise ValueError("returned_edge_count must match edges")
+        if self.node_count < self.returned_node_count:
+            raise ValueError("node_count cannot be smaller than returned nodes")
+        if self.edge_count < self.returned_edge_count:
+            raise ValueError("edge_count cannot be smaller than returned edges")
+        if self.orphan_count < len(self.orphan_keys):
+            raise ValueError("orphan_count cannot be smaller than orphan_keys")
+        if self.weak_link_count < len(self.weak_links):
+            raise ValueError("weak_link_count cannot be smaller than weak_links")
+        if any(key not in node_keys for key in self.orphan_keys):
+            raise ValueError("orphan_keys must reference returned nodes")
+        all_edges = [*self.edges, *self.weak_links]
+        if any(edge.source not in node_keys or edge.target not in node_keys
+               for edge in all_edges):
+            raise ValueError("graph edges must reference returned nodes")
+        return self
 
 
 class StoryGravityNodeDTO(BaseModel):

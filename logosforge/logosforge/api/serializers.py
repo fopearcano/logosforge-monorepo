@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from typing import Any
 
 from logosforge.api import schemas
 from logosforge.comment_revision import comment_revision
@@ -963,6 +964,256 @@ def quantum_result_to_dto(result) -> schemas.QuantumResultDTO:
         title=result.title,
         body=result.body,
         payload=payload,
+    )
+
+
+_KNOWLEDGE_GRAPH_DIAGNOSTIC_CAP = 25
+_KNOWLEDGE_GRAPH_WIRE_KEY_MAX = 512
+
+
+def knowledge_graph_wire_key(internal_key: str) -> str:
+    """Return a stable, focusable key that always fits the HTTP contract.
+
+    A few legacy structural keys embed author-controlled act/chapter names.
+    Preserve ordinary canonical keys verbatim and replace only overlong values
+    with a deterministic SHA-256 token.  Edge endpoints and focus resolution use
+    this same mapping, so no truncated/colliding identifier reaches clients.
+    """
+    value = str(internal_key)
+    if len(value) <= _KNOWLEDGE_GRAPH_WIRE_KEY_MAX:
+        return value
+    return f"kg:sha256:{hashlib.sha256(value.encode('utf-8')).hexdigest()}"
+
+
+def resolve_knowledge_graph_focus_key(graph, wire_key: str) -> str | None:
+    """Resolve a public graph key inside *this* already-built project graph."""
+    for internal_key in graph.nodes:
+        if knowledge_graph_wire_key(internal_key) == wire_key:
+            return internal_key
+    return None
+
+
+def _bounded_graph_value(value: Any, *, depth: int = 0) -> Any:
+    """Return a small JSON-safe copy of graph metadata.
+
+    The graph extractors currently emit shallow scalar metadata, but keeping the
+    API boundary defensive prevents a future extractor from turning a bounded
+    graph read into an unbounded nested payload.
+    """
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return value[:512]
+    if depth >= 3:
+        return str(value)[:512]
+    if isinstance(value, dict):
+        result: dict[str, Any] = {}
+        for key, child in sorted(value.items(), key=lambda item: str(item[0]))[:20]:
+            result[str(key)[:128]] = _bounded_graph_value(child, depth=depth + 1)
+        return result
+    if isinstance(value, (list, tuple)):
+        return [_bounded_graph_value(child, depth=depth + 1) for child in value[:20]]
+    if isinstance(value, set):
+        children = sorted(value, key=str)[:20]
+        return [_bounded_graph_value(child, depth=depth + 1) for child in children]
+    return str(value)[:512]
+
+
+def _knowledge_graph_edge_sort_key(edge) -> tuple[str, str, str, str, str]:
+    return (
+        str(edge.source), str(edge.target), str(edge.edge_type),
+        str(edge.confidence), str(edge.source_system),
+    )
+
+
+def _knowledge_graph_edge_to_dto(edge) -> schemas.KnowledgeGraphEdgeDTO:
+    return schemas.KnowledgeGraphEdgeDTO(
+        source=knowledge_graph_wire_key(edge.source),
+        target=knowledge_graph_wire_key(edge.target),
+        edge_type=str(edge.edge_type)[:128],
+        confidence=str(edge.confidence)[:32],
+        provenance=str(edge.provenance or "")[:512],
+        source_system=str(edge.source_system or "")[:128],
+        explanation=str(edge.explanation or "")[:1000],
+        is_user_confirmed=bool(edge.is_user_confirmed),
+        is_inferred=bool(edge.is_inferred),
+        metadata=_bounded_graph_value(dict(edge.metadata or {})),
+    )
+
+
+def knowledge_graph_read_to_dto(
+    graph,
+    *,
+    focus_key: str | None = None,
+    depth: int = 1,
+    limit: int = 100,
+    include_inferred: bool = True,
+) -> schemas.KnowledgeGraphReadDTO:
+    """Serialize a bounded Project Map or node neighborhood.
+
+    The builder's graph remains the source of truth.  This adapter drops
+    dangling endpoints defensively, calculates degrees and diagnostics against
+    the complete filtered query *before* slicing, and reserves Project Map
+    capacity for edge-less orphan nodes.
+    """
+    from logosforge.knowledge_graph import provenance as graph_provenance
+    from logosforge.knowledge_graph import scoring as graph_scoring
+
+    node_keys = set(graph.nodes)
+    full_edges = [
+        edge for edge in graph.visible_edges(include_inferred=include_inferred)
+        if edge.source in node_keys and edge.target in node_keys
+    ]
+    full_edges.sort(key=_knowledge_graph_edge_sort_key)
+
+    degree_by_key = {key: 0 for key in node_keys}
+    for edge in full_edges:
+        degree_by_key[edge.source] += 1
+        degree_by_key[edge.target] += 1
+
+    if focus_key is not None:
+        # Build adjacency once, then traverse the complete filtered graph before
+        # applying the HTTP response cap.  The shared query helper scans every
+        # edge once per frontier node; that becomes needlessly quadratic for a
+        # dense depth-two neighborhood.
+        adjacency: dict[str, list[Any]] = {key: [] for key in node_keys}
+        for edge in full_edges:
+            adjacency[edge.source].append(edge)
+            if edge.target != edge.source:
+                adjacency[edge.target].append(edge)
+        candidate_keys = {focus_key}
+        candidate_edges = []
+        seen_edge_keys: set[tuple[str, str, str]] = set()
+        frontier = {focus_key}
+        for _ in range(depth):
+            next_frontier: set[str] = set()
+            for key in sorted(frontier):
+                for edge in adjacency.get(key, []):
+                    if edge.dedupe_key not in seen_edge_keys:
+                        seen_edge_keys.add(edge.dedupe_key)
+                        candidate_edges.append(edge)
+                    other = edge.target if edge.source == key else edge.source
+                    if other not in candidate_keys:
+                        candidate_keys.add(other)
+                        next_frontier.add(other)
+            frontier = next_frontier
+            if not frontier:
+                break
+        candidate_edges.sort(key=_knowledge_graph_edge_sort_key)
+    else:
+        candidate_keys = set(node_keys)
+        candidate_edges = list(full_edges)
+
+    # Reuse the canonical story-orphan semantics (project membership alone does
+    # not make a story node connected), but do not inherit its default UI cap.
+    canonical_orphans = graph_scoring.orphan_nodes(
+        graph,
+        cap=max(1, len(graph.nodes)),
+        include_inferred=include_inferred,
+    )
+    candidate_orphan_keys = sorted(
+        node.key for node in canonical_orphans if node.key in candidate_keys
+    )
+
+    canonical_weak_keys = {
+        edge.dedupe_key for edge in graph_scoring.weak_link_edges(
+            graph, cap=max(1, len(graph.edges)),
+        )
+    }
+    candidate_weak_links = [
+        edge for edge in candidate_edges
+        if include_inferred and edge.dedupe_key in canonical_weak_keys
+    ]
+    candidate_weak_links.sort(
+        key=lambda edge: (
+            -graph_provenance.confidence_rank(edge.confidence),
+            *_knowledge_graph_edge_sort_key(edge),
+        )
+    )
+
+    def node_rank(key: str) -> tuple[int, int, str, str]:
+        node = graph.nodes[key]
+        return (
+            0 if focus_key is not None and key == focus_key else 1,
+            -degree_by_key.get(key, 0),
+            str(node.node_type),
+            key,
+        )
+
+    if focus_key is not None:
+        selected_keys = sorted(candidate_keys, key=node_rank)[:limit]
+    else:
+        # Keep the map useful (central nodes first) while guaranteeing that an
+        # edge-less story element survives truncation for the orphan rail.
+        orphan_budget = 0
+        if candidate_orphan_keys:
+            orphan_budget = min(
+                len(candidate_orphan_keys),
+                _KNOWLEDGE_GRAPH_DIAGNOSTIC_CAP,
+                max(1, limit // 4),
+            )
+        reserved_orphans = candidate_orphan_keys[:orphan_budget]
+        reserved_set = set(reserved_orphans)
+        primary = sorted(candidate_keys - reserved_set, key=node_rank)
+        selected_keys = primary[: max(0, limit - orphan_budget)] + reserved_orphans
+
+    selected_set = set(selected_keys)
+    returned_edges = [
+        edge for edge in candidate_edges
+        if edge.source in selected_set and edge.target in selected_set
+    ][:limit]
+    returned_orphan_keys = [
+        key for key in candidate_orphan_keys if key in selected_set
+    ]
+    weak_cap = min(limit, _KNOWLEDGE_GRAPH_DIAGNOSTIC_CAP)
+    returned_weak_links = [
+        edge for edge in candidate_weak_links
+        if edge.source in selected_set and edge.target in selected_set
+    ][:weak_cap]
+
+    nodes = []
+    for key in selected_keys:
+        node = graph.nodes[key]
+        nodes.append(schemas.KnowledgeGraphNodeDTO(
+            key=knowledge_graph_wire_key(node.key),
+            node_type=str(node.node_type)[:128],
+            source_type=str(node.source_type or "")[:128],
+            source_id=(None if node.source_id is None else str(node.source_id)[:512]),
+            label=str(node.label or "")[:512],
+            summary=str(node.summary or "")[:1000],
+            metadata=_bounded_graph_value(dict(node.metadata or {})),
+            degree=degree_by_key.get(key, 0),
+        ))
+
+    truncated = (
+        len(selected_keys) < len(candidate_keys)
+        or len(returned_edges) < len(candidate_edges)
+        or len(returned_orphan_keys) < len(candidate_orphan_keys)
+        or len(returned_weak_links) < len(candidate_weak_links)
+    )
+    return schemas.KnowledgeGraphReadDTO(
+        project_id=int(graph.project_id),
+        writing_mode=str(graph.writing_mode or "")[:128],
+        focus_key=(
+            None if focus_key is None else knowledge_graph_wire_key(focus_key)
+        ),
+        depth=depth,
+        include_inferred=include_inferred,
+        nodes=nodes,
+        edges=[_knowledge_graph_edge_to_dto(edge) for edge in returned_edges],
+        node_count=len(candidate_keys),
+        edge_count=len(candidate_edges),
+        returned_node_count=len(nodes),
+        returned_edge_count=len(returned_edges),
+        truncated=truncated,
+        orphan_keys=[knowledge_graph_wire_key(key) for key in returned_orphan_keys],
+        orphan_count=len(candidate_orphan_keys),
+        weak_links=[
+            _knowledge_graph_edge_to_dto(edge) for edge in returned_weak_links
+        ],
+        weak_link_count=len(candidate_weak_links),
+        warnings=[str(warning)[:512] for warning in graph.warnings[:25]],
+        unavailable=[str(source)[:128] for source in graph.unavailable[:25]],
     )
 
 

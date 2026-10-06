@@ -111,6 +111,7 @@ export const ROUTES = {
   voiceCommit: (p: number) => `/api/projects/${p}/voice/commit`,
   voiceCanUndo: (p: number) => `/api/projects/${p}/voice/can-undo`,
   voiceUndo: (p: number) => `/api/projects/${p}/voice/undo`,
+  knowledgeGraph: (p: number) => `/api/projects/${p}/knowledge-graph`,
   graphGravity: (p: number) => `/api/projects/${p}/graph/gravity`,
 
   // Generative (POST)
