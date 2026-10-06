@@ -138,16 +138,19 @@ layouts untouched. Moving a panel changes its grid placement under one stable
 React parent, so editor and AI session state does not remount during workspace
 rearrangement.
 
-The packaged Windows and Intel macOS release gates also launch the unpacked
-native app through Playwright's Electron transport with an isolated profile.
+The packaged Windows, Intel macOS and Linux release gates also launch the
+unpacked native app through Playwright's Electron transport with an isolated
+profile. Linux runs that journey in one 1600x1000 Xvfb display while retaining
+Chromium's sandbox; the harness rejects any packaged launch carrying
+`--no-sandbox`.
 `npm run test:packaged-workspace` uses real mouse input to author and arrange a
 Canvas Plot, tear off, move, resize, minimize, restore and dock a panel, resize
 and collapse a dock, close through the production save handshake, then relaunch
 the same project and verify the persisted board, placement and dock width.
 Failure diagnostics stay inside the explicitly validated run directory;
 successful temporary runs remove only that exact directory. Windows failures
-are uploaded by Actions, while Monterey build-only failures are retained under
-the self-hosted runner's `macos-build-drop/` directory.
+and Linux failures are uploaded by Actions, while Monterey build-only failures
+are retained under the self-hosted runner's `macos-build-drop/` directory.
 
 The shared package + contracts are aliased straight to source (vite + tsconfig
 `paths`), so there's no build/link step in dev and HMR works across the

@@ -41,13 +41,17 @@ invoking the matching npm release script. Build macOS on an available native
 Intel x64 runner and Linux on a native x64 runner; do not reuse a sidecar from
 another job or OS.
 
-After packaging, the Windows and Intel macOS jobs run
+After packaging, the Windows, Intel macOS and Linux jobs run
 `npm run test:packaged-workspace` against the real unpacked native application.
 The Playwright Electron journey uses an isolated profile, performs pointer
 Canvas and dock mutations, closes through the production save barrier, and
-relaunches to verify the persisted board and project layout. This complements
-the distributable inspection and MCP smoke; it does not replace final human
-installer, Gatekeeper, or system-permission testing.
+relaunches to verify the persisted board and project layout. The Linux job runs
+the unpacked `release/linux-unpacked/logosforge-pro` executable in one
+1600x1000 Xvfb display, explicitly enables Playwright's Chromium sandbox, and
+asserts that the packaged command line does not contain `--no-sandbox`. This
+complements the distributable inspection and MCP smoke; it does not replace
+final human installer, Gatekeeper, or system-permission testing. Windows and
+Linux failures upload the isolated acceptance directory for diagnosis.
 
 Build-only macOS runs support the self-hosted Intel Monterey runner without
 JavaScript actions: the job performs an isolated native Git checkout, bootstraps
@@ -133,7 +137,9 @@ npm run dist:mac   # DMG -> release/
 
 Run these commands on the oldest glibc-based x64 distribution the release is
 intended to support; PyInstaller bundles remain sensitive to the builder's
-glibc baseline.
+glibc baseline. The packaged UI gate also requires Xvfb and `xauth`, plus a
+host that permits sandbox-capable unprivileged user namespaces. Do not work
+around a disabled Chromium sandbox by passing `--no-sandbox`.
 
 ```bash
 python3 -m venv core-venv
@@ -143,6 +149,8 @@ cd pro-desktop/core
 ../../core-venv/bin/python -m PyInstaller logosforge-mcp.spec --noconfirm --clean
 cd ..
 npm run dist:linux # AppImage -> release/
+xvfb-run --auto-servernum --server-args="-screen 0 1600x1000x24" \
+  npm run test:packaged-workspace
 ```
 
 ## How the pieces fit

@@ -3,7 +3,7 @@
 /**
  * Pointer-driven acceptance for the packaged LogosForge Pro workspace shell.
  *
- * This launches electron-builder's unpacked Windows or macOS application
+ * This launches electron-builder's unpacked Windows, macOS, or Linux application
  * through Playwright's Electron transport. It uses a fresh, isolated profile,
  * drives real mouse input through Canvas Plot and workspace move/resize
  * interactions, closes through the application's save handshake, and
@@ -35,6 +35,12 @@ const DEFAULT_WINDOWS_EXE = path.join(
   'release',
   'win-unpacked',
   'LogosForge Pro.exe',
+);
+const DEFAULT_LINUX_EXE = path.join(
+  DESKTOP_DIR,
+  'release',
+  'linux-unpacked',
+  'logosforge-pro',
 );
 
 const STARTUP_TIMEOUT_MS = 90_000;
@@ -86,7 +92,9 @@ function assertSamePath(actual, expected, label) {
 }
 
 function packagedResourcesPath(exePath) {
-  if (process.platform === 'win32') return path.join(path.dirname(exePath), 'resources');
+  if (process.platform === 'win32' || process.platform === 'linux') {
+    return path.join(path.dirname(exePath), 'resources');
+  }
   if (process.platform === 'darwin') {
     return path.resolve(path.dirname(exePath), '..', 'Resources');
   }
@@ -123,6 +131,7 @@ async function canonicalExecutable() {
   }
   let requested = override;
   if (!requested && process.platform === 'win32') requested = DEFAULT_WINDOWS_EXE;
+  if (!requested && process.platform === 'linux') requested = DEFAULT_LINUX_EXE;
   if (!requested && process.platform === 'darwin') {
     const releaseEntries = await fs.readdir(path.join(DESKTOP_DIR, 'release'), {
       withFileTypes: true,
@@ -419,6 +428,7 @@ async function verifyPackagedRuntime(session, exePath) {
       resourcesPath: process.resourcesPath,
       userData: app.getPath('userData'),
       sessionData: app.getPath('sessionData'),
+      hasNoSandboxSwitch: app.commandLine.hasSwitch('no-sandbox'),
       windowCount: windows.length,
       preferences: {
         contextIsolation: preferences.contextIsolation,
@@ -435,6 +445,11 @@ async function verifyPackagedRuntime(session, exePath) {
   assertSamePath(runtime.appPath, path.join(expectedResources, 'app.asar'), `${session.label} appPath`);
   assertSamePath(runtime.userData, session.dirs.userData, `${session.label} userData isolation`);
   assertSamePath(runtime.sessionData, session.dirs.userData, `${session.label} sessionData isolation`);
+  assert.equal(
+    runtime.hasNoSandboxSwitch,
+    false,
+    `${session.label} launched Chromium with --no-sandbox`,
+  );
   assert.deepEqual(
     runtime.preferences,
     { contextIsolation: true, nodeIntegration: false, sandbox: true },
@@ -468,6 +483,7 @@ async function launchPackagedApp({ electron, exePath, root, label }) {
   record(label, `launching ${exePath} on isolated port ${port}`);
   const app = await electron.launch({
     executablePath: exePath,
+    chromiumSandbox: true,
     args: ['-r', playwrightElectronLoader, `--user-data-dir=${dirs.userData}`],
     cwd: path.dirname(exePath),
     env,
@@ -1282,24 +1298,45 @@ async function killOwnedTree(session) {
     return;
   }
 
-  assert.equal(process.platform, 'darwin', `Unsupported teardown platform: ${process.platform}`);
-  const waitForExit = () => new Promise((resolve, reject) => {
-    if (session.child.exitCode != null || session.child.signalCode != null) {
-      resolve();
-      return;
+  assert.ok(
+    process.platform === 'darwin' || process.platform === 'linux',
+    `Unsupported teardown platform: ${process.platform}`,
+  );
+  const signalProcessGroup = (signal) => {
+    try {
+      process.kill(-session.pid, signal);
+      return true;
+    } catch (error) {
+      if (error?.code !== 'ESRCH') throw error;
+      record(session.label, `${signal} raced with process-group exit for PID ${session.pid}`);
+      return false;
     }
-    session.child.once('exit', resolve);
-    session.child.once('error', reject);
-  });
-  record(session.label, `fallback SIGTERM for owned root PID ${session.pid}`);
-  session.child.kill('SIGTERM');
-  try {
-    await withTimeout(waitForExit(), 10_000, `${session.label} SIGTERM teardown`);
-  } catch (error) {
-    if (session.child.exitCode != null || session.child.signalCode != null) return;
-    record(session.label, `SIGTERM teardown failed; sending SIGKILL: ${errorText(error)}`);
-    session.child.kill('SIGKILL');
-    await withTimeout(waitForExit(), 5_000, `${session.label} SIGKILL teardown`);
+  };
+  const processGroupExists = () => {
+    try {
+      process.kill(-session.pid, 0);
+      return true;
+    } catch (error) {
+      if (error?.code !== 'ESRCH') throw error;
+      return false;
+    }
+  };
+  const waitForProcessGroupExit = async (timeoutMs) => {
+    const deadline = Date.now() + timeoutMs;
+    while (processGroupExists()) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return false;
+      await delay(Math.min(250, remaining));
+    }
+    return true;
+  };
+  record(session.label, `fallback SIGTERM for owned process group ${session.pid}`);
+  if (!signalProcessGroup('SIGTERM')) return;
+  if (await waitForProcessGroupExit(10_000)) return;
+  record(session.label, 'SIGTERM grace expired; sending SIGKILL to the owned process group');
+  if (!signalProcessGroup('SIGKILL')) return;
+  if (!await waitForProcessGroupExit(5_000)) {
+    throw new Error(`${session.label} process group ${session.pid} survived SIGKILL`);
   }
 }
 
@@ -1377,8 +1414,8 @@ async function removeSuccessfulRoot(root) {
 
 async function main() {
   assert.ok(
-    process.platform === 'win32' || process.platform === 'darwin',
-    `Packaged workspace acceptance requires Windows or macOS; received ${process.platform}.`,
+    process.platform === 'win32' || process.platform === 'darwin' || process.platform === 'linux',
+    `Packaged workspace acceptance requires Windows, macOS, or Linux; received ${process.platform}.`,
   );
   const exePath = await canonicalExecutable();
   const driver = await loadElectronDriver();

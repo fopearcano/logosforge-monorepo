@@ -27,6 +27,19 @@ const packagedWorkspaceScriptPath = path.join(
   'packaged-workspace-acceptance.mjs',
 );
 const packagedWorkspaceScript = fs.readFileSync(packagedWorkspaceScriptPath, 'utf8');
+const linuxJobStart = releaseWorkflow.indexOf('\n  build_linux:');
+const linuxJobEnd = releaseWorkflow.indexOf('\n  build_macos:', linuxJobStart);
+const linuxJob = releaseWorkflow.slice(linuxJobStart, linuxJobEnd);
+const linuxAcceptanceStepStart = linuxJob.indexOf(
+  '\n      - name: Exercise packaged Linux Pro pointer workspace and restart persistence',
+);
+const linuxAcceptanceStepEnd = linuxJob.indexOf('\n      - name:', linuxAcceptanceStepStart + 1);
+const linuxAcceptanceStep = linuxJob.slice(linuxAcceptanceStepStart, linuxAcceptanceStepEnd);
+const linuxDiagnosticsStepStart = linuxJob.indexOf(
+  '\n      - name: Upload Linux packaged-workspace failure diagnostics',
+);
+const linuxDiagnosticsStepEnd = linuxJob.indexOf('\n      - name:', linuxDiagnosticsStepStart + 1);
+const linuxDiagnosticsStep = linuxJob.slice(linuxDiagnosticsStepStart, linuxDiagnosticsStepEnd);
 const macJobStart = releaseWorkflow.indexOf('\n  build_macos:');
 const macJobEnd = releaseWorkflow.indexOf('\n  publish:', macJobStart);
 const macJob = releaseWorkflow.slice(macJobStart, macJobEnd);
@@ -84,15 +97,39 @@ check('packaged workspace acceptance is an explicit Pro script',
   fs.statSync(packagedWorkspaceScriptPath).isFile());
 check('packaged workspace acceptance pins the browserless Electron driver',
   pkg.devDependencies['playwright-core'] === '1.63.0');
-check('packaged workspace acceptance supports native Windows and macOS layouts',
-  packagedWorkspaceScript.includes("process.platform === 'win32' || process.platform === 'darwin'") &&
+check('packaged workspace acceptance supports native Windows, macOS, and Linux layouts',
+  packagedWorkspaceScript.includes("process.platform === 'win32' || process.platform === 'darwin' || process.platform === 'linux'") &&
+  packagedWorkspaceScript.includes('const DEFAULT_LINUX_EXE = path.join(') &&
+  packagedWorkspaceScript.includes("'linux-unpacked',") &&
+  packagedWorkspaceScript.includes("'logosforge-pro',") &&
+  packagedWorkspaceScript.includes("if (!requested && process.platform === 'linux') requested = DEFAULT_LINUX_EXE;") &&
+  packagedWorkspaceScript.includes("process.platform === 'win32' || process.platform === 'linux'") &&
+  packagedWorkspaceScript.includes("return path.join(path.dirname(exePath), 'resources');") &&
   packagedWorkspaceScript.includes("path.resolve(path.dirname(exePath), '..', 'Resources')") &&
   packagedWorkspaceScript.includes("process.platform === 'win32' ? 'logosforge-core.exe' : 'logosforge-core'") &&
   packagedWorkspaceScript.includes("process.platform === 'win32' ? 'logosforge-mcp.exe' : 'logosforge-mcp'"));
+check('packaged workspace acceptance explicitly requires Chromium sandboxing',
+  packagedWorkspaceScript.includes('chromiumSandbox: true') &&
+  packagedWorkspaceScript.includes("app.commandLine.hasSwitch('no-sandbox')") &&
+  /assert\.equal\(\s*runtime\.hasNoSandboxSwitch,\s*false,/.test(packagedWorkspaceScript) &&
+  packagedWorkspaceScript.includes('`${session.label} launched Chromium with --no-sandbox`'));
 check('packaged workspace acceptance uses native shortcuts and graceful macOS app quit',
   packagedWorkspaceScript.includes("process.platform === 'darwin' ? 'Meta+A' : 'Control+A'") &&
   packagedWorkspaceScript.includes("if (process.platform === 'darwin') app.quit()") &&
-  packagedWorkspaceScript.includes("fallback SIGTERM for owned root PID"));
+  packagedWorkspaceScript.includes("fallback SIGTERM for owned process group"));
+check('packaged workspace acceptance tears down the Linux/macOS process group safely',
+  packagedWorkspaceScript.includes("process.platform === 'darwin' || process.platform === 'linux'") &&
+  packagedWorkspaceScript.includes('process.kill(-session.pid, signal)') &&
+  packagedWorkspaceScript.includes('process.kill(-session.pid, 0)') &&
+  packagedWorkspaceScript.includes("if (error?.code !== 'ESRCH') throw error") &&
+  packagedWorkspaceScript.includes('while (processGroupExists())') &&
+  packagedWorkspaceScript.includes("signalProcessGroup('SIGTERM')") &&
+  packagedWorkspaceScript.includes('if (await waitForProcessGroupExit(10_000)) return') &&
+  packagedWorkspaceScript.includes("signalProcessGroup('SIGKILL')") &&
+  packagedWorkspaceScript.includes('if (!await waitForProcessGroupExit(5_000))') &&
+  packagedWorkspaceScript.includes('survived SIGKILL') &&
+  !packagedWorkspaceScript.includes("session.child.kill('SIGTERM')") &&
+  !packagedWorkspaceScript.includes("session.child.kill('SIGKILL')"));
 check('packaged workspace acceptance drives real pointer interactions and relaunch persistence',
   packagedWorkspaceScript.includes('notesTab.dragTo(workspace') &&
   packagedWorkspaceScript.includes('page.mouse.down()') &&
@@ -133,6 +170,21 @@ check('Windows release candidates pass the same packaged pointer journey',
   releaseWorkflow.includes('Exercise packaged Pro pointer workspace and restart persistence') &&
   releaseWorkflow.includes('npm run test:packaged-workspace') &&
   releaseWorkflow.includes('logosforge-pro-windows-workspace-diagnostics'));
+check('Linux release candidates pass the same unpacked packaged pointer journey under one Xvfb',
+  linuxJobStart > 0 && linuxJobEnd > linuxJobStart &&
+  linuxAcceptanceStepStart > 0 && linuxAcceptanceStepEnd > linuxAcceptanceStepStart &&
+  linuxAcceptanceStep.includes('release/linux-unpacked/logosforge-pro') &&
+  linuxAcceptanceStep.includes('LOGOSFORGE_PRO_WORKSPACE_ACCEPTANCE_ROOT') &&
+  linuxAcceptanceStep.includes('test ! -e "$LOGOSFORGE_PRO_WORKSPACE_ACCEPTANCE_ROOT"') &&
+  linuxAcceptanceStep.includes('--server-args="-screen 0 1600x1000x24"') &&
+  (linuxAcceptanceStep.match(/xvfb-run/g) || []).length === 1 &&
+  linuxAcceptanceStep.includes('npm --prefix pro-desktop run test:packaged-workspace'));
+check('Linux packaged-workspace diagnostics upload only on failure',
+  linuxDiagnosticsStepStart > 0 && linuxDiagnosticsStepEnd > linuxDiagnosticsStepStart &&
+  linuxDiagnosticsStep.includes('if: failure()') &&
+  linuxDiagnosticsStep.includes('logosforge-pro-linux-workspace-diagnostics-') &&
+  linuxDiagnosticsStep.includes('logosforge-pro-linux-workspace-acceptance-') &&
+  linuxDiagnosticsStep.includes('include-hidden-files: true'));
 check('macOS release candidates pass the same packaged pointer journey',
   macJob.includes('Exercise packaged macOS Pro pointer workspace and restart persistence') &&
   macJob.includes('LOGOSFORGE_PRO_WORKSPACE_ACCEPTANCE_EXE="$app_exe"') &&
