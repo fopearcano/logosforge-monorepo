@@ -22,7 +22,10 @@ import {
 import { KnowledgeGraph } from "../src/components/spatialcanvas/KnowledgeGraph";
 import {
   buildKnowledgeGraphView,
+  knowledgeGraphNodeSize,
   layoutKnowledgeGraph,
+  storyOrderFlowPath,
+  storyOrderFlowSegments,
 } from "../src/components/spatialcanvas/knowledgeGraphModel";
 import { planKnowledgeGraphCommand } from "../src/components/spatialcanvas/knowledgeGraphTransactions";
 import { useKnowledgeGraph } from "../src/hooks/resources";
@@ -94,10 +97,10 @@ function graphFixture(
   const viewMode = query.view_mode ?? "project_map";
   const edges = [remap(confirmedEdge), remap(inferredEdge)].filter((edge) => includeInferred || !edge.is_inferred);
   const nodes = [
-    { key: projectKey, node_type: "project", source_type: "project", source_id: String(projectId), label: `Project ${projectId}`, summary: "", metadata: {}, degree: 1 },
-    { key: "scene:scene:2", node_type: "scene", source_type: "scene", source_id: "2", label: "Scene One", summary: "An opening signal.", metadata: {}, degree: includeInferred ? 2 : 1 },
-    { key: "character:psyke:3", node_type: "character", source_type: "psyke", source_id: "3", label: "Marlow", summary: "A reluctant observer.", metadata: {}, degree: includeInferred ? 1 : 0 },
-    { key: "theme:psyke:9", node_type: "theme", source_type: "psyke", source_id: "9", label: "Static", summary: "An isolated motif.", metadata: {}, degree: 0 },
+    { key: projectKey, node_type: "project", source_type: "project", source_id: String(projectId), label: `Project ${projectId}`, summary: "", metadata: {}, degree: 1, story_gravity: null },
+    { key: "scene:scene:2", node_type: "scene", source_type: "scene", source_id: "2", label: "Scene One", summary: "An opening signal.", metadata: {}, degree: includeInferred ? 2 : 1, story_gravity: 0.8 },
+    { key: "character:psyke:3", node_type: "character", source_type: "psyke", source_id: "3", label: "Marlow", summary: "A reluctant observer.", metadata: {}, degree: includeInferred ? 1 : 0, story_gravity: 0.6 },
+    { key: "theme:psyke:9", node_type: "theme", source_type: "psyke", source_id: "9", label: "Static", summary: "An isolated motif.", metadata: {}, degree: 0, story_gravity: 0.9 },
   ];
   const focusKey = query.focus_key ?? null;
   return {
@@ -106,6 +109,7 @@ function graphFixture(
     writing_mode: "novel",
     view_mode: viewMode,
     story_diagnostics_available: viewMode === "project_map",
+    story_gravity_available: true,
     focus_key: focusKey,
     depth: query.depth ?? 1,
     include_inferred: includeInferred,
@@ -139,6 +143,7 @@ function diagnosticFixture(projectId: number, query: KnowledgeGraphQueryDTO): Kn
     summary: `Connection target ${index + 1}`,
     metadata: {},
     degree: 1,
+    story_gravity: 0.4,
   }));
   const orphans = Array.from({ length: 10 }, (_, index) => ({
     key: `theme:psyke:${index + 101}`,
@@ -149,9 +154,10 @@ function diagnosticFixture(projectId: number, query: KnowledgeGraphQueryDTO): Kn
     summary: "",
     metadata: {},
     degree: 0,
+    story_gravity: 0.7,
   }));
   const nodes = [
-    { key: centerKey, node_type: "scene", source_type: "scene", source_id: "100", label: "Connection hub", summary: "A highly connected scene.", metadata: {}, degree: connected.length },
+    { key: centerKey, node_type: "scene", source_type: "scene", source_id: "100", label: "Connection hub", summary: "A highly connected scene.", metadata: {}, degree: connected.length, story_gravity: 0.95 },
     ...connected,
     ...orphans,
   ];
@@ -174,6 +180,7 @@ function diagnosticFixture(projectId: number, query: KnowledgeGraphQueryDTO): Kn
     writing_mode: "novel",
     view_mode: query.view_mode ?? "project_map",
     story_diagnostics_available: (query.view_mode ?? "project_map") === "project_map",
+    story_gravity_available: true,
     focus_key: query.focus_key ?? null,
     depth: query.depth ?? 1,
     include_inferred: query.include_inferred ?? true,
@@ -200,10 +207,10 @@ function viewFixture(projectId: number, query: KnowledgeGraphQueryDTO): Knowledg
   if (viewMode === "project_map") return graphFixture(projectId, query);
   const projectKey = `project:project:${projectId}`;
   const nodes = [
-    { key: projectKey, node_type: "project", source_type: "project", source_id: String(projectId), label: `Project ${projectId}`, summary: "", metadata: {}, degree: 0 },
-    { key: "scene:scene:2", node_type: "scene", source_type: "scene", source_id: "2", label: "Scene One", summary: "An opening signal.", metadata: {}, degree: 0 },
-    { key: "scene:scene:3", node_type: "scene", source_type: "scene", source_id: "3", label: "Scene Two", summary: "A consequence.", metadata: {}, degree: 0 },
-    { key: "revision_impact:revision:4", node_type: "revision_impact", source_type: "revision", source_id: "4", label: "Saved revision impact 4", summary: "", metadata: { impact_level: "high" }, degree: 0 },
+    { key: projectKey, node_type: "project", source_type: "project", source_id: String(projectId), label: `Project ${projectId}`, summary: "", metadata: {}, degree: 0, story_gravity: null },
+    { key: "scene:scene:2", node_type: "scene", source_type: "scene", source_id: "2", label: "Scene One", summary: "An opening signal.", metadata: {}, degree: 0, story_gravity: 0.8 },
+    { key: "scene:scene:3", node_type: "scene", source_type: "scene", source_id: "3", label: "Scene Two", summary: "A consequence.", metadata: {}, degree: 0, story_gravity: 0.65 },
+    { key: "revision_impact:revision:4", node_type: "revision_impact", source_type: "revision", source_id: "4", label: "Saved revision impact 4", summary: "", metadata: { impact_level: "high" }, degree: 0, story_gravity: null },
   ];
   const contains = (target: string): KnowledgeGraphEdgeDTO => ({
     source: projectKey,
@@ -219,7 +226,7 @@ function viewFixture(projectId: number, query: KnowledgeGraphQueryDTO): Knowledg
     metadata: {},
   });
   const precedes: KnowledgeGraphEdgeDTO = {
-    source: "scene:scene:2", target: "scene:scene:3", edge_type: "precedes", confidence: "likely", provenance: "scene order", source_system: "timeline", explanation: "Scene One precedes Scene Two in manuscript order.", is_user_confirmed: false, is_inferred: true, is_hidden: false, metadata: {},
+    source: "scene:scene:2", target: "scene:scene:3", edge_type: "precedes", confidence: "likely", provenance: "scene order", source_system: "timeline", explanation: "Scene One precedes Scene Two in manuscript order.", is_user_confirmed: false, is_inferred: true, is_hidden: false, metadata: { story_order_index: 1, story_order_total: 3, story_order_band: "middle", act_boundary: true },
   };
   const revises: KnowledgeGraphEdgeDTO = {
     source: "revision_impact:revision:4", target: "scene:scene:2", edge_type: "revises", confidence: "confirmed", provenance: "revision impact report", source_system: "revision_intelligence", explanation: "The saved report records this changed scene.", is_user_confirmed: false, is_inferred: false, is_hidden: false, metadata: {},
@@ -244,6 +251,7 @@ function viewFixture(projectId: number, query: KnowledgeGraphQueryDTO): Knowledg
     writing_mode: "novel",
     view_mode: viewMode,
     story_diagnostics_available: false,
+    story_gravity_available: true,
     focus_key: query.focus_key ?? null,
     depth: query.depth ?? 1,
     include_inferred: query.include_inferred ?? true,
@@ -432,6 +440,60 @@ check(filtered.nodes.length === 3, "node-type filters must remove only the selec
 check(filtered.edges.length === 1 && filtered.edges[0]?.edge_type === "contains", "confidence and source filters must compose over edges");
 check(filtered.orphanNodes.map((node) => node.key).join() === "theme:psyke:9", "orphan cards must use server-provided keys, not filtered degree");
 check(filtered.weakLinks.length === 0, "weak-link cards must honor active confidence and source filters");
+const gravitySizing = knowledgeGraphNodeSize(valid.nodes[1]!, "story_gravity", true, 2);
+check(
+  gravitySizing.basis === "story_gravity"
+    && gravitySizing.gravity === 0.8
+    && Math.abs(gravitySizing.size - 44.4) < 0.001,
+  "Story Gravity sizing must use the bounded Core total directly",
+);
+const unmappedGravitySizing = knowledgeGraphNodeSize(valid.nodes[0]!, "story_gravity", true, 2);
+check(
+  unmappedGravitySizing.basis === "story_gravity"
+    && unmappedGravitySizing.gravity === null
+    && unmappedGravitySizing.size === 30,
+  "an unmapped node in Story Gravity mode must use the neutral minimum rather than degree",
+);
+const unavailableGravitySizing = knowledgeGraphNodeSize(valid.nodes[1]!, "story_gravity", false, 2);
+const explicitLinkSizing = knowledgeGraphNodeSize(valid.nodes[1]!, "view_links", true, 2);
+check(
+  unavailableGravitySizing.basis === "view_links"
+    && unavailableGravitySizing.size === explicitLinkSizing.size,
+  "unavailable Story Gravity must truthfully fall back to view-link sizing",
+);
+const flowEdgeOne: KnowledgeGraphEdgeDTO = {
+  ...inferredEdge,
+  source: "scene:scene:1",
+  target: "scene:scene:2",
+  edge_type: "precedes",
+  metadata: { story_order_index: 0, story_order_total: 4, story_order_band: "beginning", act_boundary: false },
+};
+const flowEdgeThree: KnowledgeGraphEdgeDTO = {
+  ...inferredEdge,
+  source: "scene:scene:4",
+  target: "scene:scene:3",
+  edge_type: "follows",
+  metadata: { story_order_index: 3, story_order_total: 4, story_order_band: "ending", act_boundary: true },
+};
+const parsedFlow = storyOrderFlowSegments([
+  flowEdgeThree,
+  flowEdgeOne,
+  { ...flowEdgeOne },
+  { ...inferredEdge, edge_type: "precedes", metadata: {} },
+]);
+check(
+  parsedFlow.length === 2
+    && parsedFlow[0]?.source === "scene:scene:1"
+    && parsedFlow[1]?.source === "scene:scene:3"
+    && parsedFlow[1]?.target === "scene:scene:4"
+    && parsedFlow[1]?.gapBefore
+    && parsedFlow[1]?.actBoundary,
+  "flow extraction must sort, deduplicate, normalize follows direction, mark gaps, and ignore unannotated edges",
+);
+check(
+  storyOrderFlowPath({ x: 10, y: 20 }, { x: 110, y: 60 }, 0).startsWith("M 10 20 Q 60"),
+  "story-order geometry must produce a stable curved path between returned endpoints",
+);
 const firstLayout = layoutKnowledgeGraph(valid.nodes);
 const secondLayout = layoutKnowledgeGraph([...valid.nodes].reverse());
 check(
@@ -766,13 +828,39 @@ check(panelRenderer.root.findByProps({ "aria-label": "Knowledge Graph view mode"
 check(panelRenderer.root.findByProps({ "aria-label": "Knowledge Graph evidence scope" }).props.value === "inferred_and_confirmed", "the graph must expose its default inferred and confirmed evidence scope");
 check(panelRenderer.root.findByProps({ "aria-label": "Minimum edge confidence" }), "confidence filter must have a stable accessible name");
 check(panelRenderer.root.findByProps({ "aria-label": "Edge source system" }), "source-system filter must have a stable accessible name");
+check(
+  panelRenderer.root.findByProps({ "aria-label": "Size Knowledge Graph nodes by Story Gravity" }).props["aria-pressed"] === true
+    && panelRenderer.root.findByProps({ "aria-label": "Size Knowledge Graph nodes by view links" }).props["aria-pressed"] === false
+    && panelRenderer.root.findByProps({ "aria-label": "Show returned story-order flow" }).props["aria-pressed"] === false,
+  "visual overlays must default to Story Gravity sizing with story-order flow explicitly off",
+);
+check(
+  text(panelRenderer.root.findByProps({ "aria-label": "Knowledge Graph visual legend" })).includes("node size = project-wide Story Gravity · 3/4 mapped · halo ≥ 55%")
+    && panelRenderer.root.findAllByProps({ "data-story-gravity-halo": "true" }).length === 3
+    && text(panelRenderer.root).includes("STORY GRAVITY · 80%"),
+  "the legend, safe halos, and inspector must expose the active Story Gravity basis and selected-node total",
+);
 check(text(panelRenderer.root).includes("Confirmed confidence"), "the manual confidence threshold must not be mislabeled as the authoritative Confirmed-only evidence scope");
-check(panelRenderer.root.findByProps({ "aria-label": "Select Scene One, Scene, 2 connections" }).props["aria-pressed"] === true, "nodes must expose a named keyboard button and non-color selected state");
+const sceneOneButton = () => panelRenderer.root.findByProps({ "data-graph-node-key": "scene:scene:2" });
+check(
+  sceneOneButton().props["aria-pressed"] === true
+    && sceneOneButton().props["aria-label"] === "Select Scene One, Scene, 2 connections, node size by Story Gravity 80 percent",
+  "nodes must expose a named keyboard button with the effective sizing basis and non-color selected state",
+);
 
-act(() => panelRenderer.root.findByProps({ "aria-label": "Select Scene One, Scene, 2 connections" }).props.onClick());
+act(() => sceneOneButton().props.onClick());
 const panelSelection = panelRenderer.root.findAllByType("output").at(-1)!;
 check(panelSelection.props["data-section"] === "Knowledge Graph" && panelSelection.props["data-node"] === "scene:scene:2" && panelSelection.props["data-scene"] === 2, "node selection must publish graph and Scene context to Studio tools");
-check(panelRenderer.root.findByProps({ "aria-label": "Select Scene One, Scene, 2 connections" }).props["aria-pressed"] === true, "selected graph nodes must expose aria-pressed");
+check(sceneOneButton().props["aria-pressed"] === true, "selected graph nodes must expose aria-pressed");
+act(() => panelRenderer.root.findByProps({ "aria-label": "Size Knowledge Graph nodes by view links" }).props.onClick());
+check(
+  panelRenderer.root.findByProps({ "data-knowledge-graph-canvas": "true" }).props["data-node-sizing"] === "view_links"
+    && panelRenderer.root.findAllByProps({ "data-story-gravity-halo": "true" }).length === 0
+    && text(panelRenderer.root.findByProps({ "aria-label": "Knowledge Graph visual legend" })).includes("node size = view-scoped links")
+    && sceneOneButton().props["aria-label"].includes("node size by 2 view-scoped links"),
+  "the explicit View links choice must remove gravity encoding and expose its effective basis accessibly",
+);
+act(() => panelRenderer.root.findByProps({ "aria-label": "Size Knowledge Graph nodes by Story Gravity" }).props.onClick());
 const inspectedConnections = panelRenderer.root.findAllByProps({ "data-graph-connection": "true" });
 check(inspectedConnections.length === 2, "the selected-node inspector must expose every returned visible connection");
 const outgoingConnectionText = inspectedConnections.map(text).find((value) => value.includes("OUTGOING TO")) ?? "";
@@ -799,12 +887,19 @@ check(graphRequests.at(-1)?.query.focus_key === "scene:scene:2", "focus action m
 check(panelRenderer.root.findByProps({ "data-knowledge-graph-canvas": "true" }).props["data-focus-key"] === "scene:scene:2", "focused response must replace the Project Map only after it arrives");
 check(panelRenderer.root.findByProps({ "aria-label": "Return to full Project Map view" }), "focused mode must provide an accessible route back to the active full view");
 check(panelRenderer.root.findAllByProps({ "aria-label": "Focus graph on Scene One" }).length === 0 && text(panelRenderer.root).includes("FOCUS ROOT"), "a selected focus root must expose status instead of an inert same-focus action");
+act(() => panelRenderer.root.findByProps({ "aria-label": "Size Knowledge Graph nodes by view links" }).props.onClick());
+act(() => panelRenderer.root.findByProps({ "aria-label": "Show returned story-order flow" }).props.onClick());
 
 await act(async () => {
   panelRenderer.update(panelTree(8));
   await flush();
 });
 check(panelRenderer.root.findByProps({ "data-knowledge-graph-canvas": "true" }).props["data-project-id"] === 8, "project switching must clear and replace the prior graph");
+check(
+  panelRenderer.root.findByProps({ "aria-label": "Size Knowledge Graph nodes by Story Gravity" }).props["aria-pressed"] === true
+    && panelRenderer.root.findByProps({ "aria-label": "Show returned story-order flow" }).props["aria-pressed"] === false,
+  "project switching must reset visual overlays to Story Gravity on and story-order flow off",
+);
 const switchedSelection = panelRenderer.root.findAllByType("output").at(-1)!;
 check(switchedSelection.props["data-node"] === "", "project switching must clear graph selection context");
 act(() => panelRenderer.unmount());
@@ -822,7 +917,65 @@ await act(async () => {
   panelRenderer = create(panelTree(7, modeApi));
   await flush();
 });
-act(() => panelRenderer.root.findByProps({ "aria-label": "Select Scene One, Scene, 2 connections" }).props.onClick());
+act(() => panelRenderer.root.findByProps({ "aria-label": "Show returned story-order flow" }).props.onClick());
+check(
+  text(panelRenderer.root).includes("No returned story-order segments match this view, evidence scope, focus, and manual filters."),
+  "an enabled flow overlay with no returned annotated edges must report an honest empty state",
+);
+await act(async () => {
+  panelRenderer.root.findByProps({ "aria-label": "Knowledge Graph view mode" }).props.onChange({ currentTarget: { value: "structure" } });
+  await flush();
+});
+check(
+  panelRenderer.root.findAllByProps({ "data-story-order-segment": 1 }).length === 1
+    && panelRenderer.root.findByProps({ "data-story-order-band": "middle" }).props.markerEnd.includes("story-order-middle")
+    && panelRenderer.root.findByProps({ "data-story-order-band": "middle" }).props.strokeDasharray === "10 3 2 3"
+    && panelRenderer.root.findByProps({ "data-story-order-band": "middle" }).props["data-act-boundary"] === "true"
+    && panelRenderer.root.findByProps({ "data-story-order-band": "middle" }).props["data-flow-gap-before"] === "true"
+    && panelRenderer.root.findByProps({ "aria-label": "Hide returned story-order flow" }).props["aria-pressed"] === true
+    && panelRenderer.root.findByProps({ "aria-label": "Size Knowledge Graph nodes by Story Gravity" }).props["aria-pressed"] === true,
+  "Structure must render only its returned annotated story-order edge and preserve independent overlay controls across view changes",
+);
+act(() => panelRenderer.root.findByProps({ "aria-label": "Edge source system" }).props.onChange({ currentTarget: { value: "structure" } }));
+check(
+  panelRenderer.root.findAllByProps({ "data-story-order-flow-overlay": "true" }).length === 0
+    && text(panelRenderer.root).includes("No returned story-order segments match this view, evidence scope, focus, and manual filters."),
+  "manual edge filters must remove flow rather than resurrect filtered order evidence",
+);
+act(() => panelRenderer.root.findByProps({ "aria-label": "Edge source system" }).props.onChange({ currentTarget: { value: "all" } }));
+await act(async () => {
+  panelRenderer.root.findByProps({ "aria-label": "Knowledge Graph evidence scope" }).props.onChange({ currentTarget: { value: "confirmed_only" } });
+  await flush();
+});
+check(
+  panelRenderer.root.findAllByProps({ "data-story-order-flow-overlay": "true" }).length === 0
+    && text(panelRenderer.root).includes("No returned story-order segments match this view, evidence scope, focus, and manual filters."),
+  "Confirmed only must remove inferred story-order flow without a client-side resurrection",
+);
+await act(async () => {
+  panelRenderer.root.findByProps({ "aria-label": "Knowledge Graph evidence scope" }).props.onChange({ currentTarget: { value: "inferred_and_confirmed" } });
+  await flush();
+});
+check(panelRenderer.root.findAllByProps({ "data-story-order-flow-overlay": "true" }).length === 1, "restoring inferred evidence must restore only Core-returned flow segments");
+act(() => panelRenderer.root.findByProps({ "data-graph-node-key": "scene:scene:2" }).props.onClick());
+await act(async () => {
+  panelRenderer.root.findAllByProps({ "aria-label": "Focus graph on Scene One" })[0]!.props.onClick();
+  await flush();
+});
+check(
+  panelRenderer.root.findByProps({ "aria-label": "Hide returned story-order flow" }).props["aria-pressed"] === true
+    && panelRenderer.root.findByProps({ "aria-label": "Size Knowledge Graph nodes by Story Gravity" }).props["aria-pressed"] === true,
+  "focus changes must preserve presentation-only overlay controls",
+);
+await act(async () => {
+  panelRenderer.root.findByProps({ "aria-label": "Return to full Structure view" }).props.onClick();
+  await flush();
+});
+await act(async () => {
+  panelRenderer.root.findByProps({ "aria-label": "Knowledge Graph view mode" }).props.onChange({ currentTarget: { value: "project_map" } });
+  await flush();
+});
+act(() => sceneOneButton().props.onClick());
 act(() => panelRenderer.root.findByProps({ "aria-label": "Minimum edge confidence" }).props.onChange({ currentTarget: { value: "likely" } }));
 act(() => panelRenderer.root.findByProps({ "aria-label": "Edge source system" }).props.onChange({ currentTarget: { value: "manuscript" } }));
 act(() => panelRenderer.root.findByProps({ "aria-label": "Hide Character nodes" }).props.onClick());
@@ -851,8 +1004,10 @@ check(
   text(panelRenderer.root).includes("Only saved risk and contradiction evidence")
     && text(panelRenderer.root).includes("zero rows must not be read as “connected” or “risk-free.”")
     && !text(panelRenderer.root).includes("CONNECTED")
-    && !text(panelRenderer.root).includes("DIAGNOSTIC CAP"),
-  "Recorded Risk must explain its saved-evidence boundary without claiming connectivity or misreporting the global hidden queue as a response cap",
+    && !text(panelRenderer.root).includes("DIAGNOSTIC CAP")
+    && panelRenderer.root.findByProps({ "aria-label": "Hide returned story-order flow" }).props["aria-pressed"] === true
+    && panelRenderer.root.findAllByProps({ "data-story-order-flow-overlay": "true" }).length === 0,
+  "Recorded Risk must explain its saved-evidence boundary and preserve but not fabricate the independent flow overlay",
 );
 await act(async () => {
   panelRenderer.root.findAllByProps({ "aria-label": "Focus graph on Saved revision impact 4" })[0]!.props.onClick();
@@ -870,8 +1025,10 @@ const riskReview = panelRenderer.root.findByProps({ "aria-label": "Review confir
 act(() => riskReview.props.onClick({ currentTarget: riskReview }));
 check(
   panelRenderer.root.findByProps({ "aria-label": "Knowledge Graph view mode" }).props.disabled === true
-    && panelRenderer.root.findByProps({ "aria-label": "Knowledge Graph evidence scope" }).props.disabled === true,
-  "view and evidence controls must lock while an edge decision is under review",
+    && panelRenderer.root.findByProps({ "aria-label": "Knowledge Graph evidence scope" }).props.disabled === true
+    && panelRenderer.root.findByProps({ "aria-label": "Size Knowledge Graph nodes by Story Gravity" }).props.disabled === true
+    && panelRenderer.root.findByProps({ "aria-label": "Hide returned story-order flow" }).props.disabled === true,
+  "view, evidence, and visual-overlay controls must lock while an edge decision is under review",
 );
 act(() => panelRenderer.root.findByProps({ "data-knowledge-graph-edge-review": "confirm_edge" }).findAllByType("button").find((button) => text(button) === "CANCEL")!.props.onClick());
 await act(async () => {
@@ -1056,6 +1213,8 @@ await act(async () => {
   panelRenderer = create(panelTree(7, oldAdapterApi));
   await flush();
 });
+act(() => panelRenderer.root.findByProps({ "aria-label": "Size Knowledge Graph nodes by view links" }).props.onClick());
+act(() => panelRenderer.root.findByProps({ "aria-label": "Show returned story-order flow" }).props.onClick());
 const adapterReviewButton = panelRenderer.root.findByProps({ "aria-label": "Review confirmation of Scene One to Marlow mentions edge" });
 act(() => adapterReviewButton.props.onClick({ currentTarget: adapterReviewButton }));
 await act(async () => {
@@ -1067,6 +1226,11 @@ await act(async () => {
   panelRenderer.update(panelTree(7, newAdapterApi));
   await flush();
 });
+check(
+  panelRenderer.root.findByProps({ "aria-label": "Size Knowledge Graph nodes by Story Gravity" }).props["aria-pressed"] === true
+    && panelRenderer.root.findByProps({ "aria-label": "Show returned story-order flow" }).props["aria-pressed"] === false,
+  "swapping API identity must reset presentation overlays and discard prior-adapter visual state",
+);
 await act(async () => {
   oldAdapterCommand.resolve({
     knowledge_graph: graphFixture(7, {}, { revision: REVISION_B }),
@@ -1305,6 +1469,30 @@ await act(async () => {
   loadingGraph.resolve(graphFixture(7, { focus_key: null, depth: 1, limit: 48, include_inferred: true }));
   await flush();
 });
+act(() => stateRenderer.unmount());
+
+const unavailableGravityApi = {
+  getKnowledgeGraph: async (projectId: number, query: KnowledgeGraphQueryDTO) => {
+    const base = graphFixture(projectId, query, { story_gravity_available: false });
+    return { ...base, nodes: base.nodes.map((node) => ({ ...node, story_gravity: null })) };
+  },
+  subscribe: () => () => {},
+} as unknown as ApiClient;
+await act(async () => {
+  stateRenderer = create(panelTree(7, unavailableGravityApi));
+  await flush();
+});
+const fallbackScene = stateRenderer.root.findByProps({ "data-graph-node-key": "scene:scene:2" });
+check(
+  stateRenderer.root.findByProps({ "aria-label": "Size Knowledge Graph nodes by Story Gravity" }).props["aria-pressed"] === true
+    && stateRenderer.root.findByProps({ "data-knowledge-graph-canvas": "true" }).props["data-node-sizing"] === "view_links"
+    && fallbackScene.props["data-node-size-basis"] === "view_links"
+    && fallbackScene.props["aria-label"].includes("Story Gravity unavailable")
+    && text(stateRenderer.root).includes("Story Gravity is unavailable; node size falls back to view-scoped links.")
+    && text(stateRenderer.root.findByProps({ "aria-label": "Knowledge Graph visual legend" })).includes("Story Gravity unavailable")
+    && stateRenderer.root.findAllByProps({ "data-story-gravity-halo": "true" }).length === 0,
+  "an unavailable gravity computation must keep the requested choice visible while truthfully falling back everywhere to view links",
+);
 act(() => stateRenderer.unmount());
 
 const emptyApi = {

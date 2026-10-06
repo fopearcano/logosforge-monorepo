@@ -41,14 +41,21 @@ check(typeof api.getKnowledgeGraphCommandReceipt === "function", "preview mock m
 check(typeof api.getKnowledgeGraphHiddenEdges === "function", "preview mock must implement the complete paged hidden-edge review queue");
 
 const health = await api.health();
-check(health.status === "ok" && health.api_version === "1.8.0", "preview health must satisfy the core contract");
+check(
+  health.status === "ok" && health.version === "1.9.0" && health.api_version === "1.9.0",
+  "preview health must satisfy the core contract",
+);
 const projectMap = await api.getKnowledgeGraph(1, { limit: 160, include_inferred: true });
 check(
   projectMap.project_id === 1
     && projectMap.view_mode === "project_map"
     && projectMap.story_diagnostics_available === true
+    && projectMap.story_gravity_available === true
     && projectMap.nodes.length > 1
     && projectMap.nodes.every((node) => Number.isSafeInteger(node.degree) && node.degree >= 0)
+    && projectMap.nodes.every((node) => node.story_gravity === null
+      || (Number.isFinite(node.story_gravity) && node.story_gravity >= 0 && node.story_gravity <= 1))
+    && projectMap.nodes.some((node) => node.story_gravity !== null)
     && projectMap.weak_links.every((edge) => projectMap.nodes.some((node) => node.key === edge.source)
       && projectMap.nodes.some((node) => node.key === edge.target)),
   "preview Knowledge Graph must expose bounded canonical nodes, full-query degrees, and safe weak-link endpoints",
@@ -72,6 +79,24 @@ check(
       "contains", "belongs_to", "precedes", "follows",
     ].includes(edge.edge_type)),
   "preview Structure view must mirror the bounded Core projection without story diagnostics",
+);
+const previewFlowEdge = structureGraph.edges.find((edge) => edge.edge_type === "precedes");
+check(
+  previewFlowEdge != null
+    && Number.isSafeInteger(previewFlowEdge.metadata.story_order_index)
+    && previewFlowEdge.metadata.story_order_total === structureGraph.nodes.filter((node) => node.node_type === "scene").length
+    && ["beginning", "middle", "ending"].includes(String(previewFlowEdge.metadata.story_order_band))
+    && typeof previewFlowEdge.metadata.act_boundary === "boolean",
+  "preview Structure flow must carry the same bounded story-order metadata as Core",
+);
+const confirmedStructureGraph = await api.getKnowledgeGraph(1, {
+  limit: 160,
+  include_inferred: false,
+  view_mode: "structure",
+});
+check(
+  confirmedStructureGraph.edges.every((edge) => edge.edge_type !== "precedes" && edge.edge_type !== "follows"),
+  "preview Confirmed-only Structure must not resurrect inferred story-order flow",
 );
 const riskGraph = await api.getKnowledgeGraph(1, {
   limit: 160,

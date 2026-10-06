@@ -944,7 +944,54 @@ function knowledgeGraphNode(value: unknown, path: string): KnowledgeGraphNodeDTO
   record(requireField(dto, "metadata", path), fieldPath(path, "metadata"));
   const degree = integerValue(requireField(dto, "degree", path), fieldPath(path, "degree"));
   if (degree < 0) fail(fieldPath(path, "degree"), "zero or greater", degree);
+  const storyGravity = nullable(
+    requireField(dto, "story_gravity", path),
+    fieldPath(path, "story_gravity"),
+    numberValue,
+  );
+  if (storyGravity !== null && (storyGravity < 0 || storyGravity > 1)) {
+    fail(fieldPath(path, "story_gravity"), "null or a finite number from 0 through 1", storyGravity);
+  }
   return value as KnowledgeGraphNodeDTO;
+}
+
+const STORY_ORDER_METADATA_FIELDS = [
+  "story_order_index",
+  "story_order_total",
+  "story_order_band",
+  "act_boundary",
+] as const;
+
+function validateStoryOrderMetadata(
+  metadata: JsonRecord,
+  edgeType: string,
+  path: string,
+): void {
+  const present = STORY_ORDER_METADATA_FIELDS.filter((key) => (
+    Object.prototype.hasOwnProperty.call(metadata, key)
+  ));
+  if (present.length === 0) return;
+  if (edgeType !== "precedes" && edgeType !== "follows") {
+    fail(path, "story-order metadata only on precedes or follows edges", metadata);
+  }
+  if (present.length !== STORY_ORDER_METADATA_FIELDS.length) {
+    fail(path, "all four story-order metadata fields when any is present", metadata);
+  }
+  const index = integerValue(metadata.story_order_index, fieldPath(path, "story_order_index"));
+  const total = integerValue(metadata.story_order_total, fieldPath(path, "story_order_total"));
+  if (index < 0) fail(fieldPath(path, "story_order_index"), "zero or greater", index);
+  if (total < 2) fail(fieldPath(path, "story_order_total"), "two or greater for an order segment", total);
+  if (edgeType === "precedes" && index >= total - 1) {
+    fail(fieldPath(path, "story_order_index"), `less than story_order_total - 1 (${total - 1}) for precedes`, index);
+  }
+  if (edgeType === "follows" && (index < 1 || index >= total)) {
+    fail(fieldPath(path, "story_order_index"), `from 1 through story_order_total - 1 (${total - 1}) for follows`, index);
+  }
+  const band = stringValue(metadata.story_order_band, fieldPath(path, "story_order_band"));
+  if (!["beginning", "middle", "ending"].includes(band)) {
+    fail(fieldPath(path, "story_order_band"), "beginning, middle, or ending", band);
+  }
+  booleanValue(metadata.act_boundary, fieldPath(path, "act_boundary"));
 }
 
 function knowledgeGraphEdge(value: unknown, path: string): KnowledgeGraphEdgeDTO {
@@ -963,7 +1010,9 @@ function knowledgeGraphEdge(value: unknown, path: string): KnowledgeGraphEdgeDTO
   booleanValue(requireField(dto, "is_user_confirmed", path), fieldPath(path, "is_user_confirmed"));
   booleanValue(requireField(dto, "is_inferred", path), fieldPath(path, "is_inferred"));
   booleanValue(requireField(dto, "is_hidden", path), fieldPath(path, "is_hidden"));
-  record(requireField(dto, "metadata", path), fieldPath(path, "metadata"));
+  const metadataPath = fieldPath(path, "metadata");
+  const metadata = record(requireField(dto, "metadata", path), metadataPath);
+  validateStoryOrderMetadata(metadata, dto.edge_type as string, metadataPath);
   return value as KnowledgeGraphEdgeDTO;
 }
 
@@ -1031,6 +1080,10 @@ function knowledgeGraphRead(value: unknown, path: string): KnowledgeGraphReadDTO
       storyDiagnosticsAvailable,
     );
   }
+  const storyGravityAvailable = booleanValue(
+    requireField(dto, "story_gravity_available", path),
+    fieldPath(path, "story_gravity_available"),
+  );
 
   const nodesPath = fieldPath(path, "nodes");
   const nodes = arrayOf(requireField(dto, "nodes", path), nodesPath, knowledgeGraphNode);
@@ -1038,6 +1091,13 @@ function knowledgeGraphRead(value: unknown, path: string): KnowledgeGraphReadDTO
   nodes.forEach((node, index) => {
     if (nodeKeys.has(node.key)) fail(`${nodesPath}[${index}].key`, "a unique node key", node.key);
     nodeKeys.add(node.key);
+    if (!storyGravityAvailable && node.story_gravity !== null) {
+      fail(
+        `${nodesPath}[${index}].story_gravity`,
+        "null when story_gravity_available is false",
+        node.story_gravity,
+      );
+    }
   });
   if (focusKey !== null && !nodeKeys.has(focusKey)) {
     fail(fieldPath(path, "focus_key"), "a key present in nodes", focusKey);

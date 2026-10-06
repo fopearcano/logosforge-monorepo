@@ -102,11 +102,12 @@ GET  /api/health → { status, service, mode, version, api_version, core_version
 `core_version` is the Logosforge build (e.g. `0.9.0-alpha`). Clients (Electron
 desktop and Web/PWA) read these to verify they're talking to a compatible
 backend. `version` mirrors `api_version` for backward compatibility.
-The current additive HTTP contract version is **1.8.0**. It adds canonical
-Knowledge Graph view projections and explicit view/diagnostic response metadata.
-This version is deliberately independent from the local MCP server contract;
-MCP gateway 1.7.0 maps the Knowledge Graph HTTP review boundary into three
-focused tools and exposes the same strict `view_mode` enum on its read tool.
+The current additive HTTP contract version is **1.9.0**. It adds canonical
+Knowledge Graph Story Gravity availability/values and validated manuscript-order
+edge metadata. This version is deliberately independent from the local MCP
+server contract; MCP gateway 1.8.0 maps the Knowledge Graph HTTP review boundary
+into the same three focused tools and returns the additive graph fields from its
+read/apply surfaces.
 
 ### Packaged-desktop live context
 ```
@@ -199,21 +200,49 @@ Graph construction and focus resolution are scoped to the project in the path.
 An unknown, stale, foreign, or selected-view-excluded focus key returns the same
 generic 404 without consulting or naming another project.
 
-The response contains the exact `view_mode`, `include_inferred`, and
-`story_diagnostics_available` values used, plus a `revision` and typed nodes and
-edges with confidence, provenance, source-system, confirmation, inference, and
-hidden state. The revision covers the complete persisted review layer (endpoint
-reference rows and directional edge-review rows), bound to the project's id and
-immutable creation timestamp. It is unchanged in meaning across view/evidence
-choices and deliberately does **not** claim to revision the derived graph
-assembled by the legacy extractors: source-content edits can change that graph
-while leaving the review revision unchanged.
+The response contains the exact `view_mode`, `include_inferred`,
+`story_diagnostics_available`, and `story_gravity_available` values used, plus a
+`revision` and typed nodes and edges with confidence, provenance, source-system,
+confirmation, inference, and hidden state. Every node has a required nullable
+`story_gravity`: a finite project-wide value in `[0,1]` when safely mapped, or
+`null` when it is not. `story_gravity_available=true` means the optional
+calculation completed, not that every canonical node has a mapping. If it is
+false, every returned value is null and the otherwise-valid graph remains
+available.
+
+Gravity reuses the existing deterministic visual-graph calculation, including
+the writing-mode enrichers, but bridges results only through a unique exact
+canonical identity: Scene `(scene,id)`, Note `(note,id)`, PSYKE `(psyke,id)`, or
+Act `(act,name)`. Character/Place table rows are not guessed to be typed PSYKE
+entries, format-specific nodes are not guessed by label, and ambiguous canonical
+identities remain null. The hidden-edge page carries the required node field as
+null but does not advertise or compute a page-level gravity overlay.
+
+The revision covers the complete persisted review layer (endpoint reference
+rows and directional edge-review rows), bound to the project's id and immutable
+creation timestamp. It is unchanged in meaning across view/evidence choices and
+deliberately does **not** claim to revision the derived graph assembled by the
+legacy extractors: source-content edits can change that graph while leaving the
+review revision unchanged.
 
 Per-node `degree` is calculated in the complete selected view after applying
 `include_inferred`, before focus traversal or response truncation. It is
 therefore stable across focused neighborhoods of the same view/evidence scope,
 but can legitimately change when either selector changes. Primary total counts
 describe the complete selected map/neighborhood before response truncation.
+Story Gravity is project-wide and does not change merely because the view,
+evidence scope, focus, or response cap changes; only which mapped nodes are
+returned changes.
+
+Each derived manuscript-adjacency `precedes` edge also carries all four
+story-order metadata fields: zero-based `story_order_index` for its source scene,
+full-manuscript `story_order_total`, `story_order_band` (`beginning`, `middle`, or
+`ending`), and boolean `act_boundary`. These edges remain `likely` inferred
+evidence (unless separately user-confirmed) and describe sequence, never
+causality. Metadata rides only on edges that survive the selected server view,
+evidence scope, focus, and cap; clients must not use the full total to synthesize
+missing edges.
+
 Story-level `orphan_count`, `orphan_keys`, `weak_link_count`, and `weak_links`
 apply only when `view_mode=project_map`; `story_diagnostics_available` is then
 true. Specialty views set it false and return zero/empty story diagnostics, so
@@ -271,19 +300,21 @@ changed command publishes `knowledge_graph_changed`; rejects and exact replays
 do not. Persisted logical duplicates fail closed as server-state corruption
 rather than choosing an order-dependent winner.
 
-MCP gateway 1.7.0 exposes the primary read, hidden-edge page, and guarded command
+MCP gateway 1.8.0 exposes the primary read, hidden-edge page, and guarded command
 proposal as `logosforge_get_knowledge_graph`,
 `logosforge_get_knowledge_graph_hidden_edges`, and
 `logosforge_propose_knowledge_graph_command`. The read accepts the same optional
 `view_mode` values (default `project_map`) and independent `include_inferred`
-scope as HTTP. Mutation proposal and receipt-recovery reads remain explicitly
-pinned to `project_map`. Restore proposals must include the `hidden_edge_offset`
-of the current page containing their edge; the gateway refetches a 100-edge page
-and verifies its project, revision, and exact directional identity before
-storing a non-mutating proposal. Confirm/Hide reject that page-only argument.
-Apply uses the proposal id as `Idempotency-Key`, and ambiguous delivery follows
-the same durable receipt/restart recovery discipline as Timeline and Canvas
-Plot.
+scope as HTTP and returns the same gravity fields and story-order edge metadata.
+Confirm/Hide proposal preflight and every apply/recovery result map remain
+explicitly pinned to `project_map`; those result maps include freshly computed
+optional gravity data. Restore proposals instead must include the
+`hidden_edge_offset` of the current page containing their edge; the gateway
+refetches a 100-edge page and verifies its project, revision, and exact
+directional identity before storing a non-mutating proposal. Confirm/Hide reject
+that page-only argument. Apply uses the proposal id as `Idempotency-Key`, and
+ambiguous delivery follows the same durable receipt/restart recovery discipline
+as Timeline and Canvas Plot.
 
 ### Scenes / manuscript
 ```

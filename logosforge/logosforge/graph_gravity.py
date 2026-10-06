@@ -29,6 +29,7 @@ the Controlling Idea PSYKE entry.  Missing data is silently skipped.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -254,6 +255,91 @@ def compute_gravity(
         result[nid] = g
 
     return result
+
+
+def compute_canonical_gravity_totals(
+    db: Database,
+    project_id: int,
+    canonical_graph,
+) -> tuple[bool, dict[str, float]]:
+    """Bridge legacy Story Gravity onto exact canonical graph identities.
+
+    The historical ``GraphData`` model and the canonical Narrative Knowledge
+    Graph are intentionally different models.  Only Scene, Note, PSYKE, and Act
+    nodes have an exact shared identity.  In particular, Character/Place rows
+    are not PSYKE entries, and format-specific legacy nodes do not yet exist in
+    the canonical graph, so this function never guesses by label.
+
+    The boolean reports whether calculation completed.  An empty mapping with
+    ``True`` is valid (for example, an empty project); any construction or
+    calculation failure returns ``False`` and no partial values so callers can
+    preserve the canonical graph while truthfully disabling the overlay.
+    """
+    try:
+        from logosforge import graph_enrichers
+        from logosforge.graph_data import build_graph_data
+        from logosforge.writing_modes import normalize_mode
+
+        mode = normalize_mode(getattr(canonical_graph, "writing_mode", ""))
+        data = build_graph_data(db, project_id)
+        enrich = {
+            "screenplay": graph_enrichers.enrich_screenplay_edges,
+            "graphic_novel": graph_enrichers.enrich_graphic_novel_graph,
+            "stage_script": graph_enrichers.enrich_stage_script_graph,
+            "series": graph_enrichers.enrich_series_graph,
+        }.get(mode)
+        if enrich is not None:
+            enrich(db, project_id, data)
+        gravity = compute_gravity(
+            db,
+            project_id,
+            data,
+            screenplay_mode=(mode == "screenplay"),
+            graphic_novel_mode=(mode == "graphic_novel"),
+        )
+
+        # Build an exact canonical identity index and retain only unique
+        # identities.  Persisted review endpoints may be unusual or duplicated;
+        # ambiguity must disable that node's bridge rather than choose one.
+        canonical_by_identity: dict[tuple[str, str], list[str]] = {}
+        for key, node in canonical_graph.nodes.items():
+            source_id = getattr(node, "source_id", None)
+            if source_id is None:
+                continue
+            identity = (
+                str(getattr(node, "source_type", "") or ""),
+                str(source_id),
+            )
+            canonical_by_identity.setdefault(identity, []).append(key)
+
+        totals: dict[str, float] = {}
+        for legacy_key, value in gravity.items():
+            legacy_node = data.nodes.get(legacy_key)
+            if legacy_node is None:
+                continue
+            etype = str(getattr(legacy_node, "etype", "") or "")
+            entity_id = getattr(legacy_node, "entity_id", None)
+            if etype == "Scene":
+                identity = ("scene", str(entity_id))
+            elif etype == "Note":
+                identity = ("note", str(entity_id))
+            elif etype == "PSYKE":
+                identity = ("psyke", str(entity_id))
+            elif etype == "Act":
+                identity = ("act", str(getattr(legacy_node, "name", "") or ""))
+            else:
+                continue
+            candidates = canonical_by_identity.get(identity, [])
+            if len(candidates) == 1:
+                total = float(value.total)
+                if not math.isfinite(total) or not 0.0 <= total <= 1.0:
+                    return False, {}
+                totals[candidates[0]] = total
+        return True, totals
+    except Exception:
+        # Gravity is an optional visualization overlay.  It must never turn a
+        # valid canonical graph read into an error or leak storage details.
+        return False, {}
 
 
 def _scene_structural_weight(idx: int, total: int) -> float:

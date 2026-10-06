@@ -1703,6 +1703,8 @@ export interface KnowledgeGraphNodeDTO {
   metadata: Record<string, unknown>;
   /** Complete selected-view degree after the evidence filter, before focus/truncation. */
   degree: number;
+  /** Project-wide Story Gravity in [0,1], or null when this canonical node has no gravity mapping. */
+  story_gravity: number | null;
 }
 export interface KnowledgeGraphEdgeDTO {
   source: string;
@@ -1715,7 +1717,15 @@ export interface KnowledgeGraphEdgeDTO {
   is_user_confirmed: boolean;
   is_inferred: boolean;
   is_hidden: boolean;
-  metadata: Record<string, unknown>;
+  /** Story-order fields are all-or-none and apply only to precedes/follows edges. */
+  metadata: Record<string, unknown> & Partial<{
+    /** Zero-based manuscript index of the edge's source Scene. */
+    story_order_index: number;
+    /** Complete manuscript Scene count, including rows beyond graph response caps. */
+    story_order_total: number;
+    story_order_band: "beginning" | "middle" | "ending";
+    act_boundary: boolean;
+  }>;
 }
 export interface KnowledgeGraphReadDTO {
   project_id: number;
@@ -1729,6 +1739,8 @@ export interface KnowledgeGraphReadDTO {
   view_mode: KnowledgeGraphViewMode;
   /** False when orphan/weak-link diagnostics do not apply to this projection. */
   story_diagnostics_available: boolean;
+  /** False when Story Gravity could not be computed for this response. */
+  story_gravity_available: boolean;
   nodes: KnowledgeGraphNodeDTO[];
   edges: KnowledgeGraphEdgeDTO[];
   /** Complete selected-view or focused-neighborhood counts before response truncation. */

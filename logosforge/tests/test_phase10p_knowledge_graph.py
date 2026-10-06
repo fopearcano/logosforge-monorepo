@@ -30,6 +30,8 @@ from logosforge.knowledge_graph import (
 )
 from logosforge.knowledge_graph import provenance as P
 from logosforge.knowledge_graph.extractor_revision import extract_revision
+from logosforge.knowledge_graph.extractor_structure import extract_structure
+from logosforge.knowledge_graph.models import KnowledgeGraph
 
 
 @pytest.fixture(autouse=True)
@@ -57,6 +59,36 @@ def _project(mode="novel"):
     s2 = db.create_scene(pid, "Twist", content="Bob betrays Alice.",
                          summary="turn", chapter="Ch1")
     return db, pid, alice.id, bob.id, s1.id, s2.id
+
+
+def test_capped_structure_flow_metadata_uses_full_manuscript_total():
+    class _StructureDb:
+        def __init__(self):
+            self.scenes = [
+                SimpleNamespace(id=index + 1, title=f"Scene {index + 1}", act="")
+                for index in range(2001)
+            ]
+
+        def get_project_by_id(self, _project_id):
+            return SimpleNamespace(title="Capped story")
+
+        def get_all_scenes(self, _project_id):
+            return self.scenes
+
+        def get_outline_nodes(self, _project_id):
+            return []
+
+        def build_link_graph(self, _project_id):
+            return [], []
+
+    graph = KnowledgeGraph(project_id=7)
+    extract_structure(_StructureDb(), 7, graph)
+    flow = [edge for edge in graph.edges if edge.edge_type == P.ET_PRECEDES]
+
+    assert len(flow) == 1999
+    assert flow[0].metadata["story_order_total"] == 2001
+    assert flow[-1].metadata["story_order_total"] == 2001
+    assert flow[-1].metadata["story_order_index"] == 1998
 
 
 # ===========================================================================

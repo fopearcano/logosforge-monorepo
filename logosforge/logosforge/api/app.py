@@ -25,7 +25,7 @@ API_PREFIX = "/api"
 # Version of the HTTP DTO/action *contract* (bump when the API shape changes).
 # Kept separate from the Logosforge core build version so generated clients have
 # a stable contract version while still being able to check the core build.
-API_CONTRACT_VERSION = "1.8.0"
+API_CONTRACT_VERSION = "1.9.0"
 
 
 def _core_version() -> str:

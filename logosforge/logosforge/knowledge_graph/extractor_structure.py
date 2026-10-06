@@ -8,6 +8,7 @@ StoryLinks). Explicit membership is ``confirmed``; positional adjacency is
 
 from __future__ import annotations
 
+from logosforge.graph_flow import position_band
 from logosforge.knowledge_graph import provenance as P
 from logosforge.knowledge_graph.models import KGEdge, KGNode, node_key
 
@@ -36,6 +37,7 @@ def extract_structure(db, project_id: int, graph) -> None:
     except Exception:
         scenes = []
         graph.unavailable.append("manuscript")
+    full_scene_count = len(scenes)
     if len(scenes) > _MAX_SCENES:
         graph.warnings.append(f"Scene count {len(scenes)} exceeds cap; truncated.")
         scenes = scenes[:_MAX_SCENES]
@@ -81,7 +83,11 @@ def extract_structure(db, project_id: int, graph) -> None:
         return k
 
     prev_scene_key = None
-    for scene in scenes:
+    prev_scene = None
+    # Flow styling describes position in the full manuscript, even when the
+    # canonical graph itself is safely capped.
+    scene_total = full_scene_count
+    for scene_index, scene in enumerate(scenes):
         skey = node_key(P.NT_SCENE, "scene", scene.id)
         graph.add_node(KGNode(
             key=skey, node_type=P.NT_SCENE, source_type="scene",
@@ -120,12 +126,26 @@ def extract_structure(db, project_id: int, graph) -> None:
 
         # Scene order = likely precedence (a timeline_event facet), not causality.
         if prev_scene_key is not None:
+            previous_act = (getattr(prev_scene, "act", "") or "").strip()
+            current_act = (getattr(scene, "act", "") or "").strip()
+            previous_index = scene_index - 1
             graph.add_edge(KGEdge(
                 source=prev_scene_key, target=skey, edge_type=P.ET_PRECEDES,
                 confidence=P.CONF_LIKELY, provenance=P.PROV_SCENE_ORDER,
                 source_system=P.SS_TIMELINE,
-                explanation="Manuscript order — sequential, not causal."))
+                explanation="Manuscript order — sequential, not causal.",
+                metadata={
+                    "story_order_index": previous_index,
+                    "story_order_total": scene_total,
+                    "story_order_band": position_band(previous_index, scene_total),
+                    "act_boundary": bool(
+                        previous_act
+                        and current_act
+                        and previous_act != current_act
+                    ),
+                }))
         prev_scene_key = skey
+        prev_scene = scene
 
         # setup_payoff_links CSV of related scene ids = confirmed dependency.
         raw = (getattr(scene, "setup_payoff_links", "") or "").strip()

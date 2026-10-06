@@ -2135,6 +2135,14 @@ class KnowledgeGraphNodeDTO(BaseModel):
     # evidence filter, before focus and response truncation.  UIs must not infer
     # view-wide centrality from the returned neighborhood slice.
     degree: int = Field(default=0, ge=0)
+    # Existing Story Gravity, bridged only when a legacy graph node has one
+    # exact canonical identity.  ``None`` deliberately means "no safe bridge",
+    # never zero narrative importance.
+    story_gravity: float | None = Field(
+        ge=0.0,
+        le=1.0,
+        allow_inf_nan=False,
+    )
 
 
 class KnowledgeGraphEdgeDTO(BaseModel):
@@ -2166,6 +2174,10 @@ class KnowledgeGraphReadDTO(BaseModel):
     depth: int = Field(ge=1, le=2)
     include_inferred: bool
     view_mode: KnowledgeGraphViewMode
+    # True when the optional legacy Story Gravity calculation completed.  Some
+    # canonical node kinds can still have ``story_gravity=None`` because the two
+    # graph models do not share an exact identity for that kind.
+    story_gravity_available: bool
     nodes: list[KnowledgeGraphNodeDTO] = Field(default_factory=list, max_length=200)
     edges: list[KnowledgeGraphEdgeDTO] = Field(default_factory=list, max_length=200)
     # Counts describe the complete selected view or focused-neighborhood query
@@ -2234,6 +2246,12 @@ class KnowledgeGraphReadDTO(BaseModel):
         ):
             raise ValueError(
                 "specialty graph views cannot advertise story diagnostics"
+            )
+        if not self.story_gravity_available and any(
+            node.story_gravity is not None for node in self.nodes
+        ):
+            raise ValueError(
+                "unavailable Story Gravity cannot advertise node values"
             )
         return self
 

@@ -1114,17 +1114,28 @@ There are **two parallel graph systems** a Studio UI must expose together:
   central-node rewrite risk — each with severity/confidence/action + a target
   system label). **Node types (22)**, **edge types (20)**, **confidence**
   confirmed→likely→possible→unknown, **source systems (16)**.
-- **Implemented Pro canonical slice (HTTP 1.8.0):** the React panel exposes
+- **Implemented Pro canonical slice (HTTP 1.9.0):** the React panel exposes
   `project_map`, `structure`, `recorded_risk`, and `revision_impact` as
   server-owned projections, with `include_inferred` independently selecting
   Confirmed only or Inferred + Confirmed evidence. Projection happens before
   focus traversal and response caps; node degree is computed across the complete
   selected view. Orphan/weak-link story diagnostics belong only to Project Map,
   while the paged hidden-edge queue and persisted review revision remain global.
-  MCP gateway 1.7.0 exposes the same strict view selector for reads, but mutation
-  proposal/recovery preflight stays pinned to Project Map. Story Gravity sizing
-  and the story-order flow overlay remain follow-up work for this React panel;
-  do not confuse that status with the existing Live Visual Graph engines below.
+  Required nullable per-node `story_gravity` and response-level
+  `story_gravity_available` reuse the deterministic Live Visual Graph calculation
+  only through unique exact Scene/Note/PSYKE/Act identities. Unsupported or
+  ambiguous nodes stay null; calculation failure preserves the graph and causes
+  a truthful link-size fallback. The panel defaults to project-wide Story Gravity
+  sizing, offers explicit selected-view link sizing, uses a neutral minimum for
+  safely unmapped nodes, and adds a halo at 0.55. Its opt-in curved story-order
+  overlay consumes validated order index/total/band/act-boundary metadata only
+  from returned, presentation-filtered edges; it color-drifts green→gold→violet,
+  marks act boundaries/gaps, and never reconstructs segments removed by
+  Confirmed-only, specialty views, focus, caps, or manual filters. MCP gateway
+  1.8.0 returns the same additive data but keeps its unchanged 45-tool surface,
+  Project Map Confirm/Hide preflight and apply/recovery result maps, and paged
+  hidden-edge Restore preflight. This bounded returned-order overlay is not the
+  Live Visual Graph's full causal/Freytag/temporal flow engine below.
 - **Live visual graph**: `build_graph_data` → `GraphData{nodes, edges,
   adjacency}` (link graph + PSYKE relations + scene↔character/place participation +
   act-cluster nodes + mention edges); per-writing-mode enrichment injects extra

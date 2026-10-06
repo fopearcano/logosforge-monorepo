@@ -6,6 +6,19 @@ import type {
 } from "@logosforge/ui-contracts";
 
 export type GraphConfidence = "unknown" | "possible" | "likely" | "confirmed";
+export type GraphNodeSizing = "story_gravity" | "view_links";
+export type StoryOrderBand = "beginning" | "middle" | "ending";
+
+export interface StoryOrderFlowSegment {
+  edge: KnowledgeGraphEdgeDTO;
+  source: string;
+  target: string;
+  orderIndex: number;
+  orderTotal: number;
+  band: StoryOrderBand;
+  actBoundary: boolean;
+  gapBefore: boolean;
+}
 
 export interface KnowledgeGraphFilters {
   hiddenNodeTypes: ReadonlySet<string>;
@@ -41,6 +54,99 @@ export function edgePassesFilters(
 }
 
 /**
+ * Resolve the visible node diameter without mixing two different metrics.
+ * Story Gravity is project-wide; view-link degree is selected-view scoped.
+ * If Core reports gravity unavailable, the requested gravity mode truthfully
+ * falls back to the existing degree encoding. A mapped response with no value
+ * for one node uses the neutral minimum instead of masquerading as degree.
+ */
+export function knowledgeGraphNodeSize(
+  node: KnowledgeGraphNodeDTO,
+  requestedSizing: GraphNodeSizing,
+  storyGravityAvailable: boolean,
+  maxDegree: number,
+): { size: number; basis: GraphNodeSizing; gravity: number | null } {
+  if (requestedSizing === "story_gravity" && storyGravityAvailable) {
+    const gravity = node.story_gravity;
+    return {
+      size: 30 + 18 * (gravity ?? 0),
+      basis: "story_gravity",
+      gravity,
+    };
+  }
+  return {
+    size: 30 + Math.min(18, Math.sqrt(Math.max(0, node.degree) / Math.max(1, maxDegree)) * 18),
+    basis: "view_links",
+    gravity: null,
+  };
+}
+
+function storyOrderMetadata(edge: KnowledgeGraphEdgeDTO): Omit<StoryOrderFlowSegment, "edge" | "source" | "target" | "gapBefore"> | null {
+  if (edge.edge_type !== "precedes" && edge.edge_type !== "follows") return null;
+  const { metadata } = edge;
+  const orderIndex = metadata.story_order_index;
+  const orderTotal = metadata.story_order_total;
+  const band = metadata.story_order_band;
+  const actBoundary = metadata.act_boundary;
+  if (
+    !Number.isSafeInteger(orderIndex)
+    || (orderIndex as number) < 0
+    || !Number.isSafeInteger(orderTotal)
+    || (orderTotal as number) < 2
+    || (edge.edge_type === "precedes" && (orderIndex as number) >= (orderTotal as number) - 1)
+    || (edge.edge_type === "follows" && ((orderIndex as number) < 1 || (orderIndex as number) >= (orderTotal as number)))
+    || (band !== "beginning" && band !== "middle" && band !== "ending")
+    || typeof actBoundary !== "boolean"
+  ) return null;
+  return {
+    orderIndex: edge.edge_type === "follows" ? (orderIndex as number) - 1 : orderIndex as number,
+    orderTotal: orderTotal as number,
+    band,
+    actBoundary,
+  };
+}
+
+/**
+ * Read only Core-owned story-order metadata from edges already present in the
+ * active server projection. This never resurrects omitted inferred order in a
+ * Confirmed-only or specialty response.
+ */
+export function storyOrderFlowSegments(
+  edges: readonly KnowledgeGraphEdgeDTO[],
+): StoryOrderFlowSegment[] {
+  const candidates = edges.flatMap((edge) => {
+    const metadata = storyOrderMetadata(edge);
+    if (!metadata) return [];
+    return [{
+      edge,
+      source: edge.edge_type === "follows" ? edge.target : edge.source,
+      target: edge.edge_type === "follows" ? edge.source : edge.target,
+      ...metadata,
+      gapBefore: false,
+    } satisfies StoryOrderFlowSegment];
+  }).sort((left, right) => (
+    left.orderIndex - right.orderIndex
+    || left.source.localeCompare(right.source)
+    || left.target.localeCompare(right.target)
+  ));
+  const seen = new Set<string>();
+  const unique: StoryOrderFlowSegment[] = [];
+  for (const segment of candidates) {
+    const key = `${segment.orderIndex}\u0000${segment.source}\u0000${segment.target}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const previous = unique.at(-1);
+    unique.push({
+      ...segment,
+      gapBefore: previous == null
+        ? segment.orderIndex > 0
+        : segment.orderIndex > previous.orderIndex + 1,
+    });
+  }
+  return unique;
+}
+
+/**
  * Apply presentation-only filters to one core-owned graph page. Orphan and
  * weak-link membership always comes from the server's full filtered graph;
  * the UI never infers those diagnostics from a potentially truncated page.
@@ -69,6 +175,18 @@ export function buildKnowledgeGraphView(
 export interface GraphPosition {
   x: number;
   y: number;
+}
+
+export function storyOrderFlowPath(
+  from: GraphPosition,
+  to: GraphPosition,
+  orderIndex: number,
+): string {
+  const midpointX = (from.x + to.x) / 2;
+  const midpointY = (from.y + to.y) / 2;
+  const distance = Math.hypot(to.x - from.x, to.y - from.y);
+  const bow = Math.min(38, Math.max(16, distance * 0.13)) * (orderIndex % 2 === 0 ? 1 : -1);
+  return `M ${from.x} ${from.y} Q ${midpointX} ${midpointY - bow} ${to.x} ${to.y}`;
 }
 
 function placeGrid(

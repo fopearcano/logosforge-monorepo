@@ -1632,8 +1632,8 @@ export function createMockApiClient(): ApiClient {
         service: "logosforge-api",
         instance_nonce: "preview-mock",
         mode: "preview-mock",
-        version: "1.8.0",
-        api_version: "1.8.0",
+        version: "1.9.0",
+        api_version: "1.9.0",
         core_version: "preview",
       };
     },
@@ -2423,19 +2423,51 @@ export function createMockApiClient(): ApiClient {
       const nodes: KnowledgeGraphNodeDTO[] = [{
         key: projectKey, node_type: "project", source_type: "project", source_id: String(p),
         label: project.title, summary: project.description, metadata: {}, degree: 0,
+        story_gravity: null,
       }];
       const edges: KnowledgeGraphEdgeDTO[] = [];
-      for (const sceneRow of scenesFor(p)) {
+      const orderedScenes = scenesFor(p);
+      const storyOrderBand = (index: number): "beginning" | "middle" | "ending" => {
+        const position = orderedScenes.length <= 1 ? 0 : index / (orderedScenes.length - 1);
+        return position <= 0.34 ? "beginning" : position >= 0.67 ? "ending" : "middle";
+      };
+      for (const [sceneIndex, sceneRow] of orderedScenes.entries()) {
         const key = `scene:scene:${sceneRow.id}`;
         nodes.push({
           key, node_type: "scene", source_type: "scene", source_id: String(sceneRow.id),
           label: sceneRow.title, summary: sceneRow.summary, metadata: { act: sceneRow.act, chapter: sceneRow.chapter }, degree: 0,
+          story_gravity: Math.min(1, 0.36 + sceneIndex * 0.18),
         });
         edges.push({
           source: projectKey, target: key, edge_type: "contains", confidence: "confirmed",
           provenance: "project structure", source_system: "structure", explanation: "The Scene belongs to this project.",
           is_user_confirmed: true, is_inferred: false, is_hidden: false, metadata: {},
         });
+        const nextScene = orderedScenes[sceneIndex + 1];
+        if (nextScene) {
+          edges.push({
+            source: key,
+            target: `scene:scene:${nextScene.id}`,
+            edge_type: "precedes",
+            confidence: "likely",
+            provenance: "scene order",
+            source_system: "timeline",
+            explanation: "Current manuscript order — sequential, not causal.",
+            is_user_confirmed: false,
+            is_inferred: true,
+            is_hidden: false,
+            metadata: {
+              story_order_index: sceneIndex,
+              story_order_total: orderedScenes.length,
+              story_order_band: storyOrderBand(sceneIndex),
+              act_boundary: Boolean(
+                sceneRow.act
+                && nextScene.act
+                && sceneRow.act !== nextScene.act
+              ),
+            },
+          });
+        }
       }
       if (p === fixtureProjectId) {
         for (const entry of PSYKE) {
@@ -2444,6 +2476,7 @@ export function createMockApiClient(): ApiClient {
             key: `${nodeType}:psyke:${entry.id}`, node_type: nodeType, source_type: "psyke",
             source_id: String(entry.id), label: entry.name, summary: entry.notes,
             metadata: { is_global: entry.is_global }, degree: 0,
+            story_gravity: entry.type === "theme" ? 0.82 : entry.type === "character" ? 0.72 : 0.44,
           });
         }
         for (const relation of RELATIONS) {
@@ -2474,7 +2507,7 @@ export function createMockApiClient(): ApiClient {
           nodes.push({
             key: revisionKey, node_type: "revision_impact", source_type: "revision",
             source_id: "1", label: "Saved impact report", summary: "A recorded revision risk.",
-            metadata: { impact_level: "medium" }, degree: 0,
+            metadata: { impact_level: "medium" }, degree: 0, story_gravity: null,
           });
           edges.push({
             source: revisionKey, target: `scene:scene:${firstScene.id}`,
@@ -2487,7 +2520,7 @@ export function createMockApiClient(): ApiClient {
           nodes.push({
             key: applyKey, node_type: "controlled_apply_operation", source_type: "apply",
             source_id: "1", label: "Pending apply", summary: "A recorded apply conflict.",
-            metadata: { status: "previewed" }, degree: 0,
+            metadata: { status: "previewed" }, degree: 0, story_gravity: null,
           });
           edges.push({
             source: applyKey, target: `scene:scene:${firstScene.id}`,
@@ -2628,6 +2661,7 @@ export function createMockApiClient(): ApiClient {
         project_id: p, revision: knowledgeGraphRevision(p), writing_mode: project.narrative_engine, focus_key: focusKey,
         depth, include_inferred: includeInferred, view_mode: viewMode,
         story_diagnostics_available: storyDiagnosticsAvailable,
+        story_gravity_available: true,
         nodes: structuredClone(returnedNodes), edges: structuredClone(returnedEdges),
         node_count: queryNodes.length, edge_count: queryEdges.length,
         returned_node_count: returnedNodes.length, returned_edge_count: returnedEdges.length,

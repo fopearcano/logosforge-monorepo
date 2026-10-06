@@ -382,9 +382,25 @@ switches any view between **Confirmed only** and **Inferred + Confirmed**. Only
 Project Map provides orphan and weak-link story diagnostics; an empty
 specialty view means no matching recorded evidence, not that the manuscript is
 connected or risk-free. The complete hidden-edge review queue remains available
-from every view. Node size reflects relationship degree within the selected
-view/evidence scope; Story Gravity and a story-order flow overlay are not yet
-part of this panel.
+from every view.
+
+Under **Visual Overlays**, node sizing defaults to **Story Gravity**, a
+project-wide 0–100% narrative-importance signal. Choose **View Links** to size by
+relationship degree in the complete selected view/evidence scope instead. Core
+bridges Story Gravity only for uniquely matching Scene, Note, PSYKE, and Act
+identities; a node that cannot be mapped safely stays at the neutral minimum
+size rather than borrowing its link degree. If the optional gravity calculation
+fails, the graph still loads and the panel explicitly falls back to View Links.
+Mapped nodes at 55% or higher receive a halo.
+
+**Story-order flow** is off by default. When enabled, curved green/gold/violet
+arrows show the manuscript-order segments present in the returned, currently
+filtered graph; heavier dashed segments mark act boundaries and the status text
+calls out visible gaps. It is manuscript order, not causality. The overlay never
+reconstructs omitted data: Confirmed only normally removes the inferred order
+chain, Recorded Risk and Saved Revision Impact exclude it, and focus, response
+caps, hidden node types, confidence, or source-system filters can leave only a
+partial chain or none.
 
 If you connect a local MCP client such as Codex or LibreChat to the optional Pro
 gateway, it can list and search complete comment threads, propose a reply
@@ -402,12 +418,16 @@ against the exact surface revision it read, and Core checks that revision again
 when applied. Timeline commands cover lanes, event membership, and
 structural/custom ordering; Canvas commands cover cards, links, frames,
 geometry, and stacking order. Its Knowledge Graph read can request any of the
-four views and either evidence scope. Knowledge Graph commands Confirm, Hide, or
-Restore one exact directional edge; proposal and recovery preflight remain
-pinned to Project Map, and the paged hidden-edge read keeps the complete restore
-queue available even when the main map is truncated. Deleting a Timeline lane
-leaves its scenes Unassigned, removing an event leaves the manuscript scene
-intact, and deleting a Canvas card preserves any linked manuscript scene.
+four views and either evidence scope; it also receives the same Story Gravity
+availability/value fields and returned story-order metadata as Pro. A null
+gravity value means no safe exact mapping, not zero importance. Knowledge Graph
+commands Confirm, Hide, or Restore one exact directional edge. Confirm and Hide
+preflight plus apply/recovery result maps remain pinned to Project Map; Restore
+preflight uses the paged hidden-edge read, which keeps the complete restore queue
+available even when the main map is truncated.
+Deleting a Timeline lane leaves its scenes Unassigned, removing an event leaves
+the manuscript scene intact, and deleting a Canvas card preserves any linked
+manuscript scene.
 
 Timeline, Canvas Plot, and Knowledge Graph applies carry a durable project
 receipt under the same reviewed proposal id. If a response is lost, the gateway

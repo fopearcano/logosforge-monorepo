@@ -9,11 +9,15 @@ from logosforge.db import Database
 from logosforge.graph_gravity import (
     GRAVITY_GLOW_THRESHOLD,
     StoryGravity,
+    compute_canonical_gravity_totals,
     compute_gravity,
     gravity_centrality_pull,
     gravity_glow_alpha,
     gravity_radius_multiplier,
 )
+from logosforge.knowledge_graph import provenance as P
+from logosforge.knowledge_graph.builder import build_knowledge_graph
+from logosforge.knowledge_graph.models import KGNode, node_key
 from logosforge.ui.focus_graph_view import (
     FocusGraphView,
     build_graph_data,
@@ -158,6 +162,93 @@ def test_empty_project_returns_empty_gravity():
     data = build_graph_data(db, proj.id)
     grav = compute_gravity(db, proj.id, data)
     assert grav == {}
+
+
+def test_canonical_gravity_bridge_uses_only_exact_shared_identities():
+    db, proj, protag, _foil, place, first, *_rest = _make_rich_project()
+    note = db.create_note(proj.id, "Research", content="See [[Opening]].")
+    canonical = build_knowledge_graph(db, proj.id).graph
+    character_key = node_key(P.NT_CHARACTER, "character", protag.id)
+    place_key = node_key(P.NT_PLACE, "place", place.id)
+    canonical.add_node(KGNode(
+        key=character_key,
+        node_type=P.NT_CHARACTER,
+        source_type="character",
+        source_id=str(protag.id),
+        label=protag.name,
+    ))
+    canonical.add_node(KGNode(
+        key=place_key,
+        node_type=P.NT_PLACE,
+        source_type="place",
+        source_id=str(place.id),
+        label=place.name,
+    ))
+
+    available, totals = compute_canonical_gravity_totals(
+        db, proj.id, canonical,
+    )
+
+    assert available is True
+    assert node_key(P.NT_SCENE, "scene", first.id) in totals
+    assert node_key(P.NT_NOTE, "note", note.id) in totals
+    assert node_key(P.NT_ACT, "act", "Act I") in totals
+    psyke_keys = {
+        key for key, node in canonical.nodes.items()
+        if node.source_type == "psyke"
+    }
+    assert psyke_keys
+    assert psyke_keys.issubset(totals)
+    # Character and Place table identities are distinct from typed PSYKE
+    # entries.  The bridge must never infer equivalence by id or label.
+    assert character_key not in totals
+    assert place_key not in totals
+
+
+def test_canonical_gravity_bridge_fails_closed_on_ambiguous_identity():
+    db, proj, _protag, _foil, _place, first, *_rest = _make_rich_project()
+    canonical = build_knowledge_graph(db, proj.id).graph
+    scene_key = node_key(P.NT_SCENE, "scene", first.id)
+    duplicate_key = "scene:duplicate:ambiguous"
+    canonical.add_node(KGNode(
+        key=duplicate_key,
+        node_type=P.NT_SCENE,
+        source_type="scene",
+        source_id=str(first.id),
+        label="Ambiguous duplicate",
+    ))
+
+    available, totals = compute_canonical_gravity_totals(
+        db, proj.id, canonical,
+    )
+
+    assert available is True
+    assert scene_key not in totals
+    assert duplicate_key not in totals
+
+
+@pytest.mark.parametrize(
+    "writing_mode",
+    ["novel", "screenplay", "graphic_novel", "stage_script", "series"],
+)
+def test_canonical_gravity_bridge_runs_in_every_writing_mode(writing_mode):
+    db = Database()
+    project = db.create_project("Mode gravity", narrative_engine=writing_mode)
+    character = db.create_character(project.id, "Hero")
+    scene = db.create_scene(
+        project.id,
+        "Opening",
+        act="Act I",
+        character_ids=[character.id],
+    )
+    canonical = build_knowledge_graph(db, project.id).graph
+
+    available, totals = compute_canonical_gravity_totals(
+        db, project.id, canonical,
+    )
+
+    assert available is True
+    assert node_key(P.NT_SCENE, "scene", scene.id) in totals
 
 
 def test_controlling_idea_theme_entry_gets_max_thematic():

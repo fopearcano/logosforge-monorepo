@@ -738,6 +738,7 @@ class _FakeApiClient:
                 "summary": "Opening scene",
                 "metadata": {},
                 "degree": 1,
+                "story_gravity": 0.6,
             },
             {
                 "key": "scene:scene:12",
@@ -748,6 +749,7 @@ class _FakeApiClient:
                 "summary": "Crossing scene",
                 "metadata": {},
                 "degree": 1,
+                "story_gravity": 0.4,
             },
         ]
         graph_edge = {
@@ -761,7 +763,12 @@ class _FakeApiClient:
             "is_user_confirmed": False,
             "is_inferred": True,
             "is_hidden": False,
-            "metadata": {},
+            "metadata": {
+                "story_order_index": 0,
+                "story_order_total": 2,
+                "story_order_band": "beginning",
+                "act_boundary": False,
+            },
         }
         self.knowledge_graphs = {
             1: {
@@ -772,6 +779,7 @@ class _FakeApiClient:
                 "depth": 1,
                 "include_inferred": True,
                 "view_mode": "project_map",
+                "story_gravity_available": True,
                 "story_diagnostics_available": True,
                 "nodes": graph_nodes,
                 "edges": [graph_edge],
@@ -797,6 +805,7 @@ class _FakeApiClient:
                 "depth": 1,
                 "include_inferred": True,
                 "view_mode": "project_map",
+                "story_gravity_available": True,
                 "story_diagnostics_available": True,
                 "nodes": [],
                 "edges": [],
@@ -4114,7 +4123,7 @@ def test_real_mcp_stdio_initializes_and_advertises_structured_tools():
 
     initialized, listed = asyncio.run(exercise())
     assert initialized.serverInfo.name == "logosforge"
-    assert initialized.serverInfo.version == "1.7.0"
+    assert initialized.serverInfo.version == "1.8.0"
     tools = {tool.name: tool for tool in listed.tools}
     assert len(tools) == 45
     assert {

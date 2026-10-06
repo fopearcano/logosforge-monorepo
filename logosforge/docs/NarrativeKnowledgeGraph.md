@@ -113,7 +113,7 @@ non-screenplay modes.
 limit, include_inferred, include_deferred)`. All queries are capped,
 deterministic, read-only, current-project-only.
 
-The canonical HTTP 1.8.0 read surface is
+The canonical HTTP 1.9.0 read surface is
 `GET /api/projects/{project_id}/knowledge-graph`. Its `view_mode` selects one of
 four Core-owned projections:
 
@@ -134,6 +134,26 @@ the view or evidence scope changes. Responses carry exact
 requested/returned/total counts, truncation state, and warnings for unavailable
 source systems. Nodes and edges remain deterministic, project-scoped, and
 endpoint-complete.
+
+Every returned node has required nullable `story_gravity` in `[0,1]`, paired
+with response-level `story_gravity_available`. Gravity is project-wide and is
+bridged from the existing deterministic visual-graph calculation only when one
+legacy node has one unique exact canonical identity: Scene by `(scene,id)`, Note
+by `(note,id)`, PSYKE by `(psyke,id)`, or Act by `(act,name)`. It never equates a
+Character/Place database row with a typed PSYKE entry and never guesses by
+label. A successful calculation can therefore still leave unsupported or
+ambiguous nodes null. Any construction/calculation failure returns
+`story_gravity_available=false` with all values null while preserving the
+canonical graph response; no partial gravity map or internal failure detail is
+exposed. Hidden-edge pages use null node values and do not compute a separate
+gravity map.
+
+Derived manuscript-adjacency `precedes` edges carry a complete metadata tuple:
+zero-based source `story_order_index`, full-manuscript `story_order_total`,
+`story_order_band` (`beginning`/`middle`/`ending`), and `act_boundary`. This is
+manuscript sequence, not causality. The edges remain likely/inferred unless a
+writer confirms them, and the metadata is returned only when the edge survives
+the active view, evidence scope, focus, and response bound.
 
 Authoritative orphan and weak-link story diagnostics apply only to Project Map,
 advertised by `story_diagnostics_available=true`. Specialty views return that
@@ -166,16 +186,17 @@ request digest so semantically altered proof fails closed. Only a fresh changed
 command emits `knowledge_graph_changed`. Logical duplicate persisted rows fail
 closed instead of choosing an order-dependent winner.
 
-MCP gateway 1.7.0 exposes the same boundary through
+MCP gateway 1.8.0 exposes the same boundary through
 `logosforge_get_knowledge_graph`,
 `logosforge_get_knowledge_graph_hidden_edges`, and
 `logosforge_propose_knowledge_graph_command`. Its read accepts the same strict
 four-value `view_mode` and independent `include_inferred` evidence scope as the
-HTTP surface, defaulting to Project Map. Proposal and receipt-recovery reads are
-deliberately pinned to Project Map. The hidden-edge read takes bounded
-`offset`/`limit` arguments, so Restore preflight can find every persisted hide
-decision rather than depending on the default map's diagnostic subset. The
-proposal stores exactly one `confirm_edge`, `hide_edge`, or `unhide_edge`
+HTTP surface, defaulting to Project Map, and returns the additive gravity and
+story-order data without adding tools. Confirm/Hide proposal preflight and every
+apply/recovery result map are deliberately pinned to Project Map. The hidden-edge
+read takes bounded `offset`/`limit` arguments, so Restore preflight can find every
+persisted hide decision rather than depending on the default map's diagnostic
+subset. Each proposal stores exactly one `confirm_edge`, `hide_edge`, or `unhide_edge`
 command under an opaque proposal id; only the shared reviewed apply tool can
 mutate. Restore proposals additionally require the `hidden_edge_offset` from
 the page containing the target. The gateway refetches that 100-edge page and
@@ -204,6 +225,24 @@ or publish context to Studio tools. The panel presents Core-authoritative orphan
 and weak-link diagnostics only in Project Map, while the complete project-global
 hidden-edge queue remains available from every view. Loading/error/empty/retry
 states and explicit size-cap/truncation status cover every projection.
+
+The **Node sizing** control defaults to **Story Gravity** and can switch to
+**View Links**. Gravity sizing uses the project-wide bounded value directly;
+nodes with no exact bridge use the neutral minimum, not their link degree, and
+mapped values at or above 0.55 receive a halo. If Core reports gravity
+unavailable, the requested gravity mode visibly falls back to view-scoped link
+sizing. The inspector and accessible node names expose the effective basis and
+the mapped percentage/null state.
+
+The optional **Story-order flow** overlay draws curved returned manuscript-order
+segments colored beginning→middle→ending (green→gold→violet), emphasizes act
+boundaries, and reports gaps in the returned sequence. It consumes only Core
+metadata on edges still present after the server projection and the UI's node,
+confidence, and source filters. It does not resurrect missing edges: Confirmed
+only normally removes the inferred chain, risk/revision specialty views exclude
+it, and focused or capped results may show a partial/gapped chain. Empty overlay
+status states this active-scope boundary and the legend explicitly says order is
+not causality.
 
 Explicit **Confirm / Hide / Restore** review actions remain backed by the same
 transactional HTTP contract and project-wide review revision. The same guarded
@@ -257,9 +296,10 @@ metadata, and dangling references before render.
 
 ## Limitations & deferred
 
-- Node size currently uses explainable degree within the complete selected
-  view/evidence scope; Story Gravity sizing and the story-order flow overlay
-  remain deferred.
+- The canonical panel exposes only the returned manuscript-order overlay, not
+  the legacy visual graph's causal, Freytag-arc, or temporal-scrubber modes.
+- Story Gravity is available only for unique exact Scene, Note, PSYKE, and Act
+  bridges; unsupported or ambiguous canonical nodes deliberately remain null.
 - No force-directed render.
 - No external graph DB / Neo4j, no cloud sync, no collaboration, no AI-only
   semantic inference, no unbounded whole-project expansion.
@@ -269,8 +309,8 @@ metadata, and dangling references before render.
 
 ## Next recommended phase
 
-Add Story Gravity sizing and the story-order flow overlay; optionally wire graph
-decision cards directly into the Dashboard's radar panel.
+Surface deterministic Knowledge Graph decision cards in the Dashboard Decision
+Radar, preserving their traceable source evidence and adding graph deep links.
 
 ## Semantic Continuity (Phase 10Q)
 

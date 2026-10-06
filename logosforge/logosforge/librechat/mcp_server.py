@@ -32,7 +32,7 @@ from logosforge.librechat.mcp_gateway import (
 )
 
 SERVER_NAME = "logosforge"
-SERVER_VERSION = "1.7.0"
+SERVER_VERSION = "1.8.0"
 SERVER_INSTRUCTIONS = (
     "Read the current project and revision before proposing changes. Proposal "
     "tools do not mutate data. Show the proposal review to the user before "

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import pytest
+
 from fastapi.testclient import TestClient
-from logosforge.api import create_api
+from logosforge.api import create_api, schemas
 from logosforge.db import Database
 from logosforge.knowledge_graph import provenance as P
 from logosforge.knowledge_graph.models import node_key
+from pydantic import ValidationError
 
 
 def _graph_project():
@@ -24,8 +27,8 @@ def test_http_and_mcp_contract_versions_are_deliberately_independent():
     from logosforge.api.app import API_CONTRACT_VERSION
     from logosforge.librechat.mcp_server import SERVER_VERSION
 
-    assert API_CONTRACT_VERSION == "1.8.0"
-    assert SERVER_VERSION == "1.7.0"
+    assert API_CONTRACT_VERSION == "1.9.0"
+    assert SERVER_VERSION == "1.8.0"
 
 
 def test_project_map_exposes_traceable_graph_and_pretruncation_diagnostics():
@@ -40,6 +43,7 @@ def test_project_map_exposes_traceable_graph_and_pretruncation_diagnostics():
     assert body["depth"] == 1
     assert body["include_inferred"] is True
     assert body["view_mode"] == "project_map"
+    assert body["story_gravity_available"] is True
     assert body["story_diagnostics_available"] is True
     assert body["returned_node_count"] == len(body["nodes"])
     assert body["returned_edge_count"] == len(body["edges"])
@@ -60,6 +64,11 @@ def test_project_map_exposes_traceable_graph_and_pretruncation_diagnostics():
                for edge in body["weak_links"])
 
     node_by_key = {node["key"]: node for node in body["nodes"]}
+    assert all("story_gravity" in node for node in body["nodes"])
+    assert 0.0 <= node_by_key[alice_key]["story_gravity"] <= 1.0
+    # The legacy GraphData model intentionally omits isolated scenes, so the
+    # canonical scene remains visible with an explicit unsupported value.
+    assert node_by_key[scene_key]["story_gravity"] is None
     assert node_by_key[alice_key]["degree"] >= 1
     assert node_by_key[lonely_key]["degree"] == 0
     assert all(edge["source"] in keys and edge["target"] in keys
@@ -200,6 +209,16 @@ def test_graph_query_validation_and_read_only_behavior():
     assert after == before
 
 
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), -0.01, 1.01])
+def test_story_gravity_contract_rejects_non_finite_or_out_of_range(invalid):
+    with pytest.raises(ValidationError):
+        schemas.KnowledgeGraphNodeDTO(
+            key="scene:scene:1",
+            node_type="scene",
+            story_gravity=invalid,
+        )
+
+
 def test_overlong_structural_keys_use_stable_focusable_wire_ids():
     db = Database()
     project = db.create_project("Long keys")
@@ -236,6 +255,70 @@ def test_graph_is_built_once_per_http_request(monkeypatch):
     response = client.get(f"/api/projects/{project.id}/knowledge-graph")
     assert response.status_code == 200
     assert calls == 1
+
+
+def test_story_gravity_failure_preserves_canonical_graph(monkeypatch):
+    client, _, project, *_ = _graph_project()
+    from logosforge import graph_data
+
+    def failed_legacy_graph(*_args, **_kwargs):
+        raise RuntimeError("private storage failure must not reach the response")
+
+    monkeypatch.setattr(graph_data, "build_graph_data", failed_legacy_graph)
+    response = client.get(f"/api/projects/{project.id}/knowledge-graph")
+
+    assert response.status_code == 200
+    assert "private storage failure" not in response.text
+    body = response.json()
+    assert body["story_gravity_available"] is False
+    assert body["nodes"]
+    assert all(node["story_gravity"] is None for node in body["nodes"])
+
+
+def test_precedes_edges_carry_full_manuscript_flow_metadata():
+    db = Database()
+    project = db.create_project("Flow metadata")
+    acts = ("Act I", "Act I", "Act II", "Act II", "Act III")
+    for index, act in enumerate(acts):
+        db.create_scene(project.id, f"Scene {index + 1}", act=act)
+    client = TestClient(create_api(db=db))
+
+    body = client.get(
+        f"/api/projects/{project.id}/knowledge-graph",
+        params={"view_mode": "structure", "limit": 200},
+    ).json()
+    flow = sorted(
+        (edge for edge in body["edges"] if edge["edge_type"] == P.ET_PRECEDES),
+        key=lambda edge: edge["metadata"]["story_order_index"],
+    )
+
+    assert len(flow) == 4
+    assert [edge["metadata"] for edge in flow] == [
+        {
+            "act_boundary": False,
+            "story_order_band": "beginning",
+            "story_order_index": 0,
+            "story_order_total": 5,
+        },
+        {
+            "act_boundary": True,
+            "story_order_band": "beginning",
+            "story_order_index": 1,
+            "story_order_total": 5,
+        },
+        {
+            "act_boundary": False,
+            "story_order_band": "middle",
+            "story_order_index": 2,
+            "story_order_total": 5,
+        },
+        {
+            "act_boundary": True,
+            "story_order_band": "ending",
+            "story_order_index": 3,
+            "story_order_total": 5,
+        },
+    ]
 
 
 def _risk_graph_project():

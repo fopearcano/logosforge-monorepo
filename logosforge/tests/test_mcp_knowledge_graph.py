@@ -248,7 +248,7 @@ def test_graph_digest_matches_core_canonical_wire():
 
 def test_graph_tools_are_versioned_bounded_and_strict(graph_gateway):
     _db, _client, gateway = graph_gateway
-    assert SERVER_VERSION == "1.7.0"
+    assert SERVER_VERSION == "1.8.0"
     assert len(TOOL_SPECS) == 45
     assert {
         "logosforge_get_knowledge_graph",
@@ -270,6 +270,8 @@ def test_graph_tools_are_versioned_bounded_and_strict(graph_gateway):
     assert read["result"]["depth"] == 2
     assert read["result"]["include_inferred"] is True
     assert read["result"]["view_mode"] == "structure"
+    assert read["result"]["story_gravity_available"] is True
+    assert all("story_gravity" in node for node in read["result"]["nodes"])
     graph_tool = next(
         spec for spec in TOOL_SPECS
         if spec.name == "logosforge_get_knowledge_graph"
@@ -338,6 +340,11 @@ def test_graph_proposal_preflight_apply_and_stale_sibling(graph_gateway):
     assert applied["result"]["affected_edge"] == {
         key: edge[key] for key in ("source", "target", "edge_type")
     }
+    assert applied["result"]["knowledge_graph"]["story_gravity_available"] is True
+    assert all(
+        "story_gravity" in node
+        for node in applied["result"]["knowledge_graph"]["nodes"]
+    )
     with pytest.raises(GatewayError, match="knowledge_graph_conflict.*will not be retried"):
         gateway.apply_proposal(sibling["proposal_id"])
     assert gateway.get_proposal(sibling["proposal_id"])["state"] == "failed"

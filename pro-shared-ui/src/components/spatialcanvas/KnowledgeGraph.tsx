@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import type {
   KnowledgeGraphCommandDTO,
   KnowledgeGraphEdgeDTO,
@@ -16,8 +16,13 @@ import { PanelShell, type PanelProps } from "../shell/PanelShell";
 import {
   buildKnowledgeGraphView,
   graphEdgeKey,
+  knowledgeGraphNodeSize,
   layoutKnowledgeGraph,
+  storyOrderFlowPath,
+  storyOrderFlowSegments,
   type GraphConfidence,
+  type GraphNodeSizing,
+  type StoryOrderBand,
 } from "./knowledgeGraphModel";
 import {
   createKnowledgeGraphIdempotencyKey,
@@ -135,6 +140,12 @@ const metaOf = (nodeType: string): NodeMeta => TYPE_META[nodeType] ?? {
   label: nodeType.replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase()),
 };
 
+const STORY_ORDER_COLORS: Record<StoryOrderBand, string> = {
+  beginning: "var(--green)",
+  middle: "var(--amber)",
+  ending: "var(--c-theme)",
+};
+
 function Message({ children, role }: { children: ReactNode; role?: "alert" | "status" }) {
   return (
     <div role={role} aria-live={role ? "polite" : undefined} style={{ flex: 1, display: "grid", placeItems: "center", padding: 24, textAlign: "center", fontSize: 11, color: role === "alert" ? "var(--blocking)" : "var(--txt3)", letterSpacing: ".04em" }}>
@@ -238,6 +249,7 @@ function actionEffect(action: KnowledgeGraphEdgeAction): string {
 export function KnowledgeGraph(props: PanelProps) {
   const { api, projectId } = useStudio();
   const { setSelection } = useSelection();
+  const markerPrefix = `knowledge-graph-${useId().replaceAll(":", "")}`;
   const mounted = useMountedRef();
   const projectIdRef = useRef(projectId);
   projectIdRef.current = projectId;
@@ -251,6 +263,8 @@ export function KnowledgeGraph(props: PanelProps) {
   const [depth, setDepth] = useState(1);
   const [viewMode, setViewMode] = useState<KnowledgeGraphViewMode>("project_map");
   const [includeInferred, setIncludeInferred] = useState(true);
+  const [nodeSizing, setNodeSizing] = useState<GraphNodeSizing>("story_gravity");
+  const [storyOrderFlow, setStoryOrderFlow] = useState(false);
   const [hiddenNodeTypes, setHiddenNodeTypes] = useState<Set<string>>(new Set());
   const [confidenceMin, setConfidenceMin] = useState<GraphConfidence>("unknown");
   const [sourceSystem, setSourceSystem] = useState("all");
@@ -277,6 +291,8 @@ export function KnowledgeGraph(props: PanelProps) {
     setDepth(1);
     setViewMode("project_map");
     setIncludeInferred(true);
+    setNodeSizing("story_gravity");
+    setStoryOrderFlow(false);
     setHiddenNodeTypes(new Set());
     setConfidenceMin("unknown");
     setSourceSystem("all");
@@ -403,6 +419,17 @@ export function KnowledgeGraph(props: PanelProps) {
   const graphNodeByKey = new Map((graph?.nodes ?? []).map((node) => [node.key, node]));
   const hiddenReviewNodeByKey = new Map((hiddenReviewPage?.nodes ?? []).map((node) => [node.key, node]));
   const maxDegree = Math.max(1, ...(view?.nodes ?? []).map((node) => node.degree));
+  const effectiveNodeSizing: GraphNodeSizing = nodeSizing === "story_gravity" && graph?.story_gravity_available
+    ? "story_gravity"
+    : "view_links";
+  const gravityMappedNodeCount = effectiveNodeSizing === "story_gravity"
+    ? (view?.nodes ?? []).filter((node) => node.story_gravity !== null).length
+    : 0;
+  const flowSegments = useMemo(
+    () => storyOrderFlow ? storyOrderFlowSegments(view?.edges ?? []) : [],
+    [storyOrderFlow, view?.edges],
+  );
+  const flowGapCount = flowSegments.filter((segment) => segment.gapBefore).length;
   const mapCapped = Boolean(graph && (
     graph.returned_node_count < graph.node_count
     || graph.returned_edge_count < graph.edge_count
@@ -702,6 +729,9 @@ export function KnowledgeGraph(props: PanelProps) {
   const reviewTargetLabel = review
     ? hiddenReviewNodeByKey.get(review.edge.target)?.label || graphNodeByKey.get(review.edge.target)?.label || review.edge.target
     : "";
+  const selectedSizing = selected
+    ? knowledgeGraphNodeSize(selected, nodeSizing, Boolean(graph?.story_gravity_available), maxDegree)
+    : null;
 
   return (
     <PanelShell {...props}>
@@ -863,6 +893,61 @@ export function KnowledgeGraph(props: PanelProps) {
                 </select>
               </label>
             </fieldset>
+
+            <fieldset disabled={interactionLocked} style={{ border: 0, borderTop: "1px solid var(--line2)", padding: "13px 0 0", margin: "15px 0 0", opacity: interactionLocked ? 0.55 : 1 }}>
+              <legend style={{ fontSize: 7.5, letterSpacing: ".2em", color: "var(--txt3)", marginBottom: 8 }}>VISUAL OVERLAYS</legend>
+              <span style={{ display: "block", color: "var(--txt2)", fontSize: 8, marginBottom: 5 }}>NODE SIZING</span>
+              <div role="group" aria-label="Knowledge Graph node sizing" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+                <button
+                  type="button"
+                  disabled={interactionLocked}
+                  aria-pressed={nodeSizing === "story_gravity"}
+                  aria-label="Size Knowledge Graph nodes by Story Gravity"
+                  onClick={() => setNodeSizing("story_gravity")}
+                  style={{ ...(nodeSizing === "story_gravity" ? activeControl : control), cursor: interactionLocked ? "default" : "pointer", padding: "5px 3px" }}
+                >
+                  STORY GRAVITY
+                </button>
+                <button
+                  type="button"
+                  disabled={interactionLocked}
+                  aria-pressed={nodeSizing === "view_links"}
+                  aria-label="Size Knowledge Graph nodes by view links"
+                  onClick={() => setNodeSizing("view_links")}
+                  style={{ ...(nodeSizing === "view_links" ? activeControl : control), cursor: interactionLocked ? "default" : "pointer", padding: "5px 3px" }}
+                >
+                  VIEW LINKS
+                </button>
+              </div>
+              <span style={{ display: "block", minHeight: 24, marginTop: 5, color: nodeSizing === "story_gravity" && graph && !graph.story_gravity_available ? "var(--warning)" : "var(--txt3)", fontSize: 7.5, lineHeight: 1.4 }}>
+                {nodeSizing === "story_gravity"
+                  ? graph
+                    ? graph.story_gravity_available
+                      ? `${gravityMappedNodeCount} of ${view?.nodes.length ?? 0} visible nodes have project-wide Story Gravity.`
+                      : "Story Gravity is unavailable; node size falls back to view-scoped links."
+                    : "Story Gravity waits for the active graph view."
+                  : "Node size reflects links in the complete selected view."}
+              </span>
+              <button
+                type="button"
+                disabled={interactionLocked}
+                aria-pressed={storyOrderFlow}
+                aria-label={`${storyOrderFlow ? "Hide" : "Show"} returned story-order flow`}
+                onClick={() => setStoryOrderFlow((current) => !current)}
+                style={{ ...(storyOrderFlow ? activeControl : control), width: "100%", marginTop: 8, cursor: interactionLocked ? "default" : "pointer" }}
+              >
+                STORY-ORDER FLOW · {storyOrderFlow ? "ON" : "OFF"}
+              </button>
+              {storyOrderFlow && (
+                <span role="status" aria-live="polite" style={{ display: "block", marginTop: 5, color: flowSegments.length > 0 ? "var(--txt3)" : "var(--warning)", fontSize: 7.5, lineHeight: 1.4 }}>
+                  {flowSegments.length > 0
+                    ? `${flowSegments.length} returned active-scope order segment${flowSegments.length === 1 ? "" : "s"}${flowGapCount > 0 ? ` · ${flowGapCount} visible gap${flowGapCount === 1 ? "" : "s"}` : ""}. Manuscript order, not causality.`
+                    : graph
+                      ? "No returned story-order segments match this view, evidence scope, focus, and manual filters."
+                      : "Story-order flow waits for the active graph view."}
+                </span>
+              )}
+            </fieldset>
           </aside>
 
           <main aria-label="Narrative Knowledge Graph canvas" style={{ flex: 1, minWidth: 0, position: "relative", overflow: "auto", display: "grid", placeItems: "center" }}>
@@ -884,11 +969,51 @@ export function KnowledgeGraph(props: PanelProps) {
             ) : !view || view.nodes.length === 0 ? (
               <Message>No nodes in this {GRAPH_VIEW_META[viewMode].shortLabel} view match the manual filters.</Message>
             ) : (
-              <div data-knowledge-graph-canvas="true" data-project-id={graph.project_id} data-focus-key={graph.focus_key ?? ""} data-view-mode={graph.view_mode} data-evidence-scope={graph.include_inferred ? "inferred_and_confirmed" : "confirmed_only"} style={{ position: "relative", width: CW, height: CH, flex: "none" }}>
+              <div data-knowledge-graph-canvas="true" data-project-id={graph.project_id} data-focus-key={graph.focus_key ?? ""} data-view-mode={graph.view_mode} data-evidence-scope={graph.include_inferred ? "inferred_and_confirmed" : "confirmed_only"} data-node-sizing={effectiveNodeSizing} data-story-order-flow={storyOrderFlow ? "on" : "off"} style={{ position: "relative", width: CW, height: CH, flex: "none" }}>
                 <svg aria-hidden="true" viewBox={`0 0 ${CW} ${CH}`} width={CW} height={CH} style={{ position: "absolute", inset: 0, zIndex: 1 }}>
                   <defs>
-                    <marker id="project-map-arrow" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6" fill="none" stroke="var(--txt3)" strokeWidth="1.1" /></marker>
+                    <marker id={`${markerPrefix}-evidence-arrow`} markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6" fill="none" stroke="var(--txt3)" strokeWidth="1.1" /></marker>
+                    {(Object.entries(STORY_ORDER_COLORS) as Array<[StoryOrderBand, string]>).map(([band, color]) => (
+                      <marker key={band} id={`${markerPrefix}-story-order-${band}`} markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill={color} /></marker>
+                    ))}
                   </defs>
+                  {storyOrderFlow && flowSegments.length > 0 && (
+                    <g data-story-order-flow-overlay="true">
+                      {flowSegments.map((segment) => {
+                        const from = positions.get(segment.source);
+                        const to = positions.get(segment.target);
+                        if (!from || !to) return null;
+                        const sourceLabel = view.nodeByKey.get(segment.source)?.label || segment.source;
+                        const targetLabel = view.nodeByKey.get(segment.target)?.label || segment.target;
+                        const color = STORY_ORDER_COLORS[segment.band];
+                        const dash = segment.actBoundary && segment.gapBefore
+                          ? "10 3 2 3"
+                          : segment.actBoundary
+                            ? "10 4"
+                            : segment.gapBefore
+                              ? "2 5"
+                              : undefined;
+                        return (
+                          <path
+                            key={`story-order-${graphEdgeKey(segment.edge)}`}
+                            data-story-order-segment={segment.orderIndex}
+                            data-story-order-band={segment.band}
+                            data-act-boundary={segment.actBoundary ? "true" : "false"}
+                            data-flow-gap-before={segment.gapBefore ? "true" : "false"}
+                            d={storyOrderFlowPath(from, to, segment.orderIndex)}
+                            fill="none"
+                            stroke={color}
+                            strokeWidth={segment.actBoundary ? 3.2 : 2.5}
+                            strokeDasharray={dash}
+                            opacity={0.72}
+                            markerEnd={`url(#${markerPrefix}-story-order-${segment.band})`}
+                          >
+                            <title>{`${sourceLabel} → ${targetLabel} · manuscript order ${segment.orderIndex + 1} of ${segment.orderTotal - 1} · ${segment.band}${segment.actBoundary ? " · act boundary" : ""}${segment.gapBefore ? " · preceding returned gap" : ""}`}</title>
+                          </path>
+                        );
+                      })}
+                    </g>
+                  )}
                   {view.edges.map((edge) => {
                     const from = positions.get(edge.source);
                     const to = positions.get(edge.target);
@@ -905,7 +1030,7 @@ export function KnowledgeGraph(props: PanelProps) {
                     return (
                       <g key={graphEdgeKey(edge)} opacity={hot ? 1 : 0.48}>
                         <title>{edgeTitle(edge, view.nodeByKey)}</title>
-                        <line x1={from.x} y1={from.y} x2={to.x} y2={to.y} stroke={hot ? "var(--accent)" : edgeColor} strokeWidth={hot ? 1.8 : 1.1} strokeDasharray={weak ? "5 4" : undefined} markerEnd="url(#project-map-arrow)" />
+                        <line x1={from.x} y1={from.y} x2={to.x} y2={to.y} stroke={hot ? "var(--accent)" : edgeColor} strokeWidth={hot ? 1.8 : 1.1} strokeDasharray={weak ? "5 4" : undefined} markerEnd={`url(#${markerPrefix}-evidence-arrow)`} />
                         {hot && <text x={(from.x + to.x) / 2} y={(from.y + to.y) / 2 - 4} textAnchor="middle" fontSize="8" fill="var(--accent)">{edge.edge_type.replaceAll("_", " ")}</text>}
                       </g>
                     );
@@ -916,18 +1041,37 @@ export function KnowledgeGraph(props: PanelProps) {
                   const meta = metaOf(node.node_type);
                   const selectedNode = selected?.key === node.key;
                   const focusedNode = graph.focus_key === node.key;
-                  const size = 30 + Math.min(18, Math.sqrt(Math.max(0, node.degree) / maxDegree) * 18);
+                  const sizing = knowledgeGraphNodeSize(
+                    node,
+                    nodeSizing,
+                    graph.story_gravity_available,
+                    maxDegree,
+                  );
+                  const size = sizing.size;
+                  const gravityHalo = sizing.basis === "story_gravity"
+                    && sizing.gravity !== null
+                    && sizing.gravity >= 0.55;
+                  const sizeBasisLabel = sizing.basis === "story_gravity"
+                    ? sizing.gravity === null
+                      ? "Story Gravity not mapped, neutral size"
+                      : `Story Gravity ${Math.round(sizing.gravity * 100)} percent`
+                    : nodeSizing === "story_gravity"
+                      ? `${node.degree} view-scoped links, Story Gravity unavailable`
+                      : `${node.degree} view-scoped links`;
                   return (
                     <button
                       key={node.key}
                       type="button"
                       data-graph-node-key={node.key}
+                      data-node-size-basis={sizing.basis}
+                      data-story-gravity={sizing.gravity ?? ""}
                       aria-pressed={selectedNode}
                       disabled={interactionLocked}
-                      aria-label={`Select ${node.label || node.key}, ${meta.label}, ${node.degree} connections`}
+                      aria-label={`Select ${node.label || node.key}, ${meta.label}, ${node.degree} connections, node size by ${sizeBasisLabel}`}
                       onClick={() => chooseNode(node)}
                       style={{ position: "absolute", left: position.x, top: position.y, transform: "translate(-50%,-50%)", zIndex: selectedNode ? 4 : 3, width: 80, minHeight: 76, border: 0, background: "transparent", padding: 0, color: "var(--txt)", font: "inherit", textAlign: "center", cursor: interactionLocked ? "default" : "pointer", opacity: interactionLocked && !selectedNode ? 0.65 : 1 }}
                     >
+                      {gravityHalo && <span data-story-gravity-halo="true" aria-hidden="true" style={{ position: "absolute", pointerEvents: "none", left: "50%", top: size / 2, transform: "translate(-50%,-50%)", width: size + 12, height: size + 12, borderRadius: "50%", background: meta.color, opacity: Math.min(0.28, 0.1 + ((sizing.gravity ?? 0) - 0.55) * 0.4), boxShadow: `0 0 18px ${meta.color}` }} />}
                       {(selectedNode || focusedNode) && <span aria-hidden="true" style={{ position: "absolute", pointerEvents: "none", left: "50%", top: size / 2, transform: "translate(-50%,-50%)", width: size + 16, height: size + 16, borderRadius: "50%", border: `1px solid ${meta.color}`, boxShadow: `0 0 16px ${meta.color}` }} />}
                       <span aria-hidden="true" style={{ position: "relative", margin: "0 auto", width: size, height: size, borderRadius: "50%", border: `${selectedNode ? 2.5 : 1.5}px solid ${meta.color}`, background: "var(--tint)", display: "grid", placeItems: "center", color: meta.color, fontSize: Math.max(13, Math.round(size * 0.33)) }}>{meta.icon}</span>
                       <span style={{ display: "block", marginTop: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: "'Chakra Petch'", fontSize: selectedNode ? 11 : 9.5, color: selectedNode ? "var(--strong)" : "var(--txt)" }}>{node.label || node.key}</span>
@@ -935,8 +1079,16 @@ export function KnowledgeGraph(props: PanelProps) {
                     </button>
                   );
                 })}
-                <div style={{ position: "absolute", left: 8, bottom: 8, zIndex: 4, border: "1px solid var(--line2)", background: "var(--tint)", padding: "6px 9px", color: "var(--txt2)", fontSize: 7.5 }}>
-                  <span style={{ marginRight: 10 }}>──▸ confirmed evidence</span><span style={{ color: "var(--warning)", marginRight: 10 }}>┄▸ inferred evidence</span><span style={{ color: "var(--accent)" }}>node size = view-scoped degree</span>
+                <div aria-label="Knowledge Graph visual legend" style={{ position: "absolute", left: 8, bottom: 8, zIndex: 4, display: "flex", flexWrap: "wrap", gap: "4px 10px", maxWidth: "calc(100% - 16px)", border: "1px solid var(--line2)", background: "var(--tint)", padding: "6px 9px", color: "var(--txt2)", fontSize: 7.5 }}>
+                  <span>──▸ confirmed evidence</span><span style={{ color: "var(--warning)" }}>┄▸ inferred evidence</span>
+                  <span style={{ color: "var(--accent)" }}>
+                    {effectiveNodeSizing === "story_gravity"
+                      ? `node size = project-wide Story Gravity · ${gravityMappedNodeCount}/${view.nodes.length} mapped · halo ≥ 55%`
+                      : nodeSizing === "story_gravity"
+                        ? "node size = view-scoped links · Story Gravity unavailable"
+                        : "node size = view-scoped links"}
+                  </span>
+                  {storyOrderFlow && <span style={{ color: "var(--green)" }}>curved arrows = returned manuscript order, not causality · {flowSegments.length} segment{flowSegments.length === 1 ? "" : "s"}</span>}
                 </div>
               </div>
             )}
@@ -957,6 +1109,18 @@ export function KnowledgeGraph(props: PanelProps) {
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 5, margin: "9px 0" }}>
                   <span style={{ ...control, padding: "2px 5px" }}>SOURCE · {selected.source_type || "derived"}</span>
                   <span style={{ ...control, padding: "2px 5px" }}>VISIBLE · {visibleDegree.get(selected.key) ?? 0}</span>
+                  <span data-selected-node-size-basis={selectedSizing?.basis} style={{ ...control, padding: "2px 5px", color: "var(--accent)" }}>
+                    NODE SIZE · {selectedSizing?.basis === "story_gravity" ? "STORY GRAVITY" : nodeSizing === "story_gravity" ? "VIEW LINKS · GRAVITY FALLBACK" : "VIEW LINKS"}
+                  </span>
+                  {graph?.story_gravity_available && (
+                    <span data-selected-story-gravity={selected.story_gravity ?? ""} style={{ ...control, padding: "2px 5px", color: selected.story_gravity === null ? "var(--txt3)" : "var(--green)" }}>
+                      STORY GRAVITY · {selected.story_gravity === null
+                        ? selectedSizing?.basis === "story_gravity"
+                          ? "NOT MAPPED · NEUTRAL SIZE"
+                          : "NOT MAPPED"
+                        : `${Math.round(selected.story_gravity * 100)}%`}
+                    </span>
+                  )}
                 </div>
                 {graph?.focus_key === selected.key ? (
                   <div role="status" style={{ ...control, width: "100%", boxSizing: "border-box", color: "var(--accent)", textAlign: "center" }}>FOCUS ROOT · {depth}-HOP NEIGHBORHOOD</div>

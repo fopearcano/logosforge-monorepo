@@ -214,12 +214,15 @@ const knowledgeGraph = (overrides: Record<string, unknown> = {}) => ({
   include_inferred: true,
   view_mode: "project_map",
   story_diagnostics_available: true,
+  story_gravity_available: true,
   nodes: [{
     key: "project:project:1", node_type: "project", source_type: "project",
     source_id: "1", label: "Project", summary: "", metadata: {}, degree: 1,
+    story_gravity: null,
   }, {
     key: "scene:scene:2", node_type: "scene", source_type: "scene",
     source_id: "2", label: "Scene", summary: "", metadata: {}, degree: 1,
+    story_gravity: 0.75,
   }],
   edges: [{
     source: "project:project:1", target: "scene:scene:2", edge_type: "contains",
@@ -1306,6 +1309,85 @@ try {
     "GET",
     "/api/projects/1/knowledge-graph",
     "$.story_diagnostics_available",
+  );
+  await expectInvalid(
+    "Knowledge Graph requires the Story Gravity availability signal",
+    () => client.getKnowledgeGraph(1),
+    json(knowledgeGraph({ story_gravity_available: undefined })),
+    "GET",
+    "/api/projects/1/knowledge-graph",
+    "$.story_gravity_available",
+  );
+  const excessiveGravity = knowledgeGraph();
+  excessiveGravity.nodes[1] = { ...excessiveGravity.nodes[1], story_gravity: 1.01 };
+  await expectInvalid(
+    "Knowledge Graph bounds per-node Story Gravity",
+    () => client.getKnowledgeGraph(1),
+    json(excessiveGravity),
+    "GET",
+    "/api/projects/1/knowledge-graph",
+    "$.nodes[1].story_gravity",
+  );
+  const unavailableGravity = knowledgeGraph({ story_gravity_available: false });
+  unavailableGravity.nodes = unavailableGravity.nodes.map((node) => ({ ...node, story_gravity: null }));
+  unavailableGravity.nodes[1] = { ...unavailableGravity.nodes[1], story_gravity: 0.2 };
+  await expectInvalid(
+    "Knowledge Graph rejects mapped gravity when Core reports the enhancement unavailable",
+    () => client.getKnowledgeGraph(1),
+    json(unavailableGravity),
+    "GET",
+    "/api/projects/1/knowledge-graph",
+    "$.nodes[1].story_gravity",
+  );
+  const invalidFlowBand = knowledgeGraph();
+  invalidFlowBand.edges[0] = {
+    ...invalidFlowBand.edges[0],
+    edge_type: "precedes",
+    metadata: {
+      story_order_index: 0,
+      story_order_total: 2,
+      story_order_band: "epilogue",
+      act_boundary: false,
+    },
+  };
+  await expectInvalid(
+    "Knowledge Graph strictly validates annotated story-order bands",
+    () => client.getKnowledgeGraph(1),
+    json(invalidFlowBand),
+    "GET",
+    "/api/projects/1/knowledge-graph",
+    "$.edges[0].metadata.story_order_band",
+  );
+  const partialFlowMetadata = knowledgeGraph();
+  partialFlowMetadata.edges[0] = {
+    ...partialFlowMetadata.edges[0],
+    edge_type: "precedes",
+    metadata: { story_order_index: 0 },
+  };
+  await expectInvalid(
+    "Knowledge Graph rejects partial story-order metadata",
+    () => client.getKnowledgeGraph(1),
+    json(partialFlowMetadata),
+    "GET",
+    "/api/projects/1/knowledge-graph",
+    "$.edges[0].metadata",
+  );
+  const validFollowsFlow = knowledgeGraph();
+  validFollowsFlow.edges[0] = {
+    ...validFollowsFlow.edges[0],
+    edge_type: "follows",
+    metadata: {
+      story_order_index: 1,
+      story_order_total: 2,
+      story_order_band: "ending",
+      act_boundary: true,
+    },
+  };
+  await expectValid(
+    "Knowledge Graph accepts a complete follows segment whose source is the later Scene",
+    () => client.getKnowledgeGraph(1),
+    validFollowsFlow,
+    (value) => value.edges[0]?.metadata.story_order_index === 1,
   );
   await expectInvalid(
     "specialty graph views cannot claim Project Map story diagnostics",

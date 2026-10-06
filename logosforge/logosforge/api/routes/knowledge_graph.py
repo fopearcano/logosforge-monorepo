@@ -20,6 +20,7 @@ from logosforge.db import (
     KnowledgeGraphReviewStateCorrupt,
     KnowledgeGraphRevisionConflict,
 )
+from logosforge.graph_gravity import compute_canonical_gravity_totals
 from logosforge.knowledge_graph.builder import build_knowledge_graph
 from logosforge.models.models import Project
 
@@ -110,6 +111,9 @@ def get_knowledge_graph(
         view_mode=view_mode,
     )
     graph = _build_graph_or_500(db, project.id)
+    gravity_available, gravity_totals = compute_canonical_gravity_totals(
+        db, project.id, graph,
+    )
     internal_focus_key = None
     if query.focus_key is not None:
         internal_focus_key = serializers.resolve_knowledge_graph_focus_key(
@@ -129,6 +133,8 @@ def get_knowledge_graph(
         limit=query.limit,
         include_inferred=query.include_inferred,
         view_mode=query.view_mode,
+        story_gravity_available=gravity_available,
+        story_gravity_totals=gravity_totals,
     )
 
 
@@ -235,6 +241,9 @@ def execute_knowledge_graph_command(
     # preflight graph is not safe to return.  ``applied_revision`` intentionally
     # remains the original command revision even if this current map is newer.
     graph = _build_graph_or_500(db, project.id)
+    gravity_available, gravity_totals = compute_canonical_gravity_totals(
+        db, project.id, graph,
+    )
 
     affected = schemas.KnowledgeGraphEdgeIdentityDTO(
         source=result.affected_edge.source,
@@ -242,7 +251,11 @@ def execute_knowledge_graph_command(
         edge_type=result.affected_edge.edge_type,
     )
     return schemas.KnowledgeGraphCommandResultDTO(
-        knowledge_graph=serializers.knowledge_graph_read_to_dto(graph),
+        knowledge_graph=serializers.knowledge_graph_read_to_dto(
+            graph,
+            story_gravity_available=gravity_available,
+            story_gravity_totals=gravity_totals,
+        ),
         changed=result.changed,
         affected_edge=affected,
         replayed=result.replayed,

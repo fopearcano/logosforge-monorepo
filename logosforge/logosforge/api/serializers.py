@@ -1144,6 +1144,8 @@ def knowledge_graph_read_to_dto(
     limit: int = 100,
     include_inferred: bool = True,
     view_mode: str = "project_map",
+    story_gravity_available: bool = False,
+    story_gravity_totals: dict[str, float] | None = None,
 ) -> schemas.KnowledgeGraphReadDTO:
     """Serialize a bounded canonical view or node neighborhood.
 
@@ -1156,6 +1158,7 @@ def knowledge_graph_read_to_dto(
     from logosforge.knowledge_graph import scoring as graph_scoring
 
     graph_node_keys = set(graph.nodes)
+    gravity_totals = story_gravity_totals or {}
     full_hidden_edges = [
         edge for edge in graph.edges
         if edge.is_hidden
@@ -1336,6 +1339,7 @@ def knowledge_graph_read_to_dto(
             summary=str(node.summary or "")[:1000],
             metadata=_bounded_graph_value(dict(node.metadata or {})),
             degree=degree_by_key.get(key, 0),
+            story_gravity=gravity_totals.get(key),
         ))
 
     truncated = (
@@ -1360,6 +1364,7 @@ def knowledge_graph_read_to_dto(
         depth=depth,
         include_inferred=include_inferred,
         view_mode=view_mode,
+        story_gravity_available=story_gravity_available,
         nodes=nodes,
         edges=[_knowledge_graph_edge_to_dto(edge) for edge in returned_edges],
         node_count=len(candidate_keys),
@@ -1424,6 +1429,7 @@ def knowledge_graph_hidden_edges_to_dto(
             summary=str(node.summary or "")[:1000],
             metadata=_bounded_graph_value(dict(node.metadata or {})),
             degree=graph.degree(key),
+            story_gravity=None,
         ))
     return schemas.KnowledgeGraphHiddenEdgePageDTO(
         project_id=int(graph.project_id),
