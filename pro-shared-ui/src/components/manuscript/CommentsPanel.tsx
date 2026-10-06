@@ -850,12 +850,18 @@ export function CommentsPanel(props: PanelProps) {
             <button type="button" aria-label="Dismiss comment error" onClick={() => setActionError(null)} style={{ ...quietButton(), color: "var(--crimson)", borderColor: "rgba(232,68,58,.45)" }}>DISMISS</button>
           </div>
         )}
+        {error && commentsData !== undefined && (
+          <div role="alert" style={{ flex: "none", display: "flex", alignItems: "center", gap: 9, borderBottom: "1px solid var(--crimson)", background: "rgba(232,68,58,.08)", color: "var(--crimson)", padding: "7px 16px", fontSize: 9.5 }}>
+            <span style={{ flex: 1 }}>Comments refresh failed — {error}</span>
+            <button type="button" onClick={refetch} style={{ ...quietButton(), color: "var(--crimson)", borderColor: "rgba(232,68,58,.45)" }}>RETRY</button>
+          </div>
+        )}
         {exportStatus && <div role="status" aria-live="polite" style={{ flex: "none", borderBottom: "1px solid var(--green)", color: "var(--green)", padding: "7px 16px", fontSize: 9.5 }}>{exportStatus}</div>}
         <div style={{ flex: 1, minHeight: 0, display: "grid", gridTemplateColumns: "minmax(290px,36%) minmax(0,1fr)" }}>
           <div style={{ minWidth: 0, minHeight: 0, borderRight: "1px solid var(--line)", background: "var(--panel2)", overflowY: "auto" }}>
-            {loading
+            {loading && commentsData === undefined
               ? message("Loading comments…", "status")
-              : error
+              : error && commentsData === undefined
                 ? (
                     <div role="alert" style={{ padding: "30px 16px", textAlign: "center", color: "var(--crimson)", fontSize: 10, lineHeight: 1.6 }}>
                       <div>Couldn't load comments — {error}</div>
@@ -903,7 +909,7 @@ export function CommentsPanel(props: PanelProps) {
                   draftStateRef={draftStateRef}
                 />
               )
-            : message(loading ? "Loading thread…" : "Select a comment thread.")}
+            : message(loading && commentsData === undefined ? "Loading thread…" : "Select a comment thread.")}
         </div>
       </div>
     </PanelShell>

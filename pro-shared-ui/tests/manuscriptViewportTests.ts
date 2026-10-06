@@ -53,13 +53,16 @@ const runNext = (): void => {
 };
 
 let editorReady = false;
+let editorFocused = false;
 let focusAttempts = 0;
 startSceneFocusRetry({
   shouldContinue: () => true,
   tryFocus: () => {
     focusAttempts += 1;
-    return editorReady;
+    editorFocused = editorReady;
+    return editorFocused;
   },
+  isFocusStable: () => editorFocused,
   schedule,
   cancel,
 });
@@ -67,13 +70,48 @@ runNext();
 check("scene focus retries when the live editor has not mounted", focusAttempts === 1 && scheduled.size === 1);
 editorReady = true;
 runNext();
-check("scene focus settles after a delayed editor mount", focusAttempts === 2 && scheduled.size === 0);
+check("scene focus schedules stability confirmation after a delayed editor mount", focusAttempts === 2 && scheduled.size === 1);
+runNext();
+check("scene focus settles only after delayed focus remains stable", focusAttempts === 2 && scheduled.size === 0);
+
+let racedFocusOwned = false;
+let racedFocusAttempts = 0;
+startSceneFocusRetry({
+  shouldContinue: () => true,
+  tryFocus: () => {
+    racedFocusAttempts += 1;
+    racedFocusOwned = true;
+    return true;
+  },
+  isFocusStable: () => racedFocusOwned,
+  schedule,
+  cancel,
+});
+runNext();
+racedFocusOwned = false;
+runNext();
+check("scene focus retries when modal teardown reclaims initial focus", racedFocusAttempts === 2 && scheduled.size === 1);
+runNext();
+check("scene focus settles after the replacement focus survives confirmation", racedFocusAttempts === 2 && scheduled.size === 0);
+
+let scrollOnlyAttempts = 0;
+startSceneFocusRetry({
+  shouldContinue: () => true,
+  tryFocus: () => { scrollOnlyAttempts += 1; return true; },
+  isFocusStable: () => true,
+  schedule,
+  cancel,
+});
+runNext();
+runNext();
+check("scroll-only scene jumps settle without repeating their action", scrollOnlyAttempts === 1 && scheduled.size === 0);
 
 let targetCurrent = true;
 let staleFocusAttempts = 0;
 startSceneFocusRetry({
   shouldContinue: () => targetCurrent,
   tryFocus: () => { staleFocusAttempts += 1; return false; },
+  isFocusStable: () => false,
   schedule,
   cancel,
 });
@@ -85,6 +123,7 @@ let cancelledFocusAttempts = 0;
 const cancelFocus = startSceneFocusRetry({
   shouldContinue: () => true,
   tryFocus: () => { cancelledFocusAttempts += 1; return false; },
+  isFocusStable: () => false,
   schedule,
   cancel,
 });
@@ -95,6 +134,7 @@ let boundedFocusAttempts = 0;
 startSceneFocusRetry({
   shouldContinue: () => true,
   tryFocus: () => { boundedFocusAttempts += 1; return false; },
+  isFocusStable: () => false,
   schedule,
   cancel,
   maxAttempts: 2,
@@ -102,6 +142,24 @@ startSceneFocusRetry({
 runNext();
 runNext();
 check("scene focus retry is bounded", boundedFocusAttempts === 2 && scheduled.size === 0);
+
+let unstableFocusAttempts = 0;
+let unstableFocusChecks = 0;
+startSceneFocusRetry({
+  shouldContinue: () => true,
+  tryFocus: () => { unstableFocusAttempts += 1; return true; },
+  isFocusStable: () => { unstableFocusChecks += 1; return false; },
+  schedule,
+  cancel,
+  maxAttempts: 2,
+});
+runNext();
+runNext();
+runNext();
+check(
+  "scene focus stability retries remain bounded",
+  unstableFocusAttempts === 2 && unstableFocusChecks === 2 && scheduled.size === 0,
+);
 check("scene focus default retry window stays finite", SCENE_FOCUS_RETRY_ATTEMPTS > 1 && SCENE_FOCUS_RETRY_ATTEMPTS <= 100);
 
 console.log(`Manuscript viewport tests: ${passed} passed, ${failures.length} failed`);

@@ -1642,6 +1642,12 @@ export function ManuscriptEditor(props: PanelProps) {
         prose.focus({ preventScroll: true });
         return document.activeElement === prose;
       },
+      isFocusStable: () => {
+        if (!focusProse) return true;
+        const current = document.getElementById(`ms-scene-${id}`);
+        const prose = current?.querySelector("[data-prose]") as HTMLElement | null;
+        return prose != null && document.activeElement === prose;
+      },
       schedule: (callback, delayMs) => window.setTimeout(callback, delayMs),
       cancel: (handle) => window.clearTimeout(handle),
     });
@@ -1837,6 +1843,12 @@ export function ManuscriptEditor(props: PanelProps) {
             <button type="button" onClick={refetchComments} style={{ ...commentAction, color: "var(--crimson)", borderColor: "rgba(232,68,58,.45)" }}>RETRY COMMENTS</button>
           </div>
         )}
+        {error && snapshot !== undefined && (
+          <div role="alert" style={{ flex: "none", display: "flex", alignItems: "center", gap: 10, borderBottom: "1px solid var(--crimson)", background: "rgba(255,82,96,.08)", color: "var(--crimson)", padding: "7px 18px", fontSize: 9.5 }}>
+            <span style={{ flex: 1 }}>Manuscript refresh failed — {error}</span>
+            <button type="button" onClick={refetch} style={{ ...commentAction, color: "var(--crimson)", borderColor: "rgba(232,68,58,.45)" }}>RETRY MANUSCRIPT</button>
+          </div>
+        )}
 
         <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
           <div
@@ -1849,8 +1861,8 @@ export function ManuscriptEditor(props: PanelProps) {
           >
             <div style={{ width: "100%", maxWidth: focus ? 720 : 660 }}>
               {projectId == null ? message("Open a project to start writing.")
-                : loading ? message("Loading manuscript…")
-                : error ? message(`Couldn't load manuscript — ${error}`)
+                : loading && snapshot === undefined ? message("Loading manuscript…")
+                : error && snapshot === undefined ? message(`Couldn't load manuscript — ${error}`)
                 : ordered.length === 0 ? (
                   <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14, padding: "60px 0", color: "var(--txt3)" }}>
                     <div style={{ fontSize: 12, letterSpacing: ".04em" }}>No scenes yet — this manuscript is empty.</div>

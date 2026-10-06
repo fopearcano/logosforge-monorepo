@@ -5,6 +5,7 @@ export const SCENE_FOCUS_RETRY_ATTEMPTS = 100;
 export interface SceneFocusRetryOptions {
   shouldContinue: () => boolean;
   tryFocus: () => boolean;
+  isFocusStable: () => boolean;
   schedule: (callback: () => void, delayMs: number) => number;
   cancel: (handle: number) => void;
   delayMs?: number;
@@ -13,11 +14,13 @@ export interface SceneFocusRetryOptions {
 
 /**
  * Keep a requested scene focus alive while its asynchronously-created editor
- * mounts. A newer navigation or unmount cancels the returned request.
+ * mounts and confirm that focus survives a later tick. A newer navigation or
+ * unmount cancels the returned request.
  */
 export function startSceneFocusRetry({
   shouldContinue,
   tryFocus,
+  isFocusStable,
   schedule,
   cancel,
   delayMs = SCENE_FOCUS_RETRY_DELAY_MS,
@@ -32,6 +35,7 @@ export function startSceneFocusRetry({
   let cancelled = false;
   let attempts = 0;
   let handle: number | null = null;
+  let confirming = false;
 
   const run = () => {
     handle = null;
@@ -39,8 +43,26 @@ export function startSceneFocusRetry({
       cancelled = true;
       return;
     }
+    if (confirming) {
+      confirming = false;
+      if (isFocusStable()) {
+        cancelled = true;
+        return;
+      }
+      if (attempts >= boundedAttempts) {
+        cancelled = true;
+        return;
+      }
+    }
     attempts += 1;
-    if (tryFocus() || attempts >= boundedAttempts) {
+    if (tryFocus()) {
+      // Modal teardown and dock commits can reclaim focus after a synchronous
+      // focus() succeeds. Confirm ownership on a later tick before settling.
+      confirming = true;
+      handle = schedule(run, boundedDelay);
+      return;
+    }
+    if (attempts >= boundedAttempts) {
       cancelled = true;
       return;
     }

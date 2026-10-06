@@ -82,6 +82,9 @@ const manuscript = requireMarkers("components/manuscript/ManuscriptEditor.tsx", 
   'setSelection({ sceneId: id, text: "", section: "Manuscript" })',
   "useManuscriptSnapshot()",
   "loadedSnapshot?.project_id === projectId",
+  "loading && snapshot === undefined",
+  "error && snapshot === undefined",
+  "isFocusStable: () => {",
   "scenePlacementPlan(stepped.draft)",
   "expectedNeighborId",
   "isImmediateScenePlacementNeighbor(",
@@ -120,6 +123,8 @@ requireMarkers("components/manuscript/CommentsPanel.tsx", [
   "scheduleThreadFocus(targetId, (focused) => {",
   "document.activeElement === button",
   "window.cancelAnimationFrame(focusFrameRef.current)",
+  "loading && commentsData === undefined",
+  "error && commentsData === undefined",
 ]);
 requireMarkers("components/manuscript/commentPreferences.ts", ["removeEventListener(COMMENT_VISIBILITY_EVENT", "removeEventListener(\"storage\""]);
 requireMarkers("adapters/StudioProvider.tsx", [
