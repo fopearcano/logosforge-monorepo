@@ -54,10 +54,26 @@ let wheelListenerPassive: boolean | null = null;
 let deferredSettingsProject: number | null = null;
 let resolveDeferredSettings: ((value: SettingsDTO) => void) | null = null;
 let deferredSettings: Promise<SettingsDTO> | null = null;
+let deferredCanvasProject: number | null = null;
+let resolveDeferredCanvas: ((value: CanvasPlotSnapshotDTO) => void) | null = null;
+let deferredCanvas: Promise<CanvasPlotSnapshotDTO> | null = null;
 
 function deferSettings(projectId: number): void {
   deferredSettingsProject = projectId;
   deferredSettings = new Promise<SettingsDTO>((resolve) => { resolveDeferredSettings = resolve; });
+}
+
+function deferCanvasPlot(projectId: number): void {
+  deferredCanvasProject = projectId;
+  deferredCanvas = new Promise<CanvasPlotSnapshotDTO>((resolve) => { resolveDeferredCanvas = resolve; });
+}
+
+function releaseCanvasPlot(value: CanvasPlotSnapshotDTO): void {
+  const resolve = resolveDeferredCanvas;
+  deferredCanvasProject = null;
+  deferredCanvas = null;
+  resolveDeferredCanvas = null;
+  resolve?.(clone(value));
 }
 
 function clone<T>(value: T): T {
@@ -123,7 +139,10 @@ function apply(projectId: number, command: CanvasPlotCommandDTO): CanvasPlotComm
 }
 
 const api = {
-  getCanvasPlot: async (projectId: number) => clone(snapshots.get(projectId)!),
+  getCanvasPlot: async (projectId: number) => {
+    if (deferredCanvasProject === projectId && deferredCanvas) return deferredCanvas;
+    return clone(snapshots.get(projectId)!);
+  },
   executeCanvasPlotCommand: async (projectId: number, command: CanvasPlotCommandDTO) => {
     commands.push(clone(command));
     return apply(projectId, command);
@@ -311,8 +330,16 @@ collaboratorNode.title = "Beta from collaborator";
 revisionCounter += 1;
 collaboratorSnapshot.revision = revisionCounter.toString(16).padStart(64, "0");
 snapshots.set(7, collaboratorSnapshot);
+deferCanvasPlot(7);
 await act(async () => { await emitCanvasChange(7); });
-check(renderer.root.findByProps({ "aria-label": "Block summary" }).props.value === "Draft survives a live refresh", "live Canvas Plot refetches must preserve a dirty inspector draft");
+check(renderer.root.findByProps({ "aria-label": "Block title" }).props.disabled !== true, "a background Canvas Plot refetch must not disable an existing inspector mid-edit");
+check(renderer.root.findByProps({ "aria-label": "Block summary" }).props.disabled !== true, "a background Canvas Plot refetch must not interrupt controlled inspector typing");
+act(() => renderer.root.findByProps({ "aria-label": "Block summary" }).props.onChange({ currentTarget: { value: "Draft survives a live refresh while typing" } }));
+await act(async () => {
+  releaseCanvasPlot(collaboratorSnapshot);
+  await flush();
+});
+check(renderer.root.findByProps({ "aria-label": "Block summary" }).props.value === "Draft survives a live refresh while typing", "live Canvas Plot refetches must preserve keystrokes entered while the read was pending");
 check(renderer.root.findByProps({ "aria-label": "Block title" }).props.value === "Beta from collaborator", "live refetches must merge authoritative changes into untouched inspector fields");
 check(commands.length === commandsBeforeLiveRefresh, "a read-only live refetch must not implicitly save the inspector");
 
@@ -322,7 +349,7 @@ await act(async () => {
 });
 check(commands.length === commandsBeforeLiveRefresh + 1, "choosing a different entity must save the previous inspector draft first");
 const selectionSave = commands.at(-1);
-check(selectionSave?.kind === "update_node" && selectionSave.body === "Draft survives a live refresh", "selection handoff must persist the draft against its original entity");
+check(selectionSave?.kind === "update_node" && selectionSave.body === "Draft survives a live refresh while typing", "selection handoff must persist the draft against its original entity");
 check(selectionSave?.kind === "update_node" && selectionSave.title === undefined, "saving one dirty field must not overwrite a collaborator's untouched field");
 check(snapshots.get(7)?.nodes.find((candidate) => candidate.id === 2)?.title === "Beta from collaborator", "the authoritative collaborator value must survive inspector persistence");
 check(renderer.root.findByProps({ "aria-label": "Frame title" }).props.value === "Act I", "the requested entity must open only after the previous draft saves");

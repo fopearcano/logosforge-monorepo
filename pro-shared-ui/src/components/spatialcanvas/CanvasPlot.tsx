@@ -653,7 +653,11 @@ export function CanvasPlot(props: PanelProps) {
   const selectedNode = selection?.kind === "node" ? nodeById.get(selection.id) : undefined;
   const selectedLink = selection?.kind === "link" ? links.find((link) => link.id === selection.id) : undefined;
   const selectedFrame = selection?.kind === "frame" ? frames.find((frame) => frame.id === selection.id) : undefined;
-  const disabled = Boolean(busy) || loading || !canvas || projectId == null || !viewportReady;
+  // A live-event refetch keeps the current Canvas snapshot visible. Do not
+  // disable controlled inspector fields during that background read: doing so
+  // can drop keystrokes when a canvas_plot_changed event lands mid-edit. The
+  // missing-snapshot guard still keeps the initial load safely read-only.
+  const disabled = Boolean(busy) || !canvas || projectId == null || !viewportReady;
 
   useEffect(() => {
     const authoritative = authoritativeEdit(canvas, selection);
