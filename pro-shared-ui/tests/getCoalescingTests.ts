@@ -73,6 +73,16 @@ try {
   await retry;
 
   installPendingFetch();
+  const beforeInvalidation = client.health();
+  client.invalidatePendingReads?.();
+  const afterInvalidation = client.health();
+  check("freshness invalidation prevents reuse of an older pending GET", calls.length === 2);
+  calls[0]!.resolve(json({ status: "stale" }));
+  calls[1]!.resolve(json({ status: "fresh" }));
+  const [staleValue, freshValue] = await Promise.all([beforeInvalidation, afterInvalidation]) as Array<{ status: string }>;
+  check("invalidated and fresh GET generations settle independently", staleValue.status === "stale" && freshValue.status === "fresh");
+
+  installPendingFetch();
   const staleRead = client.listProjects();
   const mutation = client.createProject({ title: "Created", narrative_engine: "novel" });
   const postMutationRead = client.listProjects();

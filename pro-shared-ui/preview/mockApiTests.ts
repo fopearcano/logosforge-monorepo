@@ -35,9 +35,36 @@ check(typeof api.planPsykeConsoleCommand === "function", "preview mock must impl
 check(typeof api.executePsykeConsoleCommand === "function", "preview mock must implement PSYKE command execution");
 check(typeof api.executeTimelineCommand === "function", "preview mock must implement guarded Timeline commands");
 check(typeof api.executeCanvasPlotCommand === "function", "preview mock must implement guarded Canvas Plot commands");
+check(typeof api.getKnowledgeGraph === "function", "preview mock must implement the canonical Knowledge Graph read");
 
 const health = await api.health();
-check(health.status === "ok" && health.api_version === "1.5.0", "preview health must satisfy the core contract");
+check(health.status === "ok" && health.api_version === "1.6.0", "preview health must satisfy the core contract");
+const projectMap = await api.getKnowledgeGraph(1, { limit: 160, include_inferred: true });
+check(
+  projectMap.project_id === 1
+    && projectMap.nodes.length > 1
+    && projectMap.nodes.every((node) => Number.isSafeInteger(node.degree) && node.degree >= 0)
+    && projectMap.weak_links.every((edge) => projectMap.nodes.some((node) => node.key === edge.source)
+      && projectMap.nodes.some((node) => node.key === edge.target)),
+  "preview Knowledge Graph must expose bounded canonical nodes, full-query degrees, and safe weak-link endpoints",
+);
+const focusNode = projectMap.nodes.find((node) => node.node_type === "scene")!;
+const focusedProjectMap = await api.getKnowledgeGraph(1, {
+  focus_key: focusNode.key,
+  depth: 1,
+  limit: 20,
+  include_inferred: true,
+});
+check(
+  focusedProjectMap.focus_key != null
+    && focusedProjectMap.depth === 1
+    && focusedProjectMap.nodes.some((node) => node.key === focusedProjectMap.focus_key),
+  "preview Knowledge Graph must return a bounded neighborhood containing its requested focus",
+);
+check(
+  focusedProjectMap.nodes.find((node) => node.key === focusNode.key)?.degree === focusNode.degree,
+  "preview focused nodes must retain their full-project degree",
+);
 const canvasApi = createMockApiClient();
 const initialCanvas = await canvasApi.getCanvasPlot(1);
 check(

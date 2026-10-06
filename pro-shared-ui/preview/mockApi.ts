@@ -39,6 +39,10 @@ import type {
   CanvasPlotSnapshotDTO,
   CanvasPlotCommandDTO,
   CanvasPlotCommandResultDTO,
+  KnowledgeGraphEdgeDTO,
+  KnowledgeGraphNodeDTO,
+  KnowledgeGraphQueryDTO,
+  KnowledgeGraphReadDTO,
   PlotBlockDTO,
   PlotSceneDTO,
   ExportRequestDTO,
@@ -1581,8 +1585,8 @@ export function createMockApiClient(): ApiClient {
         service: "logosforge-api",
         instance_nonce: "preview-mock",
         mode: "preview-mock",
-        version: "1.5.0",
-        api_version: "1.5.0",
+        version: "1.6.0",
+        api_version: "1.6.0",
         core_version: "preview",
       };
     },
@@ -2347,6 +2351,157 @@ export function createMockApiClient(): ApiClient {
             { id: "n2", title: "Withdraw", description: "Let the silence work.", score: 6.5, probability: 0.5, factors: {} },
           ],
         },
+      };
+    },
+    async getKnowledgeGraph(p: number, query: KnowledgeGraphQueryDTO = {}): Promise<KnowledgeGraphReadDTO> {
+      await delay();
+      const project = findMockProject(projects, p, "GET", `/api/projects/${p}/knowledge-graph`);
+      const includeInferred = query.include_inferred ?? true;
+      const depth = Math.max(1, Math.min(2, query.depth ?? 1));
+      const limit = Math.max(1, Math.min(200, query.limit ?? 100));
+      const projectKey = `project:project:${p}`;
+      const nodes: KnowledgeGraphNodeDTO[] = [{
+        key: projectKey, node_type: "project", source_type: "project", source_id: String(p),
+        label: project.title, summary: project.description, metadata: {}, degree: 0,
+      }];
+      const edges: KnowledgeGraphEdgeDTO[] = [];
+      for (const sceneRow of scenesFor(p)) {
+        const key = `scene:scene:${sceneRow.id}`;
+        nodes.push({
+          key, node_type: "scene", source_type: "scene", source_id: String(sceneRow.id),
+          label: sceneRow.title, summary: sceneRow.summary, metadata: { act: sceneRow.act, chapter: sceneRow.chapter }, degree: 0,
+        });
+        edges.push({
+          source: projectKey, target: key, edge_type: "contains", confidence: "confirmed",
+          provenance: "project structure", source_system: "structure", explanation: "The Scene belongs to this project.",
+          is_user_confirmed: true, is_inferred: false, metadata: {},
+        });
+      }
+      if (p === fixtureProjectId) {
+        for (const entry of PSYKE) {
+          const nodeType = entry.type === "location" ? "place" : entry.type;
+          nodes.push({
+            key: `${nodeType}:psyke:${entry.id}`, node_type: nodeType, source_type: "psyke",
+            source_id: String(entry.id), label: entry.name, summary: entry.notes,
+            metadata: { is_global: entry.is_global }, degree: 0,
+          });
+        }
+        for (const relation of RELATIONS) {
+          const sourceEntry = PSYKE.find((entry) => entry.id === relation.source_id);
+          const targetEntry = PSYKE.find((entry) => entry.id === relation.target_id);
+          if (!sourceEntry || !targetEntry) continue;
+          const sourceType = sourceEntry.type === "location" ? "place" : sourceEntry.type;
+          const targetType = targetEntry.type === "location" ? "place" : targetEntry.type;
+          edges.push({
+            source: `${sourceType}:psyke:${sourceEntry.id}`,
+            target: `${targetType}:psyke:${targetEntry.id}`,
+            edge_type: "relates_to", confidence: "confirmed", provenance: "explicit PSYKE relation",
+            source_system: "psyke", explanation: relation.relation_type,
+            is_user_confirmed: true, is_inferred: false, metadata: {},
+          });
+        }
+        const firstScene = scenesFor(p)[0];
+        const firstCharacter = PSYKE.find((entry) => entry.type === "character");
+        if (firstScene && firstCharacter) {
+          edges.push({
+            source: `scene:scene:${firstScene.id}`, target: `character:psyke:${firstCharacter.id}`,
+            edge_type: "mentions", confidence: "possible", provenance: "scene text match",
+            source_system: "manuscript", explanation: "The name appears in the Scene text.",
+            is_user_confirmed: false, is_inferred: true, metadata: {},
+          });
+        }
+      }
+
+      const allowedEdges = edges.filter((edge) => includeInferred || !edge.is_inferred);
+      const fullDegree = new Map(nodes.map((node) => [node.key, 0]));
+      for (const edge of allowedEdges) {
+        fullDegree.set(edge.source, (fullDegree.get(edge.source) ?? 0) + 1);
+        fullDegree.set(edge.target, (fullDegree.get(edge.target) ?? 0) + 1);
+      }
+      const storyNodeTypes = new Set([
+        "scene", "character", "place", "object", "lore", "theme", "motif",
+        "psyke_entry", "note", "plot_block",
+      ]);
+      const canonicalOrphanKeys = new Set(nodes.filter((node) => (
+        storyNodeTypes.has(node.node_type)
+        && !allowedEdges.some((edge) => {
+          if (edge.source !== node.key && edge.target !== node.key) return false;
+          const otherKey = edge.source === node.key ? edge.target : edge.source;
+          const other = nodes.find((candidate) => candidate.key === otherKey);
+          return !(other?.node_type === "project" && edge.edge_type === "contains");
+        })
+      )).map((node) => node.key));
+      let queryNodes = nodes;
+      let queryEdges = allowedEdges;
+      const focusKey = query.focus_key ?? null;
+      if (focusKey) {
+        if (!nodes.some((node) => node.key === focusKey)) {
+          throw new ApiRequestError("GET", `/api/projects/${p}/knowledge-graph`, 404, "Knowledge Graph node not found", "not_found");
+        }
+        const visible = new Set([focusKey]);
+        let frontier = new Set([focusKey]);
+        const seenEdges = new Set<string>();
+        const neighborhoodEdges: KnowledgeGraphEdgeDTO[] = [];
+        for (let hop = 0; hop < depth; hop += 1) {
+          const next = new Set<string>();
+          for (const edge of allowedEdges) {
+            if (!frontier.has(edge.source) && !frontier.has(edge.target)) continue;
+            const edgeKey = `${edge.source}\u0000${edge.target}\u0000${edge.edge_type}`;
+            if (!seenEdges.has(edgeKey)) {
+              seenEdges.add(edgeKey);
+              neighborhoodEdges.push(edge);
+            }
+            if (frontier.has(edge.source)) next.add(edge.target);
+            if (frontier.has(edge.target)) next.add(edge.source);
+          }
+          for (const key of next) visible.add(key);
+          frontier = next;
+        }
+        queryNodes = nodes.filter((node) => visible.has(node.key));
+        queryEdges = neighborhoodEdges;
+      }
+      queryNodes = queryNodes.map((node) => ({ ...node, degree: fullDegree.get(node.key) ?? 0 }));
+      const orphanNodes = queryNodes.filter((node) => canonicalOrphanKeys.has(node.key));
+      const rankNodes = (left: KnowledgeGraphNodeDTO, right: KnowledgeGraphNodeDTO) => (
+        (focusKey && left.key === focusKey ? -1 : focusKey && right.key === focusKey ? 1 : 0)
+        || right.degree - left.degree
+        || left.node_type.localeCompare(right.node_type)
+        || left.key.localeCompare(right.key)
+      );
+      let returnedNodes: KnowledgeGraphNodeDTO[];
+      if (focusKey) {
+        returnedNodes = [...queryNodes].sort(rankNodes).slice(0, limit);
+      } else {
+        const orphanBudget = orphanNodes.length === 0
+          ? 0
+          : Math.min(orphanNodes.length, 25, Math.max(1, Math.floor(limit / 4)));
+        const reservedOrphans = [...orphanNodes].sort((left, right) => left.key.localeCompare(right.key)).slice(0, orphanBudget);
+        const reservedKeys = new Set(reservedOrphans.map((node) => node.key));
+        returnedNodes = [
+          ...queryNodes.filter((node) => !reservedKeys.has(node.key)).sort(rankNodes).slice(0, Math.max(0, limit - orphanBudget)),
+          ...reservedOrphans,
+        ];
+      }
+      const returnedKeys = new Set(returnedNodes.map((node) => node.key));
+      const returnedEdges = queryEdges.filter((edge) => returnedKeys.has(edge.source) && returnedKeys.has(edge.target)).slice(0, limit);
+      const weakLinks = queryEdges.filter((edge) => edge.is_inferred);
+      const returnedWeakLinks = weakLinks.filter((edge) => returnedKeys.has(edge.source) && returnedKeys.has(edge.target)).slice(0, Math.min(limit, 25));
+      const returnedOrphanKeys = orphanNodes.filter((node) => returnedKeys.has(node.key)).map((node) => node.key);
+      return {
+        project_id: p, writing_mode: project.narrative_engine, focus_key: focusKey,
+        depth, include_inferred: includeInferred,
+        nodes: structuredClone(returnedNodes), edges: structuredClone(returnedEdges),
+        node_count: queryNodes.length, edge_count: queryEdges.length,
+        returned_node_count: returnedNodes.length, returned_edge_count: returnedEdges.length,
+        truncated: returnedNodes.length < queryNodes.length
+          || returnedEdges.length < queryEdges.length
+          || returnedOrphanKeys.length < orphanNodes.length
+          || returnedWeakLinks.length < weakLinks.length,
+        orphan_keys: returnedOrphanKeys,
+        orphan_count: orphanNodes.length,
+        weak_links: structuredClone(returnedWeakLinks),
+        weak_link_count: weakLinks.length,
+        warnings: [], unavailable: ["revision_intelligence", "rewrite_sandbox"],
       };
     },
     async getGraphGravity() {

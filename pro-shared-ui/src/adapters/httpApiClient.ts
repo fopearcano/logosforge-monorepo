@@ -35,6 +35,7 @@ import {
   validateTimelineCommandResultDTOForRequest,
   validateCanvasPlotSnapshotDTOForProject,
   validateCanvasPlotCommandResultDTOForRequest,
+  validateKnowledgeGraphReadDTOForRequest,
   validateSettingsDTO,
   validateVoiceBillyProposalDTO,
   validateWhiteboardImportResultDTO,
@@ -426,6 +427,7 @@ export function createHttpApiClient(
       patchTails.clear();
       getInflight.clear();
     },
+    invalidatePendingReads: () => getInflight.clear(),
     health: () => get(ROUTES.health),
     writingModes: () => get(ROUTES.writingModes),
     listProjects: () => get(ROUTES.projects, validateProjectListDTO),
@@ -604,6 +606,18 @@ export function createHttpApiClient(
     voiceCommit: (p, b) => writePost(ROUTES.voiceCommit(p), b),
     voiceCanUndo: (p) => get(ROUTES.voiceCanUndo(p)),
     voiceUndo: (p) => writePost(ROUTES.voiceUndo(p)),
+    getKnowledgeGraph: (p, query = {}) => {
+      const params = new URLSearchParams();
+      if (query.focus_key != null) params.set("focus_key", query.focus_key);
+      if (query.depth != null) params.set("depth", String(query.depth));
+      if (query.limit != null) params.set("limit", String(query.limit));
+      if (query.include_inferred != null) params.set("include_inferred", String(query.include_inferred));
+      const suffix = params.toString();
+      return get(
+        ROUTES.knowledgeGraph(p) + (suffix ? `?${suffix}` : ""),
+        (value) => validateKnowledgeGraphReadDTOForRequest(value, p, query),
+      );
+    },
     getGraphGravity: (p) => get(ROUTES.graphGravity(p)),
     generateQuantumOutline: (p, b) => post(ROUTES.quantumOutline(p), b, validateQuantumResultDTO),
     generateQuantumBranches: (p, b) => post(ROUTES.quantumBranches(p), b, validateQuantumResultDTO),

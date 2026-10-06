@@ -125,6 +125,8 @@ import type {
   AiBehaviorUpdateDTO,
   GrammarCheckRequestDTO,
   GrammarCheckResultDTO,
+  KnowledgeGraphQueryDTO,
+  KnowledgeGraphReadDTO,
   GraphGravityDTO,
   CounterpartRequestDTO,
   ExtractionJobDTO,
@@ -152,6 +154,8 @@ import type {
 export interface ApiClient {
   /** Stop transports and in-flight requests when a host replaces this client. */
   dispose?(): void;
+  /** Prevent a freshness-critical refetch from joining an older pending GET. */
+  invalidatePendingReads?(): void;
   // Projects & meta
   health(): Promise<HealthDTO>;
   writingModes(): Promise<WritingModesResponseDTO>;
@@ -318,6 +322,8 @@ export interface ApiClient {
   voiceCommit(p: number, body: VoiceCommitReqDTO): Promise<VoiceApplyResultDTO>;
   voiceCanUndo(p: number): Promise<VoiceUndoStateDTO>;
   voiceUndo(p: number): Promise<VoiceUndoResultDTO>;
+  /** Bounded canonical narrative graph or a one/two-hop focused neighborhood. */
+  getKnowledgeGraph(p: number, query?: KnowledgeGraphQueryDTO): Promise<KnowledgeGraphReadDTO>;
   getGraphGravity(p: number): Promise<GraphGravityDTO>;
 
   // Generative (POST, LLM-backed; quantum degrades to deterministic stubs, counterpart does not)

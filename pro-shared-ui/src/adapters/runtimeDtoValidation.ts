@@ -47,6 +47,10 @@ import type {
   CanvasPlotLinkDTO,
   CanvasPlotNodeDTO,
   CanvasPlotSnapshotDTO,
+  KnowledgeGraphEdgeDTO,
+  KnowledgeGraphNodeDTO,
+  KnowledgeGraphQueryDTO,
+  KnowledgeGraphReadDTO,
   SceneExtractionDTO,
   SettingsDTO,
   VoiceBillyProposalDTO,
@@ -922,6 +926,186 @@ export function validateCanvasPlotCommandResultDTOForRequest(
   return result;
 }
 
+function knowledgeGraphNode(value: unknown, path: string): KnowledgeGraphNodeDTO {
+  const dto = record(value, path);
+  for (const key of ["key", "node_type", "source_type", "label", "summary"] as const) {
+    const field = stringValue(requireField(dto, key, path), fieldPath(path, key));
+    if ((key === "key" || key === "node_type") && !field.trim()) {
+      fail(fieldPath(path, key), "a non-empty string", field);
+    }
+  }
+  nullable(requireField(dto, "source_id", path), fieldPath(path, "source_id"), stringValue);
+  record(requireField(dto, "metadata", path), fieldPath(path, "metadata"));
+  const degree = integerValue(requireField(dto, "degree", path), fieldPath(path, "degree"));
+  if (degree < 0) fail(fieldPath(path, "degree"), "zero or greater", degree);
+  return value as KnowledgeGraphNodeDTO;
+}
+
+function knowledgeGraphEdge(value: unknown, path: string): KnowledgeGraphEdgeDTO {
+  const dto = record(value, path);
+  for (const key of [
+    "source", "target", "edge_type", "confidence", "provenance", "source_system", "explanation",
+  ] as const) {
+    const field = stringValue(requireField(dto, key, path), fieldPath(path, key));
+    if ((key === "source" || key === "target" || key === "edge_type") && !field.trim()) {
+      fail(fieldPath(path, key), "a non-empty string", field);
+    }
+  }
+  if (!["confirmed", "likely", "possible", "unknown"].includes(dto.confidence as string)) {
+    fail(fieldPath(path, "confidence"), "confirmed, likely, possible, or unknown", dto.confidence);
+  }
+  booleanValue(requireField(dto, "is_user_confirmed", path), fieldPath(path, "is_user_confirmed"));
+  booleanValue(requireField(dto, "is_inferred", path), fieldPath(path, "is_inferred"));
+  record(requireField(dto, "metadata", path), fieldPath(path, "metadata"));
+  return value as KnowledgeGraphEdgeDTO;
+}
+
+function graphEdgeIdentity(edge: KnowledgeGraphEdgeDTO): string {
+  return [edge.source, edge.target, edge.edge_type].join("\u0000");
+}
+
+function knowledgeGraphRead(value: unknown, path: string): KnowledgeGraphReadDTO {
+  const dto = record(value, path);
+  const projectId = integerValue(requireField(dto, "project_id", path), fieldPath(path, "project_id"));
+  if (projectId <= 0) fail(fieldPath(path, "project_id"), "a positive safe integer", projectId);
+  stringValue(requireField(dto, "writing_mode", path), fieldPath(path, "writing_mode"));
+  const focusKey = nullable(
+    requireField(dto, "focus_key", path),
+    fieldPath(path, "focus_key"),
+    stringValue,
+  );
+  const depth = integerValue(requireField(dto, "depth", path), fieldPath(path, "depth"));
+  if (depth < 1 || depth > 2) fail(fieldPath(path, "depth"), "1 or 2", depth);
+  const includeInferred = booleanValue(
+    requireField(dto, "include_inferred", path),
+    fieldPath(path, "include_inferred"),
+  );
+
+  const nodesPath = fieldPath(path, "nodes");
+  const nodes = arrayOf(requireField(dto, "nodes", path), nodesPath, knowledgeGraphNode);
+  const nodeKeys = new Set<string>();
+  nodes.forEach((node, index) => {
+    if (nodeKeys.has(node.key)) fail(`${nodesPath}[${index}].key`, "a unique node key", node.key);
+    nodeKeys.add(node.key);
+  });
+  if (focusKey !== null && !nodeKeys.has(focusKey)) {
+    fail(fieldPath(path, "focus_key"), "a key present in nodes", focusKey);
+  }
+
+  const edgesPath = fieldPath(path, "edges");
+  const edges = arrayOf(requireField(dto, "edges", path), edgesPath, knowledgeGraphEdge);
+  const edgeKeys = new Set<string>();
+  edges.forEach((edge, index) => {
+    const edgePath = `${edgesPath}[${index}]`;
+    if (!nodeKeys.has(edge.source)) fail(fieldPath(edgePath, "source"), "a key present in nodes", edge.source);
+    if (!nodeKeys.has(edge.target)) fail(fieldPath(edgePath, "target"), "a key present in nodes", edge.target);
+    const identity = graphEdgeIdentity(edge);
+    if (edgeKeys.has(identity)) fail(edgePath, "a unique directed source/target/type edge", edge);
+    if (!includeInferred && edge.is_inferred) {
+      fail(fieldPath(edgePath, "is_inferred"), "false when include_inferred is false", edge.is_inferred);
+    }
+    edgeKeys.add(identity);
+  });
+
+  const counts = {} as Record<"node_count" | "edge_count" | "returned_node_count" | "returned_edge_count" | "orphan_count" | "weak_link_count", number>;
+  for (const key of [
+    "node_count", "edge_count", "returned_node_count", "returned_edge_count", "orphan_count", "weak_link_count",
+  ] as const) {
+    const count = integerValue(requireField(dto, key, path), fieldPath(path, key));
+    if (count < 0) fail(fieldPath(path, key), "zero or greater", count);
+    counts[key] = count;
+  }
+  if (counts.returned_node_count !== nodes.length) {
+    fail(fieldPath(path, "returned_node_count"), `the nodes length (${nodes.length})`, counts.returned_node_count);
+  }
+  if (counts.returned_edge_count !== edges.length) {
+    fail(fieldPath(path, "returned_edge_count"), `the edges length (${edges.length})`, counts.returned_edge_count);
+  }
+  if (counts.node_count < nodes.length) {
+    fail(fieldPath(path, "node_count"), `at least the returned nodes length (${nodes.length})`, counts.node_count);
+  }
+  if (counts.edge_count < edges.length) {
+    fail(fieldPath(path, "edge_count"), `at least the returned edges length (${edges.length})`, counts.edge_count);
+  }
+
+  const orphanKeysPath = fieldPath(path, "orphan_keys");
+  const orphanKeys = stringArray(requireField(dto, "orphan_keys", path), orphanKeysPath);
+  const seenOrphans = new Set<string>();
+  orphanKeys.forEach((key, index) => {
+    if (!nodeKeys.has(key)) fail(`${orphanKeysPath}[${index}]`, "a key present in nodes", key);
+    if (seenOrphans.has(key)) fail(`${orphanKeysPath}[${index}]`, "a unique orphan key", key);
+    seenOrphans.add(key);
+  });
+  if (counts.orphan_count < orphanKeys.length) {
+    fail(fieldPath(path, "orphan_count"), `at least the returned orphan key count (${orphanKeys.length})`, counts.orphan_count);
+  }
+
+  const weakLinksPath = fieldPath(path, "weak_links");
+  const weakLinks = arrayOf(
+    requireField(dto, "weak_links", path),
+    weakLinksPath,
+    knowledgeGraphEdge,
+  );
+  const seenWeakLinks = new Set<string>();
+  weakLinks.forEach((edge, index) => {
+    const edgePath = `${weakLinksPath}[${index}]`;
+    if (!nodeKeys.has(edge.source)) fail(fieldPath(edgePath, "source"), "a key present in nodes", edge.source);
+    if (!nodeKeys.has(edge.target)) fail(fieldPath(edgePath, "target"), "a key present in nodes", edge.target);
+    const identity = graphEdgeIdentity(edge);
+    if (seenWeakLinks.has(identity)) fail(edgePath, "a unique weak link", edge);
+    if (!includeInferred && edge.is_inferred) {
+      fail(fieldPath(edgePath, "is_inferred"), "false when include_inferred is false", edge.is_inferred);
+    }
+    seenWeakLinks.add(identity);
+  });
+  if (counts.weak_link_count < weakLinks.length) {
+    fail(fieldPath(path, "weak_link_count"), `at least the returned weak-link count (${weakLinks.length})`, counts.weak_link_count);
+  }
+
+  const truncated = booleanValue(requireField(dto, "truncated", path), fieldPath(path, "truncated"));
+  const hasMissingRows = counts.node_count > nodes.length
+    || counts.edge_count > edges.length
+    || counts.orphan_count > orphanKeys.length
+    || counts.weak_link_count > weakLinks.length;
+  if (truncated !== hasMissingRows) {
+    fail(fieldPath(path, "truncated"), hasMissingRows ? "true when any graph collection is capped" : "false when every graph collection is returned", truncated);
+  }
+  const warnings = stringArray(requireField(dto, "warnings", path), fieldPath(path, "warnings"));
+  if (warnings.length > 25) fail(fieldPath(path, "warnings"), "at most 25 entries", warnings);
+  const unavailable = stringArray(requireField(dto, "unavailable", path), fieldPath(path, "unavailable"));
+  if (unavailable.length > 25) fail(fieldPath(path, "unavailable"), "at most 25 entries", unavailable);
+  return value as KnowledgeGraphReadDTO;
+}
+
+export function validateKnowledgeGraphReadDTOForRequest(
+  value: unknown,
+  projectId: number,
+  query: KnowledgeGraphQueryDTO = {},
+): KnowledgeGraphReadDTO {
+  const graph = knowledgeGraphRead(value, "$");
+  if (graph.project_id !== projectId) {
+    fail("$.project_id", `the requested project id ${projectId}`, graph.project_id);
+  }
+  const expectedFocus = query.focus_key ?? null;
+  if (graph.focus_key !== expectedFocus) {
+    fail("$.focus_key", expectedFocus === null ? "null for a Project Map request" : `the requested focus key ${expectedFocus}`, graph.focus_key);
+  }
+  const expectedDepth = query.depth ?? 1;
+  if (graph.depth !== expectedDepth) {
+    fail("$.depth", `the requested depth ${expectedDepth}`, graph.depth);
+  }
+  const expectedInferred = query.include_inferred ?? true;
+  if (graph.include_inferred !== expectedInferred) {
+    fail("$.include_inferred", `the requested value ${expectedInferred}`, graph.include_inferred);
+  }
+  const limit = query.limit ?? 100;
+  if (graph.nodes.length > limit) fail("$.nodes", `at most the requested limit (${limit})`, graph.nodes);
+  if (graph.edges.length > limit) fail("$.edges", `at most the requested limit (${limit})`, graph.edges);
+  const weakLinkLimit = Math.min(limit, 25);
+  if (graph.weak_links.length > weakLinkLimit) fail("$.weak_links", `at most ${weakLinkLimit} entries`, graph.weak_links);
+  return graph;
+}
+
 export function validateStoryStructureCommandResultDTOForRequest(
   value: unknown,
   projectId: number,
@@ -1305,6 +1489,8 @@ export const validateCanvasPlotSnapshotDTO: RuntimeDtoValidator<CanvasPlotSnapsh
   canvasPlotSnapshot(value, "$");
 export const validateCanvasPlotCommandResultDTO: RuntimeDtoValidator<CanvasPlotCommandResultDTO> = (value) =>
   canvasPlotCommandResult(value, "$");
+export const validateKnowledgeGraphReadDTO: RuntimeDtoValidator<KnowledgeGraphReadDTO> = (value) =>
+  knowledgeGraphRead(value, "$");
 export const validateSettingsDTO: RuntimeDtoValidator<SettingsDTO> = (value) => settings(value, "$");
 export const validatePsykeConsoleCommandPlanDTO: RuntimeDtoValidator<PsykeConsoleCommandPlanDTO> = (value) =>
   psykeConsoleCommandPlan(value, "$");

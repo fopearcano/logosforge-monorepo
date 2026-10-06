@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import type { NoteDTO, InlineCommentDTO, CharacterDTO, SceneDTO, ManuscriptSnapshotDTO, StoryStructureDTO, PsykeEntryDTO, PsykeRelationDTO, PsykeProgressionDTO, OutlineNodeDTO, ProjectDTO, TimelineSnapshotDTO, CanvasPlotSnapshotDTO, PlotBlockDTO, ExportRequestDTO, ExportResponseDTO, NarrativeDashboardDTO, ContinuityReportDTO, PacingInsightDTO, BalanceDataDTO, StoryHealthDTO, StructuralAnalysisDTO, WorkflowRunDTO, DecisionRadarDTO, GraphGravityDTO, AdaptDTO, ReviewReportDTO, FormatReviewDTO, QuantumResultDTO, AssistantResponseDTO, ExtractionResultDTO, ExtractionApplyRequestDTO, ExtractionApplyReportDTO } from "@logosforge/ui-contracts";
+import type { NoteDTO, InlineCommentDTO, CharacterDTO, SceneDTO, ManuscriptSnapshotDTO, StoryStructureDTO, PsykeEntryDTO, PsykeRelationDTO, PsykeProgressionDTO, OutlineNodeDTO, ProjectDTO, TimelineSnapshotDTO, CanvasPlotSnapshotDTO, PlotBlockDTO, ExportRequestDTO, ExportResponseDTO, NarrativeDashboardDTO, ContinuityReportDTO, PacingInsightDTO, BalanceDataDTO, StoryHealthDTO, StructuralAnalysisDTO, WorkflowRunDTO, DecisionRadarDTO, KnowledgeGraphQueryDTO, KnowledgeGraphReadDTO, GraphGravityDTO, AdaptDTO, ReviewReportDTO, FormatReviewDTO, QuantumResultDTO, AssistantResponseDTO, ExtractionResultDTO, ExtractionApplyRequestDTO, ExtractionApplyReportDTO } from "@logosforge/ui-contracts";
 import type { ExtractionJobDTO } from "@logosforge/ui-contracts";
 import { useStudio } from "../adapters/StudioProvider";
 import { useResource, type Resource } from "./useResource";
@@ -180,6 +180,31 @@ export function useWorkflows(): Resource<WorkflowRunDTO[]> {
 export function useDecisionRadar(): Resource<DecisionRadarDTO> {
   const { api, projectId } = useStudio();
   return useResource(projectId ?? null, () => api.getDecisionRadar(projectId as number), ["scenes_changed", "scene_changed", "psyke_changed", "dashboard_changed"]);
+}
+
+/** Bounded canonical narrative Project Map or a focused one/two-hop neighborhood. */
+export function useKnowledgeGraph(query: KnowledgeGraphQueryDTO = {}): Resource<KnowledgeGraphReadDTO> {
+  const { api, projectId } = useStudio();
+  const focusKey = query.focus_key ?? null;
+  const depth = query.depth ?? 1;
+  const limit = query.limit ?? 100;
+  const includeInferred = query.include_inferred ?? true;
+  const key = projectId == null
+    ? null
+    : `${projectId}\u0000${focusKey ?? ""}\u0000${depth}\u0000${limit}\u0000${includeInferred}`;
+  return useResource(
+    key,
+    () => api.getKnowledgeGraph(projectId as number, {
+      focus_key: focusKey,
+      depth,
+      limit,
+      include_inferred: includeInferred,
+    }),
+    [
+      "project_data_changed", "scene_changed", "scenes_changed", "outline_changed",
+      "plot_changed", "timeline_changed", "psyke_changed", "notes_changed", "characters_changed",
+    ],
+  );
 }
 
 /** Per-node story-gravity weights (narrative/thematic/structural) for the knowledge graph. */

@@ -28,7 +28,13 @@ export function useResource<T>(
   const [loading, setLoading] = useState(key != null);
   const [error, setError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
-  const refetch = useCallback(() => setNonce((n) => n + 1), []);
+  const refetch = useCallback(() => {
+    // A live event can arrive while the identical GET is still pending. Clear
+    // transport coalescing first so the post-event generation cannot join and
+    // publish the pre-event snapshot.
+    api.invalidatePendingReads?.();
+    setNonce((n) => n + 1);
+  }, [api]);
 
   // A resource value belongs to one exact key + API instance. Keeping A's data
   // visible while B loads leaks project context and can enable actions against a
