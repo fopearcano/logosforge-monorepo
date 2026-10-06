@@ -23,9 +23,39 @@ const BASICS: [string, string][] = [
   ['Narrative voice', 'Settings ⚙ → Narrative voice sets this document’s person, style, register, and slang guidance for Billy and Logos.'],
   ['PSYKE', 'Your per-project story bible — characters, places, objects, lore, themes. Isolated per document.'],
   ['Comments', 'On the Manuscript or any Drafter page, highlight text and click Comment to leave a threaded note pinned to that writing page.'],
-  ['Editor typefaces', 'Editor Settings includes bundled and cross-platform serif, sans, mono, typewriter, and handwritten voices. Choose Installed system font to load or enter a font installed on this computer.'],
+  ['Find & Replace', 'Edit → Find and Replace… (Ctrl/Cmd+F) searches the active Manuscript or Drafter page without covering your prose. It supports case-sensitive and whole-word searches, Replace, and Replace all.'],
+  ['Editor typefaces', 'Editor Settings → Typeface includes serif, sans, mono, typewriter, and handwritten presets. Choose Installed system font… to load or enter a family installed on this computer.'],
   ['AI — Billy & Logos', 'Billy is a chat assistant; Logos works inline. Point them at your provider in Settings ⚙.'],
   ['Export & backup', 'Export Project (.lfbundle) saves manuscript, Drafter pages, document settings, outline, comments, and PSYKE. Incomplete exports are blocked.'],
+];
+
+interface Guide {
+  title: string;
+  rows: [label: string, detail: string][];
+}
+
+const GUIDES: Guide[] = [
+  {
+    title: 'Find & Replace',
+    rows: [
+      ['Open', 'Choose Edit → Find and Replace… or press Ctrl/Cmd+F. A short selected phrase is copied into Find automatically.'],
+      ['Scope', 'Only the active Manuscript or Drafter page is searched. Switch tabs to run the same search on that page.'],
+      ['Refine', 'Match case distinguishes capitals; Whole word uses Unicode word boundaries, including accented letters.'],
+      ['Navigate', 'Press Enter or ↓ for the next result; Shift+Enter or ↑ for the previous one. Navigation wraps at either end.'],
+      ['Replace safely', 'Replace changes the selected result. Replace all is a single auto-saved edit, so one Undo restores every replacement.'],
+      ['Close', 'Press Esc or × to close the bar and return focus to the editor.'],
+    ],
+  },
+  {
+    title: 'Typefaces & installed fonts',
+    rows: [
+      ['Presets', 'Choose a grouped Serif, Sans serif, Mono & typewriter, or Handwritten voice in Editor Settings → Typeface.'],
+      ['Use an OS font', 'Choose Installed system font…, then Load installed fonts and allow access when your operating system asks.'],
+      ['Install another font', 'Install it through Windows, macOS, or Linux first, then return here and refresh the installed-font list.'],
+      ['Enter it directly', 'You can type the exact family name and Apply without loading the list. Whiteboard falls back to the mode default if the OS cannot resolve it.'],
+      ['Local preference', 'Typography overrides stay on this computer; they do not embed or redistribute font files in project exports.'],
+    ],
+  },
 ];
 
 interface Group {
@@ -52,8 +82,10 @@ const GROUPS: Group[] = [
       ['New Document', 'Ctrl+N'],
       ['New Drafter page', 'Ctrl+Shift+N'],
       ['Move across writing tabs', '← / →'],
-      ['Undo / Redo', 'Ctrl+Z / Ctrl+Shift+Z'],
+      ['Undo / Redo', 'Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y'],
       ['Find & Replace', 'Ctrl+F'],
+      ['Previous / next match', 'Shift+Enter / Enter'],
+      ['Close Find & Replace', 'Esc'],
       ['Zoom in / out / reset', 'Ctrl+= / Ctrl+- / Ctrl+0'],
     ],
   },
@@ -71,7 +103,7 @@ const GROUPS: Group[] = [
     title: 'AI',
     rows: [
       ['Billy — chat', 'Ctrl+Shift+B'],
-      ['Logos — inline', 'Ctrl+Shift+L'],
+      ['Logos — inline', 'Ctrl+Shift+L / Ctrl+K'],
     ],
   },
   {
@@ -79,6 +111,7 @@ const GROUPS: Group[] = [
     rows: [
       ['Add', 'select text → Comment'],
       ['Submit comment / reply', 'Ctrl+Enter'],
+      ['Next / previous unresolved', 'Alt+↓ / Alt+↑'],
     ],
   },
   {
@@ -236,6 +269,23 @@ export function HelpDialog({ open, onClose }: Props) {
               </li>
             ))}
           </ul>
+
+          <div className="help-eyebrow">Find, replace &amp; fonts</div>
+          <div className="help-keys-grid">
+            {GUIDES.map((guide) => (
+              <div key={guide.title} className="help-group">
+                <h3>{guide.title}</h3>
+                <dl className="help-guide-list">
+                  {guide.rows.map(([label, detail]) => (
+                    <Fragment key={label}>
+                      <dt>{label}</dt>
+                      <dd>{detail}</dd>
+                    </Fragment>
+                  ))}
+                </dl>
+              </div>
+            ))}
+          </div>
 
           <div className="help-eyebrow">Manuscript syntax</div>
           <p className="settings-sub help-syntax-intro">
