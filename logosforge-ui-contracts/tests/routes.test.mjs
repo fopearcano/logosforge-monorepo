@@ -42,6 +42,22 @@ const knowledgeGraphRoute = ROUTES.knowledgeGraph(42);
 if (knowledgeGraphRoute !== '/api/projects/42/knowledge-graph') {
   throw new Error(`knowledge graph route mismatch: ${knowledgeGraphRoute}`);
 }
+const knowledgeGraphCommandRoutes = [
+  ROUTES.knowledgeGraphCommands(42),
+  ROUTES.knowledgeGraphCommandReceipt(42),
+  ROUTES.knowledgeGraphHiddenEdges(42),
+];
+const expectedKnowledgeGraphCommandRoutes = [
+  '/api/projects/42/knowledge-graph/commands',
+  '/api/projects/42/knowledge-graph/command-receipt',
+  '/api/projects/42/knowledge-graph/hidden-edges',
+];
+if (JSON.stringify(knowledgeGraphCommandRoutes) !== JSON.stringify(expectedKnowledgeGraphCommandRoutes)) {
+  throw new Error(`knowledge graph command route mismatch: ${knowledgeGraphCommandRoutes}`);
+}
+if (!KNOWN_EVENTS.includes('knowledge_graph_changed')) {
+  throw new Error('knowledge_graph_changed is missing from the known project events');
+}
 const pythonKnowledgeGraphRoute = readFileSync(
   '../logosforge/logosforge/api/routes/knowledge_graph.py',
   'utf8',
@@ -180,12 +196,25 @@ const graphDtoFields = {
   ],
   KnowledgeGraphEdgeDTO: [
     'source', 'target', 'edge_type', 'confidence', 'provenance', 'source_system',
-    'explanation', 'is_user_confirmed', 'is_inferred', 'metadata',
+    'explanation', 'is_user_confirmed', 'is_inferred', 'is_hidden', 'metadata',
   ],
   KnowledgeGraphReadDTO: [
-    'project_id', 'writing_mode', 'focus_key', 'depth', 'include_inferred', 'nodes', 'edges',
+    'project_id', 'revision', 'writing_mode', 'focus_key', 'depth', 'include_inferred', 'nodes', 'edges',
     'node_count', 'edge_count', 'returned_node_count', 'returned_edge_count', 'truncated',
-    'orphan_keys', 'orphan_count', 'weak_links', 'weak_link_count', 'warnings', 'unavailable',
+    'orphan_keys', 'orphan_count', 'weak_links', 'weak_link_count', 'hidden_edges',
+    'hidden_edge_count', 'warnings', 'unavailable',
+  ],
+  KnowledgeGraphEdgeIdentityDTO: ['source', 'target', 'edge_type'],
+  KnowledgeGraphCommandResultDTO: [
+    'knowledge_graph', 'changed', 'affected_edge', 'replayed', 'applied_revision',
+  ],
+  KnowledgeGraphCommandReceiptDTO: [
+    'project_id', 'request_digest', 'command_kind', 'expected_revision', 'applied_revision',
+    'original_changed', 'original_affected_edge', 'committed_at',
+  ],
+  KnowledgeGraphHiddenEdgePageDTO: [
+    'project_id', 'revision', 'offset', 'limit', 'hidden_edge_count',
+    'returned_edge_count', 'nodes', 'edges',
   ],
 };
 for (const [dtoName, fields] of Object.entries(graphDtoFields)) {
@@ -205,4 +234,4 @@ for (const [dtoName, fields] of Object.entries(graphDtoFields)) {
   }
 }
 
-console.log('Knowledge Graph contract parity tests: route + 4 DTOs mirrored');
+console.log('Knowledge Graph contract parity tests: routes/events + 8 DTOs mirrored');

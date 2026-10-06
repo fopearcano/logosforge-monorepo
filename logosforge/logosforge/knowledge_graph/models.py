@@ -14,6 +14,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from logosforge.knowledge_graph import provenance as P
+from logosforge.knowledge_graph.revision import (
+    EMPTY_KNOWLEDGE_GRAPH_REVIEW_REVISION,
+)
 
 
 def node_key(node_type: str, source_type: str, source_id) -> str:
@@ -76,6 +79,8 @@ class KGEdge:
 class KnowledgeGraph:
     project_id: int
     writing_mode: str = "novel"
+    revision: str = EMPTY_KNOWLEDGE_GRAPH_REVIEW_REVISION
+    persisted_hidden_edge_count: int = 0
     nodes: dict[str, KGNode] = field(default_factory=dict)
     edges: list[KGEdge] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)

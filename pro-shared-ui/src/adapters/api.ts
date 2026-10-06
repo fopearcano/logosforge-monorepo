@@ -127,6 +127,10 @@ import type {
   GrammarCheckResultDTO,
   KnowledgeGraphQueryDTO,
   KnowledgeGraphReadDTO,
+  KnowledgeGraphCommandDTO,
+  KnowledgeGraphCommandResultDTO,
+  KnowledgeGraphCommandReceiptDTO,
+  KnowledgeGraphHiddenEdgePageDTO,
   GraphGravityDTO,
   CounterpartRequestDTO,
   ExtractionJobDTO,
@@ -324,6 +328,24 @@ export interface ApiClient {
   voiceUndo(p: number): Promise<VoiceUndoResultDTO>;
   /** Bounded canonical narrative graph or a one/two-hop focused neighborhood. */
   getKnowledgeGraph(p: number, query?: KnowledgeGraphQueryDTO): Promise<KnowledgeGraphReadDTO>;
+  /** Apply one revision-guarded, idempotent graph edge-review decision. */
+  executeKnowledgeGraphCommand(
+    p: number,
+    body: KnowledgeGraphCommandDTO,
+    idempotencyKey: string,
+  ): Promise<KnowledgeGraphCommandResultDTO>;
+  /** Resolve an ambiguously completed graph command by its capability key. */
+  getKnowledgeGraphCommandReceipt(
+    p: number,
+    idempotencyKey: string,
+    expectedCommand: KnowledgeGraphCommandDTO,
+  ): Promise<KnowledgeGraphCommandReceiptDTO>;
+  /** Paginated access to every durable hidden-edge decision, independent of map caps. */
+  getKnowledgeGraphHiddenEdges(
+    p: number,
+    offset?: number,
+    limit?: number,
+  ): Promise<KnowledgeGraphHiddenEdgePageDTO>;
   getGraphGravity(p: number): Promise<GraphGravityDTO>;
 
   // Generative (POST, LLM-backed; quantum degrades to deterministic stubs, counterpart does not)

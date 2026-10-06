@@ -1706,10 +1706,13 @@ export interface KnowledgeGraphEdgeDTO {
   explanation: string;
   is_user_confirmed: boolean;
   is_inferred: boolean;
+  is_hidden: boolean;
   metadata: Record<string, unknown>;
 }
 export interface KnowledgeGraphReadDTO {
   project_id: number;
+  /** Project-wide revision of persisted graph edge-review state. */
+  revision: string;
   writing_mode: string;
   focus_key: string | null;
   depth: number;
@@ -1728,8 +1731,74 @@ export interface KnowledgeGraphReadDTO {
   /** Independently bounded inferred edges that merit confirmation. */
   weak_links: KnowledgeGraphEdgeDTO[];
   weak_link_count: number;
+  /** Bounded endpoint-complete subset; hidden_edge_count is project-wide. */
+  hidden_edges: KnowledgeGraphEdgeDTO[];
+  hidden_edge_count: number;
   warnings: string[];
   unavailable: string[];
+}
+
+export interface KnowledgeGraphEdgeIdentityDTO {
+  source: string;
+  target: string;
+  edge_type: string;
+}
+
+interface KnowledgeGraphCommandBase extends KnowledgeGraphEdgeIdentityDTO {
+  expected_revision: string;
+}
+
+export interface KnowledgeGraphConfirmEdgeCommandDTO extends KnowledgeGraphCommandBase {
+  kind: "confirm_edge";
+}
+
+export interface KnowledgeGraphHideEdgeCommandDTO extends KnowledgeGraphCommandBase {
+  kind: "hide_edge";
+}
+
+export interface KnowledgeGraphUnhideEdgeCommandDTO extends KnowledgeGraphCommandBase {
+  kind: "unhide_edge";
+}
+
+export type KnowledgeGraphCommandDTO =
+  | KnowledgeGraphConfirmEdgeCommandDTO
+  | KnowledgeGraphHideEdgeCommandDTO
+  | KnowledgeGraphUnhideEdgeCommandDTO;
+
+export interface KnowledgeGraphCommandResultDTO {
+  /** Default, bounded Project Map captured after command handling. */
+  knowledge_graph: KnowledgeGraphReadDTO;
+  changed: boolean;
+  affected_edge: KnowledgeGraphEdgeIdentityDTO;
+  /** True when an exact Idempotency-Key request was already committed. */
+  replayed: boolean;
+  /** Original command revision on replay, even if the current graph advanced. */
+  applied_revision: string;
+}
+
+/** Durable, project-scoped receipt for one graph edge-review command. */
+export interface KnowledgeGraphCommandReceiptDTO {
+  project_id: number;
+  request_digest: string;
+  command_kind: KnowledgeGraphCommandDTO["kind"];
+  expected_revision: string;
+  applied_revision: string;
+  original_changed: boolean;
+  original_affected_edge: KnowledgeGraphEdgeIdentityDTO;
+  committed_at: string;
+}
+
+/** Paginated access to every durable hidden-edge review decision. */
+export interface KnowledgeGraphHiddenEdgePageDTO {
+  project_id: number;
+  revision: string;
+  offset: number;
+  limit: number;
+  hidden_edge_count: number;
+  returned_edge_count: number;
+  /** Exact unique endpoint nodes for this page. */
+  nodes: KnowledgeGraphNodeDTO[];
+  edges: KnowledgeGraphEdgeDTO[];
 }
 
 export interface StoryGravityNodeDTO {

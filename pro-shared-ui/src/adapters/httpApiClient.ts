@@ -36,6 +36,9 @@ import {
   validateCanvasPlotSnapshotDTOForProject,
   validateCanvasPlotCommandResultDTOForRequest,
   validateKnowledgeGraphReadDTOForRequest,
+  validateKnowledgeGraphCommandResultDTOForRequest,
+  validateKnowledgeGraphCommandReceiptDTOForRequest,
+  validateKnowledgeGraphHiddenEdgePageDTOForRequest,
   validateSettingsDTO,
   validateVoiceBillyProposalDTO,
   validateWhiteboardImportResultDTO,
@@ -618,6 +621,32 @@ export function createHttpApiClient(
         (value) => validateKnowledgeGraphReadDTOForRequest(value, p, query),
       );
     },
+    executeKnowledgeGraphCommand: (p, body, idempotencyKey) => trackProjectOperation(
+      req(
+        ROUTES.knowledgeGraphCommands(p),
+        {
+          method: "POST",
+          body: JSON.stringify(body),
+          headers: { "Idempotency-Key": idempotencyKey },
+        },
+        (value) => validateKnowledgeGraphCommandResultDTOForRequest(value, p, body),
+      ),
+      { persistence: true },
+    ),
+    getKnowledgeGraphCommandReceipt: (p, idempotencyKey, expectedCommand) => req(
+      ROUTES.knowledgeGraphCommandReceipt(p),
+      {
+        headers: {
+          "Idempotency-Key": idempotencyKey,
+          "Cache-Control": "no-store",
+        },
+      },
+      (value) => validateKnowledgeGraphCommandReceiptDTOForRequest(value, p, expectedCommand),
+    ),
+    getKnowledgeGraphHiddenEdges: (p, offset = 0, limit = 25) => get(
+      `${ROUTES.knowledgeGraphHiddenEdges(p)}?offset=${offset}&limit=${limit}`,
+      (value) => validateKnowledgeGraphHiddenEdgePageDTOForRequest(value, p, offset, limit),
+    ),
     getGraphGravity: (p) => get(ROUTES.graphGravity(p)),
     generateQuantumOutline: (p, b) => post(ROUTES.quantumOutline(p), b, validateQuantumResultDTO),
     generateQuantumBranches: (p, b) => post(ROUTES.quantumBranches(p), b, validateQuantumResultDTO),

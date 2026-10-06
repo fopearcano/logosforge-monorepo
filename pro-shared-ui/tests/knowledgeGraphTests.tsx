@@ -2,6 +2,8 @@ import { MessagePort } from "node:worker_threads";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import type {
   EventMessage,
+  KnowledgeGraphCommandDTO,
+  KnowledgeGraphCommandResultDTO,
   KnowledgeGraphEdgeDTO,
   KnowledgeGraphQueryDTO,
   KnowledgeGraphReadDTO,
@@ -9,17 +11,26 @@ import type {
 import type { ApiClient } from "../src/adapters/api";
 import { useSelection } from "../src/adapters/selection";
 import { StudioProvider } from "../src/adapters/StudioProvider";
-import { createHttpApiClient } from "../src/adapters/httpApiClient";
-import { validateKnowledgeGraphReadDTOForRequest } from "../src/adapters/runtimeDtoValidation";
+import { ApiRequestError, ApiRequestTimeoutError, createHttpApiClient } from "../src/adapters/httpApiClient";
+import {
+  validateKnowledgeGraphCommandReceiptDTOForRequest,
+  validateKnowledgeGraphCommandResultDTOForRequest,
+  validateKnowledgeGraphHiddenEdgePageDTOForRequest,
+  validateKnowledgeGraphReadDTOForRequest,
+} from "../src/adapters/runtimeDtoValidation";
 import { KnowledgeGraph } from "../src/components/spatialcanvas/KnowledgeGraph";
 import {
   buildKnowledgeGraphView,
   layoutKnowledgeGraph,
 } from "../src/components/spatialcanvas/knowledgeGraphModel";
+import { planKnowledgeGraphCommand } from "../src/components/spatialcanvas/knowledgeGraphTransactions";
 import { useKnowledgeGraph } from "../src/hooks/resources";
 import type { PlatformAdapter } from "../src/adapters/platform";
 
 let assertions = 0;
+const REVISION_A = "1".repeat(64);
+const REVISION_B = "2".repeat(64);
+const REVISION_C = "3".repeat(64);
 function check(value: unknown, message: string): asserts value {
   assertions += 1;
   if (!value) throw new Error(message);
@@ -50,6 +61,7 @@ const confirmedEdge: KnowledgeGraphEdgeDTO = {
   explanation: "The Scene belongs to this project.",
   is_user_confirmed: true,
   is_inferred: false,
+  is_hidden: false,
   metadata: {},
 };
 
@@ -63,6 +75,7 @@ const inferredEdge: KnowledgeGraphEdgeDTO = {
   explanation: "The character name appears in the Scene.",
   is_user_confirmed: false,
   is_inferred: true,
+  is_hidden: false,
   metadata: {},
 };
 
@@ -87,6 +100,7 @@ function graphFixture(
   const focusKey = query.focus_key ?? null;
   return {
     project_id: projectId,
+    revision: REVISION_A,
     writing_mode: "novel",
     focus_key: focusKey,
     depth: query.depth ?? 1,
@@ -102,6 +116,8 @@ function graphFixture(
     orphan_count: 1,
     weak_links: includeInferred ? [remap(inferredEdge)] : [],
     weak_link_count: includeInferred ? 1 : 0,
+    hidden_edges: [],
+    hidden_edge_count: 0,
     warnings: [],
     unavailable: [],
     ...overrides,
@@ -145,10 +161,12 @@ function diagnosticFixture(projectId: number, query: KnowledgeGraphQueryDTO): Kn
     explanation: `Diagnostic explanation ${index + 1}.`,
     is_user_confirmed: false,
     is_inferred: true,
+    is_hidden: false,
     metadata: {},
   }));
   return {
     project_id: projectId,
+    revision: REVISION_A,
     writing_mode: "novel",
     focus_key: query.focus_key ?? null,
     depth: query.depth ?? 1,
@@ -164,6 +182,8 @@ function diagnosticFixture(projectId: number, query: KnowledgeGraphQueryDTO): Kn
     orphan_count: orphans.length,
     weak_links: edges,
     weak_link_count: edges.length,
+    hidden_edges: [],
+    hidden_edge_count: 0,
     warnings: [],
     unavailable: [],
   };
@@ -232,6 +252,101 @@ try {
 }
 check(validationMessage.includes("$.weak_links"), "runtime validation must enforce the Core weak-link diagnostic cap of 25");
 
+const hiddenInferredEdge: KnowledgeGraphEdgeDTO = { ...inferredEdge, is_hidden: true };
+const hiddenGraph = graphFixture(7, {}, {
+  edges: [confirmedEdge],
+  edge_count: 1,
+  returned_edge_count: 1,
+  weak_links: [],
+  weak_link_count: 0,
+  hidden_edges: [hiddenInferredEdge],
+  hidden_edge_count: 1,
+});
+check(
+  validateKnowledgeGraphReadDTOForRequest(hiddenGraph, 7).hidden_edges[0]?.is_hidden === true,
+  "runtime validation must accept an endpoint-complete hidden-edge review collection",
+);
+const confirmPlan = planKnowledgeGraphCommand(valid, {
+  kind: "confirm_edge",
+  source: inferredEdge.source,
+  target: inferredEdge.target,
+  edge_type: inferredEdge.edge_type,
+});
+check(confirmPlan.command?.expected_revision === REVISION_A, "confirmation planning must bind the exact fresh review-layer revision");
+check(
+  planKnowledgeGraphCommand(valid, { kind: "hide_edge", source: confirmedEdge.source, target: confirmedEdge.target, edge_type: confirmedEdge.edge_type }).error?.includes("unconfirmed inferred") === true,
+  "hiding must be rejected for explicit or already-confirmed edges to match Core eligibility",
+);
+check(
+  planKnowledgeGraphCommand(hiddenGraph, { kind: "unhide_edge", source: hiddenInferredEdge.source, target: hiddenInferredEdge.target, edge_type: hiddenInferredEdge.edge_type }).command?.kind === "unhide_edge",
+  "restore planning must target only the authoritative hidden-edge collection",
+);
+const command = confirmPlan.command!;
+const concurrentResult: KnowledgeGraphCommandResultDTO = {
+  knowledge_graph: graphFixture(7, {}, { revision: REVISION_C }),
+  changed: true,
+  affected_edge: { source: command.source, target: command.target, edge_type: command.edge_type },
+  replayed: false,
+  applied_revision: REVISION_B,
+};
+check(
+  validateKnowledgeGraphCommandResultDTOForRequest(concurrentResult, 7, command).applied_revision === REVISION_B,
+  "command validation must allow the returned map to advance after the command's truthful applied revision",
+);
+validationMessage = "";
+try {
+  validateKnowledgeGraphCommandResultDTOForRequest({
+    ...concurrentResult,
+    changed: false,
+    applied_revision: command.expected_revision,
+  }, 7, command);
+} catch (error) {
+  validationMessage = error instanceof Error ? error.message : String(error);
+}
+check(validationMessage.includes("$.changed"), "runtime validation must reject a fresh graph command response that falsely reports a no-op");
+check(
+  validateKnowledgeGraphCommandReceiptDTOForRequest({
+    project_id: 7,
+    request_digest: "a".repeat(64),
+    command_kind: command.kind,
+    expected_revision: command.expected_revision,
+    applied_revision: REVISION_B,
+    original_changed: true,
+    original_affected_edge: { source: command.source, target: command.target, edge_type: command.edge_type },
+    committed_at: "2026-10-06T10:00:00Z",
+  }, 7, command).original_changed,
+  "receipt validation must bind the project, command, edge identity, and changed revision",
+);
+check(
+  validateKnowledgeGraphHiddenEdgePageDTOForRequest({
+    project_id: 7,
+    revision: REVISION_B,
+    offset: 0,
+    limit: 25,
+    hidden_edge_count: 1,
+    returned_edge_count: 1,
+    nodes: valid.nodes.filter((node) => node.key === hiddenInferredEdge.source || node.key === hiddenInferredEdge.target),
+    edges: [hiddenInferredEdge],
+  }, 7, 0, 25).nodes.length === 2,
+  "hidden-edge page validation must require a dense page with its exact endpoint-node set",
+);
+validationMessage = "";
+try {
+  validateKnowledgeGraphHiddenEdgePageDTOForRequest({
+    project_id: 7,
+    revision: REVISION_B,
+    offset: 0,
+    limit: 25,
+    hidden_edge_count: 2,
+    returned_edge_count: 1,
+    nodes: valid.nodes.filter((node) => node.key === hiddenInferredEdge.source || node.key === hiddenInferredEdge.target),
+    edges: [hiddenInferredEdge],
+  }, 7, 0, 25);
+} catch (error) {
+  validationMessage = error instanceof Error ? error.message : String(error);
+}
+check(validationMessage.includes("$.edges"), "hidden-edge page validation must reject short middle pages that could strand later restore decisions");
+
 const filtered = buildKnowledgeGraphView(valid, {
   hiddenNodeTypes: new Set(["character"]),
   confidenceMin: "likely",
@@ -284,6 +399,55 @@ try {
     `HTTP graph query must preserve and encode every bounded read option: ${requestedUrl}`,
   );
   check(response.focus_key === "scene:scene:2" && response.depth === 2, "HTTP graph reads must validate and return the requested neighborhood");
+} finally {
+  globalThis.fetch = originalFetch;
+}
+
+try {
+  const requests: Array<{ url: string; method: string; headers: Headers; body: string }> = [];
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    requests.push({
+      url,
+      method: init?.method ?? "GET",
+      headers: new Headers(init?.headers),
+      body: typeof init?.body === "string" ? init.body : "",
+    });
+    if (url.includes("command-receipt")) {
+      return new Response(JSON.stringify({
+        project_id: 7,
+        request_digest: "a".repeat(64),
+        command_kind: command.kind,
+        expected_revision: command.expected_revision,
+        applied_revision: REVISION_B,
+        original_changed: true,
+        original_affected_edge: { source: command.source, target: command.target, edge_type: command.edge_type },
+        committed_at: "2026-10-06T10:00:00Z",
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (url.includes("hidden-edges")) {
+      return new Response(JSON.stringify({
+        project_id: 7,
+        revision: REVISION_B,
+        offset: 0,
+        limit: 25,
+        hidden_edge_count: 1,
+        returned_edge_count: 1,
+        nodes: valid.nodes.filter((node) => node.key === hiddenInferredEdge.source || node.key === hiddenInferredEdge.target),
+        edges: [hiddenInferredEdge],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return new Response(JSON.stringify(concurrentResult), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const http = createHttpApiClient("");
+  await http.executeKnowledgeGraphCommand(7, command, "kg-ui-1234567890123456");
+  await http.getKnowledgeGraphCommandReceipt(7, "kg-ui-1234567890123456", command);
+  await http.getKnowledgeGraphHiddenEdges(7, 0, 25);
+  check(requests[0]?.url === "/api/projects/7/knowledge-graph/commands" && requests[0]?.method === "POST", "graph commands must use the dedicated POST route");
+  check(requests[0]?.headers.get("Idempotency-Key") === "kg-ui-1234567890123456" && !requests[0]?.url.includes("kg-ui"), "graph command capability keys must travel only in the Idempotency-Key header");
+  check(requests[0]?.body === JSON.stringify(command), "graph command transport must preserve the exact revision-guarded command body");
+  check(requests[1]?.headers.get("Idempotency-Key") === "kg-ui-1234567890123456" && requests[1]?.headers.get("Cache-Control") === "no-store", "receipt recovery must use the same header-only key and bypass caches");
+  check(requests[2]?.url === "/api/projects/7/knowledge-graph/hidden-edges?offset=0&limit=25", "hidden restore review must use the complete paged queue route");
 } finally {
   globalThis.fetch = originalFetch;
 }
@@ -381,12 +545,12 @@ await act(async () => {
   await Promise.resolve();
 });
 check(liveRequests.length === 1, "graph resource must begin with one canonical read");
-act(() => liveListener?.({ id: 1, event: "scene_changed", project_id: 7, data: { scene_id: 2 }, ts: Date.now() }));
+act(() => liveListener?.({ id: 1, event: "knowledge_graph_changed", project_id: 7, data: { source: inferredEdge.source, target: inferredEdge.target, edge_type: inferredEdge.edge_type }, ts: Date.now() }));
 await act(async () => {
   await new Promise((resolve) => setTimeout(resolve, 140));
   await Promise.resolve();
 });
-check(readInvalidations === 1 && liveRequests.length === 2, "a live graph event must invalidate pending GET coalescing before refetching");
+check(readInvalidations === 1 && liveRequests.length === 2, "a knowledge_graph_changed event must invalidate pending GET coalescing before refetching");
 await act(async () => {
   const stale = graphFixture(7);
   stale.nodes = stale.nodes.map((node, index) => index === 0 ? { ...node, label: "STALE GRAPH" } : node);
@@ -448,7 +612,7 @@ await act(async () => {
 });
 check(panelRenderer.root.findByProps({ "data-knowledge-graph-canvas": "true" }).props["data-project-id"] === 7, "Project Map must render the active project's canonical response");
 check(text(panelRenderer.root.findByProps({ role: "status" })).includes("SIZE CAP"), "truncated graph responses must announce the size cap");
-check(text(panelRenderer.root.findByProps({ role: "status" })).includes("DIAGNOSTIC CAP · Core returned 1 of 3 orphan keys and 1 of 2 weak links"), "diagnostic-only caps must announce Core-returned and query-total orphan and weak-link counts");
+check(text(panelRenderer.root.findByProps({ role: "status" })).includes("DIAGNOSTIC CAP · Core returned 1 of 3 orphan keys, 1 of 2 weak links, and 0 of 0 hidden edges"), "diagnostic-only caps must announce Core-returned and query-total orphan, weak-link, and hidden-edge counts");
 check(panelRenderer.root.findByProps({ "aria-label": "Narrative Knowledge Graph canvas" }), "graph canvas must have an accessible landmark name");
 const scrollRegion = panelRenderer.root.findByProps({ "data-knowledge-graph-scroll-region": "true" });
 check(scrollRegion.props.tabIndex === 0 && scrollRegion.props.style.overflowX === "auto", "narrow docks must expose a keyboard-reachable horizontal workspace instead of clipping fixed rails");
@@ -520,6 +684,267 @@ act(() => panelRenderer.root.findByProps({ "aria-label": "Show all 14 matching w
 const expandedWeakLinks = panelRenderer.root.findAll((node) => typeof node.props["aria-label"] === "string" && node.props["aria-label"].startsWith("Weak link from "));
 check(expandedWeakLinks.length === 14, "weak-link expansion must make every matching returned diagnostic reachable");
 check(text(expandedWeakLinks[0]!).includes("PROVENANCE · diagnostic source 1") && text(expandedWeakLinks[0]!).includes("EXPLANATION · Diagnostic explanation 1."), "weak-link cards must expose traceable provenance and explanation as DOM text");
+act(() => panelRenderer.unmount());
+
+let mutationConfirmed = false;
+const submittedGraphCommands: Array<{ command: KnowledgeGraphCommandDTO; key: string }> = [];
+const mutableConfirmationGraph = (projectId: number, query: KnowledgeGraphQueryDTO): KnowledgeGraphReadDTO => {
+  const base = graphFixture(projectId, query);
+  if (!mutationConfirmed) return base;
+  const confirmedInference = { ...inferredEdge, is_user_confirmed: true, confidence: "confirmed" as const };
+  return {
+    ...base,
+    revision: REVISION_B,
+    edges: [base.edges[0]!, confirmedInference],
+    weak_links: [confirmedInference],
+  };
+};
+const mutationApi = {
+  getKnowledgeGraph: async (projectId: number, query: KnowledgeGraphQueryDTO) => mutableConfirmationGraph(projectId, query),
+  executeKnowledgeGraphCommand: async (projectId: number, nextCommand: KnowledgeGraphCommandDTO, key: string): Promise<KnowledgeGraphCommandResultDTO> => {
+    submittedGraphCommands.push({ command: structuredClone(nextCommand), key });
+    mutationConfirmed = true;
+    return {
+      knowledge_graph: mutableConfirmationGraph(projectId, {}),
+      changed: true,
+      affected_edge: { source: nextCommand.source, target: nextCommand.target, edge_type: nextCommand.edge_type },
+      replayed: false,
+      applied_revision: REVISION_B,
+    };
+  },
+  getKnowledgeGraphCommandReceipt: async () => { throw new Error("receipt lookup should not run for a successful write"); },
+  subscribe: () => () => {},
+  invalidatePendingReads: () => {},
+} as unknown as ApiClient;
+await act(async () => {
+  panelRenderer = create(panelTree(7, mutationApi));
+  await flush();
+});
+const reviewConfirmButton = panelRenderer.root.findByProps({ "aria-label": "Review confirmation of Scene One to Marlow mentions edge" });
+check(panelRenderer.root.findByProps({ "aria-label": "Review hiding Scene One to Marlow mentions edge" }), "eligible inferred edges must expose both confirm and hide review actions");
+act(() => reviewConfirmButton.props.onClick({ currentTarget: reviewConfirmButton }));
+const reviewDialog = panelRenderer.root.findByProps({ "data-knowledge-graph-edge-review": "confirm_edge" });
+check(submittedGraphCommands.length === 0, "opening an edge review must not mutate graph state");
+check(
+  reviewDialog.props.role === "dialog"
+    && text(reviewDialog).includes("Nothing changes until you apply this reviewed decision")
+    && text(reviewDialog).includes("PROVENANCE · scene text match"),
+  "edge review must expose a keyboard-focusable, traceable confirmation step before mutation",
+);
+await act(async () => {
+  reviewDialog.findByProps({ "aria-label": "Apply reviewed confirm edge" }).props.onClick();
+  await flush();
+});
+check(
+  submittedGraphCommands.length === 1
+    && submittedGraphCommands[0]?.command.kind === "confirm_edge"
+    && submittedGraphCommands[0]?.command.expected_revision === REVISION_A
+    && submittedGraphCommands[0]!.key.length >= 16,
+  "confirmation must submit one fresh-revision command with a capability-sized Idempotency-Key",
+);
+check(text(panelRenderer.root).includes("Knowledge Graph edge decision saved"), "successful graph review must announce its committed outcome");
+check(panelRenderer.root.findAllByProps({ "aria-label": "Review confirmation of Scene One to Marlow mentions edge" }).length === 0, "confirmed edges must stop offering an ineligible confirmation action after refresh");
+act(() => panelRenderer.unmount());
+
+let ambiguousAttempt = 0;
+const ambiguousSubmissions: Array<{ command: KnowledgeGraphCommandDTO; key: string }> = [];
+const ambiguousApi = {
+  getKnowledgeGraph: async (projectId: number, query: KnowledgeGraphQueryDTO) => graphFixture(projectId, query, ambiguousAttempt >= 2 ? { revision: REVISION_B } : {}),
+  executeKnowledgeGraphCommand: async (projectId: number, nextCommand: KnowledgeGraphCommandDTO, key: string): Promise<KnowledgeGraphCommandResultDTO> => {
+    ambiguousAttempt += 1;
+    ambiguousSubmissions.push({ command: structuredClone(nextCommand), key });
+    if (ambiguousAttempt === 1) throw new ApiRequestTimeoutError("POST", `/api/projects/${projectId}/knowledge-graph/commands`, 50);
+    return {
+      knowledge_graph: graphFixture(projectId, {}, { revision: REVISION_B }),
+      changed: true,
+      affected_edge: { source: nextCommand.source, target: nextCommand.target, edge_type: nextCommand.edge_type },
+      replayed: false,
+      applied_revision: REVISION_B,
+    };
+  },
+  getKnowledgeGraphCommandReceipt: async () => {
+    throw new ApiRequestError("GET", "/api/projects/7/knowledge-graph/command-receipt", 404, "not found", "knowledge_graph_receipt_not_found");
+  },
+  subscribe: () => () => {},
+  invalidatePendingReads: () => {},
+} as unknown as ApiClient;
+await act(async () => {
+  panelRenderer = create(panelTree(7, ambiguousApi));
+  await flush();
+});
+act(() => panelRenderer.root.findByProps({ "aria-label": "Review confirmation of Scene One to Marlow mentions edge" }).props.onClick({ currentTarget: null }));
+await act(async () => {
+  panelRenderer.root.findByProps({ "aria-label": "Apply reviewed confirm edge" }).props.onClick();
+  await flush();
+});
+check(text(panelRenderer.root).includes("No committed receipt is available yet"), "ambiguous command delivery without a receipt must explain the unresolved outcome");
+const retryButton = panelRenderer.root.findByProps({ "aria-label": "Retry same reviewed confirm edge proposal" });
+await act(async () => {
+  retryButton.props.onClick();
+  await flush();
+});
+check(
+  ambiguousSubmissions.length === 2
+    && ambiguousSubmissions[0]?.key === ambiguousSubmissions[1]?.key
+    && JSON.stringify(ambiguousSubmissions[0]?.command) === JSON.stringify(ambiguousSubmissions[1]?.command),
+  "ambiguous retry must reuse the exact reviewed command and Idempotency-Key",
+);
+act(() => panelRenderer.unmount());
+
+const staleMutationResult = deferred<KnowledgeGraphCommandResultDTO>();
+let staleSubmittedCommand: KnowledgeGraphCommandDTO | null = null;
+const staleMutationApi = {
+  getKnowledgeGraph: async (projectId: number, query: KnowledgeGraphQueryDTO) => graphFixture(projectId, query),
+  executeKnowledgeGraphCommand: async (_projectId: number, nextCommand: KnowledgeGraphCommandDTO) => {
+    staleSubmittedCommand = structuredClone(nextCommand);
+    return staleMutationResult.promise;
+  },
+  getKnowledgeGraphCommandReceipt: async () => { throw new Error("receipt lookup should not run"); },
+  subscribe: () => () => {},
+  invalidatePendingReads: () => {},
+} as unknown as ApiClient;
+await act(async () => {
+  panelRenderer = create(panelTree(7, staleMutationApi));
+  await flush();
+});
+const staleReviewButton = panelRenderer.root.findByProps({ "aria-label": "Review confirmation of Scene One to Marlow mentions edge" });
+act(() => staleReviewButton.props.onClick({ currentTarget: staleReviewButton }));
+await act(async () => {
+  panelRenderer.root.findByProps({ "aria-label": "Apply reviewed confirm edge" }).props.onClick();
+  await flush();
+});
+check(staleSubmittedCommand?.kind === "confirm_edge", "stale-response coverage must hold a real in-flight graph command");
+await act(async () => {
+  panelRenderer.update(panelTree(8, staleMutationApi));
+  await flush();
+});
+await act(async () => {
+  const nextCommand = staleSubmittedCommand!;
+  staleMutationResult.resolve({
+    knowledge_graph: graphFixture(7, {}, { revision: REVISION_B }),
+    changed: true,
+    affected_edge: { source: nextCommand.source, target: nextCommand.target, edge_type: nextCommand.edge_type },
+    replayed: false,
+    applied_revision: REVISION_B,
+  });
+  await flush();
+});
+check(
+  panelRenderer.root.findByProps({ "data-knowledge-graph-canvas": "true" }).props["data-project-id"] === 8
+    && !text(panelRenderer.root).includes("Knowledge Graph edge decision saved"),
+  "a delayed old-project command response must not repopulate or announce state in the new project",
+);
+act(() => panelRenderer.unmount());
+
+let hiddenQueueRevision = REVISION_B;
+let hiddenQueueEdges = Array.from({ length: 26 }, (_, index): KnowledgeGraphEdgeDTO => ({
+  ...hiddenInferredEdge,
+  edge_type: `hidden_type_${index}`,
+}));
+const hiddenQueueNodes = valid.nodes.filter((node) => node.key === hiddenInferredEdge.source || node.key === hiddenInferredEdge.target);
+const hiddenQueueMap = (projectId: number, query: KnowledgeGraphQueryDTO): KnowledgeGraphReadDTO => {
+  const base = graphFixture(projectId, query);
+  const embedded = hiddenQueueEdges.slice(0, Math.min(query.limit ?? 100, 25));
+  return {
+    ...base,
+    revision: hiddenQueueRevision,
+    edges: [base.edges[0]!],
+    edge_count: 1,
+    returned_edge_count: 1,
+    weak_links: [],
+    weak_link_count: 0,
+    hidden_edges: embedded,
+    hidden_edge_count: hiddenQueueEdges.length,
+    truncated: embedded.length < hiddenQueueEdges.length,
+  };
+};
+const nextHiddenPage = deferred<{
+  project_id: number;
+  revision: string;
+  offset: number;
+  limit: number;
+  hidden_edge_count: number;
+  returned_edge_count: number;
+  nodes: typeof hiddenQueueNodes;
+  edges: KnowledgeGraphEdgeDTO[];
+}>();
+let nextHiddenPageReleased = false;
+const hiddenCommands: KnowledgeGraphCommandDTO[] = [];
+const hiddenQueueApi = {
+  getKnowledgeGraph: async (projectId: number, query: KnowledgeGraphQueryDTO) => hiddenQueueMap(projectId, query),
+  getKnowledgeGraphHiddenEdges: async (projectId: number, offset = 0, limit = 25) => {
+    if (offset === 25 && !nextHiddenPageReleased) return nextHiddenPage.promise;
+    const edges = hiddenQueueEdges.slice(offset, offset + limit);
+    return {
+      project_id: projectId,
+      revision: hiddenQueueRevision,
+      offset,
+      limit,
+      hidden_edge_count: hiddenQueueEdges.length,
+      returned_edge_count: edges.length,
+      nodes: edges.length > 0 ? structuredClone(hiddenQueueNodes) : [],
+      edges: structuredClone(edges),
+    };
+  },
+  executeKnowledgeGraphCommand: async (projectId: number, nextCommand: KnowledgeGraphCommandDTO): Promise<KnowledgeGraphCommandResultDTO> => {
+    hiddenCommands.push(structuredClone(nextCommand));
+    hiddenQueueEdges = hiddenQueueEdges.filter((edge) => edge.edge_type !== nextCommand.edge_type);
+    hiddenQueueRevision = REVISION_C;
+    return {
+      knowledge_graph: hiddenQueueMap(projectId, {}),
+      changed: true,
+      affected_edge: { source: nextCommand.source, target: nextCommand.target, edge_type: nextCommand.edge_type },
+      replayed: false,
+      applied_revision: REVISION_C,
+    };
+  },
+  getKnowledgeGraphCommandReceipt: async () => { throw new Error("receipt lookup should not run for a successful restore"); },
+  subscribe: () => () => {},
+  invalidatePendingReads: () => {},
+} as unknown as ApiClient;
+await act(async () => {
+  panelRenderer = create(panelTree(7, hiddenQueueApi));
+  await flush();
+});
+check(text(panelRenderer.root).includes("The bounded map includes 25 of 26 hidden edges"), "bounded hidden diagnostics must point to the complete restore queue");
+await act(async () => {
+  panelRenderer.root.findByProps({ "aria-label": "Open the complete hidden edge review queue" }).props.onClick();
+  await flush();
+});
+check(text(panelRenderer.root).includes("Queue rows 1–25 of 26"), "the hidden review queue must expose its exact page range and total");
+act(() => panelRenderer.root.findByProps({ "aria-label": "Show all 25 returned hidden edges" }).props.onClick());
+check(panelRenderer.root.findAllByProps({ "data-hidden-graph-edge": "true" }).length === 25, "hidden review expansion must expose every decision on the current page");
+act(() => panelRenderer.root.findByProps({ "aria-label": "Next hidden edge review page" }).props.onClick());
+check(panelRenderer.root.findAllByProps({ "data-hidden-graph-edge": "true" }).length === 0, "an offset change must synchronously clear stale hidden-page rows before the next response arrives");
+nextHiddenPageReleased = true;
+await act(async () => {
+  const edges = hiddenQueueEdges.slice(25, 50);
+  nextHiddenPage.resolve({
+    project_id: 7,
+    revision: hiddenQueueRevision,
+    offset: 25,
+    limit: 25,
+    hidden_edge_count: hiddenQueueEdges.length,
+    returned_edge_count: edges.length,
+    nodes: structuredClone(hiddenQueueNodes),
+    edges: structuredClone(edges),
+  });
+  await flush();
+});
+check(text(panelRenderer.root).includes("Queue rows 26–26 of 26"), "the final hidden page must remain reachable after a delayed page response");
+const restoreReviewButton = panelRenderer.root.findByProps({ "aria-label": "Review restoring Scene One to Marlow hidden type 25 edge" });
+act(() => restoreReviewButton.props.onClick({ currentTarget: restoreReviewButton }));
+await act(async () => {
+  panelRenderer.root.findByProps({ "aria-label": "Apply reviewed restore edge" }).props.onClick();
+  await flush();
+});
+check(
+  hiddenCommands.length === 1
+    && hiddenCommands[0]?.kind === "unhide_edge"
+    && hiddenCommands[0]?.edge_type === "hidden_type_25"
+    && hiddenCommands[0]?.expected_revision === REVISION_B,
+  "restore must preflight the same complete hidden page and submit its fresh page revision",
+);
 act(() => panelRenderer.unmount());
 
 const loadingGraph = deferred<KnowledgeGraphReadDTO>();

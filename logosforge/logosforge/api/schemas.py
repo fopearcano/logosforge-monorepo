@@ -2138,11 +2138,20 @@ class KnowledgeGraphEdgeDTO(BaseModel):
     explanation: KnowledgeGraphLongText = ""
     is_user_confirmed: bool = False
     is_inferred: bool = False
+    is_hidden: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class KnowledgeGraphReadDTO(BaseModel):
     project_id: int
+    # Content-addressed revision of the persisted edge-review layer.  It is
+    # global to the project (not query/focus-specific) so every graph view can
+    # safely submit an optimistic edge-review command.
+    revision: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
     writing_mode: KnowledgeGraphShortText
     focus_key: KnowledgeGraphKey | None = None
     depth: int = Field(ge=1, le=2)
@@ -2162,6 +2171,13 @@ class KnowledgeGraphReadDTO(BaseModel):
     orphan_count: int = Field(default=0, ge=0)
     weak_links: list[KnowledgeGraphEdgeDTO] = Field(default_factory=list, max_length=25)
     weak_link_count: int = Field(default=0, ge=0)
+    # hidden_edge_count is authoritative project-wide state.  hidden_edges is
+    # an independently bounded, endpoint-complete subset compatible with the
+    # returned node slice; Project Map reads reserve room for restoration.
+    hidden_edges: list[KnowledgeGraphEdgeDTO] = Field(
+        default_factory=list, max_length=25,
+    )
+    hidden_edge_count: int = Field(default=0, ge=0)
     warnings: list[KnowledgeGraphText] = Field(default_factory=list, max_length=25)
     unavailable: list[KnowledgeGraphShortText] = Field(
         default_factory=list, max_length=25,
@@ -2182,12 +2198,134 @@ class KnowledgeGraphReadDTO(BaseModel):
             raise ValueError("orphan_count cannot be smaller than orphan_keys")
         if self.weak_link_count < len(self.weak_links):
             raise ValueError("weak_link_count cannot be smaller than weak_links")
+        if self.hidden_edge_count < len(self.hidden_edges):
+            raise ValueError("hidden_edge_count cannot be smaller than hidden_edges")
         if any(key not in node_keys for key in self.orphan_keys):
             raise ValueError("orphan_keys must reference returned nodes")
-        all_edges = [*self.edges, *self.weak_links]
+        all_edges = [*self.edges, *self.weak_links, *self.hidden_edges]
         if any(edge.source not in node_keys or edge.target not in node_keys
                for edge in all_edges):
             raise ValueError("graph edges must reference returned nodes")
+        if any(not edge.is_hidden for edge in self.hidden_edges):
+            raise ValueError("hidden_edges must contain only hidden edges")
+        if any(edge.is_hidden for edge in [*self.edges, *self.weak_links]):
+            raise ValueError("primary and weak-link edges cannot be hidden")
+        return self
+
+
+class KnowledgeGraphEdgeIdentityDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source: KnowledgeGraphKey
+    target: KnowledgeGraphKey
+    edge_type: KnowledgeGraphShortText
+
+
+class _KnowledgeGraphCommandBase(KnowledgeGraphEdgeIdentityDTO):
+    expected_revision: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+
+class KnowledgeGraphConfirmEdgeCommandDTO(_KnowledgeGraphCommandBase):
+    kind: Literal["confirm_edge"]
+
+
+class KnowledgeGraphHideEdgeCommandDTO(_KnowledgeGraphCommandBase):
+    kind: Literal["hide_edge"]
+
+
+class KnowledgeGraphUnhideEdgeCommandDTO(_KnowledgeGraphCommandBase):
+    kind: Literal["unhide_edge"]
+
+
+_KnowledgeGraphCommandUnion = Annotated[
+    KnowledgeGraphConfirmEdgeCommandDTO
+    | KnowledgeGraphHideEdgeCommandDTO
+    | KnowledgeGraphUnhideEdgeCommandDTO,
+    Field(discriminator="kind"),
+]
+
+
+class KnowledgeGraphCommandDTO(RootModel[_KnowledgeGraphCommandUnion]):
+    """Unwrapped revision-guarded graph edge-review command."""
+
+
+class KnowledgeGraphCommandResultDTO(BaseModel):
+    knowledge_graph: KnowledgeGraphReadDTO
+    changed: bool
+    affected_edge: KnowledgeGraphEdgeIdentityDTO
+    replayed: bool
+    applied_revision: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+
+class KnowledgeGraphCommandReceiptDTO(BaseModel):
+    project_id: int
+    request_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    command_kind: Literal["confirm_edge", "hide_edge", "unhide_edge"]
+    expected_revision: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    applied_revision: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    original_changed: bool
+    original_affected_edge: KnowledgeGraphEdgeIdentityDTO
+    committed_at: datetime
+
+
+class KnowledgeGraphHiddenEdgePageDTO(BaseModel):
+    """A reachable page through the complete persisted hidden-review queue."""
+
+    project_id: int
+    revision: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    offset: int = Field(ge=0)
+    limit: int = Field(ge=1, le=100)
+    hidden_edge_count: int = Field(ge=0)
+    returned_edge_count: int = Field(ge=0)
+    nodes: list[KnowledgeGraphNodeDTO] = Field(default_factory=list, max_length=200)
+    edges: list[KnowledgeGraphEdgeDTO] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def validate_hidden_page(self):
+        if self.returned_edge_count != len(self.edges):
+            raise ValueError("returned_edge_count must match edges")
+        expected = min(
+            self.limit,
+            max(self.hidden_edge_count - self.offset, 0),
+        )
+        if self.returned_edge_count != expected:
+            raise ValueError("hidden edge page must be dense")
+        if self.hidden_edge_count < len(self.edges):
+            raise ValueError("hidden_edge_count cannot be smaller than edges")
+        if any(not edge.is_hidden for edge in self.edges):
+            raise ValueError("hidden review page may contain only hidden edges")
+        node_keys = [node.key for node in self.nodes]
+        if len(node_keys) != len(set(node_keys)):
+            raise ValueError("hidden review page nodes must be unique")
+        endpoint_keys = {
+            key for edge in self.edges for key in (edge.source, edge.target)
+        }
+        if set(node_keys) != endpoint_keys:
+            raise ValueError("hidden review page must contain exact edge endpoints")
         return self
 
 

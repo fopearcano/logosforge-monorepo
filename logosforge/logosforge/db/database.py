@@ -32,7 +32,7 @@ from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
 
-DB_SCHEMA_VERSION = 5
+DB_SCHEMA_VERSION = 6
 SQLITE_BUSY_TIMEOUT_MS = 5000
 BACKUP_INSTALL_WAIT_SECONDS = 10.0
 
@@ -377,6 +377,7 @@ from logosforge.models import (
     WorkflowEvent,
     KnowledgeGraphNode,
     KnowledgeGraphEdge,
+    KnowledgeGraphCommandReceipt,
     KnowledgeGraphSnapshot,
     ContinuityIssue,
     ContinuityCheckRun,
@@ -481,6 +482,35 @@ class CanvasPlotFrameNotFound(LookupError):
 
 class CanvasPlotSceneNotFound(LookupError):
     """The requested Scene is absent from the path-scoped Project."""
+
+
+class KnowledgeGraphRevisionConflict(RuntimeError):
+    """Raised when an edge-review command targets older review state."""
+
+    def __init__(self, expected: str, current: str) -> None:
+        super().__init__("knowledge-graph review revision does not match")
+        self.expected = expected
+        self.current = current
+
+
+class KnowledgeGraphCommandError(ValueError):
+    """A graph edge-review command is malformed or unsupported."""
+
+
+class KnowledgeGraphIdempotencyKeyConflict(RuntimeError):
+    """An Idempotency-Key was committed for another graph command."""
+
+
+class KnowledgeGraphProjectNotFound(LookupError):
+    """The path-scoped Project disappeared before the transaction began."""
+
+
+class KnowledgeGraphEdgeNotFound(LookupError):
+    """The directed edge is absent from the freshly built project graph."""
+
+
+class KnowledgeGraphReviewStateCorrupt(RuntimeError):
+    """Persisted graph review rows violate canonical uniqueness."""
 
 
 @dataclass(frozen=True)
@@ -614,8 +644,53 @@ class CanvasPlotCommandReceiptData:
     created_at: datetime
 
 
+@dataclass(frozen=True)
+class KnowledgeGraphEdgeIdentity:
+    """Public, directional identity of one graph edge proposal."""
+
+    source: str
+    target: str
+    edge_type: str
+
+
+@dataclass(frozen=True)
+class KnowledgeGraphCommandResult:
+    """Committed review revision plus exactly-once recovery metadata."""
+
+    revision: str
+    changed: bool
+    affected_edge: KnowledgeGraphEdgeIdentity
+    replayed: bool = False
+    applied_revision: str = ""
+
+
+@dataclass(frozen=True)
+class KnowledgeGraphCommandReceiptData:
+    """Decoded durable graph command receipt safe for the typed API."""
+
+    project_id: int
+    request_digest: str
+    kind: str
+    expected_revision: str
+    applied_revision: str
+    original_changed: bool
+    original_affected_edge: KnowledgeGraphEdgeIdentity
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class KnowledgeGraphReviewSnapshot:
+    """One coherent persisted graph-review read detached from SQLite."""
+
+    project: Project
+    nodes: tuple[KnowledgeGraphNode, ...]
+    edges: tuple[KnowledgeGraphEdge, ...]
+    revision: str
+
+
 _TIMELINE_RECEIPT_SCHEMA_VERSION = 1
 _CANVAS_PLOT_RECEIPT_SCHEMA_VERSION = 1
+_KNOWLEDGE_GRAPH_RECEIPT_SCHEMA_VERSION = 1
 _TIMELINE_COMMAND_KINDS = frozenset({
     "create_lane",
     "update_lane",
@@ -635,10 +710,18 @@ _CANVAS_PLOT_COMMAND_KINDS = frozenset({
     "update_frame",
     "delete_frame",
 })
+_KNOWLEDGE_GRAPH_COMMAND_KINDS = frozenset({
+    "confirm_edge",
+    "hide_edge",
+    "unhide_edge",
+})
 _TIMELINE_IDEMPOTENCY_KEY_RE = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$"
 )
 _CANVAS_PLOT_IDEMPOTENCY_KEY_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$"
+)
+_KNOWLEDGE_GRAPH_IDEMPOTENCY_KEY_RE = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$"
 )
 _LOWER_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -1022,6 +1105,164 @@ def _decode_canvas_plot_command_receipt(
     )
 
 
+def _knowledge_graph_idempotency_key_hash(value: str) -> str:
+    """Validate and irreversibly identify one graph retry capability."""
+    if not isinstance(value, str):
+        raise KnowledgeGraphCommandError("Idempotency-Key must be a string")
+    if (
+        value != value.strip()
+        or _KNOWLEDGE_GRAPH_IDEMPOTENCY_KEY_RE.fullmatch(value) is None
+    ):
+        raise KnowledgeGraphCommandError(
+            "Idempotency-Key must contain 16-128 safe ASCII characters"
+        )
+    return hashlib.sha256(value.encode("ascii")).hexdigest()
+
+
+def _knowledge_graph_edge_identity(
+    source,
+    target,
+    edge_type,
+) -> KnowledgeGraphEdgeIdentity:
+    values = ((source, "source", 512), (target, "target", 512),
+              (edge_type, "edge_type", 128))
+    for value, label, maximum in values:
+        if not isinstance(value, str) or not value or len(value) > maximum:
+            raise KnowledgeGraphCommandError(
+                f"{label} must contain 1-{maximum} characters"
+            )
+    return KnowledgeGraphEdgeIdentity(
+        source=source,
+        target=target,
+        edge_type=edge_type,
+    )
+
+
+def _knowledge_graph_wire_key(value: str) -> str:
+    """Mirror the public stable-key mapping without importing the API layer."""
+    value = str(value)
+    if len(value) <= 512:
+        return value
+    return f"kg:sha256:{hashlib.sha256(value.encode('utf-8')).hexdigest()}"
+
+
+def _knowledge_graph_command_request_digest(
+    project_id: int,
+    kind: str,
+    expected_revision: str,
+    identity: KnowledgeGraphEdgeIdentity,
+) -> str:
+    encoded = json.dumps(
+        {
+            "scope": "knowledge-graph-command-v1",
+            "project_id": int(project_id),
+            "kind": kind,
+            "expected_revision": expected_revision,
+            "source": identity.source,
+            "target": identity.target,
+            "edge_type": identity.edge_type,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _knowledge_graph_receipt_result_json(
+    *,
+    kind: str,
+    expected_revision: str,
+    applied_revision: str,
+    original_changed: bool,
+    affected_edge: KnowledgeGraphEdgeIdentity,
+) -> str:
+    return json.dumps(
+        {
+            "schema_version": _KNOWLEDGE_GRAPH_RECEIPT_SCHEMA_VERSION,
+            "kind": kind,
+            "expected_revision": expected_revision,
+            "applied_revision": applied_revision,
+            "original_changed": original_changed,
+            "original_affected_edge": {
+                "source": affected_edge.source,
+                "target": affected_edge.target,
+                "edge_type": affected_edge.edge_type,
+            },
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _decode_knowledge_graph_command_receipt(
+    row: KnowledgeGraphCommandReceipt,
+) -> KnowledgeGraphCommandReceiptData:
+    """Decode a graph receipt fail-closed; corrupt proof cannot replay."""
+    try:
+        payload = json.loads(row.result_json)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise RuntimeError("Knowledge Graph command receipt is corrupt") from exc
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema_version")
+        != _KNOWLEDGE_GRAPH_RECEIPT_SCHEMA_VERSION
+        or isinstance(payload.get("schema_version"), bool)
+    ):
+        raise RuntimeError(
+            "Knowledge Graph command receipt has an unsupported schema"
+        )
+    kind = payload.get("kind")
+    expected_revision = payload.get("expected_revision")
+    applied_revision = payload.get("applied_revision")
+    original_changed = payload.get("original_changed")
+    raw_edge = payload.get("original_affected_edge")
+    try:
+        identity = _knowledge_graph_edge_identity(
+            raw_edge.get("source") if isinstance(raw_edge, dict) else None,
+            raw_edge.get("target") if isinstance(raw_edge, dict) else None,
+            raw_edge.get("edge_type") if isinstance(raw_edge, dict) else None,
+        )
+    except KnowledgeGraphCommandError as exc:
+        raise RuntimeError(
+            "Knowledge Graph command receipt has invalid edge identity"
+        ) from exc
+    if (
+        not isinstance(kind, str)
+        or kind not in _KNOWLEDGE_GRAPH_COMMAND_KINDS
+        or not isinstance(expected_revision, str)
+        or _LOWER_SHA256_RE.fullmatch(expected_revision) is None
+        or not isinstance(applied_revision, str)
+        or _LOWER_SHA256_RE.fullmatch(applied_revision) is None
+        or original_changed is not True
+        or applied_revision == expected_revision
+        or _LOWER_SHA256_RE.fullmatch(row.idempotency_key_hash or "") is None
+        or _LOWER_SHA256_RE.fullmatch(row.request_digest or "") is None
+    ):
+        raise RuntimeError("Knowledge Graph command receipt has invalid result data")
+    canonical_request_digest = _knowledge_graph_command_request_digest(
+        int(row.project_id),
+        kind,
+        expected_revision,
+        identity,
+    )
+    if not hmac.compare_digest(row.request_digest, canonical_request_digest):
+        raise RuntimeError(
+            "Knowledge Graph command receipt does not match its request digest"
+        )
+    return KnowledgeGraphCommandReceiptData(
+        project_id=int(row.project_id),
+        request_digest=row.request_digest,
+        kind=kind,
+        expected_revision=expected_revision,
+        applied_revision=applied_revision,
+        original_changed=original_changed,
+        original_affected_edge=identity,
+        created_at=row.created_at,
+    )
+
+
 @dataclass(frozen=True)
 class PlotBlockUpdateResult:
     """One committed Plot block mutation and its invalidation metadata."""
@@ -1070,6 +1311,8 @@ class Database:
         self._plot_write_locks: dict[int, threading.RLock] = {}
         self._canvas_plot_locks_guard = threading.RLock()
         self._canvas_plot_write_locks: dict[int, threading.RLock] = {}
+        self._knowledge_graph_locks_guard = threading.RLock()
+        self._knowledge_graph_write_locks: dict[int, threading.RLock] = {}
         self._structure_locks_guard = threading.RLock()
         self._structure_write_locks: dict[int, threading.RLock] = {}
         # ``check_same_thread=False`` lets FastAPI's threadpool use pooled
@@ -1163,6 +1406,17 @@ class Database:
         key = int(project_id)
         with self._canvas_plot_locks_guard:
             lock = self._canvas_plot_write_locks.setdefault(key, threading.RLock())
+        with lock:
+            yield
+
+    @contextmanager
+    def knowledge_graph_write_lock(self, project_id: int):
+        """Serialize Knowledge Graph review writers for one project."""
+        key = int(project_id)
+        with self._knowledge_graph_locks_guard:
+            lock = self._knowledge_graph_write_locks.setdefault(
+                key, threading.RLock(),
+            )
         with lock:
             yield
 
@@ -9014,6 +9268,501 @@ class Database:
     # -- Knowledge graph (Phase 10P) -----------------------------------------
     # Only user-confirmed / hidden edges (and their nodes) are persisted; the
     # live graph is computed in-memory each build and merges these back in.
+
+    def _knowledge_graph_review_snapshot_in_session(
+        self,
+        session: Session,
+        project_id: int,
+        *,
+        validate_unique: bool = True,
+    ) -> KnowledgeGraphReviewSnapshot | None:
+        """Read the complete persisted review layer in one transaction."""
+        from logosforge.knowledge_graph.revision import (
+            knowledge_graph_review_revision,
+        )
+
+        project = session.get(Project, project_id)
+        if project is None:
+            return None
+        nodes = tuple(session.exec(
+            select(KnowledgeGraphNode)
+            .where(KnowledgeGraphNode.project_id == project_id)
+            .order_by(KnowledgeGraphNode.id)
+        ).all())
+        edges = tuple(session.exec(
+            select(KnowledgeGraphEdge)
+            .where(KnowledgeGraphEdge.project_id == project_id)
+            .order_by(KnowledgeGraphEdge.id)
+        ).all())
+        if validate_unique:
+            node_keys = [row.node_key for row in nodes]
+            edge_keys = [
+                (row.source_node_key, row.target_node_key, row.edge_type)
+                for row in edges
+            ]
+            if (
+                len(node_keys) != len(set(node_keys))
+                or len(edge_keys) != len(set(edge_keys))
+            ):
+                raise KnowledgeGraphReviewStateCorrupt(
+                    "Knowledge Graph review state violates logical uniqueness"
+                )
+        return KnowledgeGraphReviewSnapshot(
+            project=project,
+            nodes=nodes,
+            edges=edges,
+            revision=knowledge_graph_review_revision(
+                edges,
+                nodes=nodes,
+                project_id=project_id,
+                project_created_at=project.created_at,
+            ),
+        )
+
+    def read_knowledge_graph_review_snapshot(
+        self,
+        project_id: int,
+    ) -> KnowledgeGraphReviewSnapshot | None:
+        """Return one coherent, detached persisted graph-review snapshot."""
+        with Session(self._engine, expire_on_commit=False) as session:
+            session.connection().exec_driver_sql("BEGIN")
+            try:
+                snapshot = self._knowledge_graph_review_snapshot_in_session(
+                    session, project_id,
+                )
+                if snapshot is not None:
+                    session.expunge_all()
+            finally:
+                session.rollback()
+        return snapshot
+
+    def get_knowledge_graph_command_receipt(
+        self,
+        project_id: int,
+        idempotency_key: str,
+    ) -> KnowledgeGraphCommandReceiptData | None:
+        """Resolve a completed graph command only within its project scope."""
+        key_hash = _knowledge_graph_idempotency_key_hash(idempotency_key)
+        with Session(self._engine, expire_on_commit=False) as session:
+            session.connection().exec_driver_sql("BEGIN")
+            try:
+                if session.get(Project, project_id) is None:
+                    return None
+                row = session.get(
+                    KnowledgeGraphCommandReceipt,
+                    (int(project_id), key_hash),
+                )
+                if row is None:
+                    return None
+                receipt = _decode_knowledge_graph_command_receipt(row)
+            finally:
+                session.rollback()
+        return receipt
+
+    def replay_knowledge_graph_command(
+        self,
+        project_id: int,
+        *,
+        kind: str,
+        expected_revision: str,
+        source: str,
+        target: str,
+        edge_type: str,
+        idempotency_key: str,
+    ) -> KnowledgeGraphCommandResult | None:
+        """Resolve an exact committed retry before rebuilding live graph data."""
+        if kind not in _KNOWLEDGE_GRAPH_COMMAND_KINDS:
+            raise KnowledgeGraphCommandError(
+                f"Unsupported Knowledge Graph command: {kind!r}"
+            )
+        if (
+            not isinstance(expected_revision, str)
+            or _LOWER_SHA256_RE.fullmatch(expected_revision) is None
+        ):
+            raise KnowledgeGraphCommandError(
+                "expected_revision must be a lowercase SHA-256 digest"
+            )
+        identity = _knowledge_graph_edge_identity(source, target, edge_type)
+        key_hash = _knowledge_graph_idempotency_key_hash(idempotency_key)
+        request_digest = _knowledge_graph_command_request_digest(
+            project_id, kind, expected_revision, identity,
+        )
+        with Session(self._engine, expire_on_commit=False) as session:
+            session.connection().exec_driver_sql("BEGIN")
+            try:
+                if session.get(Project, project_id) is None:
+                    return None
+                row = session.get(
+                    KnowledgeGraphCommandReceipt,
+                    (int(project_id), key_hash),
+                )
+                if row is None:
+                    return None
+                receipt = _decode_knowledge_graph_command_receipt(row)
+                if not hmac.compare_digest(
+                    receipt.request_digest,
+                    request_digest,
+                ):
+                    raise KnowledgeGraphIdempotencyKeyConflict(
+                        "Idempotency-Key was already used for a different "
+                        "Knowledge Graph command"
+                    )
+                current = self._knowledge_graph_review_snapshot_in_session(
+                    session,
+                    project_id,
+                    validate_unique=False,
+                )
+                assert current is not None
+                return KnowledgeGraphCommandResult(
+                    revision=current.revision,
+                    changed=False,
+                    affected_edge=receipt.original_affected_edge,
+                    replayed=True,
+                    applied_revision=receipt.applied_revision,
+                )
+            finally:
+                session.rollback()
+
+    def execute_knowledge_graph_command(
+        self,
+        project_id: int,
+        *,
+        kind: str,
+        expected_revision: str,
+        source: str,
+        target: str,
+        edge_type: str,
+        idempotency_key: str,
+        edge=None,
+        source_node=None,
+        target_node=None,
+    ) -> KnowledgeGraphCommandResult:
+        """Atomically review one directional graph edge and store its receipt.
+
+        ``expected_revision`` guards only the coherent persisted review layer;
+        the live derived graph is freshly built by the route to resolve ``edge``
+        but is not misrepresented as one database snapshot.  Receipt lookup is
+        deliberately first so an exact retry remains recoverable after the
+        inferred basis disappears.
+        """
+        from logosforge.knowledge_graph import provenance as graph_provenance
+        from logosforge.models.models import _now
+
+        if kind not in _KNOWLEDGE_GRAPH_COMMAND_KINDS:
+            raise KnowledgeGraphCommandError(
+                f"Unsupported Knowledge Graph command: {kind!r}"
+            )
+        if (
+            not isinstance(expected_revision, str)
+            or _LOWER_SHA256_RE.fullmatch(expected_revision) is None
+        ):
+            raise KnowledgeGraphCommandError(
+                "expected_revision must be a lowercase SHA-256 digest"
+            )
+        identity = _knowledge_graph_edge_identity(source, target, edge_type)
+        key_hash = _knowledge_graph_idempotency_key_hash(idempotency_key)
+        request_digest = _knowledge_graph_command_request_digest(
+            project_id,
+            kind,
+            expected_revision,
+            identity,
+        )
+
+        with self.knowledge_graph_write_lock(project_id):
+            with Session(self._engine, expire_on_commit=False) as session:
+                session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+                try:
+                    if session.get(Project, project_id) is None:
+                        raise KnowledgeGraphProjectNotFound(project_id)
+                    receipt_row = session.get(
+                        KnowledgeGraphCommandReceipt,
+                        (int(project_id), key_hash),
+                    )
+                    if receipt_row is not None:
+                        receipt = _decode_knowledge_graph_command_receipt(
+                            receipt_row,
+                        )
+                        if not hmac.compare_digest(
+                            receipt.request_digest,
+                            request_digest,
+                        ):
+                            raise KnowledgeGraphIdempotencyKeyConflict(
+                                "Idempotency-Key was already used for a "
+                                "different Knowledge Graph command"
+                            )
+                        current = self._knowledge_graph_review_snapshot_in_session(
+                            session,
+                            project_id,
+                            validate_unique=False,
+                        )
+                        assert current is not None
+                        session.expunge_all()
+                        session.rollback()
+                        return KnowledgeGraphCommandResult(
+                            revision=current.revision,
+                            changed=False,
+                            affected_edge=receipt.original_affected_edge,
+                            replayed=True,
+                            applied_revision=receipt.applied_revision,
+                        )
+
+                    current = self._knowledge_graph_review_snapshot_in_session(
+                        session, project_id,
+                    )
+                    assert current is not None
+
+                    if expected_revision != current.revision:
+                        raise KnowledgeGraphRevisionConflict(
+                            expected_revision,
+                            current.revision,
+                        )
+
+                    if edge is None or source_node is None or target_node is None:
+                        raise KnowledgeGraphEdgeNotFound(identity)
+                    internal_source = str(getattr(edge, "source", "") or "")
+                    internal_target = str(getattr(edge, "target", "") or "")
+                    internal_type = str(getattr(edge, "edge_type", "") or "")
+                    if (
+                        _knowledge_graph_wire_key(internal_source) != source
+                        or _knowledge_graph_wire_key(internal_target) != target
+                        or internal_type != edge_type
+                        or str(getattr(source_node, "key", "")) != internal_source
+                        or str(getattr(target_node, "key", "")) != internal_target
+                    ):
+                        raise KnowledgeGraphEdgeNotFound(identity)
+
+                    try:
+                        edge_metadata_json = json.dumps(
+                            dict(getattr(edge, "metadata", {}) or {}),
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                            allow_nan=False,
+                        )
+                    except (TypeError, ValueError) as exc:
+                        raise KnowledgeGraphCommandError(
+                            "Edge metadata cannot be persisted"
+                        ) from exc
+
+                    command_savepoint = session.begin_nested()
+                    changed = False
+                    nodes = list(current.nodes)
+                    edges = list(current.edges)
+
+                    def persist_endpoint(node) -> None:
+                        nonlocal changed
+                        key = str(node.key)
+                        matches = [row for row in nodes if row.node_key == key]
+                        if len(matches) > 1:
+                            raise KnowledgeGraphCommandError(
+                                "Knowledge Graph review state contains duplicate endpoint rows"
+                            )
+                        persisted = matches[0] if matches else None
+                        try:
+                            metadata_json = json.dumps(
+                                dict(getattr(node, "metadata", {}) or {}),
+                                ensure_ascii=False,
+                                sort_keys=True,
+                                separators=(",", ":"),
+                                allow_nan=False,
+                            )
+                        except (TypeError, ValueError) as exc:
+                            raise KnowledgeGraphCommandError(
+                                "Node metadata cannot be persisted"
+                            ) from exc
+                        values = {
+                            "node_type": str(getattr(node, "node_type", "") or "")[:128],
+                            "source_type": str(getattr(node, "source_type", "") or "")[:128],
+                            "source_id": (
+                                None
+                                if getattr(node, "source_id", None) is None
+                                else str(node.source_id)[:512]
+                            ),
+                            "label": str(getattr(node, "label", "") or "")[:512],
+                            "summary": str(getattr(node, "summary", "") or "")[:1000],
+                            "metadata_json": metadata_json,
+                        }
+                        if persisted is None:
+                            persisted = KnowledgeGraphNode(
+                                project_id=project_id,
+                                node_key=key,
+                                **values,
+                            )
+                            session.add(persisted)
+                            nodes.append(persisted)
+                            changed = True
+                        else:
+                            endpoint_changed = False
+                            for field, value in values.items():
+                                if getattr(persisted, field) != value:
+                                    setattr(persisted, field, value)
+                                    endpoint_changed = True
+                                    changed = True
+                            if endpoint_changed:
+                                persisted.updated_at = _now()
+
+                    matching = [
+                        row for row in edges
+                        if row.source_node_key == internal_source
+                        and row.target_node_key == internal_target
+                        and row.edge_type == internal_type
+                    ]
+                    if len(matching) > 1:
+                        raise KnowledgeGraphCommandError(
+                            "Knowledge Graph review state contains duplicate edge rows"
+                        )
+                    persisted_edge = matching[0] if matching else None
+
+                    is_hidden = bool(getattr(edge, "is_hidden", False))
+                    is_inferred = bool(getattr(edge, "is_inferred", False))
+                    if kind in {"confirm_edge", "hide_edge"} and (
+                        is_hidden or not is_inferred
+                    ):
+                        raise KnowledgeGraphCommandError(
+                            f"{kind} requires a visible inferred edge"
+                        )
+                    if kind == "unhide_edge" and (
+                        not is_hidden
+                        or persisted_edge is None
+                        or not persisted_edge.is_hidden
+                    ):
+                        raise KnowledgeGraphCommandError(
+                            "unhide_edge requires a persisted hidden edge"
+                        )
+
+                    # Confirm/hide creates durable review intent; unhide never
+                    # invents a default row when no hidden decision exists.
+                    if (
+                        kind != "unhide_edge"
+                        or (
+                            persisted_edge is not None
+                            and persisted_edge.is_user_confirmed
+                        )
+                    ):
+                        persist_endpoint(source_node)
+                        persist_endpoint(target_node)
+
+                    evidence = {
+                        "provenance": str(getattr(edge, "provenance", "") or "")[:512],
+                        "source_system": str(getattr(edge, "source_system", "") or "")[:128],
+                        "explanation": str(getattr(edge, "explanation", "") or "")[:1000],
+                        "metadata_json": edge_metadata_json,
+                    }
+                    if persisted_edge is None and kind in {
+                        "confirm_edge", "hide_edge",
+                    }:
+                        persisted_edge = KnowledgeGraphEdge(
+                            project_id=project_id,
+                            source_node_key=internal_source,
+                            target_node_key=internal_target,
+                            edge_type=internal_type,
+                            confidence=(
+                                graph_provenance.CONF_CONFIRMED
+                                if kind == "confirm_edge"
+                                else str(getattr(edge, "confidence", "") or "unknown")[:32]
+                            ),
+                            is_user_confirmed=(
+                                True
+                                if kind == "confirm_edge"
+                                else bool(getattr(edge, "is_user_confirmed", False))
+                            ),
+                            is_hidden=(kind == "hide_edge"),
+                            **evidence,
+                        )
+                        session.add(persisted_edge)
+                        edges.append(persisted_edge)
+                        changed = True
+                    elif persisted_edge is not None:
+                        updates: dict[str, object] = {}
+                        if kind == "confirm_edge":
+                            updates = {
+                                **evidence,
+                                "confidence": graph_provenance.CONF_CONFIRMED,
+                                "is_user_confirmed": True,
+                                "is_hidden": False,
+                            }
+                        elif kind == "hide_edge":
+                            updates = {"is_hidden": True}
+                            # Preserve prior confirmation and its evidence.  An
+                            # unconfirmed legacy row may fill missing evidence.
+                            if not persisted_edge.is_user_confirmed:
+                                updates.update({
+                                    key: value for key, value in evidence.items()
+                                    if not getattr(persisted_edge, key)
+                                })
+                        else:  # unhide_edge
+                            if persisted_edge.is_user_confirmed:
+                                updates = {"is_hidden": False}
+                            else:
+                                # Removing an inferred-edge hide restores the
+                                # derived edge; no neutral override row remains.
+                                session.delete(persisted_edge)
+                                edges.remove(persisted_edge)
+                                changed = True
+                                for endpoint_key in {
+                                    internal_source, internal_target,
+                                }:
+                                    if not any(
+                                        row.source_node_key == endpoint_key
+                                        or row.target_node_key == endpoint_key
+                                        for row in edges
+                                    ):
+                                        endpoint = next((
+                                            row for row in nodes
+                                            if row.node_key == endpoint_key
+                                        ), None)
+                                        if endpoint is not None:
+                                            session.delete(endpoint)
+                                            nodes.remove(endpoint)
+                                updates = {}
+                        row_changed = False
+                        for field, value in updates.items():
+                            if getattr(persisted_edge, field) != value:
+                                setattr(persisted_edge, field, value)
+                                row_changed = True
+                        if row_changed:
+                            persisted_edge.updated_at = _now()
+                            changed = True
+
+                    if not changed:
+                        command_savepoint.rollback()
+                        raise RuntimeError(
+                            "Eligible Knowledge Graph command produced no state change"
+                        )
+
+                    session.flush()
+                    updated = self._knowledge_graph_review_snapshot_in_session(
+                        session, project_id,
+                    )
+                    assert updated is not None
+                    if updated.revision == current.revision:
+                        raise RuntimeError(
+                            "Knowledge Graph mutation did not advance its revision"
+                        )
+                    command_savepoint.commit()
+                    session.add(KnowledgeGraphCommandReceipt(
+                        project_id=project_id,
+                        idempotency_key_hash=key_hash,
+                        request_digest=request_digest,
+                        result_json=_knowledge_graph_receipt_result_json(
+                            kind=kind,
+                            expected_revision=expected_revision,
+                            applied_revision=updated.revision,
+                            original_changed=True,
+                            affected_edge=identity,
+                        ),
+                    ))
+                    session.commit()
+                    session.expunge_all()
+                    return KnowledgeGraphCommandResult(
+                        revision=updated.revision,
+                        changed=True,
+                        affected_edge=identity,
+                        applied_revision=updated.revision,
+                    )
+                except Exception:
+                    session.rollback()
+                    raise
 
     def upsert_kg_node(self, project_id: int, node_key: str, **fields,
                        ) -> KnowledgeGraphNode:

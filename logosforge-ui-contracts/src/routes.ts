@@ -112,6 +112,9 @@ export const ROUTES = {
   voiceCanUndo: (p: number) => `/api/projects/${p}/voice/can-undo`,
   voiceUndo: (p: number) => `/api/projects/${p}/voice/undo`,
   knowledgeGraph: (p: number) => `/api/projects/${p}/knowledge-graph`,
+  knowledgeGraphCommands: (p: number) => `/api/projects/${p}/knowledge-graph/commands`,
+  knowledgeGraphCommandReceipt: (p: number) => `/api/projects/${p}/knowledge-graph/command-receipt`,
+  knowledgeGraphHiddenEdges: (p: number) => `/api/projects/${p}/knowledge-graph/hidden-edges`,
   graphGravity: (p: number) => `/api/projects/${p}/graph/gravity`,
 
   // Generative (POST)

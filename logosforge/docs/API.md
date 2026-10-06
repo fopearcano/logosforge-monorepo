@@ -102,10 +102,10 @@ GET  /api/health → { status, service, mode, version, api_version, core_version
 `core_version` is the Logosforge build (e.g. `0.9.0-alpha`). Clients (Electron
 desktop and Web/PWA) read these to verify they're talking to a compatible
 backend. `version` mirrors `api_version` for backward compatibility.
-The current additive HTTP contract version is **1.6.0**. This version is
+The current additive HTTP contract version is **1.7.0**. This version is
 deliberately independent from the local MCP server contract: adding the
-Knowledge Graph HTTP read below does not add or change an MCP tool, so the MCP
-server remains at **1.5.0**.
+Knowledge Graph HTTP review commands below does not add or change an MCP tool,
+so the MCP server remains at **1.5.0**.
 
 ### Packaged-desktop live context
 ```
@@ -167,10 +167,14 @@ with any of `scene`, `note`, `psyke`, or `comment`; omitting it searches all fou
 `{ kind, id, title, excerpt, revision?, resolved? }` records; the revision and
 resolution fields are present only for comment matches.
 
-### Narrative Knowledge Graph (bounded read)
+### Narrative Knowledge Graph (bounded read + transactional edge review)
 ```
 GET /api/projects/{project_id}/knowledge-graph
     ?focus_key={node_key}&depth=1&limit=100&include_inferred=true
+GET /api/projects/{project_id}/knowledge-graph/hidden-edges
+    ?offset=0&limit=25
+POST /api/projects/{project_id}/knowledge-graph/commands
+GET /api/projects/{project_id}/knowledge-graph/command-receipt
 ```
 
 Without `focus_key`, this returns the canonical deterministic Project Map.
@@ -181,21 +185,67 @@ and all diagnostics are scoped to the project in the path. An unknown, stale,
 or foreign focus key returns the same generic 404 without consulting or naming
 another project.
 
-The response contains typed nodes and edges with confidence, provenance,
-source-system, confirmation, and inference state. Per-node `degree` is the
+The response contains a `revision` plus typed nodes and edges with confidence,
+provenance, source-system, confirmation, inference, and hidden state. The
+revision covers the complete persisted review layer (endpoint reference rows
+and directional edge-review rows), bound to the project's id and immutable
+creation timestamp. It deliberately does **not** claim to revision the derived
+graph assembled by the legacy extractors: source-content edits can change that
+derived graph while leaving the review revision unchanged. Per-node `degree` is the
 node's degree in the complete project graph after applying
 `include_inferred`, before focus or response truncation; it therefore remains a
 stable global signal inside a focused neighborhood. Total counts,
-`orphan_count`, and `weak_link_count` are computed against the complete
+`orphan_count`, `weak_link_count`, and authoritative project-wide
+`hidden_edge_count` are computed against the complete
 filtered map/neighborhood before response truncation. `orphan_keys` and the
-bounded `weak_links` diagnostics reference only nodes included in the response,
+bounded `weak_links`/`hidden_edges` diagnostics reference only nodes included in the response,
 so a client never has to infer diagnostics from a partial slice. `truncated`
 signals that any primary or diagnostic collection was capped. Overlong legacy
 structural identifiers are represented by stable `kg:sha256:...` wire keys;
 those returned keys remain valid `focus_key` values.
 
-This endpoint is read-only, rebuilds once per request without an LLM, emits no
-change event, and never persists a graph snapshot.
+The primary GET remains read-only, rebuilds once per request without an LLM,
+emits no change event, and never persists a graph snapshot. The paginated
+`hidden-edges` route is the complete restore queue independent of Project Map,
+focus, and diagnostic caps. It returns deterministic dense pages (up to 100
+edges), plus the exact unique endpoint-node records for that page.
+
+The command POST accepts one unwrapped discriminated request:
+
+```json
+{
+  "kind": "confirm_edge | hide_edge | unhide_edge",
+  "expected_revision": "<64 lowercase hex characters>",
+  "source": "<returned wire key>",
+  "target": "<returned wire key>",
+  "edge_type": "precedes"
+}
+```
+
+Edge identity is directional and immutable: `(source, target, edge_type)`.
+`confirm_edge` and `hide_edge` accept only a currently visible inferred edge;
+`unhide_edge` accepts only a durable hidden review row. Unhiding an inferred
+edge removes its hide override and unused endpoint references, while unhiding a
+legacy/user-confirmed hidden edge preserves confirmation. Commands never mutate
+manuscript, PSYKE, or other project content.
+
+Every POST requires a 16–128-character safe-ASCII `Idempotency-Key`. The edge
+change and its SHA-256-keyed durable receipt commit in one `BEGIN IMMEDIATE`
+transaction. A stale review token returns `409 knowledge_graph_conflict`; reuse
+of a key with a different exact public request returns
+`409 idempotency_key_conflict`; stale, foreign, and unknown edges share the same
+generic 404. An exact retry is resolved from its receipt before live-edge
+preflight and returns the current default Project Map with `replayed: true`,
+`changed: false`, and the original `applied_revision`. Consequently the returned
+map revision may be newer than `applied_revision` after another command. Receipt
+decoding recomputes the canonical request digest and fails closed if stored
+result semantics no longer match it.
+
+Receipt GET requires the same header, is project-scoped, and returns
+`Cache-Control: no-store` plus `Vary: Authorization, Idempotency-Key`. A fresh
+changed command publishes `knowledge_graph_changed`; rejects and exact replays
+do not. Persisted logical duplicates fail closed as server-state corruption
+rather than choosing an order-dependent winner.
 
 ### Scenes / manuscript
 ```

@@ -48,9 +48,14 @@ import type {
   CanvasPlotNodeDTO,
   CanvasPlotSnapshotDTO,
   KnowledgeGraphEdgeDTO,
+  KnowledgeGraphEdgeIdentityDTO,
   KnowledgeGraphNodeDTO,
   KnowledgeGraphQueryDTO,
   KnowledgeGraphReadDTO,
+  KnowledgeGraphCommandDTO,
+  KnowledgeGraphCommandResultDTO,
+  KnowledgeGraphCommandReceiptDTO,
+  KnowledgeGraphHiddenEdgePageDTO,
   SceneExtractionDTO,
   SettingsDTO,
   VoiceBillyProposalDTO,
@@ -956,8 +961,18 @@ function knowledgeGraphEdge(value: unknown, path: string): KnowledgeGraphEdgeDTO
   }
   booleanValue(requireField(dto, "is_user_confirmed", path), fieldPath(path, "is_user_confirmed"));
   booleanValue(requireField(dto, "is_inferred", path), fieldPath(path, "is_inferred"));
+  booleanValue(requireField(dto, "is_hidden", path), fieldPath(path, "is_hidden"));
   record(requireField(dto, "metadata", path), fieldPath(path, "metadata"));
   return value as KnowledgeGraphEdgeDTO;
+}
+
+function knowledgeGraphEdgeIdentity(value: unknown, path: string): KnowledgeGraphEdgeIdentityDTO {
+  const dto = record(value, path);
+  for (const key of ["source", "target", "edge_type"] as const) {
+    const field = stringValue(requireField(dto, key, path), fieldPath(path, key));
+    if (!field.trim()) fail(fieldPath(path, key), "a non-empty string", field);
+  }
+  return value as KnowledgeGraphEdgeIdentityDTO;
 }
 
 function graphEdgeIdentity(edge: KnowledgeGraphEdgeDTO): string {
@@ -968,6 +983,10 @@ function knowledgeGraphRead(value: unknown, path: string): KnowledgeGraphReadDTO
   const dto = record(value, path);
   const projectId = integerValue(requireField(dto, "project_id", path), fieldPath(path, "project_id"));
   if (projectId <= 0) fail(fieldPath(path, "project_id"), "a positive safe integer", projectId);
+  const revision = stringValue(requireField(dto, "revision", path), fieldPath(path, "revision"));
+  if (!/^[0-9a-f]{64}$/.test(revision)) {
+    fail(fieldPath(path, "revision"), "a 64-character lowercase hexadecimal revision", revision);
+  }
   stringValue(requireField(dto, "writing_mode", path), fieldPath(path, "writing_mode"));
   const focusKey = nullable(
     requireField(dto, "focus_key", path),
@@ -1001,15 +1020,16 @@ function knowledgeGraphRead(value: unknown, path: string): KnowledgeGraphReadDTO
     if (!nodeKeys.has(edge.target)) fail(fieldPath(edgePath, "target"), "a key present in nodes", edge.target);
     const identity = graphEdgeIdentity(edge);
     if (edgeKeys.has(identity)) fail(edgePath, "a unique directed source/target/type edge", edge);
+    if (edge.is_hidden) fail(fieldPath(edgePath, "is_hidden"), "false for a visible edge", edge.is_hidden);
     if (!includeInferred && edge.is_inferred) {
       fail(fieldPath(edgePath, "is_inferred"), "false when include_inferred is false", edge.is_inferred);
     }
     edgeKeys.add(identity);
   });
 
-  const counts = {} as Record<"node_count" | "edge_count" | "returned_node_count" | "returned_edge_count" | "orphan_count" | "weak_link_count", number>;
+  const counts = {} as Record<"node_count" | "edge_count" | "returned_node_count" | "returned_edge_count" | "orphan_count" | "weak_link_count" | "hidden_edge_count", number>;
   for (const key of [
-    "node_count", "edge_count", "returned_node_count", "returned_edge_count", "orphan_count", "weak_link_count",
+    "node_count", "edge_count", "returned_node_count", "returned_edge_count", "orphan_count", "weak_link_count", "hidden_edge_count",
   ] as const) {
     const count = integerValue(requireField(dto, key, path), fieldPath(path, key));
     if (count < 0) fail(fieldPath(path, key), "zero or greater", count);
@@ -1053,6 +1073,7 @@ function knowledgeGraphRead(value: unknown, path: string): KnowledgeGraphReadDTO
     if (!nodeKeys.has(edge.target)) fail(fieldPath(edgePath, "target"), "a key present in nodes", edge.target);
     const identity = graphEdgeIdentity(edge);
     if (seenWeakLinks.has(identity)) fail(edgePath, "a unique weak link", edge);
+    if (edge.is_hidden) fail(fieldPath(edgePath, "is_hidden"), "false for a visible weak link", edge.is_hidden);
     if (!includeInferred && edge.is_inferred) {
       fail(fieldPath(edgePath, "is_inferred"), "false when include_inferred is false", edge.is_inferred);
     }
@@ -1062,11 +1083,33 @@ function knowledgeGraphRead(value: unknown, path: string): KnowledgeGraphReadDTO
     fail(fieldPath(path, "weak_link_count"), `at least the returned weak-link count (${weakLinks.length})`, counts.weak_link_count);
   }
 
+  const hiddenEdgesPath = fieldPath(path, "hidden_edges");
+  const hiddenEdges = arrayOf(
+    requireField(dto, "hidden_edges", path),
+    hiddenEdgesPath,
+    knowledgeGraphEdge,
+  );
+  const seenHiddenEdges = new Set<string>();
+  hiddenEdges.forEach((edge, index) => {
+    const edgePath = `${hiddenEdgesPath}[${index}]`;
+    if (!nodeKeys.has(edge.source)) fail(fieldPath(edgePath, "source"), "a key present in nodes", edge.source);
+    if (!nodeKeys.has(edge.target)) fail(fieldPath(edgePath, "target"), "a key present in nodes", edge.target);
+    const identity = graphEdgeIdentity(edge);
+    if (seenHiddenEdges.has(identity)) fail(edgePath, "a unique hidden edge", edge);
+    if (edgeKeys.has(identity)) fail(edgePath, "an edge not also present in visible edges", edge);
+    if (!edge.is_hidden) fail(fieldPath(edgePath, "is_hidden"), "true for a hidden edge", edge.is_hidden);
+    seenHiddenEdges.add(identity);
+  });
+  if (counts.hidden_edge_count < hiddenEdges.length) {
+    fail(fieldPath(path, "hidden_edge_count"), `at least the returned hidden-edge count (${hiddenEdges.length})`, counts.hidden_edge_count);
+  }
+
   const truncated = booleanValue(requireField(dto, "truncated", path), fieldPath(path, "truncated"));
   const hasMissingRows = counts.node_count > nodes.length
     || counts.edge_count > edges.length
     || counts.orphan_count > orphanKeys.length
-    || counts.weak_link_count > weakLinks.length;
+    || counts.weak_link_count > weakLinks.length
+    || counts.hidden_edge_count > hiddenEdges.length;
   if (truncated !== hasMissingRows) {
     fail(fieldPath(path, "truncated"), hasMissingRows ? "true when any graph collection is capped" : "false when every graph collection is returned", truncated);
   }
@@ -1103,7 +1146,141 @@ export function validateKnowledgeGraphReadDTOForRequest(
   if (graph.edges.length > limit) fail("$.edges", `at most the requested limit (${limit})`, graph.edges);
   const weakLinkLimit = Math.min(limit, 25);
   if (graph.weak_links.length > weakLinkLimit) fail("$.weak_links", `at most ${weakLinkLimit} entries`, graph.weak_links);
+  if (graph.hidden_edges.length > weakLinkLimit) fail("$.hidden_edges", `at most ${weakLinkLimit} entries`, graph.hidden_edges);
   return graph;
+}
+
+function sameKnowledgeGraphEdgeIdentity(
+  left: KnowledgeGraphEdgeIdentityDTO,
+  right: KnowledgeGraphEdgeIdentityDTO,
+): boolean {
+  return left.source === right.source
+    && left.target === right.target
+    && left.edge_type === right.edge_type;
+}
+
+export function validateKnowledgeGraphCommandResultDTOForRequest(
+  value: unknown,
+  projectId: number,
+  command: KnowledgeGraphCommandDTO,
+): KnowledgeGraphCommandResultDTO {
+  const dto = record(value, "$");
+  const knowledgeGraph = knowledgeGraphRead(
+    requireField(dto, "knowledge_graph", "$"),
+    "$.knowledge_graph",
+  );
+  const changed = booleanValue(requireField(dto, "changed", "$"), "$.changed");
+  const replayed = booleanValue(requireField(dto, "replayed", "$"), "$.replayed");
+  const affectedEdge = knowledgeGraphEdgeIdentity(
+    requireField(dto, "affected_edge", "$"),
+    "$.affected_edge",
+  );
+  const appliedRevision = stringValue(
+    requireField(dto, "applied_revision", "$"),
+    "$.applied_revision",
+  );
+  if (!/^[0-9a-f]{64}$/.test(appliedRevision)) {
+    fail("$.applied_revision", "a 64-character lowercase hexadecimal revision", appliedRevision);
+  }
+  if (knowledgeGraph.project_id !== projectId) {
+    fail("$.knowledge_graph.project_id", `the requested project id ${projectId}`, knowledgeGraph.project_id);
+  }
+  if (knowledgeGraph.focus_key !== null || knowledgeGraph.depth !== 1 || !knowledgeGraph.include_inferred) {
+    fail("$.knowledge_graph", "the default Project Map query (no focus, depth 1, inferred edges included)", knowledgeGraph);
+  }
+  if (knowledgeGraph.nodes.length > 100) fail("$.knowledge_graph.nodes", "at most 100 entries", knowledgeGraph.nodes);
+  if (knowledgeGraph.edges.length > 100) fail("$.knowledge_graph.edges", "at most 100 entries", knowledgeGraph.edges);
+  if (knowledgeGraph.weak_links.length > 25) fail("$.knowledge_graph.weak_links", "at most 25 entries", knowledgeGraph.weak_links);
+  if (knowledgeGraph.hidden_edges.length > 25) fail("$.knowledge_graph.hidden_edges", "at most 25 entries", knowledgeGraph.hidden_edges);
+  if (!sameKnowledgeGraphEdgeIdentity(affectedEdge, command)) {
+    fail("$.affected_edge", "the edge targeted by the submitted command", affectedEdge);
+  }
+  if (replayed && changed) fail("$.changed", "false for an idempotent replay", changed);
+  if (!replayed && !changed) fail("$.changed", "true for a freshly accepted graph command", changed);
+  if (!replayed && changed && appliedRevision === command.expected_revision) {
+    fail("$.applied_revision", "a new revision when changed is true", appliedRevision);
+  }
+  return value as KnowledgeGraphCommandResultDTO;
+}
+
+export function validateKnowledgeGraphCommandReceiptDTOForRequest(
+  value: unknown,
+  projectId: number,
+  command: KnowledgeGraphCommandDTO,
+): KnowledgeGraphCommandReceiptDTO {
+  const dto = record(value, "$");
+  const returnedProjectId = integerValue(requireField(dto, "project_id", "$"), "$.project_id");
+  const requestDigest = stringValue(requireField(dto, "request_digest", "$"), "$.request_digest");
+  const commandKind = stringValue(requireField(dto, "command_kind", "$"), "$.command_kind");
+  const expectedRevision = stringValue(requireField(dto, "expected_revision", "$"), "$.expected_revision");
+  const appliedRevision = stringValue(requireField(dto, "applied_revision", "$"), "$.applied_revision");
+  const originalChanged = booleanValue(requireField(dto, "original_changed", "$"), "$.original_changed");
+  const affectedEdge = knowledgeGraphEdgeIdentity(
+    requireField(dto, "original_affected_edge", "$"),
+    "$.original_affected_edge",
+  );
+  const committedAt = stringValue(requireField(dto, "committed_at", "$"), "$.committed_at");
+  if (returnedProjectId !== projectId) fail("$.project_id", `the requested project id ${projectId}`, returnedProjectId);
+  if (!/^[0-9a-f]{64}$/.test(requestDigest)) fail("$.request_digest", "a 64-character lowercase hexadecimal digest", requestDigest);
+  if (commandKind !== command.kind) fail("$.command_kind", `the submitted command kind ${command.kind}`, commandKind);
+  if (expectedRevision !== command.expected_revision) fail("$.expected_revision", "the submitted expected revision", expectedRevision);
+  if (!/^[0-9a-f]{64}$/.test(expectedRevision)) fail("$.expected_revision", "a 64-character lowercase hexadecimal revision", expectedRevision);
+  if (!/^[0-9a-f]{64}$/.test(appliedRevision)) fail("$.applied_revision", "a 64-character lowercase hexadecimal revision", appliedRevision);
+  if (!originalChanged) fail("$.original_changed", "true for a committed graph edge-review command", originalChanged);
+  if (originalChanged && appliedRevision === expectedRevision) fail("$.applied_revision", "a new revision when original_changed is true", appliedRevision);
+  if (!sameKnowledgeGraphEdgeIdentity(affectedEdge, command)) fail("$.original_affected_edge", "the edge targeted by the submitted command", affectedEdge);
+  if (!committedAt.trim() || Number.isNaN(Date.parse(committedAt))) fail("$.committed_at", "a non-empty ISO timestamp", committedAt);
+  return value as KnowledgeGraphCommandReceiptDTO;
+}
+
+export function validateKnowledgeGraphHiddenEdgePageDTOForRequest(
+  value: unknown,
+  projectId: number,
+  offset: number,
+  limit: number,
+): KnowledgeGraphHiddenEdgePageDTO {
+  const dto = record(value, "$");
+  const returnedProjectId = integerValue(requireField(dto, "project_id", "$"), "$.project_id");
+  const revision = stringValue(requireField(dto, "revision", "$"), "$.revision");
+  const returnedOffset = integerValue(requireField(dto, "offset", "$"), "$.offset");
+  const returnedLimit = integerValue(requireField(dto, "limit", "$"), "$.limit");
+  const hiddenEdgeCount = integerValue(requireField(dto, "hidden_edge_count", "$"), "$.hidden_edge_count");
+  const returnedEdgeCount = integerValue(requireField(dto, "returned_edge_count", "$"), "$.returned_edge_count");
+  const nodes = arrayOf(requireField(dto, "nodes", "$"), "$.nodes", knowledgeGraphNode);
+  const edges = arrayOf(requireField(dto, "edges", "$"), "$.edges", knowledgeGraphEdge);
+  if (returnedProjectId !== projectId) fail("$.project_id", `the requested project id ${projectId}`, returnedProjectId);
+  if (!/^[0-9a-f]{64}$/.test(revision)) fail("$.revision", "a 64-character lowercase hexadecimal revision", revision);
+  if (returnedOffset !== offset) fail("$.offset", `the requested offset ${offset}`, returnedOffset);
+  if (returnedLimit !== limit) fail("$.limit", `the requested limit ${limit}`, returnedLimit);
+  if (hiddenEdgeCount < 0) fail("$.hidden_edge_count", "zero or greater", hiddenEdgeCount);
+  if (returnedEdgeCount !== edges.length) fail("$.returned_edge_count", `the edges length (${edges.length})`, returnedEdgeCount);
+  const expectedPageLength = Math.min(limit, Math.max(hiddenEdgeCount - offset, 0));
+  if (edges.length !== expectedPageLength) fail("$.edges", `exactly ${expectedPageLength} entries for this page`, edges);
+  if (edges.length > limit) fail("$.edges", `at most the requested limit (${limit})`, edges);
+  if (edges.length > 0 && offset + edges.length > hiddenEdgeCount) fail("$.edges", "a page within hidden_edge_count", edges);
+  if (nodes.length > limit * 2) fail("$.nodes", `at most ${limit * 2} endpoint nodes`, nodes);
+  const nodeKeys = new Set<string>();
+  nodes.forEach((node, index) => {
+    if (nodeKeys.has(node.key)) fail(`$.nodes[${index}].key`, "a unique endpoint-node key", node.key);
+    nodeKeys.add(node.key);
+  });
+  const seen = new Set<string>();
+  const endpointKeys = new Set<string>();
+  edges.forEach((edge, index) => {
+    const edgePath = `$.edges[${index}]`;
+    if (!edge.is_hidden) fail(`${edgePath}.is_hidden`, "true for a hidden edge", edge.is_hidden);
+    if (!nodeKeys.has(edge.source)) fail(`${edgePath}.source`, "a key present in nodes", edge.source);
+    if (!nodeKeys.has(edge.target)) fail(`${edgePath}.target`, "a key present in nodes", edge.target);
+    endpointKeys.add(edge.source);
+    endpointKeys.add(edge.target);
+    const identity = graphEdgeIdentity(edge);
+    if (seen.has(identity)) fail(edgePath, "a unique hidden edge", edge);
+    seen.add(identity);
+  });
+  nodes.forEach((node, index) => {
+    if (!endpointKeys.has(node.key)) fail(`$.nodes[${index}].key`, "an endpoint referenced by this page", node.key);
+  });
+  return value as KnowledgeGraphHiddenEdgePageDTO;
 }
 
 export function validateStoryStructureCommandResultDTOForRequest(

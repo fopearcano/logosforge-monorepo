@@ -36,9 +36,12 @@ check(typeof api.executePsykeConsoleCommand === "function", "preview mock must i
 check(typeof api.executeTimelineCommand === "function", "preview mock must implement guarded Timeline commands");
 check(typeof api.executeCanvasPlotCommand === "function", "preview mock must implement guarded Canvas Plot commands");
 check(typeof api.getKnowledgeGraph === "function", "preview mock must implement the canonical Knowledge Graph read");
+check(typeof api.executeKnowledgeGraphCommand === "function", "preview mock must implement guarded Knowledge Graph review commands");
+check(typeof api.getKnowledgeGraphCommandReceipt === "function", "preview mock must implement durable Knowledge Graph command receipts");
+check(typeof api.getKnowledgeGraphHiddenEdges === "function", "preview mock must implement the complete paged hidden-edge review queue");
 
 const health = await api.health();
-check(health.status === "ok" && health.api_version === "1.6.0", "preview health must satisfy the core contract");
+check(health.status === "ok" && health.api_version === "1.7.0", "preview health must satisfy the core contract");
 const projectMap = await api.getKnowledgeGraph(1, { limit: 160, include_inferred: true });
 check(
   projectMap.project_id === 1
@@ -65,6 +68,40 @@ check(
   focusedProjectMap.nodes.find((node) => node.key === focusNode.key)?.degree === focusNode.degree,
   "preview focused nodes must retain their full-project degree",
 );
+const graphReviewApi = createMockApiClient();
+const initialReviewGraph = await graphReviewApi.getKnowledgeGraph(1, { limit: 100, include_inferred: true });
+const reviewEdge = initialReviewGraph.edges.find((edge) => edge.is_inferred && !edge.is_user_confirmed)!;
+const hideGraphCommand = {
+  kind: "hide_edge" as const,
+  expected_revision: initialReviewGraph.revision,
+  source: reviewEdge.source,
+  target: reviewEdge.target,
+  edge_type: reviewEdge.edge_type,
+};
+const graphReviewKey = "preview-graph-key-0001";
+const hiddenResult = await graphReviewApi.executeKnowledgeGraphCommand(1, hideGraphCommand, graphReviewKey);
+check(hiddenResult.changed && !hiddenResult.replayed && hiddenResult.applied_revision !== initialReviewGraph.revision, "preview graph hide must apply one revision-guarded mutation");
+const hiddenPage = await graphReviewApi.getKnowledgeGraphHiddenEdges(1, 0, 25);
+check(
+  hiddenPage.hidden_edge_count === 1
+    && hiddenPage.returned_edge_count === 1
+    && hiddenPage.edges[0]?.is_hidden === true
+    && hiddenPage.nodes.some((node) => node.key === reviewEdge.source)
+    && hiddenPage.nodes.some((node) => node.key === reviewEdge.target),
+  "preview hidden queue must return every hidden decision with exact endpoint nodes",
+);
+const graphReceipt = await graphReviewApi.getKnowledgeGraphCommandReceipt(1, graphReviewKey, hideGraphCommand);
+check(graphReceipt.original_changed && graphReceipt.applied_revision === hiddenResult.applied_revision, "preview graph receipt must preserve the original mutation outcome");
+const replayedHide = await graphReviewApi.executeKnowledgeGraphCommand(1, hideGraphCommand, graphReviewKey);
+check(replayedHide.replayed && !replayedHide.changed && replayedHide.applied_revision === hiddenResult.applied_revision, "preview graph command replay must be idempotent and retain its original applied revision");
+const restoredResult = await graphReviewApi.executeKnowledgeGraphCommand(1, {
+  kind: "unhide_edge",
+  expected_revision: hiddenPage.revision,
+  source: reviewEdge.source,
+  target: reviewEdge.target,
+  edge_type: reviewEdge.edge_type,
+}, "preview-graph-key-0002");
+check(restoredResult.changed && restoredResult.knowledge_graph.hidden_edge_count === 0, "preview graph restore must remove the decision from the hidden queue");
 const canvasApi = createMockApiClient();
 const initialCanvas = await canvasApi.getCanvasPlot(1);
 check(

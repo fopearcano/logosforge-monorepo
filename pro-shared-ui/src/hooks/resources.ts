@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import type { NoteDTO, InlineCommentDTO, CharacterDTO, SceneDTO, ManuscriptSnapshotDTO, StoryStructureDTO, PsykeEntryDTO, PsykeRelationDTO, PsykeProgressionDTO, OutlineNodeDTO, ProjectDTO, TimelineSnapshotDTO, CanvasPlotSnapshotDTO, PlotBlockDTO, ExportRequestDTO, ExportResponseDTO, NarrativeDashboardDTO, ContinuityReportDTO, PacingInsightDTO, BalanceDataDTO, StoryHealthDTO, StructuralAnalysisDTO, WorkflowRunDTO, DecisionRadarDTO, KnowledgeGraphQueryDTO, KnowledgeGraphReadDTO, GraphGravityDTO, AdaptDTO, ReviewReportDTO, FormatReviewDTO, QuantumResultDTO, AssistantResponseDTO, ExtractionResultDTO, ExtractionApplyRequestDTO, ExtractionApplyReportDTO } from "@logosforge/ui-contracts";
+import type { NoteDTO, InlineCommentDTO, CharacterDTO, SceneDTO, ManuscriptSnapshotDTO, StoryStructureDTO, PsykeEntryDTO, PsykeRelationDTO, PsykeProgressionDTO, OutlineNodeDTO, ProjectDTO, TimelineSnapshotDTO, CanvasPlotSnapshotDTO, PlotBlockDTO, ExportRequestDTO, ExportResponseDTO, NarrativeDashboardDTO, ContinuityReportDTO, PacingInsightDTO, BalanceDataDTO, StoryHealthDTO, StructuralAnalysisDTO, WorkflowRunDTO, DecisionRadarDTO, KnowledgeGraphQueryDTO, KnowledgeGraphReadDTO, KnowledgeGraphHiddenEdgePageDTO, GraphGravityDTO, AdaptDTO, ReviewReportDTO, FormatReviewDTO, QuantumResultDTO, AssistantResponseDTO, ExtractionResultDTO, ExtractionApplyRequestDTO, ExtractionApplyReportDTO } from "@logosforge/ui-contracts";
 import type { ExtractionJobDTO } from "@logosforge/ui-contracts";
 import { useStudio } from "../adapters/StudioProvider";
 import { useResource, type Resource } from "./useResource";
@@ -203,7 +203,23 @@ export function useKnowledgeGraph(query: KnowledgeGraphQueryDTO = {}): Resource<
     [
       "project_data_changed", "scene_changed", "scenes_changed", "outline_changed",
       "plot_changed", "timeline_changed", "psyke_changed", "notes_changed", "characters_changed",
+      "knowledge_graph_changed",
     ],
+  );
+}
+
+/** Complete paged queue of durable hidden-edge decisions for restore review. */
+export function useKnowledgeGraphHiddenEdges(
+  offset = 0,
+  limit = 25,
+  enabled = true,
+): Resource<KnowledgeGraphHiddenEdgePageDTO> {
+  const { api, projectId } = useStudio();
+  const key = projectId == null || !enabled ? null : `${projectId}\u0000hidden-edges\u0000${offset}\u0000${limit}`;
+  return useResource(
+    key,
+    () => api.getKnowledgeGraphHiddenEdges(projectId as number, offset, limit),
+    ["knowledge_graph_changed"],
   );
 }
 

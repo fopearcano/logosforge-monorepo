@@ -22,7 +22,9 @@ capped.
   `get_scenes_without_psyke`
 - `get_graph_summary_for_assistant(...)`, `explain_node`, `explain_edge`
 - `build_graph_decision_cards(...)`
-- confirmable writes: `confirm_edge`, `hide_edge`, `unhide_edge`,
+- transactional HTTP edge review: `confirm_edge`, `hide_edge`, `unhide_edge`
+  with revision guards, durable command receipts, and exact-retry recovery;
+- legacy in-process confirmable writes: `confirm_edge`, `hide_edge`, `unhide_edge`,
   `convert_edge_to_psyke_relation`, `create_psyke_entry_from_term`
 
 The live graph is **computed in-memory each build**. Only **user-confirmed /
@@ -118,6 +120,28 @@ requested/returned/total counts, truncation state, authoritative orphan and
 weak-link diagnostics, and warnings for unavailable source systems. Response
 nodes and edges are deterministic, project-scoped, and endpoint-complete.
 
+Every read also returns a project-wide review `revision` and a bounded hidden
+edge subset. The complete restore queue is reachable through deterministic,
+dense pages at `GET .../knowledge-graph/hidden-edges?offset=&limit=`; each page
+contains its exact unique endpoint nodes. The review revision is computed in
+one SQLite snapshot from all persisted endpoint/edge rows plus the project's id
+and immutable creation timestamp. It intentionally does not claim that the
+legacy multi-extractor live graph is one database snapshot: source edits may
+change derived nodes/edges without rotating this narrower review token.
+
+`POST .../knowledge-graph/commands` accepts directional
+`(source,target,edge_type)` actions `confirm_edge`, `hide_edge`, and
+`unhide_edge`. Confirm/hide require a visible inferred edge; unhide requires a
+persisted hidden decision. The required `Idempotency-Key` is hashed rather than
+stored, and the mutation plus compact receipt commit atomically. Exact retries
+resolve the receipt before live-edge preflight, return the current default map,
+and preserve the original `applied_revision`; receipt lookup is separately
+available at `GET .../knowledge-graph/command-receipt` with no-store/capability
+cache headers. The receipt decoder rebinds its stored result to the canonical
+request digest so semantically altered proof fails closed. Only a fresh changed
+command emits `knowledge_graph_changed`. Logical duplicate persisted rows fail
+closed instead of choosing an order-dependent winner.
+
 ## Graph section (UI)
 
 The Pro Graph panel now renders the canonical, API-backed **Project Map** and
@@ -127,10 +151,10 @@ can focus its neighborhood or publish its context to the Studio tools. The
 panel also presents Core-authoritative orphan and weak-link diagnostics,
 loading/error/empty/retry states, and explicit size-cap/truncation status.
 
-The surface is intentionally **read-only** in this slice. Confirm/hide/unhide
-actions, richer Structure/Risk/Revision/Confirmed-only modes, and graph writes
-through MCP remain deferred until their proposal, transaction, and durable
-receipt semantics are designed.
+The initial Project Map is now paired with explicit **Confirm / Hide / Restore**
+review actions backed by the transactional HTTP contract above. Richer
+Structure/Risk/Revision/Confirmed-only modes and graph writes through MCP remain
+deferred.
 
 ## Logos (deterministic, no LLM)
 
@@ -138,8 +162,9 @@ receipt semantics are designed.
 `Show Scene Neighborhood`, `Show PSYKE Neighborhood`, `Find Orphan Nodes`,
 `Find Weak Links`, `Find Undefined Terms`, `Generate Decision Cards from Graph` —
 all deterministic, read-only. `Explain Knowledge Graph` is generative (advisory;
-never confirms an edge). Confirm/hide/convert/create are confirmable service
-calls (no LLM, explicit user action, UI deferred).
+never confirms an edge). Confirm, Hide, and Restore are explicit transactional
+UI actions backed by durable receipts; convert/create remain deferred service
+actions.
 
 ## Assistant context
 
@@ -177,12 +202,12 @@ also rejects malformed graph payloads and dangling references before render.
 
 ## Limitations & deferred
 
-- The implemented Graph UI is a bounded read-only Project Map/neighborhood
-  slice; richer graph modes and confirm/hide/unhide writes are not yet exposed.
+- The implemented Graph UI remains a bounded Project Map/neighborhood slice;
+  richer graph modes are not yet exposed.
 - Node size currently uses explainable full-project degree; Story Gravity
   sizing and the story-order flow overlay remain part of the richer Graph pass.
-- No MCP graph write tools until graph mutations have transaction, review, and
-  durable command-receipt guarantees.
+- MCP graph write tools are not yet exposed; they can now build on the guarded
+  HTTP command/receipt contract rather than legacy collector writes.
 - No force-directed render.
 - No external graph DB / Neo4j, no cloud sync, no collaboration, no AI-only
   semantic inference, no unbounded whole-project expansion.
@@ -192,10 +217,8 @@ also rejects malformed graph payloads and dangling references before render.
 
 ## Next recommended phase
 
-Design and implement transactional **Graph edge actions** (confirm, hide, and
-unhide) with explicit review, revision guards, durable command receipts, and
-same-proposal recovery before exposing them in Pro or MCP. Then extend the
-current bounded surface with the richer Structure, Risk, Revision Impact,
+Expose the guarded Graph edge actions through MCP proposal/apply/recovery, then
+extend the bounded surface with richer Structure, Risk, Revision Impact,
 Confirmed-only, and Inferred+Confirmed modes, Story Gravity sizing, and the
 story-order flow overlay; optionally wire graph decision cards directly into
 the Dashboard's radar panel.

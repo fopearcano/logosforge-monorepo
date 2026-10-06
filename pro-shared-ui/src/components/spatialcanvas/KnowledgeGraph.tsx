@@ -1,8 +1,16 @@
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
-import type { KnowledgeGraphEdgeDTO, KnowledgeGraphNodeDTO } from "@logosforge/ui-contracts";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import type {
+  KnowledgeGraphCommandDTO,
+  KnowledgeGraphEdgeDTO,
+  KnowledgeGraphNodeDTO,
+  KnowledgeGraphQueryDTO,
+  KnowledgeGraphReadDTO,
+} from "@logosforge/ui-contracts";
 import { useSelection } from "../../adapters/selection";
-import { useProjectId } from "../../adapters/StudioProvider";
-import { useKnowledgeGraph } from "../../hooks";
+import { useStudio } from "../../adapters/StudioProvider";
+import { ApiRequestError, ApiRequestTimeoutError } from "../../adapters/httpApiClient";
+import { flushPendingProjectSaves } from "../../adapters/projectSaveCoordinator";
+import { useKnowledgeGraph, useKnowledgeGraphHiddenEdges, useMountedRef } from "../../hooks";
 import { PanelShell, type PanelProps } from "../shell/PanelShell";
 import {
   buildKnowledgeGraphView,
@@ -10,11 +18,19 @@ import {
   layoutKnowledgeGraph,
   type GraphConfidence,
 } from "./knowledgeGraphModel";
+import {
+  createKnowledgeGraphIdempotencyKey,
+  describeKnowledgeGraphAction,
+  planKnowledgeGraphCommand,
+  type KnowledgeGraphEdgeAction,
+  type KnowledgeGraphEdgeIntent,
+} from "./knowledgeGraphTransactions";
 
 // Keep the default project page dense enough to be useful while preserving
 // distinct keyboard/pointer hit areas. Larger graphs remain reachable through
 // the server-backed focus-neighborhood control.
 const PAGE_LIMIT = 48;
+const HIDDEN_EDGE_PAGE_LIMIT = 25;
 const CW = 900;
 const CH = 560;
 
@@ -98,12 +114,14 @@ function InsightCard({
   children,
   onClick,
   ariaLabel,
+  disabled = false,
 }: {
   label: string;
   tone: string;
   children: ReactNode;
   onClick?: () => void;
   ariaLabel?: string;
+  disabled?: boolean;
 }) {
   const content = (
     <>
@@ -112,7 +130,7 @@ function InsightCard({
     </>
   );
   return onClick ? (
-    <button type="button" aria-label={ariaLabel} onClick={onClick} style={{ width: "100%", textAlign: "left", border: "1px solid var(--line2)", background: "var(--tint)", padding: "8px 9px", marginBottom: 6, font: "inherit", cursor: "pointer" }}>{content}</button>
+    <button type="button" aria-label={ariaLabel} disabled={disabled} onClick={onClick} style={{ width: "100%", textAlign: "left", border: "1px solid var(--line2)", background: "var(--tint)", padding: "8px 9px", marginBottom: 6, font: "inherit", cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.55 : 1 }}>{content}</button>
   ) : (
     <div style={{ border: "1px solid var(--line2)", background: "var(--tint)", padding: "8px 9px", marginBottom: 6 }}>{content}</div>
   );
@@ -142,9 +160,55 @@ function edgeInspectionLabel(
   ].join(". ");
 }
 
+type NormalizedKnowledgeGraphQuery = Required<KnowledgeGraphQueryDTO>;
+
+interface EdgeReviewProposal {
+  ownerProjectId: number;
+  query: NormalizedKnowledgeGraphQuery;
+  intent: KnowledgeGraphEdgeIntent;
+  edge: KnowledgeGraphEdgeDTO;
+  idempotencyKey: string;
+  command: KnowledgeGraphCommandDTO | null;
+  retryReady: boolean;
+  hiddenPageOffset: number | null;
+}
+
+function queryMatches(
+  left: NormalizedKnowledgeGraphQuery,
+  right: NormalizedKnowledgeGraphQuery,
+): boolean {
+  return left.focus_key === right.focus_key
+    && left.depth === right.depth
+    && left.limit === right.limit
+    && left.include_inferred === right.include_inferred;
+}
+
+function actionLabel(action: KnowledgeGraphEdgeAction): string {
+  if (action === "confirm_edge") return "CONFIRM EDGE";
+  if (action === "hide_edge") return "HIDE EDGE";
+  return "RESTORE EDGE";
+}
+
+function actionEffect(action: KnowledgeGraphEdgeAction): string {
+  if (action === "confirm_edge") {
+    return "Persists this inferred relationship as user-confirmed graph metadata. It does not change manuscript or PSYKE content.";
+  }
+  if (action === "hide_edge") {
+    return "Hides this relationship from the live graph while preserving any confirmation state. The decision is reversible from Hidden edge review.";
+  }
+  return "Restores this hidden relationship to the live graph using its prior traceable evidence.";
+}
+
 export function KnowledgeGraph(props: PanelProps) {
-  const projectId = useProjectId();
+  const { api, projectId } = useStudio();
   const { setSelection } = useSelection();
+  const mounted = useMountedRef();
+  const projectIdRef = useRef(projectId);
+  projectIdRef.current = projectId;
+  const requestRef = useRef<object | null>(null);
+  const reviewRef = useRef<EdgeReviewProposal | null>(null);
+  const reviewDialogRef = useRef<HTMLElement | null>(null);
+  const reviewTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [focusKey, setFocusKey] = useState<string | null>(null);
   const [depth, setDepth] = useState(1);
   const [includeInferred, setIncludeInferred] = useState(true);
@@ -155,6 +219,19 @@ export function KnowledgeGraph(props: PanelProps) {
   const [connectionsExpanded, setConnectionsExpanded] = useState(false);
   const [orphansExpanded, setOrphansExpanded] = useState(false);
   const [weakLinksExpanded, setWeakLinksExpanded] = useState(false);
+  const [hiddenEdgesExpanded, setHiddenEdgesExpanded] = useState(false);
+  const [hiddenReviewOpen, setHiddenReviewOpen] = useState(false);
+  const [hiddenReviewOffset, setHiddenReviewOffset] = useState(0);
+  const [commandSnapshot, setCommandSnapshot] = useState<KnowledgeGraphReadDTO | null>(null);
+  const [review, setReview] = useState<EdgeReviewProposal | null>(null);
+  const [busy, setBusy] = useState("");
+  const [mutationError, setMutationError] = useState("");
+  const [mutationStatus, setMutationStatus] = useState("");
+
+  const replaceReview = useCallback((next: EdgeReviewProposal | null) => {
+    reviewRef.current = next;
+    setReview(next);
+  }, []);
 
   useEffect(() => {
     setFocusKey(null);
@@ -167,23 +244,63 @@ export function KnowledgeGraph(props: PanelProps) {
     setConnectionsExpanded(false);
     setOrphansExpanded(false);
     setWeakLinksExpanded(false);
-  }, [projectId]);
+    setHiddenEdgesExpanded(false);
+    setHiddenReviewOpen(false);
+    setHiddenReviewOffset(0);
+    setCommandSnapshot(null);
+    requestRef.current = null;
+    replaceReview(null);
+    setBusy("");
+    setMutationError("");
+    setMutationStatus("");
+  }, [projectId, replaceReview]);
 
-  const query = useMemo(() => ({
+  const query = useMemo<NormalizedKnowledgeGraphQuery>(() => ({
     focus_key: focusKey,
     depth,
     limit: PAGE_LIMIT,
     include_inferred: includeInferred,
   }), [depth, focusKey, includeInferred]);
+  const queryRef = useRef(query);
+  queryRef.current = query;
   const { data, loading, error, refetch } = useKnowledgeGraph(query);
+  const hiddenReviewResource = useKnowledgeGraphHiddenEdges(
+    hiddenReviewOffset,
+    HIDDEN_EDGE_PAGE_LIMIT,
+    hiddenReviewOpen,
+  );
+  useEffect(() => {
+    if (
+      data
+      && data.project_id === projectId
+      && data.focus_key === query.focus_key
+      && data.depth === query.depth
+      && data.include_inferred === query.include_inferred
+    ) setCommandSnapshot(data);
+  }, [data, projectId, query.depth, query.focus_key, query.include_inferred]);
+
+  useEffect(() => {
+    requestRef.current = null;
+    setCommandSnapshot(null);
+    replaceReview(null);
+    setBusy("");
+    setMutationError("");
+    setMutationStatus("");
+  }, [depth, focusKey, includeInferred, projectId, replaceReview]);
   // useResource clears on project changes in an effect. This synchronous guard
   // prevents even one render of the prior project's graph in the new workspace.
-  const graph = data && data.project_id === projectId
-    && data.focus_key === focusKey
-    && data.depth === depth
-    && data.include_inferred === includeInferred
-    ? data
-    : undefined;
+  const matchesActiveQuery = (candidate: KnowledgeGraphReadDTO | null | undefined) => (
+    candidate != null
+    && candidate.project_id === projectId
+    && candidate.focus_key === focusKey
+    && candidate.depth === depth
+    && candidate.include_inferred === includeInferred
+  );
+  const graph = matchesActiveQuery(commandSnapshot)
+    ? commandSnapshot ?? undefined
+    : matchesActiveQuery(data)
+      ? data
+      : undefined;
   const view = useMemo(() => graph ? buildKnowledgeGraphView(graph, {
     hiddenNodeTypes,
     confidenceMin,
@@ -226,6 +343,19 @@ export function KnowledgeGraph(props: PanelProps) {
   const displayedOrphans = orphansExpanded ? orphanNodes : orphanNodes.slice(0, 8);
   const weakLinks = view?.weakLinks ?? [];
   const displayedWeakLinks = weakLinksExpanded ? weakLinks : weakLinks.slice(0, 8);
+  const hiddenPageCandidate = hiddenReviewResource.data;
+  const hiddenReviewPage = hiddenPageCandidate != null
+    && hiddenPageCandidate.project_id === projectId
+    && hiddenPageCandidate.offset === hiddenReviewOffset
+    && hiddenPageCandidate.limit === HIDDEN_EDGE_PAGE_LIMIT
+    ? hiddenPageCandidate
+    : undefined;
+  const hiddenEdges = hiddenReviewOpen
+    ? hiddenReviewPage?.edges ?? []
+    : graph?.hidden_edges ?? [];
+  const displayedHiddenEdges = hiddenEdgesExpanded ? hiddenEdges : hiddenEdges.slice(0, 8);
+  const graphNodeByKey = new Map((graph?.nodes ?? []).map((node) => [node.key, node]));
+  const hiddenReviewNodeByKey = new Map((hiddenReviewPage?.nodes ?? []).map((node) => [node.key, node]));
   const maxDegree = Math.max(1, ...(view?.nodes ?? []).map((node) => node.degree));
   const mapCapped = Boolean(graph && (
     graph.returned_node_count < graph.node_count
@@ -234,6 +364,7 @@ export function KnowledgeGraph(props: PanelProps) {
   const diagnosticsCapped = Boolean(graph && (
     graph.orphan_keys.length < graph.orphan_count
     || graph.weak_links.length < graph.weak_link_count
+    || graph.hidden_edges.length < graph.hidden_edge_count
   ));
 
   useEffect(() => {
@@ -243,7 +374,17 @@ export function KnowledgeGraph(props: PanelProps) {
   useEffect(() => {
     setOrphansExpanded(false);
     setWeakLinksExpanded(false);
+    setHiddenEdgesExpanded(false);
   }, [confidenceMin, focusKey, hiddenNodeTypes, includeInferred, sourceSystem]);
+
+  useEffect(() => {
+    if (!hiddenReviewOpen || !hiddenReviewPage || hiddenReviewOffset === 0) return;
+    if (hiddenReviewPage.returned_edge_count > 0 || hiddenReviewOffset < hiddenReviewPage.hidden_edge_count) return;
+    const lastOffset = hiddenReviewPage.hidden_edge_count === 0
+      ? 0
+      : Math.floor((hiddenReviewPage.hidden_edge_count - 1) / HIDDEN_EDGE_PAGE_LIMIT) * HIDDEN_EDGE_PAGE_LIMIT;
+    setHiddenReviewOffset(lastOffset);
+  }, [hiddenReviewOffset, hiddenReviewOpen, hiddenReviewPage]);
 
   const chooseNode = (node: KnowledgeGraphNodeDTO) => {
     setSelectedKey(node.key);
@@ -262,6 +403,226 @@ export function KnowledgeGraph(props: PanelProps) {
     return next;
   });
 
+  const beginEdgeReview = (
+    action: KnowledgeGraphEdgeAction,
+    edge: KnowledgeGraphEdgeDTO,
+    trigger: HTMLButtonElement,
+    hiddenPageOffset: number | null = null,
+  ) => {
+    if (projectId == null || busy) return;
+    reviewTriggerRef.current = trigger;
+    setMutationError("");
+    setMutationStatus("");
+    replaceReview({
+      ownerProjectId: projectId,
+      query: { ...query },
+      intent: {
+        kind: action,
+        source: edge.source,
+        target: edge.target,
+        edge_type: edge.edge_type,
+      },
+      edge: { ...edge, metadata: { ...edge.metadata } },
+      idempotencyKey: createKnowledgeGraphIdempotencyKey(),
+      command: null,
+      retryReady: false,
+      hiddenPageOffset,
+    });
+  };
+
+  const cancelEdgeReview = () => {
+    if (busy) return;
+    replaceReview(null);
+    setMutationError("");
+    setMutationStatus("");
+    const trigger = reviewTriggerRef.current;
+    reviewTriggerRef.current = null;
+    trigger?.focus();
+  };
+
+  useEffect(() => {
+    if (review && !busy) reviewDialogRef.current?.focus();
+  }, [busy, review]);
+
+  const runReviewedEdgeAction = useCallback(async () => {
+    const initialProposal = reviewRef.current;
+    if (!initialProposal || requestRef.current != null) return;
+    const ownerProjectId = initialProposal.ownerProjectId;
+    const proposalKey = initialProposal.idempotencyKey;
+    const token = {};
+    requestRef.current = token;
+    setBusy(initialProposal.intent.kind);
+    setMutationError("");
+    setMutationStatus("Refreshing graph review state…");
+
+    const ownsRequest = () => mounted.current
+      && requestRef.current === token
+      && projectIdRef.current === ownerProjectId;
+    const ownsProposal = () => ownsRequest()
+      && reviewRef.current?.idempotencyKey === proposalKey
+      && queryMatches(queryRef.current, initialProposal.query);
+
+    const refreshCurrentQuery = async (successMessage: string) => {
+      api.invalidatePendingReads?.();
+      try {
+        const refreshed = await api.getKnowledgeGraph(ownerProjectId, initialProposal.query);
+        if (!ownsRequest() || !queryMatches(queryRef.current, initialProposal.query)) return;
+        setCommandSnapshot(refreshed);
+        setMutationError("");
+        setMutationStatus(successMessage);
+        if (hiddenReviewOpen) hiddenReviewResource.refetch();
+      } catch (refreshFailure) {
+        if (!ownsRequest()) return;
+        setMutationStatus("");
+        setMutationError(`The edge decision was committed, but the Project Map could not refresh — ${refreshFailure instanceof Error ? refreshFailure.message : String(refreshFailure)}. Reload the map; do not repeat the decision as a new proposal.`);
+      } finally {
+        if (ownsRequest()) refetch();
+      }
+    };
+
+    let command = initialProposal.command;
+    try {
+      if (!command) {
+        await flushPendingProjectSaves({ commitActiveField: true });
+        if (!ownsProposal()) return;
+        api.invalidatePendingReads?.();
+        const latest = await api.getKnowledgeGraph(ownerProjectId, initialProposal.query);
+        if (!ownsProposal()) return;
+        setCommandSnapshot(latest);
+        let planningGraph = latest;
+        if (initialProposal.intent.kind === "unhide_edge") {
+          if (initialProposal.hiddenPageOffset == null) {
+            replaceReview(null);
+            setMutationStatus("");
+            setMutationError("Open the complete hidden-edge review queue and review that edge again before restoring it.");
+            return;
+          }
+          const hiddenPage = await api.getKnowledgeGraphHiddenEdges(
+            ownerProjectId,
+            initialProposal.hiddenPageOffset,
+            HIDDEN_EDGE_PAGE_LIMIT,
+          );
+          if (!ownsProposal()) return;
+          planningGraph = {
+            ...latest,
+            revision: hiddenPage.revision,
+            hidden_edges: hiddenPage.edges,
+            hidden_edge_count: hiddenPage.hidden_edge_count,
+          };
+        }
+        const planned = planKnowledgeGraphCommand(planningGraph, initialProposal.intent);
+        if (!planned.command) {
+          replaceReview(null);
+          setMutationStatus("");
+          setMutationError(planned.error);
+          refetch();
+          return;
+        }
+        command = planned.command;
+        replaceReview({ ...initialProposal, edge: planned.edge, command, retryReady: false });
+      }
+
+      if (!ownsProposal()) return;
+      setMutationStatus(`Saving reviewed decision to ${describeKnowledgeGraphAction(command.kind)}…`);
+      try {
+        const result = await api.executeKnowledgeGraphCommand(
+          ownerProjectId,
+          command,
+          proposalKey,
+        );
+        if (!ownsProposal()) return;
+        replaceReview(null);
+        reviewTriggerRef.current = null;
+        await refreshCurrentQuery(result.replayed
+          ? "Recovered the previously committed edge decision."
+          : result.changed
+            ? "Knowledge Graph edge decision saved."
+            : "The Knowledge Graph already matched that edge decision.");
+      } catch (failure) {
+        if (!ownsProposal()) return;
+        const ambiguousTransport = failure instanceof ApiRequestTimeoutError
+          ? failure.outcomeUnknown
+          : failure instanceof ApiRequestError
+            ? failure.status >= 500 || failure.status === 408 || failure.status === 429
+            : true;
+        if (ambiguousTransport) {
+          setMutationStatus("The write response was interrupted. Checking its durable receipt…");
+          try {
+            const receipt = await api.getKnowledgeGraphCommandReceipt(
+              ownerProjectId,
+              proposalKey,
+              command,
+            );
+            if (!ownsProposal()) return;
+            replaceReview(null);
+            reviewTriggerRef.current = null;
+            await refreshCurrentQuery(receipt.original_changed
+              ? "Recovered the committed edge decision from its durable receipt."
+              : "The durable receipt confirms that the graph already matched this decision.");
+            return;
+          } catch (receiptFailure) {
+            if (!ownsProposal()) return;
+            const next = { ...(reviewRef.current ?? initialProposal), command, retryReady: true };
+            replaceReview(next);
+            setMutationStatus("");
+            setMutationError(
+              receiptFailure instanceof ApiRequestError
+                && receiptFailure.code === "knowledge_graph_receipt_not_found"
+                ? "No committed receipt is available yet. Retry will reuse the exact reviewed proposal and Idempotency-Key."
+                : `The write outcome could not be verified — ${receiptFailure instanceof Error ? receiptFailure.message : String(receiptFailure)}. Retry will reuse the exact reviewed proposal and Idempotency-Key.`,
+            );
+            refetch();
+            return;
+          }
+        }
+        throw failure;
+      }
+    } catch (failure) {
+      if (!ownsRequest()) return;
+      const keyConflict = failure instanceof ApiRequestError && failure.code === "idempotency_key_conflict";
+      const conflict = failure instanceof ApiRequestError
+        && !keyConflict
+        && (failure.code === "knowledge_graph_conflict" || failure.status === 409);
+      const missing = failure instanceof ApiRequestError && failure.status === 404;
+      const definiteClientFailure = failure instanceof ApiRequestError
+        && failure.status >= 400
+        && failure.status < 500
+        && failure.status !== 408
+        && failure.status !== 429;
+      if (conflict || missing || keyConflict || definiteClientFailure) {
+        replaceReview(null);
+      } else {
+        replaceReview({ ...(reviewRef.current ?? initialProposal), command, retryReady: true });
+      }
+      setMutationStatus("");
+      setMutationError(
+        conflict
+          ? "The graph review state changed before this decision could be saved. The map was refreshed; review the edge again."
+            : missing
+              ? "That edge is no longer available. The map was refreshed."
+            : keyConflict
+              ? "This proposal key was already used for a different graph decision. Review the edge again to create a new proposal."
+              : definiteClientFailure
+                ? `Core rejected the edge decision — ${failure.message}. The map was refreshed; review the edge again.`
+                : `Couldn’t save the edge decision — ${failure instanceof Error ? failure.message : String(failure)}.`,
+      );
+      refetch();
+    } finally {
+      if (requestRef.current === token) {
+        requestRef.current = null;
+        if (mounted.current && projectIdRef.current === ownerProjectId) setBusy("");
+      }
+    }
+  }, [api, hiddenReviewOpen, hiddenReviewResource, mounted, refetch, replaceReview]);
+
+  const interactionLocked = Boolean(busy) || review != null;
+  const reviewSourceLabel = review
+    ? hiddenReviewNodeByKey.get(review.edge.source)?.label || graphNodeByKey.get(review.edge.source)?.label || review.edge.source
+    : "";
+  const reviewTargetLabel = review
+    ? hiddenReviewNodeByKey.get(review.edge.target)?.label || graphNodeByKey.get(review.edge.target)?.label || review.edge.target
+    : "";
+
   return (
     <PanelShell {...props}>
       <div data-screen-label="Knowledge Graph" style={panelBox}>
@@ -275,26 +636,84 @@ export function KnowledgeGraph(props: PanelProps) {
           <div style={{ flex: 1 }} />
           <label style={{ display: "flex", alignItems: "center", gap: 5, color: "var(--txt2)", fontSize: 8 }}>
             DEPTH
-            <select aria-label="Knowledge Graph focus depth" value={depth} onChange={(event) => setDepth(Number(event.currentTarget.value))} style={control}>
+            <select aria-label="Knowledge Graph focus depth" value={depth} disabled={interactionLocked} onChange={(event) => setDepth(Number(event.currentTarget.value))} style={{ ...control, opacity: interactionLocked ? 0.55 : 1 }}>
               <option value={1}>1 hop</option>
               <option value={2}>2 hops</option>
             </select>
           </label>
           {focusKey ? (
-            <button type="button" aria-label="Return to full Project Map" onClick={() => setFocusKey(null)} style={activeControl}>SHOW PROJECT MAP</button>
+            <button type="button" disabled={interactionLocked} aria-label="Return to full Project Map" onClick={() => setFocusKey(null)} style={{ ...activeControl, opacity: interactionLocked ? 0.55 : 1 }}>SHOW PROJECT MAP</button>
           ) : (
-            <button type="button" disabled={!selected} aria-label={selected ? `Focus graph on ${selected.label || selected.key}` : "Focus graph on selected node"} onClick={() => selected && setFocusKey(selected.key)} style={{ ...activeControl, opacity: selected ? 1 : 0.45, cursor: selected ? "pointer" : "default" }}>FOCUS NEIGHBORHOOD</button>
+            <button type="button" disabled={!selected || interactionLocked} aria-label={selected ? `Focus graph on ${selected.label || selected.key}` : "Focus graph on selected node"} onClick={() => selected && setFocusKey(selected.key)} style={{ ...activeControl, opacity: selected && !interactionLocked ? 1 : 0.45, cursor: selected && !interactionLocked ? "pointer" : "default" }}>FOCUS NEIGHBORHOOD</button>
           )}
         </div>
 
         {graph && (graph.truncated || diagnosticsCapped || graph.warnings.length > 0 || graph.unavailable.length > 0) && (
           <div role="status" aria-live="polite" style={{ flex: "none", padding: "5px 14px", borderBottom: "1px solid var(--line2)", color: graph.truncated || diagnosticsCapped ? "var(--warning)" : "var(--txt2)", background: "var(--tint2)", fontSize: 8, lineHeight: 1.45, overflowWrap: "anywhere" }}>
             {mapCapped && <span>SIZE CAP · Showing an interaction-safe page of {graph.returned_node_count} of {graph.node_count} nodes and {graph.returned_edge_count} of {graph.edge_count} edges (up to {PAGE_LIMIT} nodes). Focus a node to inspect its bounded neighborhood. </span>}
-            {diagnosticsCapped && <span>DIAGNOSTIC CAP · Core returned {graph.orphan_keys.length} of {graph.orphan_count} orphan keys and {graph.weak_links.length} of {graph.weak_link_count} weak links. </span>}
+            {diagnosticsCapped && <span>DIAGNOSTIC CAP · Core returned {graph.orphan_keys.length} of {graph.orphan_count} orphan keys, {graph.weak_links.length} of {graph.weak_link_count} weak links, and {graph.hidden_edges.length} of {graph.hidden_edge_count} hidden edges. </span>}
             {graph.truncated && !mapCapped && !diagnosticsCapped && <span>BOUNDED RESPONSE · Core indicated additional graph data was omitted. </span>}
             {graph.warnings.map((warning) => <span key={warning}>WARNING · {warning} </span>)}
             {graph.unavailable.length > 0 && <span>DEFERRED SOURCES · {graph.unavailable.join(", ")}</span>}
           </div>
+        )}
+
+        {(mutationStatus || mutationError) && (
+          <div
+            role={mutationError ? "alert" : "status"}
+            aria-live="polite"
+            style={{ flex: "none", display: "flex", alignItems: "center", gap: 8, padding: "6px 14px", borderBottom: "1px solid var(--line2)", color: mutationError ? "var(--blocking)" : "var(--green)", background: "var(--tint2)", fontSize: 8.5, lineHeight: 1.45, overflowWrap: "anywhere" }}
+          >
+            <span>{mutationError || mutationStatus}</span>
+            {mutationError && !busy && (
+              <button type="button" onClick={() => setMutationError("")} style={{ ...activeControl, marginLeft: "auto", flex: "none" }}>DISMISS MESSAGE</button>
+            )}
+          </div>
+        )}
+
+        {review && (
+          <section
+            ref={reviewDialogRef}
+            role="dialog"
+            aria-modal="false"
+            aria-labelledby="knowledge-graph-edge-review-title"
+            aria-describedby="knowledge-graph-edge-review-effect"
+            aria-busy={Boolean(busy)}
+            data-knowledge-graph-edge-review={review.intent.kind}
+            tabIndex={-1}
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && !busy) {
+                event.preventDefault();
+                cancelEdgeReview();
+              }
+            }}
+            style={{ flex: "none", borderBottom: "1px solid var(--line-cy)", background: "var(--panel2)", padding: "10px 14px", color: "var(--txt2)", fontSize: 9, lineHeight: 1.45, overflowWrap: "anywhere", outline: "none" }}
+          >
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: 8 }}>
+              <strong id="knowledge-graph-edge-review-title" style={{ color: "var(--strong)", fontFamily: "'Chakra Petch'", letterSpacing: ".12em" }}>REVIEW · {actionLabel(review.intent.kind)}</strong>
+              <span style={{ color: "var(--accent)" }}>{reviewSourceLabel} → {reviewTargetLabel}</span>
+              <span style={{ color: "var(--txt3)" }}>TYPE · {review.edge.edge_type.replaceAll("_", " ")} · CONFIDENCE · {review.edge.confidence}</span>
+            </div>
+            <div style={{ marginTop: 4 }}>
+              <span style={{ color: "var(--txt3)" }}>SOURCE SYSTEM · {review.edge.source_system.replaceAll("_", " ")} · PROVENANCE · {review.edge.provenance || "not provided"}</span>
+              <span style={{ display: "block" }}>EXPLANATION · {review.edge.explanation || "not provided"}</span>
+              <span style={{ display: "block" }}>CURRENT REVIEW STATE · {review.edge.is_hidden ? "hidden" : "visible"} · {review.edge.is_user_confirmed ? "user-confirmed" : "not user-confirmed"}</span>
+            </div>
+            <p id="knowledge-graph-edge-review-effect" style={{ margin: "6px 0", color: "var(--warning)" }}>{actionEffect(review.intent.kind)} Nothing changes until you apply this reviewed decision.</p>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
+              <button type="button" disabled={Boolean(busy)} onClick={cancelEdgeReview} style={{ ...control, cursor: busy ? "default" : "pointer", opacity: busy ? 0.55 : 1 }}>CANCEL</button>
+              <button
+                type="button"
+                disabled={Boolean(busy)}
+                aria-label={review.retryReady ? `Retry same reviewed ${actionLabel(review.intent.kind).toLowerCase()} proposal` : `Apply reviewed ${actionLabel(review.intent.kind).toLowerCase()}`}
+                onClick={() => void runReviewedEdgeAction()}
+                style={{ ...activeControl, opacity: busy ? 0.55 : 1, cursor: busy ? "default" : "pointer" }}
+              >
+                {busy ? "WORKING…" : review.retryReady ? "RETRY SAME PROPOSAL" : `APPLY ${actionLabel(review.intent.kind)}`}
+              </button>
+              {review.retryReady && review.command && <span role="status" style={{ alignSelf: "center", color: "var(--txt3)" }}>Retry preserves the exact reviewed command and Idempotency-Key.</span>}
+            </div>
+          </section>
         )}
 
         <div
@@ -306,7 +725,7 @@ export function KnowledgeGraph(props: PanelProps) {
         >
           <div style={{ display: "flex", width: "100%", minWidth: 920, height: "100%", minHeight: 0 }}>
           <aside aria-label="Knowledge Graph filters" style={{ width: 196, flex: "none", borderRight: "1px solid var(--line)", background: "var(--panel2)", overflowY: "auto", padding: "12px 11px" }}>
-            <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
+            <fieldset disabled={interactionLocked} style={{ border: 0, padding: 0, margin: 0, opacity: interactionLocked ? 0.55 : 1 }}>
               <legend style={{ fontSize: 7.5, letterSpacing: ".2em", color: "var(--txt3)", marginBottom: 8 }}>NODE TYPES</legend>
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                 {nodeTypes.length === 0 && <span style={{ fontSize: 8.5, color: "var(--txt3)" }}>No node types loaded</span>}
@@ -324,7 +743,7 @@ export function KnowledgeGraph(props: PanelProps) {
               </div>
             </fieldset>
 
-            <fieldset style={{ border: 0, padding: 0, margin: "15px 0 0" }}>
+            <fieldset disabled={interactionLocked} style={{ border: 0, padding: 0, margin: "15px 0 0", opacity: interactionLocked ? 0.55 : 1 }}>
               <legend style={{ fontSize: 7.5, letterSpacing: ".2em", color: "var(--txt3)", marginBottom: 8 }}>EDGE FILTERS</legend>
               <label style={{ display: "flex", flexDirection: "column", gap: 4, color: "var(--txt2)", fontSize: 8, marginBottom: 9 }}>
                 MINIMUM CONFIDENCE
@@ -400,9 +819,10 @@ export function KnowledgeGraph(props: PanelProps) {
                       type="button"
                       data-graph-node-key={node.key}
                       aria-pressed={selectedNode}
+                      disabled={interactionLocked}
                       aria-label={`Select ${node.label || node.key}, ${meta.label}, ${node.degree} connections`}
                       onClick={() => chooseNode(node)}
-                      style={{ position: "absolute", left: position.x, top: position.y, transform: "translate(-50%,-50%)", zIndex: selectedNode ? 4 : 3, width: 80, minHeight: 76, border: 0, background: "transparent", padding: 0, color: "var(--txt)", font: "inherit", textAlign: "center", cursor: "pointer" }}
+                      style={{ position: "absolute", left: position.x, top: position.y, transform: "translate(-50%,-50%)", zIndex: selectedNode ? 4 : 3, width: 80, minHeight: 76, border: 0, background: "transparent", padding: 0, color: "var(--txt)", font: "inherit", textAlign: "center", cursor: interactionLocked ? "default" : "pointer", opacity: interactionLocked && !selectedNode ? 0.65 : 1 }}
                     >
                       {(selectedNode || focusedNode) && <span aria-hidden="true" style={{ position: "absolute", pointerEvents: "none", left: "50%", top: size / 2, transform: "translate(-50%,-50%)", width: size + 16, height: size + 16, borderRadius: "50%", border: `1px solid ${meta.color}`, boxShadow: `0 0 16px ${meta.color}` }} />}
                       <span aria-hidden="true" style={{ position: "relative", margin: "0 auto", width: size, height: size, borderRadius: "50%", border: `${selectedNode ? 2.5 : 1.5}px solid ${meta.color}`, background: "var(--tint)", display: "grid", placeItems: "center", color: meta.color, fontSize: Math.max(13, Math.round(size * 0.33)) }}>{meta.icon}</span>
@@ -437,7 +857,7 @@ export function KnowledgeGraph(props: PanelProps) {
                 {graph?.focus_key === selected.key ? (
                   <div role="status" style={{ ...control, width: "100%", boxSizing: "border-box", color: "var(--accent)", textAlign: "center" }}>FOCUS ROOT · {depth}-HOP NEIGHBORHOOD</div>
                 ) : (
-                  <button type="button" aria-label={`Focus graph on ${selected.label || selected.key}`} onClick={() => setFocusKey(selected.key)} style={{ ...activeControl, width: "100%" }}>FOCUS {depth}-HOP NEIGHBORHOOD</button>
+                  <button type="button" disabled={interactionLocked} aria-label={`Focus graph on ${selected.label || selected.key}`} onClick={() => setFocusKey(selected.key)} style={{ ...activeControl, width: "100%", opacity: interactionLocked ? 0.55 : 1 }}>FOCUS {depth}-HOP NEIGHBORHOOD</button>
                 )}
                 <div style={{ marginTop: 10, color: "var(--txt3)", fontSize: 7.5, letterSpacing: ".14em" }}>VISIBLE CONNECTIONS · SHOWING {displayedConnections.length} OF {selectedEdges.length}</div>
                 {selectedEdges.length === 0 ? <p style={{ color: "var(--txt3)", fontSize: 9 }}>None under the current edge filters.</p> : displayedConnections.map((edge) => {
@@ -446,18 +866,31 @@ export function KnowledgeGraph(props: PanelProps) {
                   const outgoing = edge.source === selected.key;
                   const direction = outgoing ? "OUTGOING TO" : "INCOMING FROM";
                   const description = edgeInspectionLabel(edge, selected.key, view?.nodeByKey ?? new Map<string, KnowledgeGraphNodeDTO>());
+                  const sourceLabel = graphNodeByKey.get(edge.source)?.label || edge.source;
+                  const targetLabel = graphNodeByKey.get(edge.target)?.label || edge.target;
+                  const edgeActionLabel = `${sourceLabel} to ${targetLabel} ${edge.edge_type.replaceAll("_", " ")} edge`;
                   return (
-                    <button data-graph-connection="true" key={graphEdgeKey(edge)} type="button" aria-label={`${description}. Select connected node.`} onClick={() => other && chooseNode(other)} style={{ width: "100%", border: "1px solid var(--line2)", background: "var(--tint)", padding: "6px 7px", marginTop: 5, color: "var(--txt2)", font: "inherit", fontSize: 8.5, display: "block", textAlign: "left", cursor: other ? "pointer" : "default", overflowWrap: "anywhere" }}>
+                    <div data-graph-connection="true" key={graphEdgeKey(edge)} aria-label={description} style={{ width: "100%", boxSizing: "border-box", border: "1px solid var(--line2)", background: "var(--tint)", padding: "6px 7px", marginTop: 5, color: "var(--txt2)", fontSize: 8.5, overflowWrap: "anywhere" }}>
                       <span style={{ display: "block", color: "var(--strong)", fontSize: 9 }}>{outgoing ? "→" : "←"} {direction} · {other?.label || otherKey}</span>
                       <span style={{ display: "block", marginTop: 3, color: "var(--accent)" }}>TYPE · {edge.edge_type.replaceAll("_", " ")} · CONFIDENCE · {edge.confidence}</span>
                       <span style={{ display: "block", color: "var(--txt3)" }}>SOURCE SYSTEM · {edge.source_system.replaceAll("_", " ")}</span>
                       <span style={{ display: "block", color: "var(--txt3)" }}>PROVENANCE · {edge.provenance || "not provided"}</span>
                       <span style={{ display: "block", color: "var(--txt2)" }}>EXPLANATION · {edge.explanation || "not provided"}</span>
-                    </button>
+                      <span style={{ display: "block", color: edge.is_user_confirmed ? "var(--green)" : "var(--txt3)" }}>REVIEW STATE · {edge.is_user_confirmed ? "USER-CONFIRMED" : edge.is_inferred ? "INFERRED" : "SOURCE-DERIVED"}</span>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 6 }}>
+                        {other && <button type="button" disabled={interactionLocked} aria-label={`${description}. Select connected node.`} onClick={() => chooseNode(other)} style={{ ...control, cursor: interactionLocked ? "default" : "pointer", opacity: interactionLocked ? 0.55 : 1 }}>SELECT NODE</button>}
+                        {edge.is_inferred && !edge.is_user_confirmed && (
+                          <button type="button" disabled={interactionLocked} aria-label={`Review confirmation of ${edgeActionLabel}`} onClick={(event) => beginEdgeReview("confirm_edge", edge, event.currentTarget)} style={{ ...activeControl, opacity: interactionLocked ? 0.55 : 1 }}>REVIEW CONFIRM</button>
+                        )}
+                        {edge.is_inferred && !edge.is_user_confirmed && (
+                          <button type="button" disabled={interactionLocked} aria-label={`Review hiding ${edgeActionLabel}`} onClick={(event) => beginEdgeReview("hide_edge", edge, event.currentTarget)} style={{ ...activeControl, borderColor: "var(--warning)", color: "var(--warning)", opacity: interactionLocked ? 0.55 : 1 }}>REVIEW HIDE</button>
+                        )}
+                      </div>
+                    </div>
                   );
                 })}
                 {selectedEdges.length > 12 && (
-                  <button type="button" aria-expanded={connectionsExpanded} aria-label={connectionsExpanded ? "Show fewer visible connections" : `Show all ${selectedEdges.length} visible connections`} onClick={() => setConnectionsExpanded((current) => !current)} style={{ ...activeControl, width: "100%", marginTop: 6 }}>
+                  <button type="button" disabled={interactionLocked} aria-expanded={connectionsExpanded} aria-label={connectionsExpanded ? "Show fewer visible connections" : `Show all ${selectedEdges.length} visible connections`} onClick={() => setConnectionsExpanded((current) => !current)} style={{ ...activeControl, width: "100%", marginTop: 6, opacity: interactionLocked ? 0.55 : 1 }}>
                     {connectionsExpanded ? "SHOW FEWER CONNECTIONS" : `SHOW ALL ${selectedEdges.length} CONNECTIONS`}
                   </button>
                 )}
@@ -466,18 +899,18 @@ export function KnowledgeGraph(props: PanelProps) {
 
             <section aria-label="Graph diagnostics" style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 12 }}>
               <div style={{ display: "flex", alignItems: "baseline", gap: 7, marginBottom: 8 }}><span style={{ fontFamily: "'Chakra Petch'", color: "var(--strong)", fontSize: 11, letterSpacing: ".1em" }}>DIAGNOSTICS</span><span style={{ marginLeft: "auto", color: "var(--txt3)", fontSize: 7 }}>CORE-DERIVED</span></div>
-              {(graph?.orphan_count ?? 0) === 0 && (graph?.weak_link_count ?? 0) === 0 ? (
-                <InsightCard label="CONNECTED" tone="var(--green)">No orphan or weak-link diagnostics in this graph view.</InsightCard>
+              {(graph?.orphan_count ?? 0) === 0 && (graph?.weak_link_count ?? 0) === 0 && (graph?.hidden_edge_count ?? 0) === 0 ? (
+                <InsightCard label="CONNECTED" tone="var(--green)">No orphan, weak-link, or hidden-edge diagnostics in this graph view.</InsightCard>
               ) : null}
               {(graph?.orphan_count ?? 0) > 0 && (
                 <div style={{ marginBottom: 9 }}>
                   <div style={{ color: "var(--warning)", fontSize: 7.5, letterSpacing: ".14em", marginBottom: 5 }}>ORPHANS · SHOWING {displayedOrphans.length} OF {orphanNodes.length} MATCHING · {graph?.orphan_keys.length ?? 0} CORE RETURNED · {graph?.orphan_count} QUERY TOTAL</div>
                   {displayedOrphans.map((node) => (
-                    <InsightCard key={node.key} label={metaOf(node.node_type).label.toUpperCase()} tone="var(--warning)" ariaLabel={`Select orphan node ${node.label || node.key}`} onClick={() => chooseNode(node)}>{node.label || node.key}</InsightCard>
+                    <InsightCard key={node.key} label={metaOf(node.node_type).label.toUpperCase()} tone="var(--warning)" ariaLabel={`Select orphan node ${node.label || node.key}`} disabled={interactionLocked} onClick={() => chooseNode(node)}>{node.label || node.key}</InsightCard>
                   ))}
                   {orphanNodes.length === 0 && <div style={{ color: "var(--txt3)", fontSize: 8 }}>No returned orphan nodes match the active node-type filters.</div>}
                   {orphanNodes.length > 8 && (
-                    <button type="button" aria-expanded={orphansExpanded} aria-label={orphansExpanded ? "Show fewer matching orphan nodes" : `Show all ${orphanNodes.length} matching orphan nodes`} onClick={() => setOrphansExpanded((current) => !current)} style={{ ...activeControl, width: "100%", marginBottom: 5 }}>
+                    <button type="button" disabled={interactionLocked} aria-expanded={orphansExpanded} aria-label={orphansExpanded ? "Show fewer matching orphan nodes" : `Show all ${orphanNodes.length} matching orphan nodes`} onClick={() => setOrphansExpanded((current) => !current)} style={{ ...activeControl, width: "100%", marginBottom: 5, opacity: interactionLocked ? 0.55 : 1 }}>
                       {orphansExpanded ? "SHOW FEWER ORPHANS" : `SHOW ALL ${orphanNodes.length} ORPHANS`}
                     </button>
                   )}
@@ -486,7 +919,7 @@ export function KnowledgeGraph(props: PanelProps) {
                 </div>
               )}
               {(graph?.weak_link_count ?? 0) > 0 && (
-                <div>
+                <div style={{ marginBottom: 9 }}>
                   <div style={{ color: "var(--warning)", fontSize: 7.5, letterSpacing: ".14em", marginBottom: 5 }}>WEAK LINKS · SHOWING {displayedWeakLinks.length} OF {weakLinks.length} MATCHING · {graph?.weak_links.length ?? 0} CORE RETURNED · {graph?.weak_link_count} QUERY TOTAL</div>
                   {displayedWeakLinks.map((edge) => {
                     const source = view?.nodeByKey.get(edge.source);
@@ -494,7 +927,7 @@ export function KnowledgeGraph(props: PanelProps) {
                     const sourceLabel = source?.label || edge.source;
                     const targetLabel = target?.label || edge.target;
                     return (
-                      <InsightCard key={`weak-${graphEdgeKey(edge)}`} label={`${edge.confidence.toUpperCase()} · ${edge.source_system.replaceAll("_", " ").toUpperCase()}`} tone="var(--warning)" ariaLabel={`Weak link from ${sourceLabel} to ${targetLabel}. Type ${edge.edge_type.replaceAll("_", " ")}. Confidence ${edge.confidence}. Source system ${edge.source_system.replaceAll("_", " ")}. Provenance ${edge.provenance || "not provided"}. Explanation ${edge.explanation || "not provided"}. Select source node.`} onClick={() => source && chooseNode(source)}>
+                      <InsightCard key={`weak-${graphEdgeKey(edge)}`} label={`${edge.confidence.toUpperCase()} · ${edge.source_system.replaceAll("_", " ").toUpperCase()}`} tone="var(--warning)" ariaLabel={`Weak link from ${sourceLabel} to ${targetLabel}. Type ${edge.edge_type.replaceAll("_", " ")}. Confidence ${edge.confidence}. Source system ${edge.source_system.replaceAll("_", " ")}. Provenance ${edge.provenance || "not provided"}. Explanation ${edge.explanation || "not provided"}. Select source node.`} disabled={interactionLocked} onClick={() => source && chooseNode(source)}>
                         <span style={{ display: "block" }}>{sourceLabel} → {targetLabel}</span>
                         <span style={{ display: "block", color: "var(--txt3)" }}>TYPE · {edge.edge_type.replaceAll("_", " ")} · CONFIDENCE · {edge.confidence}</span>
                         <span style={{ display: "block", color: "var(--txt3)" }}>SOURCE SYSTEM · {edge.source_system.replaceAll("_", " ")}</span>
@@ -505,12 +938,58 @@ export function KnowledgeGraph(props: PanelProps) {
                   })}
                   {weakLinks.length === 0 && <div style={{ color: "var(--txt3)", fontSize: 8 }}>No returned weak links match the active edge filters.</div>}
                   {weakLinks.length > 8 && (
-                    <button type="button" aria-expanded={weakLinksExpanded} aria-label={weakLinksExpanded ? "Show fewer matching weak links" : `Show all ${weakLinks.length} matching weak links`} onClick={() => setWeakLinksExpanded((current) => !current)} style={{ ...activeControl, width: "100%", marginTop: 1 }}>
+                    <button type="button" disabled={interactionLocked} aria-expanded={weakLinksExpanded} aria-label={weakLinksExpanded ? "Show fewer matching weak links" : `Show all ${weakLinks.length} matching weak links`} onClick={() => setWeakLinksExpanded((current) => !current)} style={{ ...activeControl, width: "100%", marginTop: 1, opacity: interactionLocked ? 0.55 : 1 }}>
                       {weakLinksExpanded ? "SHOW FEWER WEAK LINKS" : `SHOW ALL ${weakLinks.length} WEAK LINKS`}
                     </button>
                   )}
                   {graph && graph.weak_links.length > weakLinks.length && <div style={{ color: "var(--txt3)", fontSize: 8, marginTop: 5 }}>{weakLinks.length} of {graph.weak_links.length} Core-returned weak links match the active edge filters.</div>}
                   {graph && graph.weak_link_count > graph.weak_links.length && <div style={{ color: "var(--txt3)", fontSize: 8, marginTop: 5 }}>Core returned {graph.weak_links.length} of {graph.weak_link_count} weak links for this bounded query.</div>}
+                </div>
+              )}
+              {((graph?.hidden_edge_count ?? 0) > 0 || (hiddenReviewPage?.hidden_edge_count ?? 0) > 0) && (
+                <div>
+                  <div style={{ color: "var(--warning)", fontSize: 7.5, letterSpacing: ".14em", marginBottom: 5 }}>HIDDEN EDGES · SHOWING {displayedHiddenEdges.length} OF {hiddenEdges.length} {hiddenReviewOpen ? "ON THIS QUEUE PAGE" : "CORE RETURNED"} · {hiddenReviewPage?.hidden_edge_count ?? graph?.hidden_edge_count} QUERY TOTAL</div>
+                  {!hiddenReviewOpen ? (
+                    <button type="button" disabled={interactionLocked} aria-label="Open the complete hidden edge review queue" onClick={() => { setHiddenReviewOffset(0); setHiddenReviewOpen(true); }} style={{ ...activeControl, width: "100%", marginBottom: 6, opacity: interactionLocked ? 0.55 : 1 }}>OPEN COMPLETE HIDDEN REVIEW QUEUE</button>
+                  ) : (
+                    <button type="button" disabled={interactionLocked} aria-label="Close the complete hidden edge review queue" onClick={() => { setHiddenReviewOpen(false); setHiddenReviewOffset(0); }} style={{ ...control, width: "100%", marginBottom: 6, cursor: interactionLocked ? "default" : "pointer", opacity: interactionLocked ? 0.55 : 1 }}>CLOSE HIDDEN REVIEW QUEUE</button>
+                  )}
+                  {hiddenReviewOpen && hiddenReviewResource.loading && !hiddenReviewPage && <div role="status" aria-live="polite" style={{ color: "var(--txt3)", fontSize: 8, marginBottom: 6 }}>Loading hidden edge review queue…</div>}
+                  {hiddenReviewOpen && hiddenReviewResource.error && <div role="alert" style={{ color: "var(--blocking)", fontSize: 8, marginBottom: 6 }}>Couldn&apos;t load hidden edge reviews — {hiddenReviewResource.error} <button type="button" disabled={interactionLocked} onClick={hiddenReviewResource.refetch} style={{ ...activeControl, marginLeft: 5 }}>RETRY QUEUE</button></div>}
+                  {displayedHiddenEdges.map((edge) => {
+                    const sourceLabel = hiddenReviewNodeByKey.get(edge.source)?.label || graphNodeByKey.get(edge.source)?.label || edge.source;
+                    const targetLabel = hiddenReviewNodeByKey.get(edge.target)?.label || graphNodeByKey.get(edge.target)?.label || edge.target;
+                    const readableType = edge.edge_type.replaceAll("_", " ");
+                    return (
+                      <div key={`hidden-${graphEdgeKey(edge)}`} data-hidden-graph-edge="true" style={{ border: "1px solid var(--line2)", background: "var(--tint)", padding: "8px 9px", marginBottom: 6, color: "var(--txt2)", fontSize: 8.5, lineHeight: 1.4, overflowWrap: "anywhere" }}>
+                        <span style={{ display: "block", color: "var(--strong)", fontSize: 9 }}>{sourceLabel} → {targetLabel}</span>
+                        <span style={{ display: "block", color: "var(--accent)" }}>TYPE · {readableType} · CONFIDENCE · {edge.confidence}</span>
+                        <span style={{ display: "block", color: "var(--txt3)" }}>SOURCE SYSTEM · {edge.source_system.replaceAll("_", " ")}</span>
+                        <span style={{ display: "block", color: "var(--txt3)" }}>PROVENANCE · {edge.provenance || "not provided"}</span>
+                        <span style={{ display: "block" }}>EXPLANATION · {edge.explanation || "not provided"}</span>
+                        <span style={{ display: "block", color: edge.is_user_confirmed ? "var(--green)" : "var(--txt3)" }}>PRESERVED REVIEW STATE · {edge.is_user_confirmed ? "USER-CONFIRMED" : "NOT USER-CONFIRMED"}</span>
+                        {hiddenReviewOpen && hiddenReviewPage ? (
+                          <button type="button" disabled={interactionLocked} aria-label={`Review restoring ${sourceLabel} to ${targetLabel} ${readableType} edge`} onClick={(event) => beginEdgeReview("unhide_edge", edge, event.currentTarget, hiddenReviewOffset)} style={{ ...activeControl, width: "100%", marginTop: 6, opacity: interactionLocked ? 0.55 : 1 }}>REVIEW RESTORE</button>
+                        ) : (
+                          <span style={{ display: "block", marginTop: 5, color: "var(--txt3)" }}>Open the complete queue to review restoration against a fresh page revision.</span>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {hiddenEdges.length === 0 && <div style={{ color: "var(--txt3)", fontSize: 8 }}>{hiddenReviewOpen ? "No hidden edges are present on this queue page." : "Core reports hidden edges, but none fit this bounded map response. Open the complete queue to review them."}</div>}
+                  {hiddenEdges.length > 8 && (
+                    <button type="button" disabled={interactionLocked} aria-expanded={hiddenEdgesExpanded} aria-label={hiddenEdgesExpanded ? "Show fewer hidden edges" : `Show all ${hiddenEdges.length} returned hidden edges`} onClick={() => setHiddenEdgesExpanded((current) => !current)} style={{ ...activeControl, width: "100%", marginTop: 1, opacity: interactionLocked ? 0.55 : 1 }}>
+                      {hiddenEdgesExpanded ? "SHOW FEWER HIDDEN EDGES" : `SHOW ALL ${hiddenEdges.length} HIDDEN EDGES`}
+                    </button>
+                  )}
+                  {hiddenReviewOpen && hiddenReviewPage && (
+                    <div style={{ display: "flex", gap: 5, marginTop: 5 }}>
+                      <button type="button" disabled={interactionLocked || hiddenReviewOffset === 0} aria-label="Previous hidden edge review page" onClick={() => setHiddenReviewOffset((current) => Math.max(0, current - HIDDEN_EDGE_PAGE_LIMIT))} style={{ ...activeControl, flex: 1, opacity: interactionLocked || hiddenReviewOffset === 0 ? 0.45 : 1 }}>PREVIOUS</button>
+                      <button type="button" disabled={interactionLocked || hiddenReviewOffset + hiddenReviewPage.returned_edge_count >= hiddenReviewPage.hidden_edge_count} aria-label="Next hidden edge review page" onClick={() => setHiddenReviewOffset((current) => current + HIDDEN_EDGE_PAGE_LIMIT)} style={{ ...activeControl, flex: 1, opacity: interactionLocked || hiddenReviewOffset + hiddenReviewPage.returned_edge_count >= hiddenReviewPage.hidden_edge_count ? 0.45 : 1 }}>NEXT</button>
+                    </div>
+                  )}
+                  {hiddenReviewOpen && hiddenReviewPage && <div role="status" style={{ color: "var(--txt3)", fontSize: 8, marginTop: 5 }}>Queue rows {hiddenReviewPage.returned_edge_count === 0 ? 0 : hiddenReviewPage.offset + 1}–{hiddenReviewPage.offset + hiddenReviewPage.returned_edge_count} of {hiddenReviewPage.hidden_edge_count}.</div>}
+                  {!hiddenReviewOpen && graph && graph.hidden_edge_count > graph.hidden_edges.length && <div style={{ color: "var(--txt3)", fontSize: 8, marginTop: 5 }}>The bounded map includes {graph.hidden_edges.length} of {graph.hidden_edge_count} hidden edges; the complete paged queue reaches every restore decision.</div>}
                 </div>
               )}
             </section>
@@ -519,10 +998,10 @@ export function KnowledgeGraph(props: PanelProps) {
         </div>
 
         <div style={{ minHeight: 24, flex: "none", borderTop: "1px solid var(--line2)", display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12, padding: "3px 16px", background: "var(--base)", color: "var(--txt3)", fontSize: 8, letterSpacing: ".08em" }}>
-          <span style={{ color: "var(--green)" }}>● DETERMINISTIC · READ ONLY · TRACEABLE</span>
+          <span style={{ color: "var(--green)" }}>● DETERMINISTIC · REVIEWABLE · TRACEABLE</span>
           <span>{view?.nodes.length ?? 0} / {graph?.node_count ?? 0} NODES</span>
           <span>{view?.edges.length ?? 0} / {graph?.edge_count ?? 0} EDGES</span>
-          <span style={{ color: "var(--warning)" }}>{graph?.orphan_count ?? 0} ORPHANS · {graph?.weak_link_count ?? 0} WEAK LINKS</span>
+          <span style={{ color: "var(--warning)" }}>{graph?.orphan_count ?? 0} ORPHANS · {graph?.weak_link_count ?? 0} WEAK LINKS · {graph?.hidden_edge_count ?? 0} HIDDEN EDGES</span>
           {hiddenNodeTypes.size > 0 && <span>{hiddenNodeTypes.size} NODE TYPE{hiddenNodeTypes.size === 1 ? "" : "S"} HIDDEN</span>}
           <span style={{ marginLeft: "auto", color: "var(--txt2)" }}>{graph?.writing_mode ?? "current project"}</span>
         </div>

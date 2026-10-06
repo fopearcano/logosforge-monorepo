@@ -43,6 +43,9 @@ import type {
   KnowledgeGraphNodeDTO,
   KnowledgeGraphQueryDTO,
   KnowledgeGraphReadDTO,
+  KnowledgeGraphCommandDTO,
+  KnowledgeGraphCommandResultDTO,
+  KnowledgeGraphCommandReceiptDTO,
   PlotBlockDTO,
   PlotSceneDTO,
   ExportRequestDTO,
@@ -159,6 +162,7 @@ const MOCK_PERSISTENT_METHODS = new Set([
   "executeStoryStructureCommand",
   "executeTimelineCommand",
   "executeCanvasPlotCommand",
+  "executeKnowledgeGraphCommand",
 ]);
 
 function mockMethodPersists(name: string): boolean {
@@ -1575,9 +1579,44 @@ export function createMockApiClient(): ApiClient {
   const fixtureRowsFor = <T>(projectId: number, rows: readonly T[]): readonly T[] => (
     projectId === fixtureProjectId ? rows : []
   );
+  interface MockKnowledgeGraphReview {
+    is_hidden: boolean;
+    is_user_confirmed: boolean;
+  }
+  interface MockKnowledgeGraphReceipt {
+    serializedCommand: string;
+    receipt: KnowledgeGraphCommandReceiptDTO;
+  }
+  const knowledgeGraphReviews = new Map<number, Map<string, MockKnowledgeGraphReview>>();
+  const knowledgeGraphReceipts = new Map<string, MockKnowledgeGraphReceipt>();
+  const knowledgeGraphEdgeKey = (edge: { source: string; target: string; edge_type: string }) => (
+    [edge.source, edge.target, edge.edge_type].join("\u0000")
+  );
+  const knowledgeGraphReviewFor = (projectId: number) => {
+    let reviews = knowledgeGraphReviews.get(projectId);
+    if (!reviews) {
+      reviews = new Map();
+      knowledgeGraphReviews.set(projectId, reviews);
+    }
+    return reviews;
+  };
+  const mockSha256 = (payload: unknown): string => {
+    let hash = 0x811c9dc5;
+    for (const char of JSON.stringify(payload)) {
+      hash ^= char.charCodeAt(0);
+      hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+    return hash.toString(16).padStart(8, "0").repeat(8);
+  };
+  const knowledgeGraphRevision = (projectId: number): string => mockSha256([
+    projectId,
+    [...knowledgeGraphReviewFor(projectId).entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, state]) => [key, state.is_hidden, state.is_user_confirmed]),
+  ]);
   let commandPlanSequence = 1;
   const commandPlans = new Map<string, PsykeConsoleCommandPlanDTO & { entry_type?: string; entry_name?: string }>();
-  const client = {
+  const client: ApiClient = {
     async health() {
       await delay(60);
       return {
@@ -1585,8 +1624,8 @@ export function createMockApiClient(): ApiClient {
         service: "logosforge-api",
         instance_nonce: "preview-mock",
         mode: "preview-mock",
-        version: "1.6.0",
-        api_version: "1.6.0",
+        version: "1.7.0",
+        api_version: "1.7.0",
         core_version: "preview",
       };
     },
@@ -2374,7 +2413,7 @@ export function createMockApiClient(): ApiClient {
         edges.push({
           source: projectKey, target: key, edge_type: "contains", confidence: "confirmed",
           provenance: "project structure", source_system: "structure", explanation: "The Scene belongs to this project.",
-          is_user_confirmed: true, is_inferred: false, metadata: {},
+          is_user_confirmed: true, is_inferred: false, is_hidden: false, metadata: {},
         });
       }
       if (p === fixtureProjectId) {
@@ -2397,7 +2436,7 @@ export function createMockApiClient(): ApiClient {
             target: `${targetType}:psyke:${targetEntry.id}`,
             edge_type: "relates_to", confidence: "confirmed", provenance: "explicit PSYKE relation",
             source_system: "psyke", explanation: relation.relation_type,
-            is_user_confirmed: true, is_inferred: false, metadata: {},
+            is_user_confirmed: true, is_inferred: false, is_hidden: false, metadata: {},
           });
         }
         const firstScene = scenesFor(p)[0];
@@ -2407,12 +2446,22 @@ export function createMockApiClient(): ApiClient {
             source: `scene:scene:${firstScene.id}`, target: `character:psyke:${firstCharacter.id}`,
             edge_type: "mentions", confidence: "possible", provenance: "scene text match",
             source_system: "manuscript", explanation: "The name appears in the Scene text.",
-            is_user_confirmed: false, is_inferred: true, metadata: {},
+            is_user_confirmed: false, is_inferred: true, is_hidden: false, metadata: {},
           });
         }
       }
 
-      const allowedEdges = edges.filter((edge) => includeInferred || !edge.is_inferred);
+      const reviews = knowledgeGraphReviewFor(p);
+      const reviewedEdges = edges.map((edge) => {
+        const review = reviews.get(knowledgeGraphEdgeKey(edge));
+        return review ? { ...edge, ...review } : edge;
+      });
+      const hiddenQueryEdges = reviewedEdges.filter((edge) => (
+        edge.is_hidden && (includeInferred || !edge.is_inferred)
+      ));
+      const allowedEdges = reviewedEdges.filter((edge) => (
+        !edge.is_hidden && (includeInferred || !edge.is_inferred)
+      ));
       const fullDegree = new Map(nodes.map((node) => [node.key, 0]));
       for (const edge of allowedEdges) {
         fullDegree.set(edge.source, (fullDegree.get(edge.source) ?? 0) + 1);
@@ -2486,9 +2535,10 @@ export function createMockApiClient(): ApiClient {
       const returnedEdges = queryEdges.filter((edge) => returnedKeys.has(edge.source) && returnedKeys.has(edge.target)).slice(0, limit);
       const weakLinks = queryEdges.filter((edge) => edge.is_inferred);
       const returnedWeakLinks = weakLinks.filter((edge) => returnedKeys.has(edge.source) && returnedKeys.has(edge.target)).slice(0, Math.min(limit, 25));
+      const returnedHiddenEdges = hiddenQueryEdges.filter((edge) => returnedKeys.has(edge.source) && returnedKeys.has(edge.target)).slice(0, Math.min(limit, 25));
       const returnedOrphanKeys = orphanNodes.filter((node) => returnedKeys.has(node.key)).map((node) => node.key);
       return {
-        project_id: p, writing_mode: project.narrative_engine, focus_key: focusKey,
+        project_id: p, revision: knowledgeGraphRevision(p), writing_mode: project.narrative_engine, focus_key: focusKey,
         depth, include_inferred: includeInferred,
         nodes: structuredClone(returnedNodes), edges: structuredClone(returnedEdges),
         node_count: queryNodes.length, edge_count: queryEdges.length,
@@ -2496,12 +2546,123 @@ export function createMockApiClient(): ApiClient {
         truncated: returnedNodes.length < queryNodes.length
           || returnedEdges.length < queryEdges.length
           || returnedOrphanKeys.length < orphanNodes.length
-          || returnedWeakLinks.length < weakLinks.length,
+          || returnedWeakLinks.length < weakLinks.length
+          || returnedHiddenEdges.length < hiddenQueryEdges.length,
         orphan_keys: returnedOrphanKeys,
         orphan_count: orphanNodes.length,
         weak_links: structuredClone(returnedWeakLinks),
         weak_link_count: weakLinks.length,
+        hidden_edges: structuredClone(returnedHiddenEdges),
+        hidden_edge_count: hiddenQueryEdges.length,
         warnings: [], unavailable: ["revision_intelligence", "rewrite_sandbox"],
+      };
+    },
+    async executeKnowledgeGraphCommand(
+      p: number,
+      command: KnowledgeGraphCommandDTO,
+      idempotencyKey: string,
+    ): Promise<KnowledgeGraphCommandResultDTO> {
+      const path = `/api/projects/${p}/knowledge-graph/commands`;
+      await delay();
+      findMockProject(projects, p, "POST", path);
+      if (!/^[\x21-\x7e]{16,128}$/.test(idempotencyKey)) {
+        throw new ApiRequestError("POST", path, 400, "Invalid Idempotency-Key", "bad_request");
+      }
+      const receiptKey = `${p}\u0000${idempotencyKey}`;
+      const serializedCommand = JSON.stringify(command);
+      const previous = knowledgeGraphReceipts.get(receiptKey);
+      if (previous) {
+        if (previous.serializedCommand !== serializedCommand) {
+          throw new ApiRequestError("POST", path, 409, "Idempotency-Key was already used for a different graph command", "idempotency_key_conflict");
+        }
+        return {
+          knowledge_graph: await client.getKnowledgeGraph(p, { focus_key: null, depth: 1, limit: 100, include_inferred: true }),
+          changed: false,
+          affected_edge: structuredClone(previous.receipt.original_affected_edge),
+          replayed: true,
+          applied_revision: previous.receipt.applied_revision,
+        };
+      }
+
+      const current = await client.getKnowledgeGraph(p, { focus_key: null, depth: 1, limit: 100, include_inferred: true });
+      if (command.expected_revision !== current.revision) {
+        throw new ApiRequestError("POST", path, 409, "Knowledge Graph review state changed", "knowledge_graph_conflict");
+      }
+      const identity = knowledgeGraphEdgeKey(command);
+      const collection = command.kind === "unhide_edge" ? current.hidden_edges : current.edges;
+      const edge = collection.find((candidate) => knowledgeGraphEdgeKey(candidate) === identity);
+      if (!edge) {
+        throw new ApiRequestError("POST", path, 404, "Knowledge Graph edge not found", "knowledge_graph_edge_not_found");
+      }
+      if (command.kind === "confirm_edge" && !edge.is_inferred) {
+        throw new ApiRequestError("POST", path, 400, "Only inferred edges can be confirmed", "bad_request");
+      }
+      if (command.kind === "confirm_edge" && edge.is_user_confirmed) {
+        throw new ApiRequestError("POST", path, 400, "That inferred edge is already confirmed", "bad_request");
+      }
+      if (command.kind === "hide_edge" && (!edge.is_inferred || edge.is_user_confirmed)) {
+        throw new ApiRequestError("POST", path, 400, "Only visible, unconfirmed inferred edges can be hidden", "bad_request");
+      }
+
+      const reviews = knowledgeGraphReviewFor(p);
+      const nextReview: MockKnowledgeGraphReview = {
+        is_hidden: command.kind === "hide_edge" ? true : command.kind === "unhide_edge" ? false : edge.is_hidden,
+        is_user_confirmed: command.kind === "confirm_edge" ? true : edge.is_user_confirmed,
+      };
+      const changed = nextReview.is_hidden !== edge.is_hidden
+        || nextReview.is_user_confirmed !== edge.is_user_confirmed;
+      if (changed) reviews.set(identity, nextReview);
+      const knowledgeGraph = await client.getKnowledgeGraph(p, { focus_key: null, depth: 1, limit: 100, include_inferred: true });
+      const appliedRevision = changed ? knowledgeGraph.revision : command.expected_revision;
+      const affectedEdge = { source: command.source, target: command.target, edge_type: command.edge_type };
+      const receipt: KnowledgeGraphCommandReceiptDTO = {
+        project_id: p,
+        request_digest: mockSha256(command),
+        command_kind: command.kind,
+        expected_revision: command.expected_revision,
+        applied_revision: appliedRevision,
+        original_changed: changed,
+        original_affected_edge: affectedEdge,
+        committed_at: new Date().toISOString(),
+      };
+      knowledgeGraphReceipts.set(receiptKey, { serializedCommand, receipt });
+      return {
+        knowledge_graph: knowledgeGraph,
+        changed,
+        affected_edge: affectedEdge,
+        replayed: false,
+        applied_revision: appliedRevision,
+      };
+    },
+    async getKnowledgeGraphCommandReceipt(
+      p: number,
+      idempotencyKey: string,
+      _expectedCommand: KnowledgeGraphCommandDTO,
+    ): Promise<KnowledgeGraphCommandReceiptDTO> {
+      const path = `/api/projects/${p}/knowledge-graph/command-receipt`;
+      await delay(80);
+      findMockProject(projects, p, "GET", path);
+      const saved = knowledgeGraphReceipts.get(`${p}\u0000${idempotencyKey}`);
+      if (!saved) {
+        throw new ApiRequestError("GET", path, 404, "Knowledge Graph command receipt not found", "knowledge_graph_receipt_not_found");
+      }
+      return structuredClone(saved.receipt);
+    },
+    async getKnowledgeGraphHiddenEdges(p: number, offset = 0, limit = 25) {
+      const path = `/api/projects/${p}/knowledge-graph/hidden-edges`;
+      findMockProject(projects, p, "GET", path);
+      const map = await client.getKnowledgeGraph(p, { focus_key: null, depth: 1, limit: 200, include_inferred: true });
+      const edges = map.hidden_edges.slice(offset, offset + limit);
+      const endpointKeys = new Set(edges.flatMap((edge) => [edge.source, edge.target]));
+      return {
+        project_id: p,
+        revision: map.revision,
+        offset,
+        limit,
+        hidden_edge_count: map.hidden_edge_count,
+        returned_edge_count: edges.length,
+        nodes: structuredClone(map.nodes.filter((node) => endpointKeys.has(node.key))),
+        edges: structuredClone(edges),
       };
     },
     async getGraphGravity() {

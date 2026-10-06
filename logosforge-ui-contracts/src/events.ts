@@ -14,6 +14,7 @@ export const KNOWN_EVENTS = [
   "plot_changed",
   "timeline_changed",
   "canvas_plot_changed",
+  "knowledge_graph_changed",
   "psyke_changed",
   "notes_changed",
   "comments_changed",

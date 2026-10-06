@@ -52,47 +52,100 @@ def test_first_versioned_upgrade_preserves_exact_pre_migration_copy(tmp_path: Pa
     assert backup.read_bytes() == original_backup
 
 
-def test_v4_to_v5_backs_up_before_creating_canvas_receipts(
+def test_v4_to_v6_preserves_canvas_and_graph_receipt_boundary(
     tmp_path: Path,
 ) -> None:
-    path = tmp_path / "v4-canvas-receipts.db"
+    path = tmp_path / "v4-receipts.db"
     seed = Database(str(path))
     project = seed.create_project("Preserved v4 project")
     seed._engine.dispose()
 
-    # Reconstruct the released v4 boundary: all prior tables/data exist, while
-    # the v5 receipt table does not.  DELETE mode makes the bytes inspected
-    # below self-contained rather than dependent on a committed WAL sidecar.
+    # Reconstruct the released v4 boundary: Timeline receipts exist, while
+    # Canvas (v5) and Knowledge Graph (v6) receipts do not.
     with sqlite3.connect(path) as conn:
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         conn.execute("PRAGMA journal_mode=DELETE")
+        conn.execute("DROP TABLE knowledgegraphcommandreceipt")
         conn.execute("DROP TABLE canvasplotcommandreceipt")
         conn.execute("PRAGMA user_version = 4")
         conn.commit()
 
     upgraded = Database(str(path))
-    backup = path.with_name(path.name + ".pre-v5.bak")
+    backup = path.with_name(path.name + ".pre-v6.bak")
     with sqlite3.connect(backup) as snapshot:
         assert snapshot.execute("PRAGMA user_version").fetchone()[0] == 4
         assert snapshot.execute(
             "SELECT title FROM project WHERE id = ?", (project.id,),
         ).fetchone()[0] == "Preserved v4 project"
-        assert snapshot.execute(
-            "SELECT 1 FROM sqlite_master"
-            " WHERE type='table' AND name='canvasplotcommandreceipt'"
-        ).fetchone() is None
+        for table in (
+            "canvasplotcommandreceipt",
+            "knowledgegraphcommandreceipt",
+        ):
+            assert snapshot.execute(
+                "SELECT 1 FROM sqlite_master"
+                " WHERE type='table' AND name=?",
+                (table,),
+            ).fetchone() is None
         assert snapshot.execute(
             "SELECT 1 FROM sqlite_master"
             " WHERE type='table' AND name='timelinecommandreceipt'"
         ).fetchone() is not None
 
-    assert _pragma(upgraded, "PRAGMA user_version") == 5
+    assert _pragma(upgraded, "PRAGMA user_version") == 6
+    with upgraded._engine.connect() as connection:
+        for table in (
+            "canvasplotcommandreceipt",
+            "knowledgegraphcommandreceipt",
+        ):
+            assert connection.execute(text(
+                "SELECT 1 FROM sqlite_master"
+                " WHERE type='table' AND name=:table"
+            ), {"table": table}).fetchone() is not None
+    assert upgraded.get_project_by_id(project.id).title == "Preserved v4 project"
+    upgraded._engine.dispose()
+
+
+def test_v5_to_v6_backs_up_before_creating_graph_receipts(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "v5-graph-receipts.db"
+    seed = Database(str(path))
+    project = seed.create_project("Preserved v5 project")
+    seed._engine.dispose()
+
+    # Reconstruct the released v5 boundary: all prior tables/data exist, while
+    # the v6 receipt table does not.  DELETE mode makes the bytes inspected
+    # below self-contained rather than dependent on a committed WAL sidecar.
+    with sqlite3.connect(path) as conn:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        conn.execute("PRAGMA journal_mode=DELETE")
+        conn.execute("DROP TABLE knowledgegraphcommandreceipt")
+        conn.execute("PRAGMA user_version = 5")
+        conn.commit()
+
+    upgraded = Database(str(path))
+    backup = path.with_name(path.name + ".pre-v6.bak")
+    with sqlite3.connect(backup) as snapshot:
+        assert snapshot.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert snapshot.execute(
+            "SELECT title FROM project WHERE id = ?", (project.id,),
+        ).fetchone()[0] == "Preserved v5 project"
+        assert snapshot.execute(
+            "SELECT 1 FROM sqlite_master"
+            " WHERE type='table' AND name='knowledgegraphcommandreceipt'"
+        ).fetchone() is None
+        assert snapshot.execute(
+            "SELECT 1 FROM sqlite_master"
+            " WHERE type='table' AND name='canvasplotcommandreceipt'"
+        ).fetchone() is not None
+
+    assert _pragma(upgraded, "PRAGMA user_version") == 6
     with upgraded._engine.connect() as connection:
         assert connection.execute(text(
             "SELECT 1 FROM sqlite_master"
-            " WHERE type='table' AND name='canvasplotcommandreceipt'"
+            " WHERE type='table' AND name='knowledgegraphcommandreceipt'"
         )).fetchone() is not None
-    assert upgraded.get_project_by_id(project.id).title == "Preserved v4 project"
+    assert upgraded.get_project_by_id(project.id).title == "Preserved v5 project"
     upgraded._engine.dispose()
 
 

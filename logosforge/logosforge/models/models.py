@@ -591,6 +591,21 @@ class KnowledgeGraphEdge(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=_now)
 
 
+class KnowledgeGraphCommandReceipt(SQLModel, table=True):
+    """Durable exactly-once receipt for a graph edge-review command.
+
+    The caller's raw ``Idempotency-Key`` is a capability and is never stored.
+    The composite primary key keeps capabilities project-scoped while the
+    compact result JSON records only the committed review outcome.
+    """
+
+    project_id: int = Field(foreign_key="project.id", primary_key=True)
+    idempotency_key_hash: str = Field(primary_key=True, max_length=64)
+    request_digest: str = Field(max_length=64)
+    result_json: str
+    created_at: datetime = Field(default_factory=_now)
+
+
 class KnowledgeGraphSnapshot(SQLModel, table=True):
     """A lightweight record of a knowledge-graph build (Phase 10P)."""
 

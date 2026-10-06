@@ -1037,6 +1037,7 @@ def _knowledge_graph_edge_to_dto(edge) -> schemas.KnowledgeGraphEdgeDTO:
         explanation=str(edge.explanation or "")[:1000],
         is_user_confirmed=bool(edge.is_user_confirmed),
         is_inferred=bool(edge.is_inferred),
+        is_hidden=bool(edge.is_hidden),
         metadata=_bounded_graph_value(dict(edge.metadata or {})),
     )
 
@@ -1060,6 +1061,13 @@ def knowledge_graph_read_to_dto(
     from logosforge.knowledge_graph import scoring as graph_scoring
 
     node_keys = set(graph.nodes)
+    full_hidden_edges = [
+        edge for edge in graph.edges
+        if edge.is_hidden
+        and edge.source in node_keys
+        and edge.target in node_keys
+    ]
+    full_hidden_edges.sort(key=_knowledge_graph_edge_sort_key)
     full_edges = [
         edge for edge in graph.visible_edges(include_inferred=include_inferred)
         if edge.source in node_keys and edge.target in node_keys
@@ -1143,6 +1151,26 @@ def knowledge_graph_read_to_dto(
     if focus_key is not None:
         selected_keys = sorted(candidate_keys, key=node_rank)[:limit]
     else:
+        # Reserve a bounded portion of the Project Map for authoritative hidden
+        # review state so a refresh does not strand the Restore action.  The
+        # other half remains available for the useful central-node projection.
+        hidden_key_budget = (
+            min(limit, max(2, limit // 2))
+            if full_hidden_edges and limit >= 2
+            else 0
+        )
+        reserved_hidden_keys: list[str] = []
+        reserved_hidden_set: set[str] = set()
+        for edge in full_hidden_edges[:_KNOWLEDGE_GRAPH_DIAGNOSTIC_CAP]:
+            additions = [
+                key for key in (edge.source, edge.target)
+                if key not in reserved_hidden_set
+            ]
+            if len(reserved_hidden_set) + len(additions) > hidden_key_budget:
+                continue
+            reserved_hidden_keys.extend(additions)
+            reserved_hidden_set.update(additions)
+
         # Keep the map useful (central nodes first) while guaranteeing that an
         # edge-less story element survives truncation for the orphan rail.
         orphan_budget = 0
@@ -1151,11 +1179,19 @@ def knowledge_graph_read_to_dto(
                 len(candidate_orphan_keys),
                 _KNOWLEDGE_GRAPH_DIAGNOSTIC_CAP,
                 max(1, limit // 4),
+                max(0, limit - len(reserved_hidden_keys)),
             )
-        reserved_orphans = candidate_orphan_keys[:orphan_budget]
-        reserved_set = set(reserved_orphans)
+        reserved_orphans = [
+            key for key in candidate_orphan_keys
+            if key not in reserved_hidden_set
+        ][:orphan_budget]
+        reserved_set = {*reserved_hidden_set, *reserved_orphans}
         primary = sorted(candidate_keys - reserved_set, key=node_rank)
-        selected_keys = primary[: max(0, limit - orphan_budget)] + reserved_orphans
+        selected_keys = (
+            reserved_hidden_keys
+            + primary[:max(0, limit - len(reserved_set))]
+            + reserved_orphans
+        )
 
     selected_set = set(selected_keys)
     returned_edges = [
@@ -1170,6 +1206,15 @@ def knowledge_graph_read_to_dto(
         edge for edge in candidate_weak_links
         if edge.source in selected_set and edge.target in selected_set
     ][:weak_cap]
+    hidden_cap = min(limit, _KNOWLEDGE_GRAPH_DIAGNOSTIC_CAP)
+    returned_hidden_edges = [
+        edge for edge in full_hidden_edges
+        if edge.source in selected_set and edge.target in selected_set
+    ][:hidden_cap]
+    hidden_edge_count = max(
+        len(full_hidden_edges),
+        int(getattr(graph, "persisted_hidden_edge_count", 0)),
+    )
 
     nodes = []
     for key in selected_keys:
@@ -1190,9 +1235,11 @@ def knowledge_graph_read_to_dto(
         or len(returned_edges) < len(candidate_edges)
         or len(returned_orphan_keys) < len(candidate_orphan_keys)
         or len(returned_weak_links) < len(candidate_weak_links)
+        or len(returned_hidden_edges) < hidden_edge_count
     )
     return schemas.KnowledgeGraphReadDTO(
         project_id=int(graph.project_id),
+        revision=str(graph.revision),
         writing_mode=str(graph.writing_mode or "")[:128],
         focus_key=(
             None if focus_key is None else knowledge_graph_wire_key(focus_key)
@@ -1212,8 +1259,66 @@ def knowledge_graph_read_to_dto(
             _knowledge_graph_edge_to_dto(edge) for edge in returned_weak_links
         ],
         weak_link_count=len(candidate_weak_links),
+        hidden_edges=[
+            _knowledge_graph_edge_to_dto(edge)
+            for edge in returned_hidden_edges
+        ],
+        hidden_edge_count=hidden_edge_count,
         warnings=[str(warning)[:512] for warning in graph.warnings[:25]],
         unavailable=[str(source)[:128] for source in graph.unavailable[:25]],
+    )
+
+
+def knowledge_graph_hidden_edges_to_dto(
+    graph,
+    *,
+    offset: int,
+    limit: int,
+) -> schemas.KnowledgeGraphHiddenEdgePageDTO:
+    """Serialize a deterministic page of every durable hidden edge decision."""
+    node_keys = set(graph.nodes)
+    hidden = [
+        edge for edge in graph.edges
+        if edge.is_hidden
+        and edge.source in node_keys
+        and edge.target in node_keys
+    ]
+    hidden.sort(key=_knowledge_graph_edge_sort_key)
+    persisted_count = int(
+        getattr(graph, "persisted_hidden_edge_count", len(hidden))
+    )
+    if persisted_count != len(hidden):
+        # Duplicate/corrupt legacy rows cannot be paginated into unambiguous
+        # directional commands.  Fail closed rather than hiding a decision.
+        raise RuntimeError("Knowledge Graph hidden review state is inconsistent")
+    page = hidden[offset:offset + limit]
+    endpoint_keys = sorted({
+        key for edge in page for key in (edge.source, edge.target)
+    })
+    nodes = []
+    for key in endpoint_keys:
+        node = graph.nodes[key]
+        nodes.append(schemas.KnowledgeGraphNodeDTO(
+            key=knowledge_graph_wire_key(node.key),
+            node_type=str(node.node_type)[:128],
+            source_type=str(node.source_type or "")[:128],
+            source_id=(
+                None if node.source_id is None else str(node.source_id)[:512]
+            ),
+            label=str(node.label or "")[:512],
+            summary=str(node.summary or "")[:1000],
+            metadata=_bounded_graph_value(dict(node.metadata or {})),
+            degree=graph.degree(key),
+        ))
+    return schemas.KnowledgeGraphHiddenEdgePageDTO(
+        project_id=int(graph.project_id),
+        revision=str(graph.revision),
+        offset=offset,
+        limit=limit,
+        hidden_edge_count=persisted_count,
+        returned_edge_count=len(page),
+        nodes=nodes,
+        edges=[_knowledge_graph_edge_to_dto(edge) for edge in page],
     )
 
 
