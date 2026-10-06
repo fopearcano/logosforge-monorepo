@@ -25,6 +25,7 @@ export function setAppMenu({ getWindow, reloadWindow }: MenuDeps): void {
     getWindow()?.webContents.send('menu:file', action);
   };
   const viewAction = (action: string) => getWindow()?.webContents.send('menu:view', action);
+  const editAction = (action: string) => getWindow()?.webContents.send('menu:edit', action);
 
   const appMenu: MenuItemConstructorOptions = {
     label: app.name,
@@ -89,6 +90,15 @@ export function setAppMenu({ getWindow, reloadWindow }: MenuDeps): void {
     submenu: [
       { role: 'undo' },
       { role: 'redo' },
+      { type: 'separator' },
+      {
+        label: 'Find and Replace…',
+        accelerator: 'CmdOrCtrl+F',
+        // The renderer owns the shortcut too, so browser and packaged builds
+        // enter the exact same active-surface search path.
+        registerAccelerator: false,
+        click: () => editAction('findReplace'),
+      },
       { type: 'separator' },
       { role: 'cut' },
       { role: 'copy' },

@@ -23,6 +23,7 @@ const BASICS: [string, string][] = [
   ['Narrative voice', 'Settings ⚙ → Narrative voice sets this document’s person, style, register, and slang guidance for Billy and Logos.'],
   ['PSYKE', 'Your per-project story bible — characters, places, objects, lore, themes. Isolated per document.'],
   ['Comments', 'On the Manuscript or any Drafter page, highlight text and click Comment to leave a threaded note pinned to that writing page.'],
+  ['Editor typefaces', 'Editor Settings includes bundled and cross-platform serif, sans, mono, typewriter, and handwritten voices. Choose Installed system font to load or enter a font installed on this computer.'],
   ['AI — Billy & Logos', 'Billy is a chat assistant; Logos works inline. Point them at your provider in Settings ⚙.'],
   ['Export & backup', 'Export Project (.lfbundle) saves manuscript, Drafter pages, document settings, outline, comments, and PSYKE. Incomplete exports are blocked.'],
 ];
@@ -52,6 +53,7 @@ const GROUPS: Group[] = [
       ['New Drafter page', 'Ctrl+Shift+N'],
       ['Move across writing tabs', '← / →'],
       ['Undo / Redo', 'Ctrl+Z / Ctrl+Shift+Z'],
+      ['Find & Replace', 'Ctrl+F'],
       ['Zoom in / out / reset', 'Ctrl+= / Ctrl+- / Ctrl+0'],
     ],
   },

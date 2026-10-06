@@ -890,7 +890,7 @@ body.is-col-resizing * { cursor: col-resize !important; }
 /* =============================================================================
  * EDITOR SETTINGS / DOC SETTINGS
  * ========================================================================== */
-.wb-settings { padding: 12px; min-width: 230px; display: flex; flex-direction: column; gap: 9px; }
+.wb-settings { padding: 12px; min-width: 230px; max-height: calc(100vh - 80px); overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 9px; }
 .wb-settings-title { font: 500 9px/1 var(--font-mono); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
 .wb-field { display: flex; align-items: center; justify-content: space-between; gap: 10px; font: 500 11px/1.2 var(--font-ui); color: var(--text); }
 .wb-field-check { justify-content: flex-start; gap: 8px; }
@@ -901,6 +901,56 @@ body.is-col-resizing * { cursor: col-resize !important; }
 .wb-color-reset { border: 1px solid var(--border); border-radius: var(--r-sm); background: transparent; color: var(--muted); padding: 4px 7px; font: 500 9px/1 var(--font-ui); }
 .wb-color-reset:hover:not(:disabled) { color: var(--text); border-color: var(--muted); }
 .wb-color-reset:disabled { opacity: .45; }
+.wb-system-font { display: flex; flex-direction: column; gap: 5px; }
+.wb-system-font > label { font: 500 10px/1.2 var(--font-ui); color: var(--muted); }
+.wb-system-font-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+.wb-system-font-row input { min-width: 0; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg); color: var(--text); padding: 6px 8px; font: 400 11px/1.2 var(--font-ui); }
+.wb-system-font-row input:focus-visible { outline: 2px solid color-mix(in oklab, var(--accent) 55%, transparent); outline-offset: 1px; border-color: var(--accent); }
+.wb-system-font-row input[aria-invalid="true"] { border-color: var(--danger, #b44949); }
+.wb-system-font-row button { border: 1px solid var(--border); border-radius: var(--r-sm); background: transparent; color: var(--text); padding: 5px 8px; font: 500 10px/1 var(--font-ui); }
+.wb-system-font-row button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.wb-system-font-row button:disabled { opacity: .45; }
+.wb-system-font .wb-field-hint, .wb-system-font .wb-field-error { margin: 0 2px 2px; }
+.wb-field-error { font: 500 10px/1.35 var(--font-ui); color: var(--danger, #b44949); }
+.wb-system-font-inventory { display: flex; align-items: center; gap: 7px; }
+.wb-system-font-inventory button { flex: none; border: 1px solid var(--border); border-radius: var(--r-sm); background: transparent; color: var(--muted); padding: 5px 7px; font: 500 9px/1 var(--font-ui); }
+.wb-system-font-inventory button:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+.wb-system-font-inventory button:disabled { opacity: .45; }
+.wb-system-font-inventory span { min-width: 0; color: var(--muted); font: 400 9px/1.3 var(--font-ui); }
+
+/* Non-modal editor search: it takes layout space instead of covering prose. */
+.wb-sr-only { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
+.find-replace-bar { flex: none; display: flex; align-items: end; gap: 10px; padding: 9px 14px; border-bottom: 1px solid var(--border); background: color-mix(in oklab, var(--panel) 96%, var(--accent-soft)); box-shadow: 0 5px 14px rgb(0 0 0 / .05); position: relative; z-index: 8; }
+.find-replace-fields { flex: 1 1 420px; display: grid; grid-template-columns: minmax(130px, 1fr) minmax(130px, 1fr); gap: 8px; }
+.find-replace-fields label { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 6px; color: var(--muted); font: 500 9px/1 var(--font-ui); text-transform: uppercase; letter-spacing: .08em; }
+.find-replace-fields input { width: 100%; min-width: 0; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--paper); color: var(--text); padding: 6px 8px; font: 400 12px/1.2 var(--font-ui); }
+.find-replace-fields input:focus { outline: 2px solid color-mix(in oklab, var(--accent) 38%, transparent); border-color: var(--accent); }
+.find-replace-options { display: flex; align-items: center; gap: 8px; padding-bottom: 5px; white-space: nowrap; }
+.find-replace-options label { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font: 500 10px/1 var(--font-ui); }
+.find-replace-actions { display: flex; align-items: center; gap: 5px; }
+.find-replace-actions button { min-height: 28px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg); color: var(--text); padding: 5px 8px; font: 500 10px/1 var(--font-ui); white-space: nowrap; }
+.find-replace-actions button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.find-replace-actions button:disabled { opacity: .4; }
+.find-replace-actions .find-replace-close { border-color: transparent; background: transparent; font-size: 17px; padding-inline: 6px; }
+.find-replace-count { min-width: 64px; color: var(--muted); font: 500 10px/1 var(--font-mono); text-align: right; white-space: nowrap; }
+.find-replace-scope { flex: none; align-self: center; max-width: min(220px, 24vw); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font: 500 9px/1 var(--font-ui); pointer-events: none; }
+.wb-find-match { border-radius: 2px; background: color-mix(in oklab, var(--syn-note-bg) 78%, var(--accent-soft)); color: var(--syn-note-ink); box-shadow: inset 0 -1px 0 color-mix(in oklab, var(--accent) 45%, transparent); }
+.wb-find-match-current { background: color-mix(in oklab, var(--accent) 30%, var(--syn-note-bg)); box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent) 72%, transparent); }
+
+@media (max-width: 900px) {
+  .find-replace-bar { align-items: stretch; flex-wrap: wrap; }
+  .find-replace-fields { flex-basis: 100%; }
+  .find-replace-actions { margin-left: auto; }
+  .find-replace-scope { max-width: 45vw; }
+}
+
+@media (max-width: 560px) {
+  .find-replace-fields { grid-template-columns: 1fr; }
+  .find-replace-options { flex: 1 1 auto; }
+  .find-replace-actions { flex: 1 1 100%; flex-wrap: wrap; margin-left: 0; }
+  .find-replace-count { margin-right: auto; text-align: left; }
+  .find-replace-scope { max-width: 100%; }
+}
 .wb-reset { align-self: flex-start; margin-top: 2px; border: 1px solid var(--border); border-radius: var(--r-sm); background: transparent; color: var(--muted); padding: 4px 9px; font: 500 10px/1 var(--font-ui); }
 .wb-reset:hover { color: var(--text); border-color: var(--muted); }
 
@@ -1362,7 +1412,7 @@ body.is-col-resizing * { cursor: col-resize !important; }
   @page { size: letter; margin: 1in 1in 1in 1.5in; }
 
   /* hide everything that isn't the document itself */
-  .titlebar, .outline-panel, .wb-outline-boundary, .wb-toolbar, .wb-location, .wb-statusline, .drafter-tabs-row, .wb-storymap,
+  .titlebar, .outline-panel, .wb-outline-boundary, .wb-toolbar, .wb-location, .wb-statusline, .drafter-tabs-row, .wb-storymap, .find-replace-bar,
   .statusbar, .wb-popover, .psyke-window, .littleboy-box, .wb-tool,
   .comments-window, .comment-popover, .comment-add-fab,
   .wb-hint, .sp-titlepage-edit, .wb-toast-stack, .wb-toast,
@@ -1390,6 +1440,9 @@ body.is-col-resizing * { cursor: col-resize !important; }
     background: transparent !important;
     border-bottom: 0 !important;
     border-radius: 0 !important;
+  }
+  .wb-find-match, .wb-find-match-current {
+    background: transparent !important; box-shadow: none !important;
   }
 
   /* respect Fountain page-break conventions */

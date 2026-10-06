@@ -201,6 +201,40 @@ requireMarkers('Native PDF menu', sourceText('features/whiteboard/WhiteboardPage
   '!isDocumentInteractionLocked()',
   "a === 'export:pdf'",
 ]);
+requireMarkers('Advanced Find and Replace bar', sourceText('features/findReplace/FindReplaceBar.tsx'), [
+  'role="search"',
+  'aria-live="polite"',
+  'Match case',
+  'Whole word',
+  'Previous match',
+  'Replace all',
+  "event.key === 'Escape'",
+]);
+requireMarkers('Find and Replace command routing', sourceText('features/whiteboard/WhiteboardPage.tsx'), [
+  "onMenuEdit((action)",
+  "action === 'findReplace'",
+  "e.key === 'f' || e.key === 'F'",
+  'e.preventDefault()',
+  'isModalDialogOpen()',
+  'isDocumentInteractionLocked()',
+]);
+requireMarkers(
+  'Native Find and Replace menu',
+  fs.readFileSync(path.join(process.cwd(), 'electron', 'menu.ts'), 'utf8'),
+  [
+    "label: 'Find and Replace…'",
+    "accelerator: 'CmdOrCtrl+F'",
+    'registerAccelerator: false',
+    "editAction('findReplace')",
+  ],
+);
+requireMarkers('Installed-font user-gesture inventory', sourceText('features/editorTools/EditorSettingsPopover.tsx'), [
+  'queryInstalledFontFamiliesFromUserGesture()',
+  'Load installed fonts',
+  'Refresh installed fonts',
+  'role="status"',
+  'aria-live="polite"',
+]);
 requireMarkers('Comment navigation modal precedence', sourceText('features/comments/CommentsLayer.tsx'), [
   'if (isModalDialogOpen()) return;',
 ]);
@@ -433,6 +467,17 @@ for (const relative of [
   }
 }
 const electronMain = fs.readFileSync(path.join(process.cwd(), 'electron', 'main.ts'), 'utf8');
+requireMarkers('Renderer permission boundary', electronMain, [
+  "requestedPermission === 'local-fonts'",
+  "requestedPermission === 'clipboard-sanitized-write'",
+  'isAllowedRendererPermission(permission)',
+  'isTrustedRendererPermissionRequest(',
+  'webContents !== ownerWebContents',
+  '!isMainFrame',
+  'isTrustedRendererUrl(',
+  'setPermissionCheckHandler(',
+  'setPermissionRequestHandler(',
+]);
 requireMarkers('All-close autosave handshake', electronMain, [
   'requestRendererAutosaveFlush',
   "app:flush-autosave-before-close",

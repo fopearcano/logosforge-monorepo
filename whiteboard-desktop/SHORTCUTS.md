@@ -53,9 +53,14 @@ file creates an internal project copy; it does not keep a live link to the disk 
 ## Writing & formatting  (inside the editor)
 | Shortcut | Action |
 |----------|--------|
+| `Mod + F` | Open advanced Find & Replace for the active Manuscript or Drafter page |
 | `Mod + Z` | Undo · `Mod + Shift + Z` / `Mod + Y` | Redo |
 | `Mod + B` | Bold — real formatting in prose modes; inserts Fountain `**…**` in Screenplay |
 | `Mod + I` | Italic — real formatting in prose modes; inserts Fountain `*…*` in Screenplay |
+
+Find & Replace searches only the active writing page and supports match case,
+Unicode-aware whole words, wrapping previous/next navigation, Replace, and a
+single-undo Replace All. It is also available from the desktop **Edit** menu.
 
 ### Screenplay mode only (Fountain markup)
 These insert Fountain syntax and apply **only in Screenplay mode**; in prose modes they do nothing.

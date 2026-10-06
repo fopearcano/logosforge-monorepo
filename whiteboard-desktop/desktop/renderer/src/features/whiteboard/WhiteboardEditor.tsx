@@ -19,6 +19,7 @@ import {
   type CommentMark,
 } from '../comments/commentsExtension';
 import type { EditorToolsState } from '../editorTools/editorToolTypes';
+import { FindReplaceExtension } from '../findReplace/findReplaceExtension';
 import { GraphicNovelEditing, gnKey } from '../graphicNovel/graphicNovelExtension';
 import { StageEditing, stageKey } from '../stage/stageExtension';
 import { AutocompletePopup } from '../screenplay/AutocompletePopup';
@@ -136,6 +137,7 @@ export function WhiteboardEditor({
       StageEditing,
       EditorTools.configure({ onToggleFold: (i) => onToggleFoldRef.current(i) }),
       CommentsExtension.configure({ onCommentClick: (id) => onCommentClickRef.current?.(id) }),
+      FindReplaceExtension,
     ],
     content: blocksToDoc(initialBlocks),
     autofocus: 'end',

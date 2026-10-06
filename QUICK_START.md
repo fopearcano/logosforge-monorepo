@@ -12,6 +12,7 @@ A calm, database-backed writing workstation for **novels, screenplays, graphic n
 - **Drafter pages** — the tabs above the editor let you draft isolated scenes or alternatives without navigating or changing the full manuscript. Click **+** (or press **Ctrl+Shift+N**) for a blank page, or use **Drafter → Import file as page…**. Pages stay in the same project, so Billy and Logos retain its manuscript, Outline, PSYKE, mode, and settings while clearly treating the active page as provisional.
 - **Writing modes** — the **Mode** dropdown reformats the current document live: **Novel**, **Screenplay** (Fountain), **Graphic Novel**, or **Stage Play**. It asks first if the page already has text, since the reformat is permanent.
 - **The three surfaces** — the **Editor** (centre) is where you write; the **Outline** (left) holds your manual story structure; the **Story Map** (bottom) is a visual overview derived from the document.
+- **Editor tools** — press **Ctrl+F** for advanced Find & Replace on the active Manuscript or Drafter page. **Editor Settings → Typeface** offers expanded style groups plus fonts installed on your computer (load or enter a family after installing it in the OS).
 - **Outline** — build structure by hand — **Acts, Chapters, Scenes, Beats** — with drag-to-reorder, colours, and status. **+ Add ▾** inserts a typed item (auto-nested) or applies a **writing-method template** (Three-Act, Save the Cat!, Hero's Journey, and more). Use a row's **⋯ → Link to cursor position** for a stable manuscript anchor and live “you are here” breadcrumb.
 - **PSYKE — the story bible** — keep **characters, places, objects, lore, and themes** per project. PSYKE is scoped to each document, so two projects never share a cast.
 - **Comments** — on the **Manuscript** tab, highlight text and click **Comment** to leave a threaded note pinned to that passage. Resolve them when handled.
@@ -43,6 +44,7 @@ Outline keys apply while a row is selected; editor keys apply while you're writi
 | New Document | `Ctrl` `N` |
 | New Drafter page | `Ctrl` `Shift` `N` |
 | Undo / Redo | `Ctrl` `Z` / `Ctrl` `Shift` `Z` |
+| Find & Replace | `Ctrl` `F` |
 | Zoom in / out | `Ctrl` `=` / `Ctrl` `-` |
 | Reset zoom | `Ctrl` `0` |
 

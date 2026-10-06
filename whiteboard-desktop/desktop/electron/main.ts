@@ -3,10 +3,12 @@ import {
   BrowserWindow,
   dialog,
   ipcMain,
+  type WebContents,
   type IpcMainEvent,
   type IpcMainInvokeEvent,
 } from 'electron';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { BackendManager, type BackendStatus } from './backend-manager';
 import {
@@ -63,6 +65,7 @@ const ownsSingleInstance = app.requestSingleInstanceLock();
 
 const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL ?? 'http://localhost:5173';
 const isProd = app.isPackaged || process.argv.includes('--prod');
+const PACKAGED_RENDERER_ENTRY = path.join(__dirname, '..', 'renderer', 'dist', 'index.html');
 const bundledMcpPath = app.isPackaged ? resolveBundledMcpPath(process.resourcesPath) : undefined;
 let mcpRuntimePath: string | undefined;
 let installedMcpPath: string | undefined;
@@ -622,6 +625,84 @@ function queueSystemSessionEnd(win: BrowserWindow): void {
   });
 }
 
+function samePath(left: string, right: string): boolean {
+  const normalizedLeft = path.resolve(left);
+  const normalizedRight = path.resolve(right);
+  return process.platform === 'win32'
+    ? normalizedLeft.toLocaleLowerCase('en-US') === normalizedRight.toLocaleLowerCase('en-US')
+    : normalizedLeft === normalizedRight;
+}
+
+/** Only the app's actual renderer entry point is trusted for permissions. */
+function isTrustedRendererUrl(candidate: string): boolean {
+  try {
+    const url = new URL(candidate);
+    if (isProd) {
+      return url.protocol === 'file:' && samePath(fileURLToPath(url), PACKAGED_RENDERER_ENTRY);
+    }
+    return url.origin === new URL(DEV_SERVER_URL).origin;
+  } catch {
+    return false;
+  }
+}
+
+function isAllowedRendererPermission(permission: unknown): boolean {
+  const requestedPermission = String(permission);
+  return (
+    requestedPermission === 'local-fonts'
+    || requestedPermission === 'clipboard-sanitized-write'
+  );
+}
+
+function isTrustedRendererPermissionRequest(
+  owner: BrowserWindow,
+  webContents: WebContents | null,
+  requestingLocation: string | undefined,
+  isMainFrame: boolean,
+): boolean {
+  if (owner.isDestroyed()) return false;
+  const ownerWebContents = owner.webContents;
+  if (
+    webContents !== ownerWebContents
+    || ownerWebContents.isDestroyed()
+    || !isMainFrame
+    || !isTrustedRendererUrl(ownerWebContents.getURL())
+  ) {
+    return false;
+  }
+  if (!requestingLocation) return false;
+  // Electron can report a file document's origin rather than its complete URL
+  // during the permission check. The exact current page was verified above.
+  if (isProd && (requestingLocation === 'file://' || requestingLocation === 'file:')) {
+    return true;
+  }
+  return isTrustedRendererUrl(requestingLocation);
+}
+
+function installRendererPermissionPolicy(win: BrowserWindow): void {
+  const rendererSession = win.webContents.session;
+  rendererSession.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => (
+    isAllowedRendererPermission(permission)
+    && isTrustedRendererPermissionRequest(
+      win,
+      webContents,
+      details.requestingUrl || requestingOrigin,
+      details.isMainFrame,
+    )
+  ));
+  rendererSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    callback(
+      isAllowedRendererPermission(permission)
+      && isTrustedRendererPermissionRequest(
+        win,
+        webContents,
+        details.requestingUrl,
+        details.isMainFrame,
+      ),
+    );
+  });
+}
+
 function createWindow(): void {
   allowClose = false;
   isDirty = false;
@@ -642,8 +723,10 @@ function createWindow(): void {
     },
   });
 
+  installRendererPermissionPolicy(mainWindow);
+
   if (isProd) {
-    void mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'dist', 'index.html'));
+    void mainWindow.loadFile(PACKAGED_RENDERER_ENTRY);
   } else {
     void mainWindow.loadURL(DEV_SERVER_URL);
   }

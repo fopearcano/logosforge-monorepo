@@ -2,6 +2,8 @@
  *  plus the Screenplay Preview / Settings / scale / export toolbar. */
 
 import type { Editor } from '@tiptap/react';
+import { closeHistory } from '@tiptap/pm/history';
+import { TextSelection } from '@tiptap/pm/state';
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 
 import { ConfirmDialog } from '../../components/ConfirmDialog';
@@ -17,6 +19,19 @@ import { EditorSettingsPopover } from '../editorTools/EditorSettingsPopover';
 import { editorToolsAttrs, editorToolsVars } from '../editorTools/editorToolsSurface';
 import { useFolding } from '../editorTools/folding/useFolding';
 import { useEditorTools } from '../editorTools/useEditorTools';
+import { findFoldableRegions } from '../editorTools/folding/foldingModel';
+import { FindReplaceBar } from '../findReplace/FindReplaceBar';
+import { findReplaceKey, findReplaceMeta } from '../findReplace/findReplaceExtension';
+import {
+  descendingReplacementPlan,
+  findTextMatches,
+  matchIndexForRange,
+  matchIndexFromPosition,
+  stepMatchIndex,
+  type FindDirection,
+  type FindMatch,
+} from '../findReplace/findReplaceModel';
+import { onMenuEdit } from '../findReplace/findReplaceMenu';
 import { filesAvailable, onMenuFile } from '../files/fileApi';
 import { windowTitle } from '../files/fileState';
 import { EXPORT_FORMATS, IMPORT_FORMATS, parseImport } from '../files/importExportFormats';
@@ -41,6 +56,7 @@ import { SettingsDialog } from '../settings/SettingsDialog';
 import { PreviewView } from '../screenplay/PreviewView';
 import { printScreenplayPdf } from '../screenplay/printScreenplay';
 import { toFountainBlocks } from '../screenplay/screenplayExport';
+import { docToFountainBlocks } from '../screenplay/screenplayFormatting';
 import type { FountainType } from '../screenplay/fountainTypes';
 import { paginateScreenplay } from '../screenplay/screenplayPaginate';
 import { screenplayLabel } from '../screenplay/screenplayClassifier';
@@ -155,6 +171,30 @@ export function WhiteboardPage({
   });
   const { modes, defaultMode } = useWritingModes({ baseUrl, ready });
   const [editor, setEditor] = useState<Editor | null>(null);
+  const [findOpen, setFindOpen] = useState(false);
+  const [findRequestToken, setFindRequestToken] = useState(0);
+  const [findQuery, setFindQuery] = useState('');
+  const [findEvaluatedQuery, setFindEvaluatedQuery] = useState('');
+  const [findReplacement, setFindReplacement] = useState('');
+  const [findMatchCase, setFindMatchCase] = useState(false);
+  const [findWholeWord, setFindWholeWord] = useState(false);
+  const [findCurrentIndex, setFindCurrentIndex] = useState<number | null>(null);
+  const findCurrentIndexRef = useRef<number | null>(null);
+  const findMatchesRef = useRef<readonly FindMatch[]>([]);
+  const lastAutoSurfaceCriteriaRef = useRef<{
+    editor: Editor;
+    open: boolean;
+    query: string;
+    matchCase: boolean;
+    wholeWord: boolean;
+  } | null>(null);
+  const [findRevision, setFindRevision] = useState(0);
+  const [, setFindSelectionRevision] = useState(0);
+  const [findAnnouncement, setFindAnnouncement] = useState('');
+  const commitFindCurrentIndex = useCallback((index: number | null) => {
+    findCurrentIndexRef.current = index;
+    setFindCurrentIndex(index);
+  }, []);
   const [element, setElement] = useState<FountainType | null>(null);
   const [preview, setPreview] = useState(false);
   const [conflictReloadOpen, setConflictReloadOpen] = useState(false);
@@ -258,6 +298,275 @@ export function WhiteboardPage({
   }, [activeDraft]);
   const activeEditorBlocks = manuscriptActive ? editorMountBlocks : draftMountBlocks;
   const activeBlocks = manuscriptActive ? liveBlocks : draftMountBlocks;
+  const findSearchPending = findOpen && findEvaluatedQuery !== findQuery;
+
+  // A short idle window collapses rapid typing into one full-document scan.
+  // Results/count remain exact once evaluated; pending decorations are cleared
+  // so stale matches can never be mistaken for the new query.
+  useEffect(() => {
+    if (!findOpen) {
+      setFindEvaluatedQuery(findQuery);
+      return undefined;
+    }
+    if (findEvaluatedQuery === findQuery) return undefined;
+    const timer = window.setTimeout(() => setFindEvaluatedQuery(findQuery), 80);
+    return () => window.clearTimeout(timer);
+  }, [findEvaluatedQuery, findOpen, findQuery]);
+
+  // Advanced literal search is scoped to the currently mounted writing surface
+  // (manuscript or one Drafter page). Preferences remain while switching tabs,
+  // but results are always recomputed against the active TipTap document.
+  useEffect(() => {
+    if (!editor) return undefined;
+    const onUpdate = () => setFindRevision((revision) => revision + 1);
+    const onSelectionUpdate = () => {
+      if (!findOpen) return;
+      setFindSelectionRevision((revision) => revision + 1);
+      const matches = findMatchesRef.current;
+      if (!matches.length) {
+        commitFindCurrentIndex(null);
+        return;
+      }
+      const selection = editor.state.selection;
+      const exact = matchIndexForRange(matches, selection.from, selection.to);
+      const containing = matches.findIndex(
+        (match) => selection.from >= match.from && selection.from < match.to,
+      );
+      commitFindCurrentIndex(
+        exact ?? (containing >= 0
+          ? containing
+          : matchIndexFromPosition(matches, selection.from, 1).index),
+      );
+    };
+    editor.on('update', onUpdate);
+    editor.on('selectionUpdate', onSelectionUpdate);
+    return () => {
+      editor.off('update', onUpdate);
+      editor.off('selectionUpdate', onSelectionUpdate);
+    };
+  }, [commitFindCurrentIndex, editor, findOpen]);
+
+  const findMatches = useMemo(
+    () => (
+      findOpen && editor
+        ? findTextMatches(editor.state.doc, findEvaluatedQuery, {
+            matchCase: findMatchCase,
+            wholeWord: findWholeWord,
+          })
+        : []
+    ),
+    [editor, findOpen, findEvaluatedQuery, findMatchCase, findWholeWord, findRevision],
+  );
+  findMatchesRef.current = findMatches;
+  const resolvedFindIndex = findMatches.length
+    ? Math.min(findCurrentIndex ?? 0, findMatches.length - 1)
+    : null;
+  const selectedFindIndex = editor
+    ? matchIndexForRange(
+      findMatches,
+      editor.state.selection.from,
+      editor.state.selection.to,
+    )
+    : null;
+  const findCurrentSelected = resolvedFindIndex !== null
+    && selectedFindIndex === resolvedFindIndex;
+
+  useEffect(() => {
+    if (!editor || !findMatches.length) {
+      commitFindCurrentIndex(null);
+      return;
+    }
+    const selection = editor.state.selection;
+    const exact = matchIndexForRange(findMatches, selection.from, selection.to);
+    const containing = findMatches.findIndex(
+      (match) => selection.from >= match.from && selection.from < match.to,
+    );
+    commitFindCurrentIndex(
+      exact ?? (containing >= 0
+        ? containing
+        : matchIndexFromPosition(findMatches, selection.from, 1).index),
+    );
+  }, [commitFindCurrentIndex, editor, findMatches]);
+
+  useEffect(() => {
+    setFindAnnouncement('');
+  }, [editor, findQuery, findMatchCase, findWholeWord]);
+
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    editor.view.dispatch(
+      editor.state.tr.setMeta(
+        findReplaceKey,
+        findReplaceMeta(
+          findOpen && !findSearchPending ? findMatches : [],
+          findOpen && !findSearchPending ? resolvedFindIndex : null,
+        ),
+      ),
+    );
+  }, [editor, findOpen, findMatches, findSearchPending, resolvedFindIndex]);
+
+  useEffect(() => {
+    setFindOpen(false);
+    setFindAnnouncement('');
+  }, [doc?.id]);
+
+  const openFindReplace = useCallback(() => {
+    if (!editor || editor.isDestroyed || isModalDialogOpen() || isDocumentInteractionLocked()) return;
+    if (previewRef.current) setPreview(false);
+    if (!findOpen) {
+      const { from, to, $from, $to } = editor.state.selection;
+      if (from < to && $from.parent === $to.parent) {
+        const selected = editor.state.doc.textBetween(from, to, ' ');
+        if (selected && selected.length <= 200 && !/[\r\n]/.test(selected)) setFindQuery(selected);
+      }
+    }
+    setFindOpen(true);
+    setFindRequestToken((token) => token + 1);
+  }, [editor, findOpen]);
+
+  const closeFindReplace = useCallback(() => {
+    setFindOpen(false);
+    setFindAnnouncement('');
+    window.requestAnimationFrame(() => {
+      if (editor && !editor.isDestroyed) editor.commands.focus();
+    });
+  }, [editor]);
+
+  const selectFindMatch = useCallback((match: FindMatch) => {
+    if (!editor || editor.isDestroyed) return;
+    const regions = findFoldableRegions(docToFountainBlocks(editor.state.doc), mode);
+    const enclosingCollapsedHeads = regions
+      .filter((region) => folds.has(region.head) && match.blockIndex > region.head && match.blockIndex <= region.end)
+      .map((region) => region.head);
+    for (const head of enclosingCollapsedHeads) toggleFold(head);
+
+    const select = () => {
+      if (editor.isDestroyed || match.from < 0 || match.to > editor.state.doc.content.size) return;
+      editor.view.dispatch(
+        editor.state.tr
+          .setSelection(TextSelection.create(editor.state.doc, match.from, match.to))
+          .scrollIntoView(),
+      );
+    };
+    if (enclosingCollapsedHeads.length) {
+      window.requestAnimationFrame(() => window.requestAnimationFrame(select));
+    } else {
+      select();
+    }
+  }, [editor, folds, mode, toggleFold]);
+
+  // A new query/filter always surfaces the resolved result before Replace is
+  // allowed. This also opens any folded region containing that result without
+  // moving DOM focus out of the Find field.
+  useEffect(() => {
+    if (!editor || findSearchPending) return;
+    const previous = lastAutoSurfaceCriteriaRef.current;
+    if (
+      previous?.editor === editor
+      && previous.open === findOpen
+      && previous.query === findEvaluatedQuery
+      && previous.matchCase === findMatchCase
+      && previous.wholeWord === findWholeWord
+    ) return;
+    lastAutoSurfaceCriteriaRef.current = {
+      editor,
+      open: findOpen,
+      query: findEvaluatedQuery,
+      matchCase: findMatchCase,
+      wholeWord: findWholeWord,
+    };
+    if (!findOpen || !findEvaluatedQuery) return;
+    if (!findMatches.length) {
+      commitFindCurrentIndex(null);
+      return;
+    }
+    const selection = editor.state.selection;
+    const exact = matchIndexForRange(findMatches, selection.from, selection.to);
+    const containing = findMatches.findIndex(
+      (match) => selection.from >= match.from && selection.from < match.to,
+    );
+    const index = exact ?? (containing >= 0
+      ? containing
+      : matchIndexFromPosition(findMatches, selection.from, 1).index);
+    if (index === null) return;
+    commitFindCurrentIndex(index);
+    selectFindMatch(findMatches[index]);
+  }, [
+    commitFindCurrentIndex,
+    editor,
+    findEvaluatedQuery,
+    findMatchCase,
+    findMatches,
+    findOpen,
+    findSearchPending,
+    findWholeWord,
+    selectFindMatch,
+  ]);
+
+  const navigateFind = useCallback((direction: FindDirection) => {
+    if (!editor || !findMatches.length) return;
+    const current = findCurrentIndexRef.current;
+    const navigation = stepMatchIndex(
+      findMatches.length,
+      current !== null && current < findMatches.length ? current : null,
+      direction,
+    );
+    if (navigation.index === null) return;
+    commitFindCurrentIndex(navigation.index);
+    setFindAnnouncement(
+      navigation.wrapped
+        ? direction === 1 ? 'Wrapped to the first match.' : 'Wrapped to the last match.'
+        : `Match ${navigation.index + 1} of ${findMatches.length}.`,
+    );
+    selectFindMatch(findMatches[navigation.index]);
+  }, [commitFindCurrentIndex, editor, findMatches, selectFindMatch]);
+
+  const replaceCurrentFindMatch = useCallback(() => {
+    if (!editor || editor.isDestroyed || isDocumentInteractionLocked()) return;
+    const options = { matchCase: findMatchCase, wholeWord: findWholeWord };
+    const latestMatches = findTextMatches(editor.state.doc, findEvaluatedQuery, options);
+    if (!latestMatches.length) return;
+    const targetIndex = Math.min(findCurrentIndexRef.current ?? 0, latestMatches.length - 1);
+    const target = latestMatches[targetIndex];
+    const transaction = closeHistory(editor.state.tr)
+      .setStoredMarks(null)
+      .insertText(findReplacement, target.from, target.to);
+    const remainingMatches = findTextMatches(transaction.doc, findEvaluatedQuery, options);
+    const navigation = matchIndexFromPosition(
+      remainingMatches,
+      target.from + findReplacement.length,
+      1,
+    );
+    editor.view.dispatch(transaction);
+    commitFindCurrentIndex(navigation.index);
+    setFindAnnouncement(
+      remainingMatches.length
+        ? `Replaced one match. ${remainingMatches.length} remaining.`
+        : 'Replaced the final match.',
+    );
+    if (navigation.index !== null) {
+      const nextMatch = remainingMatches[navigation.index];
+      window.requestAnimationFrame(() => selectFindMatch(nextMatch));
+    }
+  }, [commitFindCurrentIndex, editor, findEvaluatedQuery, findMatchCase, findReplacement, findWholeWord, selectFindMatch]);
+
+  const replaceAllFindMatches = useCallback(() => {
+    if (!editor || editor.isDestroyed || isDocumentInteractionLocked()) return;
+    const latestMatches = findTextMatches(editor.state.doc, findEvaluatedQuery, {
+      matchCase: findMatchCase,
+      wholeWord: findWholeWord,
+    });
+    if (!latestMatches.length) return;
+    let transaction = closeHistory(editor.state.tr).setStoredMarks(null);
+    for (const match of descendingReplacementPlan(latestMatches)) {
+      transaction = transaction.insertText(findReplacement, match.from, match.to);
+    }
+    editor.view.dispatch(transaction);
+    commitFindCurrentIndex(null);
+    setFindAnnouncement(
+      `Replaced ${latestMatches.length} ${latestMatches.length === 1 ? 'match' : 'matches'} in one edit.`,
+    );
+  }, [commitFindCurrentIndex, editor, findEvaluatedQuery, findMatchCase, findReplacement, findWholeWord]);
 
   // A document handoff always returns to its canonical manuscript. A deleted
   // page also falls back synchronously through reconcileWritingSurface above;
@@ -834,6 +1143,10 @@ export function WhiteboardPage({
     }
   }), []);
 
+  useEffect(() => onMenuEdit((action) => {
+    if (action === 'findReplace') openFindReplace();
+  }), [openFindReplace]);
+
   // Autosave + recompute the (client-derived) outline + live snapshot on edit.
   const handleBlocks = useCallback(
     (blocks: WhiteboardBlock[]) => {
@@ -913,8 +1226,26 @@ export function WhiteboardPage({
   // View scale (Ctrl/Cmd +/-/0), Preview toggle (Ctrl/Cmd+Shift+E), Esc exits.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (isModalDialogOpen() || isDocumentInteractionLocked()) return;
       const mod = e.metaKey || e.ctrlKey;
+      if (mod && !e.shiftKey && !e.altKey && (e.key === 'f' || e.key === 'F')) {
+        // Always suppress Chromium's page search; Whiteboard owns Cmd/Ctrl+F.
+        e.preventDefault();
+        if (!isModalDialogOpen() && !isDocumentInteractionLocked()) openFindReplace();
+        return;
+      }
+      if (isModalDialogOpen() || isDocumentInteractionLocked()) return;
+      if (e.key === 'Escape' && findOpen) {
+        const active = document.activeElement as HTMLElement | null;
+        if (
+          active
+          && !active.closest('.find-replace-bar')
+          && (active.closest('.wb-popover') || /^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(active.tagName))
+        ) return;
+        e.preventDefault();
+        e.stopPropagation();
+        closeFindReplace();
+        return;
+      }
       if (mod && e.shiftKey && !e.altKey && e.code === 'KeyN') {
         if (!doc || !drafter.available || drafter.loading) return;
         e.preventDefault();
@@ -969,9 +1300,9 @@ export function WhiteboardPage({
         setPreview(false);
       }
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [isScreenplay, applyScale, toggleTool, doc, drafter.available, drafter.loading, drafter.pages.length]);
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [isScreenplay, applyScale, toggleTool, doc, drafter.available, drafter.loading, drafter.pages.length, closeFindReplace, findOpen, openFindReplace]);
 
   // Exact page count from the SAME paginator the PDF export uses, so the on-screen
   // figure matches the printed script. Recomputes only on a content change (memo).
@@ -980,9 +1311,19 @@ export function WhiteboardPage({
     [isScreenplay, activeBlocks],
   );
 
+  const modeTypeface = mode === 'screenplay'
+    ? settingsApi.settings.typeface === 'courier'
+      ? "'Courier New', Courier, monospace"
+      : settingsApi.settings.typeface === 'monospace'
+        ? "ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace"
+        : 'var(--font-screenplay)'
+    : modeBehavior(mode).font === 'mono'
+      ? 'var(--font-screenplay)'
+      : 'var(--font-prose)';
   const surfaceStyle = {
     '--measure': modeBehavior(mode).measure,
     '--wb-scale': String(scale),
+    '--wb-mode-typeface': modeTypeface,
     ...editorToolsVars(editorTools),
   } as CSSProperties;
   const surfaceAttrs = {
@@ -996,6 +1337,10 @@ export function WhiteboardPage({
       : `${doc.id}:drafter:${activeDraft?.id ?? 'missing'}`)
     : 'none';
   const activeTabDomId = writingSurfaceTabDomId(activeSurface);
+  const findSurfaceLabel = manuscriptActive
+    ? 'Manuscript'
+    : `Drafter · ${activeDraft?.title ?? 'Page'}`;
+  const findMutationLocked = isDocumentInteractionLocked();
 
   return (
     <main className="whiteboard">
@@ -1253,6 +1598,44 @@ export function WhiteboardPage({
         />
       )}
       {!isScreenplay && <ProseToolbar editor={editor} scale={scale} onScale={applyScale} />}
+
+      <FindReplaceBar
+        open={findOpen}
+        requestToken={findRequestToken}
+        query={findQuery}
+        replacement={findReplacement}
+        matchCase={findMatchCase}
+        wholeWord={findWholeWord}
+        currentIndex={resolvedFindIndex ?? -1}
+        matchCount={findMatches.length}
+        searchPending={findSearchPending}
+        surfaceLabel={findSurfaceLabel}
+        announcement={findAnnouncement}
+        canReplace={Boolean(
+          findEvaluatedQuery
+          && !findSearchPending
+          && findMatches.length
+          && findCurrentSelected
+          && editor
+          && !findMutationLocked
+        )}
+        canReplaceAll={Boolean(
+          findEvaluatedQuery
+          && !findSearchPending
+          && findMatches.length
+          && editor
+          && !findMutationLocked
+        )}
+        onQueryChange={setFindQuery}
+        onReplacementChange={setFindReplacement}
+        onMatchCaseChange={setFindMatchCase}
+        onWholeWordChange={setFindWholeWord}
+        onPrevious={() => navigateFind(-1)}
+        onNext={() => navigateFind(1)}
+        onReplace={replaceCurrentFindMatch}
+        onReplaceAll={replaceAllFindMatches}
+        onClose={closeFindReplace}
+      />
 
       {manuscriptActive && locationPath && locationPath.length > 0 && (
         <div className="wb-location" aria-label="Current outline section">

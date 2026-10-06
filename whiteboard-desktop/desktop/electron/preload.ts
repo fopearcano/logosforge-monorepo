@@ -57,6 +57,7 @@ export interface LogosForgeApi {
   exportSave(content: string, suggestedName: string, filters: DialogFilter[]): Promise<SaveResult>;
 
   onMenuFile(cb: (action: string) => void): () => void;
+  onMenuEdit(cb: (action: string) => void): () => void;
   onMenuView(cb: (action: string) => void): () => void;
 }
 
@@ -116,6 +117,7 @@ const api: LogosForgeApi = {
     ipcRenderer.invoke('export:save-dialog', { content, suggestedName, filters }),
 
   onMenuFile: (cb) => subscribe<string>('menu:file', cb),
+  onMenuEdit: (cb) => subscribe<string>('menu:edit', cb),
   onMenuView: (cb) => subscribe<string>('menu:view', cb),
 };
 

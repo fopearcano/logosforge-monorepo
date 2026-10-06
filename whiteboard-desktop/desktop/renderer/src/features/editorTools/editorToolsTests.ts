@@ -4,8 +4,8 @@
  */
 
 import type { FountainBlock } from '../screenplay/fountainTypes';
-import { DEFAULT_EDITOR_TOOLS, EDITOR_TYPEFACES } from './editorToolTypes';
-import { EDITOR_TYPEFACE_STACKS, editorToolsAttrs, editorToolsVars } from './editorToolsSurface';
+import { DEFAULT_EDITOR_TOOLS, EDITOR_TYPEFACES, normalizeSystemFontFamily } from './editorToolTypes';
+import { EDITOR_TYPEFACE_STACKS, editorToolsAttrs, editorToolsVars, installedTypefaceStack } from './editorToolsSurface';
 import { findFoldableRegions, headingLevel, hiddenBlocks, isFoldHead } from './folding/foldingModel';
 import { gutterDigits, lineNumbersForCount } from './lineNumbers/lineNumbers';
 import { classifySyntax } from './syntax/syntaxClassifier';
@@ -155,7 +155,8 @@ check(
   check('manuscript colour reaches CSS', vars['--wb-editor-ink'] === '#A1B2C3');
   check(
     'every non-default typeface has a stack',
-    EDITOR_TYPEFACES.filter((face) => face !== 'default').every((face) => Boolean(EDITOR_TYPEFACE_STACKS[face])),
+    EDITOR_TYPEFACES.filter((face) => face !== 'default' && face !== 'installed')
+      .every((face) => Boolean(EDITOR_TYPEFACE_STACKS[face])),
   );
   check(
     'typewriter stack stays distinct from bundled screenplay Courier',
@@ -183,6 +184,15 @@ check(
     'normalizer rejects invalid CSS preferences',
     rejected.typeface === 'default' && rejected.textColor === null && rejected.fontSize === null,
   );
+  check('system font accepts international family', normalizeSystemFontFamily('  Noto Sans CJK 日本語  ') === 'Noto Sans CJK 日本語');
+  check('system font rejects CSS fallback list', normalizeSystemFontFamily('Garamond, serif') === null);
+  check('system font rejects CSS injection', normalizeSystemFontFamily('Garamond; color: red') === null);
+  const installed = normalizeEditorTools({ typeface: 'installed', systemFontFamily: 'EB Garamond' });
+  check('normalizer keeps installed font family', installed.systemFontFamily === 'EB Garamond');
+  check('installed font stack is safely quoted', installedTypefaceStack(installed.systemFontFamily) === '"EB Garamond", var(--wb-mode-typeface)');
+  check('installed font reaches surface', editorToolsVars(installed)['--wb-editor-typeface'] === '"EB Garamond", var(--wb-mode-typeface)');
+  const missingInstalled = { ...DEFAULT_EDITOR_TOOLS, typeface: 'installed' as const };
+  check('empty installed font does not gate surface', !('data-editor-typeface' in editorToolsAttrs(missingInstalled)));
 }
 
 // --- report ---

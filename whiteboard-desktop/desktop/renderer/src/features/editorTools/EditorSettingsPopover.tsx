@@ -5,6 +5,8 @@
  * few typography overrides, all of which default to off / mode-default.
  */
 
+import { useEffect, useState } from 'react';
+
 import { Popover } from '../../components/Popover';
 import { useTheme } from '../../styles/themes/useTheme';
 import {
@@ -12,9 +14,15 @@ import {
   FONT_SIZE_MIN,
   LINE_HEIGHT_MAX,
   LINE_HEIGHT_MIN,
+  normalizeSystemFontFamily,
+  SYSTEM_FONT_FAMILY_MAX_LENGTH,
   type EditorLayout,
   type EditorTypeface,
 } from './editorToolTypes';
+import {
+  InstalledFontInventoryError,
+  queryInstalledFontFamiliesFromUserGesture,
+} from './installedFonts';
 import type { EditorToolsApi } from './useEditorTools';
 
 interface Props {
@@ -23,19 +31,40 @@ interface Props {
   onReset: () => void;
 }
 
-const TYPEFACES: { value: EditorTypeface; label: string }[] = [
-  { value: 'default', label: 'Mode default' },
-  { value: 'serif', label: 'Literary serif · Spectral' },
-  { value: 'book', label: 'Book serif · Palatino' },
-  { value: 'classic', label: 'Classic serif · Georgia' },
-  { value: 'sans', label: 'Humanist sans · IBM Plex' },
-  { value: 'system', label: 'System sans' },
-  { value: 'mono', label: 'Modern mono · IBM Plex' },
-  { value: 'courier-prime', label: 'Screenplay · Courier Prime' },
-  { value: 'typewriter', label: 'Typewriter · Vintage' },
-  { value: 'handwritten', label: 'Handwritten · Print' },
-  { value: 'script', label: 'Handwritten · Script' },
-  { value: 'chalkboard', label: 'Handwritten · Chalkboard' },
+const TYPEFACE_GROUPS: { label: string; options: { value: EditorTypeface; label: string }[] }[] = [
+  { label: 'General', options: [
+    { value: 'default', label: 'Mode default' },
+    { value: 'installed', label: 'Installed system font…' },
+  ] },
+  { label: 'Serif', options: [
+    { value: 'serif', label: 'Literary · Spectral' },
+    { value: 'book', label: 'Book · Palatino' },
+    { value: 'classic', label: 'Classic · Georgia' },
+    { value: 'transitional', label: 'Transitional · Charter' },
+    { value: 'editorial', label: 'Editorial · Didot / Bodoni' },
+    { value: 'slab', label: 'Slab · Rockwell' },
+  ] },
+  { label: 'Sans serif', options: [
+    { value: 'sans', label: 'IBM Plex' },
+    { value: 'system', label: 'System UI' },
+    { value: 'humanist', label: 'Humanist · Optima / Candara' },
+    { value: 'geometric', label: 'Geometric · Futura / Avenir' },
+    { value: 'rounded', label: 'Rounded · Rounded / Quicksand' },
+  ] },
+  { label: 'Mono & typewriter', options: [
+    { value: 'mono', label: 'Modern mono · IBM Plex' },
+    { value: 'coding', label: 'Coding · Cascadia / JetBrains' },
+    { value: 'courier-prime', label: 'Screenplay · Courier Prime' },
+    { value: 'typewriter', label: 'Vintage typewriter' },
+    { value: 'typewriter-modern', label: 'Modern typewriter' },
+  ] },
+  { label: 'Handwritten', options: [
+    { value: 'handwritten', label: 'Print' },
+    { value: 'handwritten-casual', label: 'Casual' },
+    { value: 'script', label: 'Script' },
+    { value: 'chalkboard', label: 'Chalkboard' },
+    { value: 'marker', label: 'Marker' },
+  ] },
 ];
 
 const FONT_SIZES = [13, 14, 15, 16, 17, 18, 20, 22, 24].filter(
@@ -48,6 +77,51 @@ const LINE_HEIGHTS = [1.3, 1.5, 1.7, 1.9, 2.1].filter(
 export function EditorSettingsPopover({ api, onReset }: Props) {
   const { tools, update, toggle } = api;
   const { theme } = useTheme();
+  const [systemFontDraft, setSystemFontDraft] = useState(tools.systemFontFamily ?? '');
+  const [installedFamilies, setInstalledFamilies] = useState<string[]>([]);
+  const [fontInventoryStatus, setFontInventoryStatus] = useState('');
+  const [loadingFonts, setLoadingFonts] = useState(false);
+  useEffect(() => setSystemFontDraft(tools.systemFontFamily ?? ''), [tools.systemFontFamily]);
+  const normalizedSystemFont = normalizeSystemFontFamily(systemFontDraft);
+  const systemFontValid = systemFontDraft.trim() === '' || normalizedSystemFont !== null;
+  const selectedFontMissing = Boolean(
+    normalizedSystemFont
+      && installedFamilies.length
+      && !installedFamilies.some(
+        (family) => family.toLocaleLowerCase() === normalizedSystemFont.toLocaleLowerCase(),
+      ),
+  );
+  const visibleFontInventoryStatus = selectedFontMissing
+    ? `${normalizedSystemFont} was not found in the loaded list. Whiteboard will use the mode default if the operating system cannot resolve it.`
+    : fontInventoryStatus;
+  const applySystemFont = () => {
+    if (!systemFontValid) return;
+    update('systemFontFamily', normalizedSystemFont);
+  };
+  const loadInstalledFonts = async () => {
+    // Keep this call directly inside the click turn: Local Font Access requires
+    // explicit user activation and the adapter performs no permission preflight.
+    const pending = queryInstalledFontFamiliesFromUserGesture();
+    setLoadingFonts(true);
+    setFontInventoryStatus('Reading installed fonts…');
+    try {
+      const families = await pending;
+      setInstalledFamilies(families);
+      setFontInventoryStatus(
+        families.length
+          ? `${families.length} installed font ${families.length === 1 ? 'family' : 'families'} available.`
+          : 'No installed font families were returned.',
+      );
+    } catch (error) {
+      setFontInventoryStatus(
+        error instanceof InstalledFontInventoryError
+          ? error.message
+          : 'Whiteboard could not read the installed-font list.',
+      );
+    } finally {
+      setLoadingFonts(false);
+    }
+  };
 
   return (
     <Popover label="Editor" title="Editor Settings" align="right">
@@ -121,13 +195,76 @@ export function EditorSettingsPopover({ api, onReset }: Props) {
           <label className="wb-field">
             <span>Typeface</span>
             <select value={tools.typeface} onChange={(e) => update('typeface', e.target.value as EditorTypeface)}>
-              {TYPEFACES.map((t) => (
-                <option key={t.value} value={t.value}>
-                  {t.label}
-                </option>
+              {TYPEFACE_GROUPS.map((group) => (
+                <optgroup key={group.label} label={group.label}>
+                  {group.options.map((typeface) => (
+                    <option key={typeface.value} value={typeface.value}>
+                      {typeface.label}
+                    </option>
+                  ))}
+                </optgroup>
               ))}
             </select>
           </label>
+
+          {tools.typeface === 'installed' && (
+            <div className="wb-system-font">
+              <label htmlFor="wb-system-font-family">Installed font family</label>
+              <div className="wb-system-font-row">
+                <input
+                  id="wb-system-font-family"
+                  type="text"
+                  value={systemFontDraft}
+                  maxLength={SYSTEM_FONT_FAMILY_MAX_LENGTH}
+                  placeholder="e.g. Garamond"
+                  list="wb-installed-font-families"
+                  aria-invalid={!systemFontValid}
+                  aria-describedby={systemFontValid
+                    ? 'wb-system-font-help wb-system-font-status'
+                    : 'wb-system-font-status'}
+                  aria-errormessage={!systemFontValid ? 'wb-system-font-error' : undefined}
+                  onChange={(e) => setSystemFontDraft(e.target.value)}
+                  onBlur={applySystemFont}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      applySystemFont();
+                      e.currentTarget.blur();
+                    }
+                  }}
+                />
+                <datalist id="wb-installed-font-families">
+                  {installedFamilies.map((family) => (
+                    <option key={family} value={family} />
+                  ))}
+                </datalist>
+                <button type="button" onClick={applySystemFont} disabled={!systemFontValid}>
+                  Apply
+                </button>
+              </div>
+              {!systemFontValid ? (
+                <p id="wb-system-font-error" className="wb-field-error">
+                  Enter one font family name, without CSS or a fallback list.
+                </p>
+              ) : (
+                <p id="wb-system-font-help" className="wb-field-hint">
+                  Uses a font installed on this computer. Install it in your OS, then refresh the list; you can also type its exact family name.
+                </p>
+              )}
+              <div className="wb-system-font-inventory">
+                <button type="button" onClick={() => void loadInstalledFonts()} disabled={loadingFonts}>
+                  {loadingFonts
+                    ? 'Loading…'
+                    : installedFamilies.length
+                      ? 'Refresh installed fonts'
+                      : 'Load installed fonts'}
+                </button>
+                <span id="wb-system-font-status" role="status" aria-live="polite">
+                  {visibleFontInventoryStatus}
+                </span>
+              </div>
+            </div>
+          )}
 
           <div className="wb-field wb-color-field">
             <label htmlFor="wb-editor-text-color">Manuscript text</label>

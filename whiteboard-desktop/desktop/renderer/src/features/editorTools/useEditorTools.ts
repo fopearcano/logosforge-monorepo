@@ -9,6 +9,7 @@ import {
   FONT_SIZE_MIN,
   LINE_HEIGHT_MAX,
   LINE_HEIGHT_MIN,
+  normalizeSystemFontFamily,
   type EditorToolsState,
 } from './editorToolTypes';
 
@@ -41,6 +42,7 @@ export function normalizeEditorTools(value: unknown): EditorToolsState {
     typeface: TYPEFACE_SET.has(String(raw.typeface))
       ? (raw.typeface as EditorToolsState['typeface'])
       : DEFAULT_EDITOR_TOOLS.typeface,
+    systemFontFamily: normalizeSystemFontFamily(raw.systemFontFamily),
     textColor:
       typeof raw.textColor === 'string' && HEX_COLOR.test(raw.textColor)
         ? raw.textColor.toLowerCase()
@@ -79,7 +81,7 @@ export function useEditorTools(): EditorToolsApi {
 
   const update = useCallback<EditorToolsApi['update']>((key, value) => {
     setTools((prev) => {
-      const next = { ...prev, [key]: value };
+      const next = normalizeEditorTools({ ...prev, [key]: value });
       persist(next);
       return next;
     });
@@ -87,7 +89,7 @@ export function useEditorTools(): EditorToolsApi {
 
   const toggle = useCallback((key: BoolKey) => {
     setTools((prev) => {
-      const next = { ...prev, [key]: !prev[key] };
+      const next = normalizeEditorTools({ ...prev, [key]: !prev[key] });
       persist(next);
       return next;
     });

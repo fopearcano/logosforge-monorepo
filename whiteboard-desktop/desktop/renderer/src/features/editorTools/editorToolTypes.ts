@@ -8,20 +8,36 @@
  * the screenplay Document Settings.
  */
 
+import {
+  INSTALLED_FONT_FAMILY_MAX_LENGTH,
+  normalizeInstalledFontFamily,
+} from './installedFonts';
+
 /** General editor typeface override ('default' = keep the per-mode typeface). */
 export const EDITOR_TYPEFACES = [
   'default',
   'serif',
   'book',
   'classic',
+  'transitional',
+  'editorial',
+  'slab',
   'sans',
   'system',
+  'humanist',
+  'geometric',
+  'rounded',
   'mono',
+  'coding',
   'courier-prime',
   'typewriter',
+  'typewriter-modern',
   'handwritten',
+  'handwritten-casual',
   'script',
   'chalkboard',
+  'marker',
+  'installed',
 ] as const;
 
 export type EditorTypeface = (typeof EDITOR_TYPEFACES)[number];
@@ -40,6 +56,8 @@ export interface EditorToolsState {
   lineHeight: number | null;
   /** General typeface override across all modes. */
   typeface: EditorTypeface;
+  /** One locally installed OS font family. Used only when typeface=installed. */
+  systemFontFamily: string | null;
   /** Optional manuscript ink override (#rrggbb); null follows the active theme. */
   textColor: string | null;
   /** 'flow' = continuous scroll (default); 'paged' = a page sheet with page breaks. */
@@ -56,6 +74,7 @@ export const DEFAULT_EDITOR_TOOLS: EditorToolsState = {
   fontSize: null,
   lineHeight: null,
   typeface: 'default',
+  systemFontFamily: null,
   textColor: null,
   layout: 'flow',
 };
@@ -65,3 +84,13 @@ export const FONT_SIZE_MIN = 12;
 export const FONT_SIZE_MAX = 28;
 export const LINE_HEIGHT_MIN = 1.2;
 export const LINE_HEIGHT_MAX = 2.4;
+
+export const SYSTEM_FONT_FAMILY_MAX_LENGTH = INSTALLED_FONT_FAMILY_MAX_LENGTH;
+
+/**
+ * Accept one font-family name, never a CSS expression or fallback list. The
+ * renderer quotes the result before putting it in an inline custom property.
+ */
+export function normalizeSystemFontFamily(value: unknown): string | null {
+  return normalizeInstalledFontFamily(value);
+}

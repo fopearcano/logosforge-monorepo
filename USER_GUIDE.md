@@ -107,6 +107,10 @@ The centre pane is your writing surface. It formats as you type, so what you see
 
 **View controls:** Zoom the page with `Ctrl+=` / `Ctrl+-`, reset with `Ctrl+0`.
 
+**Find & Replace:** Press `Ctrl+F` / `Cmd+F`, or choose **Edit → Find and Replace…** in the desktop app. The non-modal bar searches only the active Manuscript or Drafter page, keeps an exact result count, highlights a bounded window around the current result for large manuscripts, wraps Previous/Next navigation, and offers **Match case**, Unicode-aware **Whole word**, **Replace**, and single-undo **Replace all**.
+
+**Typefaces:** Open **Editor Settings → Typeface** for expanded Serif, Sans serif, Mono & typewriter, and Handwritten groups. The four bundled faces work identically on every platform; the other presets use the closest installed platform face. Choose **Installed system font…** to enter a family name or explicitly load the local font list. Install new fonts through Windows, macOS, or Linux, then refresh the list. This preference stays on the computer and is not embedded in project exports.
+
 ### Drafter pages
 
 The tabs above the editor contain one permanent **Manuscript** tab plus any project-owned **Drafter** pages. Drafter is for isolated scenes, alternate versions, notes, or exploratory prose that should not yet change the canonical manuscript.
@@ -267,6 +271,7 @@ For a true "save everything" snapshot, use **Export Project (.lfbundle)** — it
 | New Drafter page | `Ctrl+Shift+N` |
 | Move across focused writing tabs | `←` / `→` *(Home / End for first / last)* |
 | Undo / Redo | `Ctrl+Z` / `Ctrl+Shift+Z` |
+| Find & Replace in the active writing page | `Ctrl+F` |
 | Zoom in / out / reset | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` |
 
 ### Writing (editor)
