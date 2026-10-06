@@ -149,8 +149,12 @@ and collapse a dock, close through the production save handshake, then relaunch
 the same project and verify the persisted board, placement and dock width.
 Failure diagnostics stay inside the explicitly validated run directory;
 successful temporary runs remove only that exact directory. Windows failures
-and Linux failures are uploaded by Actions, while Monterey build-only failures
-are retained under the self-hosted runner's `macos-build-drop/` directory.
+and Linux failures are uploaded by Actions, while Monterey failures are retained
+under the self-hosted runner's `macos-build-drop/` directory. Successful macOS
+candidates are transferred without JavaScript actions through a private,
+digest-addressed GHCR handoff. A hosted Ubuntu job validates the DMG and its
+source-bound evidence before creating the normal Actions downloads used by the
+hosted release publisher.
 
 The shared package + contracts are aliased straight to source (vite + tsconfig
 `paths`), so there's no build/link step in dev and HMR works across the

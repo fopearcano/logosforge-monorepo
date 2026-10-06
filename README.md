@@ -30,11 +30,12 @@ published tag. For the version bump, release notes, validation, tag, manual
 workflow, and recovery procedures, follow
 **[whiteboard-desktop/RELEASING.md](whiteboard-desktop/RELEASING.md)**. The macOS
   jobs need a self-hosted Intel Mac runner labelled `self-hosted`, `macOS`, and
-  `X64`, with Python 3.11+ installed. Whiteboard 0.1.14 supports macOS 12 through
-  Electron 43 and a shell-only Monterey build job documented in its release guide;
-  Pro build-only candidates now use the same Monterey-compatible pattern. Pro
-  publishing still requires macOS 13.5+ and Actions Runner 2.327.1+ for its
-  Node 24 artifact actions.
+  `X64`, with Python 3.11, 3.12, or 3.13 installed. Whiteboard 0.1.14 supports macOS 12 through
+  Electron 43 and a shell-only Monterey build job documented in its release guide.
+  Pro uses the same shell-only build pattern, then hands the verified DMG and
+  provenance to a private, digest-addressed GHCR artifact. A hosted Ubuntu job
+  verifies that evidence before creating the normal Actions download and passing
+  it to the single hosted release publisher; Node 24 actions never run on Monterey.
 
 ## Local development
 

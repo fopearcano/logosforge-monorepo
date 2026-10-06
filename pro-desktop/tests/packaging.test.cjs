@@ -41,8 +41,13 @@ const linuxDiagnosticsStepStart = linuxJob.indexOf(
 const linuxDiagnosticsStepEnd = linuxJob.indexOf('\n      - name:', linuxDiagnosticsStepStart + 1);
 const linuxDiagnosticsStep = linuxJob.slice(linuxDiagnosticsStepStart, linuxDiagnosticsStepEnd);
 const macJobStart = releaseWorkflow.indexOf('\n  build_macos:');
-const macJobEnd = releaseWorkflow.indexOf('\n  publish:', macJobStart);
+const macJobEnd = releaseWorkflow.indexOf('\n  ingest_macos:', macJobStart);
 const macJob = releaseWorkflow.slice(macJobStart, macJobEnd);
+const macIngestJobStart = macJobEnd;
+const macIngestJobEnd = releaseWorkflow.indexOf('\n  publish:', macIngestJobStart);
+const macIngestJob = releaseWorkflow.slice(macIngestJobStart, macIngestJobEnd);
+const publishJobStart = macIngestJobEnd;
+const publishJob = releaseWorkflow.slice(publishJobStart);
 
 let passed = 0;
 function check(label, condition) {
@@ -214,15 +219,73 @@ check('Monterey release job bootstraps a checksum-pinned native Node 22',
   macJob.includes('NODE_ARCHIVE_SHA256:') &&
   !macJob.includes('uses: actions/setup-node@'));
 check('Monterey build-only job preserves its verified DMG on the host',
-  macJob.includes("if: needs.metadata.outputs.publish != 'true'") &&
+  macJob.includes('Preserve build-only or failed-handoff Monterey candidate on the Mac host') &&
+  macJob.includes("needs.metadata.outputs.publish != 'true' || steps.handoff.outcome != 'success'") &&
   macJob.includes('macos-build-drop/run-${GITHUB_RUN_ID}-attempt-${GITHUB_RUN_ATTEMPT}'));
-check('Node 24 artifact actions run only on supported publishing hosts',
-  (macJob.match(/if: needs\.metadata\.outputs\.publish == 'true'/g) || []).length === 2 &&
-  (macJob.match(/uses: actions\/upload-artifact@/g) || []).length === 2 &&
-  macJob.includes('working-directory: pro-macos-source/pro-desktop') &&
-  macJob.includes('path: ${{ github.workspace }}/pro-macos-source/pro-desktop/release/*.dmg') &&
-  macJob.includes('requires macOS 13.5+') &&
-  macJob.includes('require Actions Runner >=2.327.1'));
+check('Monterey release job cannot execute JavaScript actions and has only package handoff write access',
+  !macJob.includes('\n        uses:') &&
+  macJob.includes('permissions:\n      contents: read\n      packages: write') &&
+  !macJob.includes('contents: write') &&
+  !macJob.includes('actions/upload-artifact@'));
+check('Monterey release job creates bounded evidence and pushes exactly four typed layers with pinned ORAS',
+  macJob.includes('ORAS_VERSION: "1.3.4"') &&
+  macJob.includes('ORAS_ARCHIVE_SHA256: "5e964f3d5a36eb9499a9d3e252a86b09e7adf3e6f6447eec56fd249c6702af7e"') &&
+  macJob.includes('steps.controls.outputs.evidence }}" create') &&
+  macJob.includes('--artifact-type application/vnd.logosforge.pro.macos-handoff.v1') &&
+  macJob.includes('"LogosForge Pro-${VERSION}-x64.dmg:application/x-apple-diskimage"') &&
+  macJob.includes('"macos-handoff.json:application/json"') &&
+  macJob.includes('"pip-freeze.txt:text/plain"') &&
+  macJob.includes('"SHA256SUMS-and-build.txt:text/plain"') &&
+  macJob.includes('handoff_run_attempt: ${{ steps.evidence.outputs.run_attempt }}') &&
+  macJob.includes('echo "run_attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"') &&
+  macJob.includes('echo "digest=$digest" >> "$GITHUB_OUTPUT"'));
+check('Monterey cleanup roots are exported before failure-prone staging and downloads',
+  macJob.indexOf('echo "root=$controls_root" >> "$GITHUB_OUTPUT"') <
+    macJob.indexOf('cp -p -- "$evidence" "$controls_root/macos-handoff-evidence.py"') &&
+  macJob.indexOf('echo "root=$handoff_root" >> "$GITHUB_OUTPUT"') <
+    macJob.indexOf('steps.controls.outputs.evidence }}" create') &&
+  macJob.indexOf('echo "root=$oras_root" >> "$GITHUB_OUTPUT"') <
+    macJob.indexOf("curl --fail --location --proto '=https'"));
+check('hosted macOS ingest is a bounded read-only-package bridge',
+  macIngestJobStart > macJobStart && macIngestJobEnd > macIngestJobStart &&
+  macIngestJob.includes('runs-on: ubuntu-22.04') &&
+  macIngestJob.includes('permissions:\n      contents: read\n      packages: read') &&
+  !macIngestJob.includes('contents: write') &&
+  macIngestJob.includes('ORAS_ARCHIVE_SHA256: "f27adb935022d94df8dc77719c322dda592c78a0d57a6f7dcdd8d900b248c454"') &&
+  macIngestJob.includes('HANDOFF_RUN_ATTEMPT: ${{ needs.build_macos.outputs.handoff_run_attempt }}') &&
+  macIngestJob.includes('"io.logosforge.run-attempt": os.environ["HANDOFF_RUN_ATTEMPT"]') &&
+  macIngestJob.includes('--run-attempt "$HANDOFF_RUN_ATTEMPT"') &&
+  !macIngestJob.includes('--run-attempt "$GITHUB_RUN_ATTEMPT"') &&
+  macIngestJob.indexOf('echo "root=$oras_root" >> "$GITHUB_OUTPUT"') <
+    macIngestJob.indexOf("curl --fail --location --proto '=https'") &&
+  macIngestJob.includes('reference="${package}@${HANDOFF_DIGEST}"') &&
+  macIngestJob.includes('Fetched OCI manifest must be between 1 byte and 1 MiB') &&
+  macIngestJob.includes('Fetched OCI manifest does not match the build job digest'));
+check('hosted macOS ingest validates exact OCI layers, evidence, and downloaded bytes',
+  macIngestJob.includes('OCI handoff must contain exactly four layers') &&
+  macIngestJob.includes('"application/x-apple-diskimage"') &&
+  macIngestJob.includes('"macos-handoff.json": ("application/json", 1024 * 1024)') &&
+  macIngestJob.includes('macos-handoff-evidence.py verify') &&
+  macIngestJob.includes('Pulled OCI layer digest mismatch') &&
+  macIngestJob.includes('8 * 1024 * 1024 * 1024') &&
+  macIngestJob.includes('layer["size"] > maximum_size') &&
+  (macIngestJob.match(/uses: actions\/upload-artifact@/g) || []).length === 2 &&
+  (macIngestJob.match(/overwrite: true/g) || []).length === 2 &&
+  macIngestJob.includes('name: logosforge-pro-macos-intel-x64-provenance'));
+check('release publisher is the sole release writer and re-verifies the admitted macOS bytes',
+  publishJobStart > macIngestJobStart &&
+  (releaseWorkflow.match(/contents: write/g) || []).length === 1 &&
+  (releaseWorkflow.match(/uses: softprops\/action-gh-release@/g) || []).length === 1 &&
+  publishJob.includes('needs: [metadata, quality, build_windows, build_linux, build_macos, ingest_macos]') &&
+  publishJob.includes('permissions:\n      contents: write') &&
+  publishJob.includes('name: logosforge-pro-macos-intel-x64-provenance') &&
+  publishJob.includes('macos-handoff-evidence.py verify') &&
+  publishJob.includes('EXPECTED_DMG_SHA256: ${{ needs.ingest_macos.outputs.dmg_sha256 }}') &&
+  publishJob.includes('HANDOFF_RUN_ATTEMPT: ${{ needs.build_macos.outputs.handoff_run_attempt }}') &&
+  publishJob.includes('--run-attempt "$HANDOFF_RUN_ATTEMPT"') &&
+  !publishJob.includes('--run-attempt "$GITHUB_RUN_ATTEMPT"') &&
+  publishJob.includes('Downloaded DMG does not match the hosted ingest digest') &&
+  publishJob.includes('uses: softprops/action-gh-release@'));
 check('Monterey job pins and verifies the macOS 12 deployment floor',
   macJob.includes('MACOSX_DEPLOYMENT_TARGET: "12.0"') &&
   macJob.includes('test "$minimum_version" = "12.0.0"') &&

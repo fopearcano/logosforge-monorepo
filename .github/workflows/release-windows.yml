@@ -3,11 +3,11 @@ name: Release — LogosForge Pro (Native desktop)
 # Coordinated native release for LogosForge Pro. The historical filename is
 # retained so existing repository links keep working. Manual runs are build-only
 # by default: Windows and Linux are selected, while macOS is opt-in on the
-# self-hosted Intel macOS 12+ host. Monterey build-only runs avoid JavaScript
-# actions and preserve their verified candidate on that Mac. Publishing still
-# requires macOS 13.5+ / Actions Runner 2.327.1+ for artifact upload. A v* tag
-# selects all three platforms. One final job owns GitHub Release mutation,
-# avoiding platform races.
+# self-hosted Intel macOS 12+ host. The Monterey job contains no JavaScript
+# actions: it transfers its verified candidate to a private, digest-addressed
+# GHCR handoff. A hosted Ubuntu job verifies that handoff and creates the normal
+# Actions artifacts. A v* tag selects all three platforms. One final hosted job
+# owns GitHub Release mutation, avoiding platform races.
 # All current artifacts are unsigned.
 
 on:
@@ -25,7 +25,7 @@ on:
         type: boolean
         default: true
       build_macos:
-        description: "Build macOS 12+ Intel x64 (candidate remains on Monterey host)"
+        description: "Build macOS 12+ Intel x64 and verify its hosted handoff"
         type: boolean
         default: false
       publish_release:
@@ -927,6 +927,12 @@ jobs:
     if: needs.metadata.outputs.build_macos == 'true'
     runs-on: [self-hosted, macOS, X64]
     timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      handoff_digest: ${{ steps.handoff.outputs.digest }}
+      handoff_run_attempt: ${{ steps.evidence.outputs.run_attempt }}
     defaults:
       run:
         shell: bash
@@ -939,8 +945,6 @@ jobs:
     steps:
       - name: Verify native Intel macOS 12+ release host
         working-directory: .
-        env:
-          PUBLISH_RELEASE: ${{ needs.metadata.outputs.publish }}
         run: |
           set -euo pipefail
           test "$RUNNER_OS" = "macOS" && test "$RUNNER_ARCH" = "X64"
@@ -956,54 +960,8 @@ jobs:
             exit 1
           fi
 
-          runner_version="not required for build-only"
-          if [ "$PUBLISH_RELEASE" = "true" ]; then
-            host_remainder="${host_version#*.}"
-            host_minor="${host_remainder%%.*}"
-            host_minor="${host_minor:-0}"
-            case "$host_minor" in ""|*[!0-9]*) echo "::error::Could not parse macOS version: $host_version"; exit 1 ;; esac
-            if [ "$host_major" -lt 13 ] || { [ "$host_major" -eq 13 ] && [ "$host_minor" -lt 5 ]; }; then
-              echo "::error::Publishing uses Node 24 artifact actions and requires macOS 13.5+; runner reported $host_version."
-              exit 1
-            fi
-
-            runner_version_raw="${ACTIONS_RUNNER_VERSION:-}"
-            if [ -z "$runner_version_raw" ]; then
-              if [ -z "${RUNNER_WORKSPACE:-}" ]; then
-                echo "::error::RUNNER_WORKSPACE is unavailable; cannot verify Actions Runner >=2.327.1."
-                exit 1
-              fi
-              listener=""
-              runner_probe="$(cd "$RUNNER_WORKSPACE" && pwd -P)"
-              for _ in 0 1 2 3; do
-                if [ -x "$runner_probe/bin/Runner.Listener" ]; then
-                  listener="$runner_probe/bin/Runner.Listener"
-                  break
-                fi
-                runner_probe="$(dirname "$runner_probe")"
-              done
-              if [ -z "$listener" ]; then
-                echo "::error::Cannot find Runner.Listener above $RUNNER_WORKSPACE to verify Actions Runner >=2.327.1."
-                exit 1
-              fi
-              runner_version_raw="$("$listener" --version 2>&1)"
-            fi
-            runner_version="$(printf '%s\n' "$runner_version_raw" | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | tail -n 1 || true)"
-            if [ -z "$runner_version" ]; then
-              echo "::error::Could not parse Actions Runner version from: $runner_version_raw"
-              exit 1
-            fi
-            runner_major="${runner_version%%.*}"
-            runner_remainder="${runner_version#*.}"
-            runner_minor="${runner_remainder%%.*}"
-            runner_patch="${runner_remainder#*.}"
-            if [ "$runner_major" -lt 2 ] || { [ "$runner_major" -eq 2 ] && [ "$runner_minor" -lt 327 ]; } || { [ "$runner_major" -eq 2 ] && [ "$runner_minor" -eq 327 ] && [ "$runner_patch" -lt 1 ]; }; then
-              echo "::error::Node 24 artifact actions require Actions Runner >=2.327.1; runner reported $runner_version."
-              exit 1
-            fi
-          fi
           xcode-select -p >/dev/null
-          echo "release host OK: macOS $host_version ($host_arch), Actions Runner $runner_version"
+          echo "release host OK: macOS $host_version ($host_arch); handoff uses shell and native binaries only"
 
       - name: Checkout verified source without JavaScript actions
         working-directory: .
@@ -1028,6 +986,20 @@ jobs:
             echo "::error::Checkout mismatch: expected $SOURCE_SHA, found $actual_sha."
             exit 1
           }
+
+      - name: Stage trusted macOS handoff evidence control
+        id: controls
+        run: |
+          set -euo pipefail
+          temp_root="$(cd "${RUNNER_TEMP:?}" && pwd -P)"
+          case "$temp_root" in ""|"/") echo "::error::Unsafe runner temp directory: $temp_root"; exit 1 ;; esac
+          controls_root="$(mktemp -d "$temp_root/logosforge-pro-release-controls.XXXXXX")"
+          case "$controls_root" in "$temp_root"/logosforge-pro-release-controls.??????) ;; *) echo "::error::Unsafe controls directory: $controls_root"; exit 1 ;; esac
+          echo "root=$controls_root" >> "$GITHUB_OUTPUT"
+          evidence="pro-desktop/scripts/macos-handoff-evidence.py"
+          test -f "$evidence" && test ! -L "$evidence" || { echo "::error::Missing handoff evidence control: $evidence"; exit 1; }
+          cp -p -- "$evidence" "$controls_root/macos-handoff-evidence.py"
+          echo "evidence=$controls_root/macos-handoff-evidence.py" >> "$GITHUB_OUTPUT"
 
       - name: Locate or bootstrap checksum-pinned Node.js 22
         env:
@@ -1076,7 +1048,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "${{ needs.metadata.outputs.source_sha }}"
-          for path in logosforge/pyproject.toml logosforge-ui-contracts/package.json pro-shared-ui/package.json pro-desktop/package.json pro-desktop/core/logosforge-core.spec pro-desktop/core/logosforge-mcp.spec pro-desktop/scripts/live-context-core-manager-driver.cjs pro-desktop/scripts/packaged-workspace-acceptance.mjs pro-desktop/scripts/smoke-live-context-bridge.py whiteboard-desktop/scripts/check-macos-deployment-targets.py; do
+          for path in logosforge/pyproject.toml logosforge-ui-contracts/package.json pro-shared-ui/package.json pro-desktop/package.json pro-desktop/core/logosforge-core.spec pro-desktop/core/logosforge-mcp.spec pro-desktop/scripts/live-context-core-manager-driver.cjs pro-desktop/scripts/macos-handoff-evidence.py pro-desktop/scripts/packaged-workspace-acceptance.mjs pro-desktop/scripts/smoke-live-context-bridge.py whiteboard-desktop/scripts/check-macos-deployment-targets.py; do
             test -e "$path" || { echo "::error::Missing required monorepo path: $path"; exit 1; }
           done
 
@@ -1094,6 +1066,12 @@ jobs:
           done
           echo "::error::No Python 3.11, 3.12, or 3.13 is installed on the Intel Mac runner."
           exit 1
+
+      - name: Self-test macOS handoff evidence control
+        run: >-
+          "${{ steps.py.outputs.python }}"
+          "${{ steps.controls.outputs.evidence }}"
+          --self-test
 
       - name: Build a fresh voice-capable frozen core
         run: |
@@ -1380,12 +1358,18 @@ jobs:
         run: |
           set -euo pipefail
           provenance="$RUNNER_TEMP/logosforge-pro-macos-intel-x64-provenance"
+          case "$provenance" in "$RUNNER_TEMP"/logosforge-pro-macos-intel-x64-provenance) ;; *) echo "::error::Unsafe provenance directory: $provenance"; exit 1 ;; esac
+          if [ -e "$provenance" ] || [ -L "$provenance" ]; then rm -rf -- "$provenance"; fi
           mkdir -p "$provenance"
           ./build-venv/bin/python -m pip freeze --all > "$provenance/pip-freeze.txt"
           {
             echo "source_sha=${{ needs.metadata.outputs.source_sha }}"
             echo "version=${{ needs.metadata.outputs.version }}"
             echo "platform=macos-intel-x64"
+            echo "repository=$GITHUB_REPOSITORY"
+            echo "workflow=.github/workflows/release-windows.yml"
+            echo "run_id=$GITHUB_RUN_ID"
+            echo "run_attempt=$GITHUB_RUN_ATTEMPT"
             echo "runner=$RUNNER_OS/$RUNNER_ARCH"
             echo "host=$(sw_vers -productVersion)"
             echo "python=$(./build-venv/bin/python --version 2>&1)"
@@ -1395,8 +1379,139 @@ jobs:
             shasum -a 256 pro-desktop/release/*.dmg
           } > "$provenance/SHA256SUMS-and-build.txt"
 
-      - name: Preserve non-publishing Monterey candidate on the Mac host
-        if: needs.metadata.outputs.publish != 'true'
+      - name: Create source-bound macOS handoff evidence
+        id: evidence
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+          SOURCE_SHA: ${{ needs.metadata.outputs.source_sha }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          temp_root="$(cd "${RUNNER_TEMP:?}" && pwd -P)"
+          handoff_root="$temp_root/logosforge-pro-macos-handoff-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          case "$handoff_root" in "$temp_root"/logosforge-pro-macos-handoff-*-*) ;; *) echo "::error::Unsafe handoff directory: $handoff_root"; exit 1 ;; esac
+          if [ -e "$handoff_root" ] || [ -L "$handoff_root" ]; then rm -rf -- "$handoff_root"; fi
+          mkdir -m 700 -- "$handoff_root"
+          staging="$handoff_root/payload"
+          echo "root=$handoff_root" >> "$GITHUB_OUTPUT"
+          echo "staging=$staging" >> "$GITHUB_OUTPUT"
+          echo "run_attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+          dmg="pro-desktop/release/LogosForge Pro-${VERSION}-x64.dmg"
+          provenance="$temp_root/logosforge-pro-macos-intel-x64-provenance"
+          source_tree_sha256="$(git ls-tree -r --full-tree "$SOURCE_SHA" | shasum -a 256 | awk '{print $1}')"
+          "${{ steps.py.outputs.python }}" "${{ steps.controls.outputs.evidence }}" create \
+            --staging-dir "$staging" \
+            --dmg "$dmg" \
+            --pip-freeze "$provenance/pip-freeze.txt" \
+            --sha256s-and-build "$provenance/SHA256SUMS-and-build.txt" \
+            --repository "$GITHUB_REPOSITORY" \
+            --repository-id "$GITHUB_REPOSITORY_ID" \
+            --tag "$RELEASE_TAG" \
+            --source-sha "$SOURCE_SHA" \
+            --source-tree-sha256 "$source_tree_sha256" \
+            --workflow-ref "$GITHUB_WORKFLOW_REF" \
+            --workflow-sha "$GITHUB_WORKFLOW_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --version "$VERSION" \
+            --platform macos-intel-x64 \
+            --dmg-name "LogosForge Pro-${VERSION}-x64.dmg"
+
+      - name: Bootstrap checksum-pinned ORAS for the Monterey handoff
+        id: oras
+        working-directory: .
+        env:
+          ORAS_ARCHIVE_SHA256: "5e964f3d5a36eb9499a9d3e252a86b09e7adf3e6f6447eec56fd249c6702af7e"
+          ORAS_VERSION: "1.3.4"
+        run: |
+          set -euo pipefail
+          temp_root="$(cd "${RUNNER_TEMP:?}" && pwd -P)"
+          case "$temp_root" in ""|"/") echo "::error::Unsafe runner temp directory: $temp_root"; exit 1 ;; esac
+          oras_root="$(mktemp -d "$temp_root/logosforge-oras.XXXXXX")"
+          case "$oras_root" in "$temp_root"/logosforge-oras.??????) ;; *) echo "::error::Unsafe ORAS directory: $oras_root"; exit 1 ;; esac
+          echo "root=$oras_root" >> "$GITHUB_OUTPUT"
+          archive="oras_${ORAS_VERSION}_darwin_amd64.tar.gz"
+          archive_path="$oras_root/$archive"
+          curl --fail --location --proto '=https' --tlsv1.2 --show-error --silent \
+            "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/${archive}" \
+            --output "$archive_path"
+          printf '%s  %s\n' "$ORAS_ARCHIVE_SHA256" "$archive_path" | shasum -a 256 --check
+          oras_bin="$oras_root/oras"
+          tar -xOf "$archive_path" oras > "$oras_bin"
+          chmod 700 "$oras_bin"
+          "$oras_bin" version | grep -Eq 'Version:[[:space:]]+1\.3\.4'
+          echo "bin=$oras_bin" >> "$GITHUB_OUTPUT"
+
+      - name: Transfer verified Monterey candidate by immutable GHCR digest
+        id: handoff
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          HANDOFF_ROOT: ${{ steps.evidence.outputs.root }}
+          HANDOFF_STAGING: ${{ steps.evidence.outputs.staging }}
+          ORAS_BIN: ${{ steps.oras.outputs.bin }}
+          SOURCE_SHA: ${{ needs.metadata.outputs.source_sha }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          umask 077
+          case "$HANDOFF_ROOT" in "$RUNNER_TEMP"/logosforge-pro-macos-handoff-*-*) ;; *) echo "::error::Unsafe handoff root: $HANDOFF_ROOT"; exit 1 ;; esac
+          test "$HANDOFF_STAGING" = "$HANDOFF_ROOT/payload"
+          test -x "$ORAS_BIN"
+          owner="${GITHUB_REPOSITORY%%/*}"
+          repository_name="${GITHUB_REPOSITORY#*/}"
+          owner="$(printf '%s' "$owner" | tr '[:upper:]' '[:lower:]')"
+          repository_name="$(printf '%s' "$repository_name" | tr '[:upper:]' '[:lower:]')"
+          for component in "$owner" "$repository_name"; do
+            printf '%s\n' "$component" | grep -Eq '^[a-z0-9][a-z0-9._-]*$' || {
+              echo "::error::Unsafe GHCR package component."
+              exit 1
+            }
+          done
+          package="ghcr.io/${owner}/${repository_name}-pro-macos-handoff"
+          reference="${package}:run-${GITHUB_RUN_ID}-attempt-${GITHUB_RUN_ATTEMPT}"
+          registry_config="$HANDOFF_ROOT/registry-config.json"
+          push_result="$HANDOFF_ROOT/oras-push.json"
+          cleanup_registry_auth() {
+            rc=$?
+            trap - EXIT INT TERM
+            "$ORAS_BIN" logout --registry-config "$registry_config" ghcr.io >/dev/null 2>&1 || true
+            rm -f -- "$registry_config"
+            exit "$rc"
+          }
+          trap cleanup_registry_auth EXIT INT TERM
+          printf '%s' "$GHCR_TOKEN" | "$ORAS_BIN" login \
+            --registry-config "$registry_config" \
+            --username "$GITHUB_ACTOR" \
+            --password-stdin \
+            ghcr.io
+          cd "$HANDOFF_STAGING"
+          "$ORAS_BIN" push \
+            --registry-config "$registry_config" \
+            --artifact-type application/vnd.logosforge.pro.macos-handoff.v1 \
+            --annotation "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            --annotation "org.opencontainers.image.revision=${SOURCE_SHA}" \
+            --annotation "org.opencontainers.image.version=${VERSION}" \
+            --annotation "io.logosforge.repository-id=${GITHUB_REPOSITORY_ID}" \
+            --annotation "io.logosforge.workflow-ref=${GITHUB_WORKFLOW_REF}" \
+            --annotation "io.logosforge.workflow-sha=${GITHUB_WORKFLOW_SHA}" \
+            --annotation "io.logosforge.run-id=${GITHUB_RUN_ID}" \
+            --annotation "io.logosforge.run-attempt=${GITHUB_RUN_ATTEMPT}" \
+            --format json \
+            "$reference" \
+            "LogosForge Pro-${VERSION}-x64.dmg:application/x-apple-diskimage" \
+            "macos-handoff.json:application/json" \
+            "pip-freeze.txt:text/plain" \
+            "SHA256SUMS-and-build.txt:text/plain" > "$push_result"
+          digest="$("${{ steps.py.outputs.python }}" -c 'import json, re, sys; value=json.load(open(sys.argv[1], encoding="utf-8")).get("digest", ""); sys.stdout.write(value if re.fullmatch(r"sha256:[0-9a-f]{64}", value) else "")' "$push_result")"
+          if ! printf '%s\n' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+            echo "::error::ORAS did not return a valid immutable handoff digest."
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "::notice::Verified macOS handoff transferred as ${package}@${digest}"
+
+      - name: Preserve build-only or failed-handoff Monterey candidate on the Mac host
+        if: ${{ always() && steps.evidence.outcome == 'success' && (needs.metadata.outputs.publish != 'true' || steps.handoff.outcome != 'success') }}
         env:
           VERSION: ${{ needs.metadata.outputs.version }}
         run: |
@@ -1409,6 +1524,7 @@ jobs:
           mkdir -p -- "$drop/provenance"
           cp -p -- "$source_dmg" "$drop/"
           cp -p -- "$RUNNER_TEMP/logosforge-pro-macos-intel-x64-provenance/"* "$drop/provenance/"
+          cp -p -- "${{ steps.evidence.outputs.staging }}/macos-handoff.json" "$drop/provenance/"
           shasum -a 256 "$drop/LogosForge Pro-${VERSION}-x64.dmg" > "$drop/SHA256SUMS.txt"
           echo "::notice::Verified Monterey candidate preserved at $drop"
           {
@@ -1421,25 +1537,7 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload macOS artifact
-        if: needs.metadata.outputs.publish == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (Node 24)
-        with:
-          name: logosforge-pro-macos-intel-x64
-          path: ${{ github.workspace }}/pro-macos-source/pro-desktop/release/*.dmg
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload macOS provenance
-        if: needs.metadata.outputs.publish == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (Node 24)
-        with:
-          name: logosforge-pro-macos-intel-x64-provenance
-          path: ${{ runner.temp }}/logosforge-pro-macos-intel-x64-provenance/*
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Clean isolated macOS checkout
+      - name: Clean isolated macOS checkout and handoff controls
         if: always()
         working-directory: .
         run: |
@@ -1449,11 +1547,323 @@ jobs:
           source_root="$workspace/pro-macos-source"
           case "$source_root" in "$workspace"/pro-macos-source) ;; *) echo "::error::Unsafe source cleanup target: $source_root"; exit 1 ;; esac
           if [ -e "$source_root" ] || [ -L "$source_root" ]; then rm -rf -- "$source_root"; fi
+          temp_root="$(cd "${RUNNER_TEMP:?}" && pwd -P)"
+          controls_root="${{ steps.controls.outputs.root }}"
+          oras_root="${{ steps.oras.outputs.root }}"
+          handoff_root="${{ steps.evidence.outputs.root }}"
+          if [ -n "$controls_root" ]; then
+            case "$controls_root" in "$temp_root"/logosforge-pro-release-controls.??????) rm -rf -- "$controls_root" ;; *) echo "::error::Unsafe controls cleanup target: $controls_root"; exit 1 ;; esac
+          fi
+          if [ -n "$oras_root" ]; then
+            case "$oras_root" in "$temp_root"/logosforge-oras.??????) rm -rf -- "$oras_root" ;; *) echo "::error::Unsafe ORAS cleanup target: $oras_root"; exit 1 ;; esac
+          fi
+          if [ -n "$handoff_root" ]; then
+            case "$handoff_root" in "$temp_root"/logosforge-pro-macos-handoff-*-*) rm -rf -- "$handoff_root" ;; *) echo "::error::Unsafe handoff cleanup target: $handoff_root"; exit 1 ;; esac
+          fi
+
+  ingest_macos:
+    name: Verify and ingest Monterey handoff
+    needs: [metadata, build_macos]
+    if: ${{ always() && needs.metadata.result == 'success' && needs.metadata.outputs.build_macos == 'true' && needs.build_macos.result == 'success' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      dmg_sha256: ${{ steps.ingest.outputs.dmg_sha256 }}
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout the exact trusted verification control
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (Node 24)
+        with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify source and self-test the handoff evidence control
+        env:
+          SOURCE_SHA: ${{ needs.metadata.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -f pro-desktop/scripts/macos-handoff-evidence.py
+          test ! -L pro-desktop/scripts/macos-handoff-evidence.py
+          python3 pro-desktop/scripts/macos-handoff-evidence.py --self-test
+
+      - name: Bootstrap checksum-pinned ORAS for hosted ingestion
+        id: oras
+        env:
+          ORAS_ARCHIVE_SHA256: "f27adb935022d94df8dc77719c322dda592c78a0d57a6f7dcdd8d900b248c454"
+          ORAS_VERSION: "1.3.4"
+        run: |
+          set -euo pipefail
+          temp_root="$(cd "${RUNNER_TEMP:?}" && pwd -P)"
+          case "$temp_root" in ""|"/") echo "::error::Unsafe runner temp directory: $temp_root"; exit 1 ;; esac
+          oras_root="$(mktemp -d "$temp_root/logosforge-oras.XXXXXX")"
+          case "$oras_root" in "$temp_root"/logosforge-oras.??????) ;; *) echo "::error::Unsafe ORAS directory: $oras_root"; exit 1 ;; esac
+          echo "root=$oras_root" >> "$GITHUB_OUTPUT"
+          archive="oras_${ORAS_VERSION}_linux_amd64.tar.gz"
+          archive_path="$oras_root/$archive"
+          curl --fail --location --proto '=https' --tlsv1.2 --show-error --silent \
+            "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/${archive}" \
+            --output "$archive_path"
+          printf '%s  %s\n' "$ORAS_ARCHIVE_SHA256" "$archive_path" | sha256sum --check
+          oras_bin="$oras_root/oras"
+          tar -xOf "$archive_path" oras > "$oras_bin"
+          chmod 700 "$oras_bin"
+          "$oras_bin" version | grep -Eq 'Version:[[:space:]]+1\.3\.4'
+          echo "bin=$oras_bin" >> "$GITHUB_OUTPUT"
+
+      - name: Pull by digest and verify the complete handoff contract
+        id: ingest
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          HANDOFF_DIGEST: ${{ needs.build_macos.outputs.handoff_digest }}
+          HANDOFF_RUN_ATTEMPT: ${{ needs.build_macos.outputs.handoff_run_attempt }}
+          ORAS_BIN: ${{ steps.oras.outputs.bin }}
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+          SOURCE_SHA: ${{ needs.metadata.outputs.source_sha }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s\n' "$HANDOFF_DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$' || {
+            echo "::error::The Monterey job did not return a valid immutable digest."
+            exit 1
+          }
+          printf '%s\n' "$HANDOFF_RUN_ATTEMPT" | grep -Eq '^[1-9][0-9]*$' || {
+            echo "::error::The Monterey job did not return a valid producer attempt."
+            exit 1
+          }
+          test -x "$ORAS_BIN"
+          owner="${GITHUB_REPOSITORY%%/*}"
+          repository_name="${GITHUB_REPOSITORY#*/}"
+          owner="$(printf '%s' "$owner" | tr '[:upper:]' '[:lower:]')"
+          repository_name="$(printf '%s' "$repository_name" | tr '[:upper:]' '[:lower:]')"
+          for component in "$owner" "$repository_name"; do
+            printf '%s\n' "$component" | grep -Eq '^[a-z0-9][a-z0-9._-]*$' || {
+              echo "::error::Unsafe GHCR package component."
+              exit 1
+            }
+          done
+          package="ghcr.io/${owner}/${repository_name}-pro-macos-handoff"
+          reference="${package}@${HANDOFF_DIGEST}"
+
+          temp_root="$(cd "${RUNNER_TEMP:?}" && pwd -P)"
+          case "$temp_root" in ""|"/") echo "::error::Unsafe runner temp directory: $temp_root"; exit 1 ;; esac
+          ingest_root="$temp_root/logosforge-pro-macos-ingest-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          case "$ingest_root" in "$temp_root"/logosforge-pro-macos-ingest-*-*) ;; *) echo "::error::Unsafe ingest directory: $ingest_root"; exit 1 ;; esac
+          if [ -e "$ingest_root" ] || [ -L "$ingest_root" ]; then rm -rf -- "$ingest_root"; fi
+          mkdir -m 700 -- "$ingest_root"
+          payload="$ingest_root/payload"
+          mkdir -m 700 -- "$payload"
+          manifest="$ingest_root/oci-manifest.json"
+          registry_config="$ingest_root/registry-config.json"
+          echo "root=$ingest_root" >> "$GITHUB_OUTPUT"
+
+          cleanup_registry_auth() {
+            rc=$?
+            trap - EXIT INT TERM
+            "$ORAS_BIN" logout --registry-config "$registry_config" ghcr.io >/dev/null 2>&1 || true
+            rm -f -- "$registry_config"
+            exit "$rc"
+          }
+          trap cleanup_registry_auth EXIT INT TERM
+          printf '%s' "$GHCR_TOKEN" | "$ORAS_BIN" login \
+            --registry-config "$registry_config" \
+            --username "$GITHUB_ACTOR" \
+            --password-stdin \
+            ghcr.io
+          "$ORAS_BIN" manifest fetch \
+            --registry-config "$registry_config" \
+            --output "$manifest" \
+            "$reference"
+          test -f "$manifest" && test ! -L "$manifest" || {
+            echo "::error::Fetched OCI manifest is not a regular non-symlink file."
+            exit 1
+          }
+          manifest_size="$(wc -c < "$manifest" | tr -d '[:space:]')"
+          case "$manifest_size" in ""|*[!0-9]*) echo "::error::Could not measure the fetched OCI manifest."; exit 1 ;; esac
+          if [ "$manifest_size" -lt 1 ] || [ "$manifest_size" -gt 1048576 ]; then
+            echo "::error::Fetched OCI manifest must be between 1 byte and 1 MiB."
+            exit 1
+          fi
+          observed_manifest_digest="sha256:$(sha256sum "$manifest" | awk '{print $1}')"
+          if [ "$observed_manifest_digest" != "$HANDOFF_DIGEST" ]; then
+            echo "::error::Fetched OCI manifest does not match the build job digest."
+            exit 1
+          fi
+
+          EXPECTED_DMG="LogosForge Pro-${VERSION}-x64.dmg" \
+          EXPECTED_SOURCE_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+          python3 - "$manifest" <<'PY'
+          import json
+          import os
+          import re
+          import sys
+
+          manifest_path = sys.argv[1]
+          with open(manifest_path, "r", encoding="utf-8") as handle:
+              value = json.load(handle)
+          if value.get("schemaVersion") != 2:
+              raise SystemExit("::error::OCI handoff schemaVersion must be 2.")
+          if value.get("artifactType") != "application/vnd.logosforge.pro.macos-handoff.v1":
+              raise SystemExit("::error::OCI handoff artifactType mismatch.")
+          annotations = value.get("annotations")
+          if not isinstance(annotations, dict):
+              raise SystemExit("::error::OCI handoff annotations are missing.")
+          expected_annotations = {
+              "org.opencontainers.image.source": os.environ["EXPECTED_SOURCE_URL"],
+              "org.opencontainers.image.revision": os.environ["SOURCE_SHA"],
+              "org.opencontainers.image.version": os.environ["VERSION"],
+              "io.logosforge.repository-id": os.environ["GITHUB_REPOSITORY_ID"],
+              "io.logosforge.workflow-ref": os.environ["GITHUB_WORKFLOW_REF"],
+              "io.logosforge.workflow-sha": os.environ["GITHUB_WORKFLOW_SHA"],
+              "io.logosforge.run-id": os.environ["GITHUB_RUN_ID"],
+              "io.logosforge.run-attempt": os.environ["HANDOFF_RUN_ATTEMPT"],
+          }
+          for key, expected in expected_annotations.items():
+              if annotations.get(key) != expected:
+                  raise SystemExit(f"::error::OCI handoff annotation mismatch: {key}")
+          expected_layers = {
+              os.environ["EXPECTED_DMG"]: ("application/x-apple-diskimage", 8 * 1024 * 1024 * 1024),
+              "macos-handoff.json": ("application/json", 1024 * 1024),
+              "pip-freeze.txt": ("text/plain", 32 * 1024 * 1024),
+              "SHA256SUMS-and-build.txt": ("text/plain", 32 * 1024 * 1024),
+          }
+          layers = value.get("layers")
+          if not isinstance(layers, list) or len(layers) != len(expected_layers):
+              raise SystemExit("::error::OCI handoff must contain exactly four layers.")
+          observed = {}
+          for layer in layers:
+              if not isinstance(layer, dict):
+                  raise SystemExit("::error::OCI handoff contains an invalid layer descriptor.")
+              layer_annotations = layer.get("annotations")
+              title = layer_annotations.get("org.opencontainers.image.title") if isinstance(layer_annotations, dict) else None
+              if title not in expected_layers or title in observed:
+                  raise SystemExit("::error::OCI handoff layer titles are not exact and unique.")
+              expected_media_type, maximum_size = expected_layers[title]
+              if layer.get("mediaType") != expected_media_type:
+                  raise SystemExit(f"::error::OCI handoff media type mismatch: {title}")
+              if (
+                  isinstance(layer.get("size"), bool)
+                  or not isinstance(layer.get("size"), int)
+                  or layer["size"] < 1
+                  or layer["size"] > maximum_size
+              ):
+                  raise SystemExit(f"::error::OCI handoff layer size is invalid: {title}")
+              if re.fullmatch(r"sha256:[0-9a-f]{64}", str(layer.get("digest", ""))) is None:
+                  raise SystemExit(f"::error::OCI handoff layer digest is invalid: {title}")
+              observed[title] = layer
+          if set(observed) != set(expected_layers):
+              raise SystemExit("::error::OCI handoff layer set mismatch.")
+          PY
+
+          "$ORAS_BIN" pull \
+            --registry-config "$registry_config" \
+            --output "$payload" \
+            "$reference"
+          source_tree_sha256="$(git ls-tree -r --full-tree "$SOURCE_SHA" | sha256sum | awk '{print $1}')"
+          python3 pro-desktop/scripts/macos-handoff-evidence.py verify \
+            --staging-dir "$payload" \
+            --repository "$GITHUB_REPOSITORY" \
+            --repository-id "$GITHUB_REPOSITORY_ID" \
+            --tag "$RELEASE_TAG" \
+            --source-sha "$SOURCE_SHA" \
+            --source-tree-sha256 "$source_tree_sha256" \
+            --workflow-ref "$GITHUB_WORKFLOW_REF" \
+            --workflow-sha "$GITHUB_WORKFLOW_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$HANDOFF_RUN_ATTEMPT" \
+            --version "$VERSION" \
+            --platform macos-intel-x64 \
+            --dmg-name "LogosForge Pro-${VERSION}-x64.dmg"
+
+          PAYLOAD="$payload" EXPECTED_DMG="LogosForge Pro-${VERSION}-x64.dmg" \
+          python3 - "$manifest" <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import sys
+
+          with open(sys.argv[1], "r", encoding="utf-8") as handle:
+              layers = json.load(handle)["layers"]
+          payload = pathlib.Path(os.environ["PAYLOAD"])
+          expected_names = {
+              os.environ["EXPECTED_DMG"],
+              "macos-handoff.json",
+              "pip-freeze.txt",
+              "SHA256SUMS-and-build.txt",
+          }
+          descriptors = {
+              layer["annotations"]["org.opencontainers.image.title"]: layer
+              for layer in layers
+          }
+          if set(descriptors) != expected_names:
+              raise SystemExit("::error::Pulled OCI descriptor set changed during ingestion.")
+          for name in sorted(expected_names):
+              path = payload / name
+              digest = hashlib.sha256()
+              with path.open("rb") as handle:
+                  for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                      digest.update(chunk)
+              descriptor = descriptors[name]
+              if path.stat().st_size != descriptor["size"]:
+                  raise SystemExit(f"::error::Pulled OCI layer size mismatch: {name}")
+              if f"sha256:{digest.hexdigest()}" != descriptor["digest"]:
+                  raise SystemExit(f"::error::Pulled OCI layer digest mismatch: {name}")
+          PY
+
+          dmg_sha256="$(sha256sum "$payload/LogosForge Pro-${VERSION}-x64.dmg" | awk '{print $1}')"
+          printf '%s\n' "$dmg_sha256" | grep -Eq '^[0-9a-f]{64}$'
+          echo "payload=$payload" >> "$GITHUB_OUTPUT"
+          echo "dmg_sha256=$dmg_sha256" >> "$GITHUB_OUTPUT"
+          echo "::notice::Verified ${reference} and admitted the Monterey DMG to Actions artifacts."
+
+      - name: Upload verified macOS artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (Node 24)
+        with:
+          name: logosforge-pro-macos-intel-x64
+          path: ${{ steps.ingest.outputs.payload }}/LogosForge Pro-${{ needs.metadata.outputs.version }}-x64.dmg
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          overwrite: true
+
+      - name: Upload verified macOS provenance
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (Node 24)
+        with:
+          name: logosforge-pro-macos-intel-x64-provenance
+          path: |
+            ${{ steps.ingest.outputs.payload }}/macos-handoff.json
+            ${{ steps.ingest.outputs.payload }}/pip-freeze.txt
+            ${{ steps.ingest.outputs.payload }}/SHA256SUMS-and-build.txt
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+          overwrite: true
+
+      - name: Clean hosted macOS ingest state
+        if: always()
+        run: |
+          set -euo pipefail
+          temp_root="$(cd "${RUNNER_TEMP:?}" && pwd -P)"
+          ingest_root="$temp_root/logosforge-pro-macos-ingest-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          case "$ingest_root" in "$temp_root"/logosforge-pro-macos-ingest-*-*) rm -rf -- "$ingest_root" ;; *) echo "::error::Unsafe ingest cleanup target: $ingest_root"; exit 1 ;; esac
+          oras_root="${{ steps.oras.outputs.root }}"
+          if [ -n "$oras_root" ]; then
+            case "$oras_root" in "$temp_root"/logosforge-oras.??????) rm -rf -- "$oras_root" ;; *) echo "::error::Unsafe ORAS cleanup target: $oras_root"; exit 1 ;; esac
+          fi
 
   publish:
     name: Publish verified native prerelease
-    needs: [metadata, quality, build_windows, build_linux, build_macos]
-    if: ${{ always() && needs.metadata.result == 'success' && needs.quality.result == 'success' && needs.metadata.outputs.publish == 'true' && (needs.build_windows.result == 'success' || needs.build_windows.result == 'skipped') && (needs.build_linux.result == 'success' || needs.build_linux.result == 'skipped') && (needs.build_macos.result == 'success' || needs.build_macos.result == 'skipped') }}
+    needs: [metadata, quality, build_windows, build_linux, build_macos, ingest_macos]
+    if: ${{ always() && needs.metadata.result == 'success' && needs.quality.result == 'success' && needs.metadata.outputs.publish == 'true' && (needs.build_windows.result == 'success' || needs.build_windows.result == 'skipped') && (needs.build_linux.result == 'success' || needs.build_linux.result == 'skipped') && ((needs.metadata.outputs.build_macos == 'true' && needs.build_macos.result == 'success' && needs.ingest_macos.result == 'success') || (needs.metadata.outputs.build_macos != 'true' && needs.build_macos.result == 'skipped' && needs.ingest_macos.result == 'skipped')) }}
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     permissions:
@@ -1517,6 +1927,72 @@ jobs:
         with:
           name: logosforge-pro-macos-intel-x64
           path: release-assets/macos
+
+      - name: Download macOS provenance
+        if: needs.metadata.outputs.build_macos == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1 (Node 24)
+        with:
+          name: logosforge-pro-macos-intel-x64-provenance
+          path: release-assets/macos-provenance
+
+      - name: Re-verify downloaded macOS artifact and provenance
+        if: needs.metadata.outputs.build_macos == 'true'
+        env:
+          EXPECTED_DMG_SHA256: ${{ needs.ingest_macos.outputs.dmg_sha256 }}
+          HANDOFF_RUN_ATTEMPT: ${{ needs.build_macos.outputs.handoff_run_attempt }}
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+          SOURCE_SHA: ${{ needs.metadata.outputs.source_sha }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          dmg="release-assets/macos/LogosForge Pro-${VERSION}-x64.dmg"
+          provenance="release-assets/macos-provenance"
+          set -- release-assets/macos/*.dmg
+          if [ "$#" -ne 1 ] || [ "$1" != "$dmg" ] || [ ! -s "$dmg" ] || [ -L "$dmg" ]; then
+            echo "::error::Downloaded macOS artifact contract mismatch."
+            exit 1
+          fi
+          for name in macos-handoff.json pip-freeze.txt SHA256SUMS-and-build.txt; do
+            test -s "$provenance/$name" && test ! -L "$provenance/$name" || {
+              echo "::error::Downloaded macOS provenance is missing or unsafe: $name"
+              exit 1
+            }
+          done
+          provenance_entries="$(find "$provenance" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)"
+          expected_entries="$(printf '%s\n' SHA256SUMS-and-build.txt macos-handoff.json pip-freeze.txt | sort)"
+          if [ "$provenance_entries" != "$expected_entries" ]; then
+            echo "::error::Downloaded macOS provenance contains unexpected entries."
+            exit 1
+          fi
+          verify_root="release-assets/macos-verify"
+          if [ -e "$verify_root" ] || [ -L "$verify_root" ]; then rm -rf -- "$verify_root"; fi
+          mkdir -m 700 -- "$verify_root"
+          cp -- "$dmg" "$verify_root/"
+          cp -- "$provenance/macos-handoff.json" "$provenance/pip-freeze.txt" "$provenance/SHA256SUMS-and-build.txt" "$verify_root/"
+          source_tree_sha256="$(git ls-tree -r --full-tree "$SOURCE_SHA" | sha256sum | awk '{print $1}')"
+          python3 pro-desktop/scripts/macos-handoff-evidence.py verify \
+            --staging-dir "$verify_root" \
+            --repository "$GITHUB_REPOSITORY" \
+            --repository-id "$GITHUB_REPOSITORY_ID" \
+            --tag "$RELEASE_TAG" \
+            --source-sha "$SOURCE_SHA" \
+            --source-tree-sha256 "$source_tree_sha256" \
+            --workflow-ref "$GITHUB_WORKFLOW_REF" \
+            --workflow-sha "$GITHUB_WORKFLOW_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$HANDOFF_RUN_ATTEMPT" \
+            --version "$VERSION" \
+            --platform macos-intel-x64 \
+            --dmg-name "LogosForge Pro-${VERSION}-x64.dmg"
+          printf '%s\n' "$EXPECTED_DMG_SHA256" | grep -Eq '^[0-9a-f]{64}$' || {
+            echo "::error::Hosted ingest did not return a valid DMG digest."
+            exit 1
+          }
+          observed_dmg_sha256="$(sha256sum "$dmg" | awk '{print $1}')"
+          if [ "$observed_dmg_sha256" != "$EXPECTED_DMG_SHA256" ]; then
+            echo "::error::Downloaded DMG does not match the hosted ingest digest."
+            exit 1
+          fi
 
       - name: Stage exactly the selected successful artifacts
         env:

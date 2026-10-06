@@ -53,22 +53,35 @@ complements the distributable inspection and MCP smoke; it does not replace
 final human installer, Gatekeeper, or system-permission testing. Windows and
 Linux failures upload the isolated acceptance directory for diagnosis.
 
-Build-only macOS runs support the self-hosted Intel Monterey runner without
-JavaScript actions: the job performs an isolated native Git checkout, bootstraps
-a checksum-pinned Node 22 when needed, and leaves the verified DMG plus
-provenance in `macos-build-drop/` on that host. Publishing still requires macOS
-13.5 or newer and Actions Runner 2.327.1 or newer for the Node 24 artifact
-actions. The packaged app's declared consumer floor is macOS 12.0. If the native
-UI journey fails on Monterey, its screenshots, acceptance log and isolated state
-are retained beside that run under `macos-build-drop/` for diagnosis.
+macOS runs support the self-hosted Intel Monterey runner without JavaScript
+actions: the job performs an isolated native Git checkout, bootstraps a
+checksum-pinned Node 22 when needed, and builds and verifies the complete DMG.
+It then pushes the DMG and source-bound evidence to a private GHCR OCI handoff
+using a checksum-pinned native ORAS binary. A hosted Ubuntu ingestion job pulls
+that handoff by immutable digest, independently verifies its exact files,
+checksums, source, version and workflow-run identity, and only then creates the
+normal Actions artifact consumed by the hosted publisher. The Monterey job has
+package-write permission but never release-write permission; the final hosted
+job remains the only GitHub Release mutator. The packaged app's declared
+consumer floor is macOS 12.0.
+
+Build-only candidates also become downloadable workflow artifacts after hosted
+ingestion and remain under `macos-build-drop/` on the runner as a local fallback.
+If the native UI journey fails on Monterey, its screenshots, acceptance log and
+isolated state are retained beside that run under `macos-build-drop/` for
+diagnosis. GitHub no longer supports Node-based actions on macOS 13.4 or older,
+so the Monterey job intentionally contains no `uses:` steps. Keep the
+self-hosted runner current enough to accept GitHub jobs even though every build
+and transfer step on it is shell/native.
 
 - `npm run dist:win` → Windows NSIS + portable.
 - `npm run dist:mac` → Intel x64 DMG (native macOS only).
 - `npm run dist:linux` → x64 AppImage (native Linux only).
 
 Keep native artifacts as CI downloads until they have been manually tested on
-their target systems. A Monterey build-only candidate remains in the runner's
-`macos-build-drop/` directory instead. Create/push a release tag only after that
+their target systems. A Monterey build-only candidate is available as a verified
+Actions download after hosted ingestion and is also retained in the runner's
+`macos-build-drop/` directory. Create/push a release tag only after that
 validation.
 
 ```bash
@@ -79,7 +92,9 @@ The workflow assumes a **single monorepo checkout** containing `logosforge/`,
 `logosforge-ui-contracts/`, `pro-shared-ui/`, and `pro-desktop/` as sibling
 dirs (the current on-disk layout). Hosted jobs use `actions/checkout`; the
 Monterey job makes an equivalent isolated native Git checkout without a
-JavaScript action.
+JavaScript action. The handoff registry package is derived from the repository
+owner/name and addressed by the digest emitted by that exact build; mutable tags
+are never accepted by ingestion or publication.
 
 ## Local build
 
