@@ -19,6 +19,8 @@ const SEVERITY = Object.freeze({
 //   the watched path itself; untrusted users cannot submit glob expressions.
 // - http-cache-semantics is reached only through electron-builder's artifact
 //   downloader, which runs on an isolated build host with a private cache.
+// - sprintf-js is reached only through electron-builder's proxy logger. The
+//   affected formatter is development-only and is never shipped in the app.
 //
 // The production-only audit below must remain clean, and any other advisory —
 // including a severity change for either exception — still fails the gate.
@@ -30,6 +32,10 @@ const TEMPORARY_DEV_ADVISORIES = new Map([
   [
     'https://github.com/advisories/GHSA-ch52-4w7c-c8xp',
     { dependency: 'http-cache-semantics', severity: 'high' },
+  ],
+  [
+    'https://github.com/advisories/GHSA-hp3w-g68c-fv3c',
+    { dependency: 'sprintf-js', severity: 'moderate' },
   ],
 ]);
 
