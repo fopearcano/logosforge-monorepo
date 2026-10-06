@@ -16,6 +16,7 @@ from logosforge.knowledge_graph import provenance as P
 from logosforge.librechat.api_client import LogosForgeApiError
 from logosforge.librechat.mcp_gateway import (
     GatewayError,
+    KNOWLEDGE_GRAPH_VIEW_MODES,
     LogosForgeMcpGateway,
     _knowledge_graph_receipt_request_digest,
 )
@@ -36,6 +37,7 @@ class _InProcessApiClient:
         self.fail_graph_posts_before_send = 0
         self.drop_graph_response_after_commit = 0
         self.graph_post_attempts = 0
+        self.graph_read_queries: list[dict[str, Any]] = []
 
     @property
     def project_id(self) -> int:
@@ -127,16 +129,20 @@ class _InProcessApiClient:
         depth: int = 1,
         limit: int = 100,
         include_inferred: bool = True,
+        view_mode: str = "project_map",
     ) -> dict:
+        query = {
+            "focus_key": focus_key,
+            "depth": depth,
+            "limit": limit,
+            "include_inferred": include_inferred,
+            "view_mode": view_mode,
+        }
+        self.graph_read_queries.append(dict(query))
         return self.request(
             "GET",
             self.project_path("knowledge-graph", project_id),
-            query={
-                "focus_key": focus_key,
-                "depth": depth,
-                "limit": limit,
-                "include_inferred": include_inferred,
-            },
+            query=query,
         )
 
     def get_knowledge_graph_hidden_edges(
@@ -242,7 +248,7 @@ def test_graph_digest_matches_core_canonical_wire():
 
 def test_graph_tools_are_versioned_bounded_and_strict(graph_gateway):
     _db, _client, gateway = graph_gateway
-    assert SERVER_VERSION == "1.6.0"
+    assert SERVER_VERSION == "1.7.0"
     assert len(TOOL_SPECS) == 45
     assert {
         "logosforge_get_knowledge_graph",
@@ -253,11 +259,32 @@ def test_graph_tools_are_versioned_bounded_and_strict(graph_gateway):
     read = call_tool(
         gateway,
         "logosforge_get_knowledge_graph",
-        {"depth": 2, "limit": 25, "include_inferred": True},
+        {
+            "depth": 2,
+            "limit": 25,
+            "include_inferred": True,
+            "view_mode": "structure",
+        },
     )
     assert read["ok"] is True
     assert read["result"]["depth"] == 2
     assert read["result"]["include_inferred"] is True
+    assert read["result"]["view_mode"] == "structure"
+    graph_tool = next(
+        spec for spec in TOOL_SPECS
+        if spec.name == "logosforge_get_knowledge_graph"
+    )
+    assert graph_tool.input_schema["properties"]["view_mode"] == {
+        "type": "string",
+        "enum": sorted(KNOWLEDGE_GRAPH_VIEW_MODES),
+    }
+    invalid_mode = call_tool(
+        gateway,
+        "logosforge_get_knowledge_graph",
+        {"view_mode": "predictive_risk"},
+    )
+    assert invalid_mode["ok"] is False
+    assert "view_mode" in invalid_mode["error"]
     invalid = call_tool(
         gateway,
         "logosforge_get_knowledge_graph_hidden_edges",
@@ -277,6 +304,23 @@ def test_graph_proposal_preflight_apply_and_stale_sibling(graph_gateway):
     sibling = gateway.propose_knowledge_graph_command(
         _command("confirm_edge", current["revision"], edge),
     )
+
+    assert client.graph_read_queries[-2:] == [
+        {
+            "focus_key": edge["source"],
+            "depth": 1,
+            "limit": 200,
+            "include_inferred": True,
+            "view_mode": "project_map",
+        },
+        {
+            "focus_key": edge["source"],
+            "depth": 1,
+            "limit": 200,
+            "include_inferred": True,
+            "view_mode": "project_map",
+        },
+    ]
 
     assert hidden["operation"] == "knowledge_graph_hide_edge"
     assert hidden["request"] == {

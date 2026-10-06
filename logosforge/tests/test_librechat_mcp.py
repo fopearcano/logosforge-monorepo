@@ -174,6 +174,7 @@ def test_api_client_knowledge_graph_reads_preserve_bounded_queries():
             depth=2,
             limit=25,
             include_inferred=False,
+            view_mode="revision_impact",
         )
         client.get_knowledge_graph_hidden_edges(offset=100, limit=50)
 
@@ -184,6 +185,7 @@ def test_api_client_knowledge_graph_reads_preserve_bounded_queries():
         "depth": ["2"],
         "limit": ["25"],
         "include_inferred": ["False"],
+        "view_mode": ["revision_impact"],
     }
     hidden_url = ac.urllib.parse.urlparse(captured[1]["url"])
     assert hidden_url.path == "/api/projects/7/knowledge-graph/hidden-edges"
@@ -769,6 +771,8 @@ class _FakeApiClient:
                 "focus_key": None,
                 "depth": 1,
                 "include_inferred": True,
+                "view_mode": "project_map",
+                "story_diagnostics_available": True,
                 "nodes": graph_nodes,
                 "edges": [graph_edge],
                 "node_count": 2,
@@ -792,6 +796,8 @@ class _FakeApiClient:
                 "focus_key": None,
                 "depth": 1,
                 "include_inferred": True,
+                "view_mode": "project_map",
+                "story_diagnostics_available": True,
                 "nodes": [],
                 "edges": [],
                 "node_count": 0,
@@ -963,6 +969,7 @@ class _FakeApiClient:
         depth: int = 1,
         limit: int = 100,
         include_inferred: bool = True,
+        view_mode: str = "project_map",
     ) -> dict:
         del limit
         pid = int(project_id) if project_id is not None else self.require_project_id()
@@ -970,6 +977,7 @@ class _FakeApiClient:
         graph["focus_key"] = focus_key
         graph["depth"] = depth
         graph["include_inferred"] = include_inferred
+        graph["view_mode"] = view_mode
         if not include_inferred:
             graph["edges"] = [
                 edge for edge in graph["edges"] if not edge["is_inferred"]
@@ -4005,6 +4013,15 @@ def test_mcp_registry_has_unique_focused_tools_and_no_legacy_self_approval():
         "depth": {"type": "integer", "minimum": 1, "maximum": 2},
         "limit": {"type": "integer", "minimum": 1, "maximum": 200},
         "include_inferred": server.BOOL,
+        "view_mode": {
+            "type": "string",
+            "enum": [
+                "project_map",
+                "recorded_risk",
+                "revision_impact",
+                "structure",
+            ],
+        },
     })
     assert graph_read.read_only is True
     assert graph_read.destructive is False
@@ -4097,7 +4114,7 @@ def test_real_mcp_stdio_initializes_and_advertises_structured_tools():
 
     initialized, listed = asyncio.run(exercise())
     assert initialized.serverInfo.name == "logosforge"
-    assert initialized.serverInfo.version == "1.6.0"
+    assert initialized.serverInfo.version == "1.7.0"
     tools = {tool.name: tool for tool in listed.tools}
     assert len(tools) == 45
     assert {

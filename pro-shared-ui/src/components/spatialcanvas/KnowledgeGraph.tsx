@@ -5,6 +5,7 @@ import type {
   KnowledgeGraphNodeDTO,
   KnowledgeGraphQueryDTO,
   KnowledgeGraphReadDTO,
+  KnowledgeGraphViewMode,
 } from "@logosforge/ui-contracts";
 import { useSelection } from "../../adapters/selection";
 import { useStudio } from "../../adapters/StudioProvider";
@@ -33,6 +34,40 @@ const PAGE_LIMIT = 48;
 const HIDDEN_EDGE_PAGE_LIMIT = 25;
 const CW = 900;
 const CH = 560;
+
+interface GraphViewMeta {
+  title: string;
+  shortLabel: string;
+  description: string;
+  empty: string;
+}
+
+const GRAPH_VIEW_META: Record<KnowledgeGraphViewMode, GraphViewMeta> = {
+  project_map: {
+    title: "PROJECT MAP",
+    shortLabel: "Project Map",
+    description: "The bounded canonical story graph across every available source system.",
+    empty: "No narrative knowledge has been derived yet. Add manuscript structure, PSYKE entries, notes, or workflows to begin the map.",
+  },
+  structure: {
+    title: "STRUCTURE",
+    shortLabel: "Structure",
+    description: "Recorded hierarchy and manuscript-order evidence. Inferred order disappears in Confirmed only scope.",
+    empty: "No structural relationships match this evidence scope. Add or link acts, chapters, scenes, plot blocks, or timeline evidence.",
+  },
+  recorded_risk: {
+    title: "RECORDED RISK",
+    shortLabel: "Recorded Risk",
+    description: "Only saved risk and contradiction evidence from Core—not a prediction or a low-confidence guess.",
+    empty: "No saved risk or contradiction evidence matches this scope. This does not prove that the manuscript is risk-free.",
+  },
+  revision_impact: {
+    title: "SAVED REVISION IMPACT",
+    shortLabel: "Saved Revision Impact",
+    description: "Saved revision-intelligence reports and the exact story elements they revise or flag.",
+    empty: "No saved revision-impact evidence matches this scope. Run and save a revision-impact analysis to populate this view.",
+  },
+};
 
 const panelBox: CSSProperties = {
   position: "relative",
@@ -180,6 +215,7 @@ function queryMatches(
   return left.focus_key === right.focus_key
     && left.depth === right.depth
     && left.limit === right.limit
+    && left.view_mode === right.view_mode
     && left.include_inferred === right.include_inferred;
 }
 
@@ -205,12 +241,15 @@ export function KnowledgeGraph(props: PanelProps) {
   const mounted = useMountedRef();
   const projectIdRef = useRef(projectId);
   projectIdRef.current = projectId;
+  const apiRef = useRef(api);
+  apiRef.current = api;
   const requestRef = useRef<object | null>(null);
   const reviewRef = useRef<EdgeReviewProposal | null>(null);
   const reviewDialogRef = useRef<HTMLElement | null>(null);
   const reviewTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [focusKey, setFocusKey] = useState<string | null>(null);
   const [depth, setDepth] = useState(1);
+  const [viewMode, setViewMode] = useState<KnowledgeGraphViewMode>("project_map");
   const [includeInferred, setIncludeInferred] = useState(true);
   const [hiddenNodeTypes, setHiddenNodeTypes] = useState<Set<string>>(new Set());
   const [confidenceMin, setConfidenceMin] = useState<GraphConfidence>("unknown");
@@ -236,6 +275,7 @@ export function KnowledgeGraph(props: PanelProps) {
   useEffect(() => {
     setFocusKey(null);
     setDepth(1);
+    setViewMode("project_map");
     setIncludeInferred(true);
     setHiddenNodeTypes(new Set());
     setConfidenceMin("unknown");
@@ -253,14 +293,15 @@ export function KnowledgeGraph(props: PanelProps) {
     setBusy("");
     setMutationError("");
     setMutationStatus("");
-  }, [projectId, replaceReview]);
+  }, [api, projectId, replaceReview]);
 
   const query = useMemo<NormalizedKnowledgeGraphQuery>(() => ({
     focus_key: focusKey,
     depth,
     limit: PAGE_LIMIT,
+    view_mode: viewMode,
     include_inferred: includeInferred,
-  }), [depth, focusKey, includeInferred]);
+  }), [depth, focusKey, includeInferred, viewMode]);
   const queryRef = useRef(query);
   queryRef.current = query;
   const { data, loading, error, refetch } = useKnowledgeGraph(query);
@@ -275,9 +316,10 @@ export function KnowledgeGraph(props: PanelProps) {
       && data.project_id === projectId
       && data.focus_key === query.focus_key
       && data.depth === query.depth
+      && data.view_mode === query.view_mode
       && data.include_inferred === query.include_inferred
     ) setCommandSnapshot(data);
-  }, [data, projectId, query.depth, query.focus_key, query.include_inferred]);
+  }, [data, projectId, query.depth, query.focus_key, query.include_inferred, query.view_mode]);
 
   useEffect(() => {
     requestRef.current = null;
@@ -286,7 +328,7 @@ export function KnowledgeGraph(props: PanelProps) {
     setBusy("");
     setMutationError("");
     setMutationStatus("");
-  }, [depth, focusKey, includeInferred, projectId, replaceReview]);
+  }, [depth, focusKey, includeInferred, projectId, replaceReview, viewMode]);
   // useResource clears on project changes in an effect. This synchronous guard
   // prevents even one render of the prior project's graph in the new workspace.
   const matchesActiveQuery = (candidate: KnowledgeGraphReadDTO | null | undefined) => (
@@ -294,6 +336,7 @@ export function KnowledgeGraph(props: PanelProps) {
     && candidate.project_id === projectId
     && candidate.focus_key === focusKey
     && candidate.depth === depth
+    && candidate.view_mode === viewMode
     && candidate.include_inferred === includeInferred
   );
   const graph = matchesActiveQuery(commandSnapshot)
@@ -328,7 +371,10 @@ export function KnowledgeGraph(props: PanelProps) {
   const selected = view?.nodeByKey.get(selectedKey ?? "")
     ?? (graph?.focus_key ? view?.nodeByKey.get(graph.focus_key) : undefined)
     ?? [...(view?.nodes ?? [])].sort((left, right) => right.degree - left.degree || left.key.localeCompare(right.key))[0];
-  const positions = useMemo(() => layoutKnowledgeGraph(view?.nodes ?? [], CW, CH), [view?.nodes]);
+  const positions = useMemo(
+    () => layoutKnowledgeGraph(view?.nodes ?? [], CW, CH, viewMode, view?.edges ?? []),
+    [view?.edges, view?.nodes, viewMode],
+  );
   const visibleDegree = useMemo(() => {
     const degree = new Map<string, number>((view?.nodes ?? []).map((node) => [node.key, 0]));
     for (const edge of view?.edges ?? []) {
@@ -361,7 +407,7 @@ export function KnowledgeGraph(props: PanelProps) {
     graph.returned_node_count < graph.node_count
     || graph.returned_edge_count < graph.edge_count
   ));
-  const diagnosticsCapped = Boolean(graph && (
+  const diagnosticsCapped = Boolean(graph?.story_diagnostics_available && (
     graph.orphan_keys.length < graph.orphan_count
     || graph.weak_links.length < graph.weak_link_count
     || graph.hidden_edges.length < graph.hidden_edge_count
@@ -369,13 +415,13 @@ export function KnowledgeGraph(props: PanelProps) {
 
   useEffect(() => {
     setConnectionsExpanded(false);
-  }, [confidenceMin, focusKey, includeInferred, selected?.key, sourceSystem]);
+  }, [confidenceMin, focusKey, includeInferred, selected?.key, sourceSystem, viewMode]);
 
   useEffect(() => {
     setOrphansExpanded(false);
     setWeakLinksExpanded(false);
     setHiddenEdgesExpanded(false);
-  }, [confidenceMin, focusKey, hiddenNodeTypes, includeInferred, sourceSystem]);
+  }, [confidenceMin, focusKey, hiddenNodeTypes, includeInferred, sourceSystem, viewMode]);
 
   useEffect(() => {
     if (!hiddenReviewOpen || !hiddenReviewPage || hiddenReviewOffset === 0) return;
@@ -437,7 +483,7 @@ export function KnowledgeGraph(props: PanelProps) {
     setMutationStatus("");
     const trigger = reviewTriggerRef.current;
     reviewTriggerRef.current = null;
-    trigger?.focus();
+    if (typeof trigger?.focus === "function") trigger.focus();
   };
 
   useEffect(() => {
@@ -447,6 +493,7 @@ export function KnowledgeGraph(props: PanelProps) {
   const runReviewedEdgeAction = useCallback(async () => {
     const initialProposal = reviewRef.current;
     if (!initialProposal || requestRef.current != null) return;
+    const ownerApi = api;
     const ownerProjectId = initialProposal.ownerProjectId;
     const proposalKey = initialProposal.idempotencyKey;
     const token = {};
@@ -457,7 +504,8 @@ export function KnowledgeGraph(props: PanelProps) {
 
     const ownsRequest = () => mounted.current
       && requestRef.current === token
-      && projectIdRef.current === ownerProjectId;
+      && projectIdRef.current === ownerProjectId
+      && apiRef.current === ownerApi;
     const ownsProposal = () => ownsRequest()
       && reviewRef.current?.idempotencyKey === proposalKey
       && queryMatches(queryRef.current, initialProposal.query);
@@ -474,7 +522,7 @@ export function KnowledgeGraph(props: PanelProps) {
       } catch (refreshFailure) {
         if (!ownsRequest()) return;
         setMutationStatus("");
-        setMutationError(`The edge decision was committed, but the Project Map could not refresh — ${refreshFailure instanceof Error ? refreshFailure.message : String(refreshFailure)}. Reload the map; do not repeat the decision as a new proposal.`);
+        setMutationError(`The edge decision was committed, but the active graph view could not refresh — ${refreshFailure instanceof Error ? refreshFailure.message : String(refreshFailure)}. Reload the view; do not repeat the decision as a new proposal.`);
       } finally {
         if (ownsRequest()) refetch();
       }
@@ -616,6 +664,38 @@ export function KnowledgeGraph(props: PanelProps) {
   }, [api, hiddenReviewOpen, hiddenReviewResource, mounted, refetch, replaceReview]);
 
   const interactionLocked = Boolean(busy) || review != null;
+  const clearProjectionContext = (resetManualFilters: boolean) => {
+    setFocusKey(null);
+    setDepth(1);
+    setSelectedKey(null);
+    setSelection({ sceneId: null, text: "", section: "Knowledge Graph", nodeId: null });
+    setConnectionsExpanded(false);
+    setOrphansExpanded(false);
+    setWeakLinksExpanded(false);
+    setHiddenEdgesExpanded(false);
+    setHiddenReviewOpen(false);
+    setHiddenReviewOffset(0);
+    setCommandSnapshot(null);
+    replaceReview(null);
+    reviewTriggerRef.current = null;
+    setMutationError("");
+    setMutationStatus("");
+    if (resetManualFilters) {
+      setHiddenNodeTypes(new Set());
+      setConfidenceMin("unknown");
+      setSourceSystem("all");
+    }
+  };
+  const changeViewMode = (next: KnowledgeGraphViewMode) => {
+    if (interactionLocked || next === viewMode) return;
+    clearProjectionContext(true);
+    setViewMode(next);
+  };
+  const changeEvidenceScope = (nextIncludeInferred: boolean) => {
+    if (interactionLocked || nextIncludeInferred === includeInferred) return;
+    clearProjectionContext(false);
+    setIncludeInferred(nextIncludeInferred);
+  };
   const reviewSourceLabel = review
     ? hiddenReviewNodeByKey.get(review.edge.source)?.label || graphNodeByKey.get(review.edge.source)?.label || review.edge.source
     : "";
@@ -630,10 +710,26 @@ export function KnowledgeGraph(props: PanelProps) {
         <div style={{ position: "absolute", top: 3, left: 3, width: 5, height: 5, background: "var(--crimson)", zIndex: 9 }} />
 
         <div style={{ minHeight: 44, flex: "none", display: "flex", flexWrap: "wrap", alignItems: "center", gap: 9, padding: "5px 16px", borderBottom: "1px solid var(--line)", background: "var(--tint)", zIndex: 5 }}>
-          <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 14, letterSpacing: ".12em", color: "var(--strong)" }}>PROJECT MAP</span>
+          <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 14, letterSpacing: ".12em", color: "var(--strong)" }}>{GRAPH_VIEW_META[viewMode].title}</span>
           <span style={{ fontSize: 7.5, color: "var(--accent)", border: "1px solid var(--line-cy)", padding: "2px 7px", letterSpacing: ".12em" }}>CANONICAL NARRATIVE GRAPH</span>
           {graph?.focus_key && <span style={{ maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 8, color: "var(--amber)" }}>FOCUS · {graph.nodes.find((node) => node.key === graph.focus_key)?.label ?? graph.focus_key}</span>}
           <div style={{ flex: 1 }} />
+          <label style={{ display: "flex", alignItems: "center", gap: 5, color: "var(--txt2)", fontSize: 8 }}>
+            VIEW
+            <select aria-label="Knowledge Graph view mode" value={viewMode} disabled={interactionLocked} onChange={(event) => changeViewMode(event.currentTarget.value as KnowledgeGraphViewMode)} style={{ ...control, opacity: interactionLocked ? 0.55 : 1 }}>
+              <option value="project_map">Project Map</option>
+              <option value="structure">Structure</option>
+              <option value="recorded_risk">Recorded Risk</option>
+              <option value="revision_impact">Saved Revision Impact</option>
+            </select>
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 5, color: "var(--txt2)", fontSize: 8 }}>
+            EVIDENCE
+            <select aria-label="Knowledge Graph evidence scope" value={includeInferred ? "inferred_and_confirmed" : "confirmed_only"} disabled={interactionLocked} onChange={(event) => changeEvidenceScope(event.currentTarget.value === "inferred_and_confirmed")} style={{ ...control, opacity: interactionLocked ? 0.55 : 1 }}>
+              <option value="confirmed_only">Confirmed only</option>
+              <option value="inferred_and_confirmed">Inferred + Confirmed</option>
+            </select>
+          </label>
           <label style={{ display: "flex", alignItems: "center", gap: 5, color: "var(--txt2)", fontSize: 8 }}>
             DEPTH
             <select aria-label="Knowledge Graph focus depth" value={depth} disabled={interactionLocked} onChange={(event) => setDepth(Number(event.currentTarget.value))} style={{ ...control, opacity: interactionLocked ? 0.55 : 1 }}>
@@ -642,7 +738,7 @@ export function KnowledgeGraph(props: PanelProps) {
             </select>
           </label>
           {focusKey ? (
-            <button type="button" disabled={interactionLocked} aria-label="Return to full Project Map" onClick={() => setFocusKey(null)} style={{ ...activeControl, opacity: interactionLocked ? 0.55 : 1 }}>SHOW PROJECT MAP</button>
+            <button type="button" disabled={interactionLocked} aria-label={`Return to full ${GRAPH_VIEW_META[viewMode].shortLabel} view`} onClick={() => setFocusKey(null)} style={{ ...activeControl, opacity: interactionLocked ? 0.55 : 1 }}>SHOW FULL {GRAPH_VIEW_META[viewMode].title}</button>
           ) : (
             <button type="button" disabled={!selected || interactionLocked} aria-label={selected ? `Focus graph on ${selected.label || selected.key}` : "Focus graph on selected node"} onClick={() => selected && setFocusKey(selected.key)} style={{ ...activeControl, opacity: selected && !interactionLocked ? 1 : 0.45, cursor: selected && !interactionLocked ? "pointer" : "default" }}>FOCUS NEIGHBORHOOD</button>
           )}
@@ -725,6 +821,11 @@ export function KnowledgeGraph(props: PanelProps) {
         >
           <div style={{ display: "flex", width: "100%", minWidth: 920, height: "100%", minHeight: 0 }}>
           <aside aria-label="Knowledge Graph filters" style={{ width: 196, flex: "none", borderRight: "1px solid var(--line)", background: "var(--panel2)", overflowY: "auto", padding: "12px 11px" }}>
+            <div data-graph-view-description={viewMode} style={{ border: "1px solid var(--line2)", background: "var(--tint)", padding: "8px 9px", marginBottom: 13 }}>
+              <span style={{ display: "block", color: "var(--accent)", fontSize: 7.5, letterSpacing: ".14em" }}>{GRAPH_VIEW_META[viewMode].shortLabel.toUpperCase()}</span>
+              <span style={{ display: "block", marginTop: 4, color: "var(--txt2)", fontSize: 8.5, lineHeight: 1.4 }}>{GRAPH_VIEW_META[viewMode].description}</span>
+              <span style={{ display: "block", marginTop: 5, color: includeInferred ? "var(--warning)" : "var(--green)", fontSize: 7.5 }}>{includeInferred ? "INFERRED + CONFIRMED EVIDENCE" : "CONFIRMED EVIDENCE ONLY"}</span>
+            </div>
             <fieldset disabled={interactionLocked} style={{ border: 0, padding: 0, margin: 0, opacity: interactionLocked ? 0.55 : 1 }}>
               <legend style={{ fontSize: 7.5, letterSpacing: ".2em", color: "var(--txt3)", marginBottom: 8 }}>NODE TYPES</legend>
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -751,7 +852,7 @@ export function KnowledgeGraph(props: PanelProps) {
                   <option value="unknown">All confidence</option>
                   <option value="possible">Possible+</option>
                   <option value="likely">Likely+</option>
-                  <option value="confirmed">Confirmed only</option>
+                  <option value="confirmed">Confirmed confidence</option>
                 </select>
               </label>
               <label style={{ display: "flex", flexDirection: "column", gap: 4, color: "var(--txt2)", fontSize: 8, marginBottom: 9 }}>
@@ -761,10 +862,6 @@ export function KnowledgeGraph(props: PanelProps) {
                   {sourceSystems.map((source) => <option key={source} value={source}>{source.replaceAll("_", " ")}</option>)}
                 </select>
               </label>
-              <label style={{ display: "flex", alignItems: "center", gap: 7, color: "var(--txt2)", fontSize: 8.5 }}>
-                <input type="checkbox" checked={includeInferred} onChange={(event) => setIncludeInferred(event.currentTarget.checked)} />
-                INCLUDE INFERRED
-              </label>
             </fieldset>
           </aside>
 
@@ -772,22 +869,22 @@ export function KnowledgeGraph(props: PanelProps) {
             {projectId == null ? (
               <Message>Open a project to build its narrative map.</Message>
             ) : loading && !graph ? (
-              <Message role="status">Building the canonical Project Map…</Message>
+              <Message role="status">Building the canonical {GRAPH_VIEW_META[viewMode].shortLabel} view…</Message>
             ) : error ? (
               <Message role="alert">
                 <div>
-                  <div>Couldn&apos;t load the Project Map — {error}</div>
+                  <div>Couldn&apos;t load the {GRAPH_VIEW_META[viewMode].shortLabel} view — {error}</div>
                   <button type="button" onClick={refetch} style={{ ...activeControl, marginTop: 10 }}>RETRY LOAD</button>
                 </div>
               </Message>
             ) : !graph ? (
-              <Message>Project Map unavailable.</Message>
+              <Message>{GRAPH_VIEW_META[viewMode].shortLabel} view unavailable.</Message>
             ) : graph.nodes.length === 0 ? (
-              <Message>No narrative knowledge has been derived yet. Add manuscript structure, PSYKE entries, notes, or workflows to begin the map.</Message>
+              <Message>{GRAPH_VIEW_META[viewMode].empty}</Message>
             ) : !view || view.nodes.length === 0 ? (
-              <Message>No nodes match the current filters.</Message>
+              <Message>No nodes in this {GRAPH_VIEW_META[viewMode].shortLabel} view match the manual filters.</Message>
             ) : (
-              <div data-knowledge-graph-canvas="true" data-project-id={graph.project_id} data-focus-key={graph.focus_key ?? ""} style={{ position: "relative", width: CW, height: CH, flex: "none" }}>
+              <div data-knowledge-graph-canvas="true" data-project-id={graph.project_id} data-focus-key={graph.focus_key ?? ""} data-view-mode={graph.view_mode} data-evidence-scope={graph.include_inferred ? "inferred_and_confirmed" : "confirmed_only"} style={{ position: "relative", width: CW, height: CH, flex: "none" }}>
                 <svg aria-hidden="true" viewBox={`0 0 ${CW} ${CH}`} width={CW} height={CH} style={{ position: "absolute", inset: 0, zIndex: 1 }}>
                   <defs>
                     <marker id="project-map-arrow" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6" fill="none" stroke="var(--txt3)" strokeWidth="1.1" /></marker>
@@ -798,10 +895,17 @@ export function KnowledgeGraph(props: PanelProps) {
                     if (!from || !to) return null;
                     const hot = selected && (edge.source === selected.key || edge.target === selected.key);
                     const weak = edge.is_inferred || edge.confidence === "possible" || edge.confidence === "unknown";
+                    const edgeColor = edge.edge_type === "contradicts"
+                      ? "var(--blocking)"
+                      : edge.edge_type === "risks"
+                        ? "var(--warning)"
+                        : weak
+                          ? "var(--warning)"
+                          : "var(--txt3)";
                     return (
                       <g key={graphEdgeKey(edge)} opacity={hot ? 1 : 0.48}>
                         <title>{edgeTitle(edge, view.nodeByKey)}</title>
-                        <line x1={from.x} y1={from.y} x2={to.x} y2={to.y} stroke={hot ? "var(--accent)" : weak ? "var(--warning)" : "var(--txt3)"} strokeWidth={hot ? 1.8 : 1.1} strokeDasharray={weak ? "5 4" : undefined} markerEnd="url(#project-map-arrow)" />
+                        <line x1={from.x} y1={from.y} x2={to.x} y2={to.y} stroke={hot ? "var(--accent)" : edgeColor} strokeWidth={hot ? 1.8 : 1.1} strokeDasharray={weak ? "5 4" : undefined} markerEnd="url(#project-map-arrow)" />
                         {hot && <text x={(from.x + to.x) / 2} y={(from.y + to.y) / 2 - 4} textAnchor="middle" fontSize="8" fill="var(--accent)">{edge.edge_type.replaceAll("_", " ")}</text>}
                       </g>
                     );
@@ -832,7 +936,7 @@ export function KnowledgeGraph(props: PanelProps) {
                   );
                 })}
                 <div style={{ position: "absolute", left: 8, bottom: 8, zIndex: 4, border: "1px solid var(--line2)", background: "var(--tint)", padding: "6px 9px", color: "var(--txt2)", fontSize: 7.5 }}>
-                  <span style={{ marginRight: 10 }}>──▸ relation</span><span style={{ color: "var(--warning)", marginRight: 10 }}>┄▸ weak / inferred</span><span style={{ color: "var(--accent)" }}>node size = full-graph degree</span>
+                  <span style={{ marginRight: 10 }}>──▸ confirmed evidence</span><span style={{ color: "var(--warning)", marginRight: 10 }}>┄▸ inferred evidence</span><span style={{ color: "var(--accent)" }}>node size = view-scoped degree</span>
                 </div>
               </div>
             )}
@@ -846,7 +950,7 @@ export function KnowledgeGraph(props: PanelProps) {
                   <span aria-hidden="true" style={{ width: 30, height: 30, display: "grid", placeItems: "center", border: `1px solid ${metaOf(selected.node_type).color}`, color: metaOf(selected.node_type).color }}>{metaOf(selected.node_type).icon}</span>
                   <div style={{ minWidth: 0 }}>
                     <div style={{ color: "var(--strong)", fontFamily: "'Chakra Petch'", fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{selected.label || selected.key}</div>
-                    <div style={{ color: "var(--txt3)", fontSize: 7.5, letterSpacing: ".08em" }}>{metaOf(selected.node_type).label.toUpperCase()} · {selected.degree} FULL-GRAPH LINKS</div>
+                    <div style={{ color: "var(--txt3)", fontSize: 7.5, letterSpacing: ".08em" }}>{metaOf(selected.node_type).label.toUpperCase()} · {selected.degree} VIEW-SCOPED LINKS</div>
                   </div>
                 </div>
                 {selected.summary && <p style={{ margin: "9px 0", color: "var(--txt2)", fontSize: 9.5, lineHeight: 1.45 }}>{selected.summary}</p>}
@@ -899,6 +1003,10 @@ export function KnowledgeGraph(props: PanelProps) {
 
             <section aria-label="Graph diagnostics" style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 12 }}>
               <div style={{ display: "flex", alignItems: "baseline", gap: 7, marginBottom: 8 }}><span style={{ fontFamily: "'Chakra Petch'", color: "var(--strong)", fontSize: 11, letterSpacing: ".1em" }}>DIAGNOSTICS</span><span style={{ marginLeft: "auto", color: "var(--txt3)", fontSize: 7 }}>CORE-DERIVED</span></div>
+              {!graph ? (
+                <InsightCard label="WAITING" tone="var(--txt3)">Diagnostics become available after the active graph view finishes loading.</InsightCard>
+              ) : graph.story_diagnostics_available ? (
+                <>
               {(graph?.orphan_count ?? 0) === 0 && (graph?.weak_link_count ?? 0) === 0 && (graph?.hidden_edge_count ?? 0) === 0 ? (
                 <InsightCard label="CONNECTED" tone="var(--green)">No orphan, weak-link, or hidden-edge diagnostics in this graph view.</InsightCard>
               ) : null}
@@ -946,9 +1054,13 @@ export function KnowledgeGraph(props: PanelProps) {
                   {graph && graph.weak_link_count > graph.weak_links.length && <div style={{ color: "var(--txt3)", fontSize: 8, marginTop: 5 }}>Core returned {graph.weak_links.length} of {graph.weak_link_count} weak links for this bounded query.</div>}
                 </div>
               )}
+                </>
+              ) : (
+                <InsightCard label="VIEW-SCOPED" tone="var(--accent)">Orphan and weak-link diagnostics belong to Project Map. This specialized view reports only its traceable evidence; zero rows must not be read as “connected” or “risk-free.”</InsightCard>
+              )}
               {((graph?.hidden_edge_count ?? 0) > 0 || (hiddenReviewPage?.hidden_edge_count ?? 0) > 0) && (
                 <div>
-                  <div style={{ color: "var(--warning)", fontSize: 7.5, letterSpacing: ".14em", marginBottom: 5 }}>HIDDEN EDGES · SHOWING {displayedHiddenEdges.length} OF {hiddenEdges.length} {hiddenReviewOpen ? "ON THIS QUEUE PAGE" : "CORE RETURNED"} · {hiddenReviewPage?.hidden_edge_count ?? graph?.hidden_edge_count} QUERY TOTAL</div>
+                  <div style={{ color: "var(--warning)", fontSize: 7.5, letterSpacing: ".14em", marginBottom: 5 }}>HIDDEN EDGES · SHOWING {displayedHiddenEdges.length} OF {hiddenEdges.length} {hiddenReviewOpen ? "ON THIS QUEUE PAGE" : "CORE RETURNED"} · {hiddenReviewPage?.hidden_edge_count ?? graph?.hidden_edge_count} PROJECT TOTAL</div>
                   {!hiddenReviewOpen ? (
                     <button type="button" disabled={interactionLocked} aria-label="Open the complete hidden edge review queue" onClick={() => { setHiddenReviewOffset(0); setHiddenReviewOpen(true); }} style={{ ...activeControl, width: "100%", marginBottom: 6, opacity: interactionLocked ? 0.55 : 1 }}>OPEN COMPLETE HIDDEN REVIEW QUEUE</button>
                   ) : (
@@ -989,7 +1101,7 @@ export function KnowledgeGraph(props: PanelProps) {
                     </div>
                   )}
                   {hiddenReviewOpen && hiddenReviewPage && <div role="status" style={{ color: "var(--txt3)", fontSize: 8, marginTop: 5 }}>Queue rows {hiddenReviewPage.returned_edge_count === 0 ? 0 : hiddenReviewPage.offset + 1}–{hiddenReviewPage.offset + hiddenReviewPage.returned_edge_count} of {hiddenReviewPage.hidden_edge_count}.</div>}
-                  {!hiddenReviewOpen && graph && graph.hidden_edge_count > graph.hidden_edges.length && <div style={{ color: "var(--txt3)", fontSize: 8, marginTop: 5 }}>The bounded map includes {graph.hidden_edges.length} of {graph.hidden_edge_count} hidden edges; the complete paged queue reaches every restore decision.</div>}
+                  {!hiddenReviewOpen && graph && graph.hidden_edge_count > graph.hidden_edges.length && <div style={{ color: "var(--txt3)", fontSize: 8, marginTop: 5 }}>The active view embeds {graph.hidden_edges.length} of {graph.hidden_edge_count} project-wide hidden edges; the complete paged queue reaches every restore decision.</div>}
                 </div>
               )}
             </section>
@@ -1001,9 +1113,13 @@ export function KnowledgeGraph(props: PanelProps) {
           <span style={{ color: "var(--green)" }}>● DETERMINISTIC · REVIEWABLE · TRACEABLE</span>
           <span>{view?.nodes.length ?? 0} / {graph?.node_count ?? 0} NODES</span>
           <span>{view?.edges.length ?? 0} / {graph?.edge_count ?? 0} EDGES</span>
-          <span style={{ color: "var(--warning)" }}>{graph?.orphan_count ?? 0} ORPHANS · {graph?.weak_link_count ?? 0} WEAK LINKS · {graph?.hidden_edge_count ?? 0} HIDDEN EDGES</span>
+          {!graph
+            ? <span style={{ color: "var(--txt3)" }}>DIAGNOSTICS · WAITING FOR ACTIVE VIEW</span>
+            : graph.story_diagnostics_available
+              ? <span style={{ color: "var(--warning)" }}>{graph.orphan_count} ORPHANS · {graph.weak_link_count} WEAK LINKS · {graph.hidden_edge_count} HIDDEN EDGES</span>
+              : <span style={{ color: "var(--txt3)" }}>STORY DIAGNOSTICS · PROJECT MAP ONLY · {graph.hidden_edge_count} HIDDEN EDGES</span>}
           {hiddenNodeTypes.size > 0 && <span>{hiddenNodeTypes.size} NODE TYPE{hiddenNodeTypes.size === 1 ? "" : "S"} HIDDEN</span>}
-          <span style={{ marginLeft: "auto", color: "var(--txt2)" }}>{graph?.writing_mode ?? "current project"}</span>
+          <span style={{ marginLeft: "auto", color: "var(--txt2)" }}>{GRAPH_VIEW_META[viewMode].shortLabel} · {includeInferred ? "Inferred + Confirmed" : "Confirmed only"} · {graph?.writing_mode ?? "current project"}</span>
         </div>
       </div>
     </PanelShell>

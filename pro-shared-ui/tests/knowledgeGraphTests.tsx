@@ -7,6 +7,7 @@ import type {
   KnowledgeGraphEdgeDTO,
   KnowledgeGraphQueryDTO,
   KnowledgeGraphReadDTO,
+  KnowledgeGraphViewMode,
 } from "@logosforge/ui-contracts";
 import type { ApiClient } from "../src/adapters/api";
 import { useSelection } from "../src/adapters/selection";
@@ -90,6 +91,7 @@ function graphFixture(
     source: edge.source.startsWith("project:project:") ? projectKey : edge.source,
   });
   const includeInferred = query.include_inferred ?? true;
+  const viewMode = query.view_mode ?? "project_map";
   const edges = [remap(confirmedEdge), remap(inferredEdge)].filter((edge) => includeInferred || !edge.is_inferred);
   const nodes = [
     { key: projectKey, node_type: "project", source_type: "project", source_id: String(projectId), label: `Project ${projectId}`, summary: "", metadata: {}, degree: 1 },
@@ -102,6 +104,8 @@ function graphFixture(
     project_id: projectId,
     revision: REVISION_A,
     writing_mode: "novel",
+    view_mode: viewMode,
+    story_diagnostics_available: viewMode === "project_map",
     focus_key: focusKey,
     depth: query.depth ?? 1,
     include_inferred: includeInferred,
@@ -168,6 +172,8 @@ function diagnosticFixture(projectId: number, query: KnowledgeGraphQueryDTO): Kn
     project_id: projectId,
     revision: REVISION_A,
     writing_mode: "novel",
+    view_mode: query.view_mode ?? "project_map",
+    story_diagnostics_available: (query.view_mode ?? "project_map") === "project_map",
     focus_key: query.focus_key ?? null,
     depth: query.depth ?? 1,
     include_inferred: query.include_inferred ?? true,
@@ -184,6 +190,76 @@ function diagnosticFixture(projectId: number, query: KnowledgeGraphQueryDTO): Kn
     weak_link_count: edges.length,
     hidden_edges: [],
     hidden_edge_count: 0,
+    warnings: [],
+    unavailable: [],
+  };
+}
+
+function viewFixture(projectId: number, query: KnowledgeGraphQueryDTO): KnowledgeGraphReadDTO {
+  const viewMode: KnowledgeGraphViewMode = query.view_mode ?? "project_map";
+  if (viewMode === "project_map") return graphFixture(projectId, query);
+  const projectKey = `project:project:${projectId}`;
+  const nodes = [
+    { key: projectKey, node_type: "project", source_type: "project", source_id: String(projectId), label: `Project ${projectId}`, summary: "", metadata: {}, degree: 0 },
+    { key: "scene:scene:2", node_type: "scene", source_type: "scene", source_id: "2", label: "Scene One", summary: "An opening signal.", metadata: {}, degree: 0 },
+    { key: "scene:scene:3", node_type: "scene", source_type: "scene", source_id: "3", label: "Scene Two", summary: "A consequence.", metadata: {}, degree: 0 },
+    { key: "revision_impact:revision:4", node_type: "revision_impact", source_type: "revision", source_id: "4", label: "Saved revision impact 4", summary: "", metadata: { impact_level: "high" }, degree: 0 },
+  ];
+  const contains = (target: string): KnowledgeGraphEdgeDTO => ({
+    source: projectKey,
+    target,
+    edge_type: "contains",
+    confidence: "confirmed",
+    provenance: "project structure",
+    source_system: "structure",
+    explanation: "The Scene belongs to this project.",
+    is_user_confirmed: false,
+    is_inferred: false,
+    is_hidden: false,
+    metadata: {},
+  });
+  const precedes: KnowledgeGraphEdgeDTO = {
+    source: "scene:scene:2", target: "scene:scene:3", edge_type: "precedes", confidence: "likely", provenance: "scene order", source_system: "timeline", explanation: "Scene One precedes Scene Two in manuscript order.", is_user_confirmed: false, is_inferred: true, is_hidden: false, metadata: {},
+  };
+  const revises: KnowledgeGraphEdgeDTO = {
+    source: "revision_impact:revision:4", target: "scene:scene:2", edge_type: "revises", confidence: "confirmed", provenance: "revision impact report", source_system: "revision_intelligence", explanation: "The saved report records this changed scene.", is_user_confirmed: false, is_inferred: false, is_hidden: false, metadata: {},
+  };
+  const risks: KnowledgeGraphEdgeDTO = {
+    source: "revision_impact:revision:4", target: "scene:scene:3", edge_type: "risks", confidence: "likely", provenance: "revision impact report", source_system: "revision_intelligence", explanation: "The saved report records a likely impact.", is_user_confirmed: false, is_inferred: true, is_hidden: false, metadata: { severity: "high" },
+  };
+  const candidateEdges = viewMode === "structure"
+    ? [contains("scene:scene:2"), contains("scene:scene:3"), precedes]
+    : viewMode === "recorded_risk"
+      ? [risks]
+      : [revises, risks];
+  const edges = candidateEdges.filter((edge) => (query.include_inferred ?? true) || !edge.is_inferred);
+  const nodeKeys = new Set(edges.flatMap((edge) => [edge.source, edge.target]));
+  const projectedNodes = nodes.filter((node) => nodeKeys.has(node.key)).map((node) => ({
+    ...node,
+    degree: edges.filter((edge) => edge.source === node.key || edge.target === node.key).length,
+  }));
+  return {
+    project_id: projectId,
+    revision: REVISION_A,
+    writing_mode: "novel",
+    view_mode: viewMode,
+    story_diagnostics_available: false,
+    focus_key: query.focus_key ?? null,
+    depth: query.depth ?? 1,
+    include_inferred: query.include_inferred ?? true,
+    nodes: projectedNodes,
+    edges,
+    node_count: projectedNodes.length,
+    edge_count: edges.length,
+    returned_node_count: projectedNodes.length,
+    returned_edge_count: edges.length,
+    truncated: false,
+    orphan_keys: [],
+    orphan_count: 0,
+    weak_links: [],
+    weak_link_count: 0,
+    hidden_edges: [],
+    hidden_edge_count: 2,
     warnings: [],
     unavailable: [],
   };
@@ -379,6 +455,75 @@ check(
     Math.abs(left.x - right.x) >= 80 || Math.abs(left.y - right.y) >= 76
   ))),
   "the 48-node interaction-safe page must not overlap its 80 by 76 pixel node hit areas",
+);
+const structureNodes = [
+  { ...valid.nodes[0]!, key: "project:project:7", node_type: "project", label: "Project" },
+  { ...valid.nodes[1]!, key: "act:act:1", node_type: "act", label: "Act One" },
+  { ...valid.nodes[1]!, key: "chapter:chapter:1", node_type: "chapter", label: "Chapter One" },
+  { ...valid.nodes[1]!, key: "scene:scene:1", node_type: "scene", label: "Scene One" },
+  { ...valid.nodes[1]!, key: "scene:scene:2", node_type: "scene", label: "Scene Two" },
+];
+const structureEdges = [
+  { ...confirmedEdge, source: "project:project:7", target: "act:act:1", edge_type: "contains" },
+  { ...confirmedEdge, source: "act:act:1", target: "chapter:chapter:1", edge_type: "contains" },
+  { ...confirmedEdge, source: "chapter:chapter:1", target: "scene:scene:1", edge_type: "contains" },
+  { ...confirmedEdge, source: "scene:scene:2", target: "chapter:chapter:1", edge_type: "belongs_to" },
+  { ...inferredEdge, source: "scene:scene:1", target: "scene:scene:2", edge_type: "precedes" },
+];
+const structureLayout = layoutKnowledgeGraph(structureNodes, 900, 560, "structure", structureEdges);
+const reversedStructureLayout = layoutKnowledgeGraph([...structureNodes].reverse(), 900, 560, "structure", [...structureEdges].reverse());
+check(
+  structureLayout.get("project:project:7")!.y < structureLayout.get("act:act:1")!.y
+    && structureLayout.get("act:act:1")!.y < structureLayout.get("chapter:chapter:1")!.y
+    && structureLayout.get("chapter:chapter:1")!.y < structureLayout.get("scene:scene:1")!.y
+    && structureLayout.get("scene:scene:1")!.x < structureLayout.get("scene:scene:2")!.x,
+  "Structure layout must place hierarchy layers top-down and recorded scene precedence left-to-right",
+);
+check(
+  [...structureLayout].every(([key, position]) => JSON.stringify(position) === JSON.stringify(reversedStructureLayout.get(key))),
+  "Structure layout must be deterministic regardless of response insertion order",
+);
+const riskAnchor = { ...valid.nodes[0]!, key: "revision_impact:revision:4", node_type: "revision_impact", label: "Revision 4" };
+const riskTarget = { ...valid.nodes[1]!, key: "scene:scene:4", node_type: "scene", label: "Affected scene" };
+const riskEdge = { ...inferredEdge, source: riskAnchor.key, target: riskTarget.key, edge_type: "risks", source_system: "revision_intelligence" };
+const riskLayout = layoutKnowledgeGraph([riskTarget, riskAnchor], 900, 560, "recorded_risk", [riskEdge]);
+check(
+  riskLayout.get(riskAnchor.key)!.x < riskLayout.get(riskTarget.key)!.x
+    && [...riskLayout.values()].every(({ x, y }) => x >= 0 && x <= 900 && y >= 0 && y <= 560),
+  "Recorded Risk layout must keep evidence anchors left of their exact endpoints inside the canvas",
+);
+const denseStructureNodes = Array.from({ length: 48 }, (_, index) => ({
+  ...valid.nodes[1]!,
+  key: index === 0 ? "project:project:dense" : index === 1 ? "act:act:dense" : index === 2 ? "chapter:chapter:dense" : `scene:scene:${index}`,
+  node_type: index === 0 ? "project" : index === 1 ? "act" : index === 2 ? "chapter" : "scene",
+  label: `Dense structure node ${index + 1}`,
+}));
+const denseStructureLayout = layoutKnowledgeGraph(denseStructureNodes, 900, 560, "structure");
+const denseStructurePositions = [...denseStructureLayout.values()];
+check(
+  denseStructurePositions.every((left, index) => denseStructurePositions.slice(index + 1).every((right) => (
+    Math.abs(left.x - right.x) >= 80 || Math.abs(left.y - right.y) >= 76
+  ))),
+  "the 48-node Structure layout must preserve every 80 by 76 pixel interaction target",
+);
+const crowdedRiskNodes = Array.from({ length: 48 }, (_, index) => ({
+  ...valid.nodes[1]!,
+  key: index < 32 ? `revision_impact:revision:${index}` : `scene:scene:${index}`,
+  node_type: index < 32 ? "revision_impact" : "scene",
+  label: `Crowded risk node ${index + 1}`,
+}));
+const crowdedRiskEdges = crowdedRiskNodes.slice(0, 32).map((node, index) => ({
+  ...riskEdge,
+  source: node.key,
+  target: crowdedRiskNodes[32 + (index % 16)]!.key,
+}));
+const crowdedRiskLayout = layoutKnowledgeGraph(crowdedRiskNodes, 900, 560, "recorded_risk", crowdedRiskEdges);
+const crowdedRiskPositions = [...crowdedRiskLayout.values()];
+check(
+  crowdedRiskPositions.every((left, index) => crowdedRiskPositions.slice(index + 1).every((right) => (
+    Math.abs(left.x - right.x) >= 80 || Math.abs(left.y - right.y) >= 76
+  ))),
+  "crowded Recorded Risk views must fall back to the interaction-safe bounded grid",
 );
 
 const originalFetch = globalThis.fetch;
@@ -617,8 +762,11 @@ check(panelRenderer.root.findByProps({ "aria-label": "Narrative Knowledge Graph 
 const scrollRegion = panelRenderer.root.findByProps({ "data-knowledge-graph-scroll-region": "true" });
 check(scrollRegion.props.tabIndex === 0 && scrollRegion.props.style.overflowX === "auto", "narrow docks must expose a keyboard-reachable horizontal workspace instead of clipping fixed rails");
 check(panelRenderer.root.findByType("svg").props["aria-hidden"] === "true", "graph SVG geometry must be decorative to assistive technology");
+check(panelRenderer.root.findByProps({ "aria-label": "Knowledge Graph view mode" }).props.value === "project_map", "the graph must expose Project Map as the default accessible view");
+check(panelRenderer.root.findByProps({ "aria-label": "Knowledge Graph evidence scope" }).props.value === "inferred_and_confirmed", "the graph must expose its default inferred and confirmed evidence scope");
 check(panelRenderer.root.findByProps({ "aria-label": "Minimum edge confidence" }), "confidence filter must have a stable accessible name");
 check(panelRenderer.root.findByProps({ "aria-label": "Edge source system" }), "source-system filter must have a stable accessible name");
+check(text(panelRenderer.root).includes("Confirmed confidence"), "the manual confidence threshold must not be mislabeled as the authoritative Confirmed-only evidence scope");
 check(panelRenderer.root.findByProps({ "aria-label": "Select Scene One, Scene, 2 connections" }).props["aria-pressed"] === true, "nodes must expose a named keyboard button and non-color selected state");
 
 act(() => panelRenderer.root.findByProps({ "aria-label": "Select Scene One, Scene, 2 connections" }).props.onClick());
@@ -649,7 +797,7 @@ act(() => panelRenderer.root.findAllByProps({ "aria-label": "Focus graph on Scen
 await act(async () => { await flush(); });
 check(graphRequests.at(-1)?.query.focus_key === "scene:scene:2", "focus action must request the selected canonical node neighborhood");
 check(panelRenderer.root.findByProps({ "data-knowledge-graph-canvas": "true" }).props["data-focus-key"] === "scene:scene:2", "focused response must replace the Project Map only after it arrives");
-check(panelRenderer.root.findByProps({ "aria-label": "Return to full Project Map" }), "focused mode must provide an accessible route back to the Project Map");
+check(panelRenderer.root.findByProps({ "aria-label": "Return to full Project Map view" }), "focused mode must provide an accessible route back to the active full view");
 check(panelRenderer.root.findAllByProps({ "aria-label": "Focus graph on Scene One" }).length === 0 && text(panelRenderer.root).includes("FOCUS ROOT"), "a selected focus root must expose status instead of an inert same-focus action");
 
 await act(async () => {
@@ -661,6 +809,144 @@ const switchedSelection = panelRenderer.root.findAllByType("output").at(-1)!;
 check(switchedSelection.props["data-node"] === "", "project switching must clear graph selection context");
 act(() => panelRenderer.unmount());
 check(listeners.size === 0, "unmount must release Knowledge Graph live-event subscriptions");
+
+const modeRequests: Array<KnowledgeGraphQueryDTO> = [];
+const modeApi = {
+  getKnowledgeGraph: async (projectId: number, query: KnowledgeGraphQueryDTO) => {
+    modeRequests.push({ ...query });
+    return viewFixture(projectId, query);
+  },
+  subscribe: () => () => {},
+} as unknown as ApiClient;
+await act(async () => {
+  panelRenderer = create(panelTree(7, modeApi));
+  await flush();
+});
+act(() => panelRenderer.root.findByProps({ "aria-label": "Select Scene One, Scene, 2 connections" }).props.onClick());
+act(() => panelRenderer.root.findByProps({ "aria-label": "Minimum edge confidence" }).props.onChange({ currentTarget: { value: "likely" } }));
+act(() => panelRenderer.root.findByProps({ "aria-label": "Edge source system" }).props.onChange({ currentTarget: { value: "manuscript" } }));
+act(() => panelRenderer.root.findByProps({ "aria-label": "Hide Character nodes" }).props.onClick());
+await act(async () => {
+  panelRenderer.root.findByProps({ "aria-label": "Knowledge Graph view mode" }).props.onChange({ currentTarget: { value: "recorded_risk" } });
+  await flush();
+});
+check(
+  modeRequests.at(-1)?.view_mode === "recorded_risk"
+    && modeRequests.at(-1)?.include_inferred === true
+    && modeRequests.at(-1)?.focus_key == null,
+  "selecting Recorded Risk must issue one full-view Core query while preserving the independent evidence scope",
+);
+check(
+  panelRenderer.root.findByProps({ "data-knowledge-graph-canvas": "true" }).props["data-view-mode"] === "recorded_risk",
+  "the panel must render only a response echoing the active graph view",
+);
+check(
+  panelRenderer.root.findByProps({ "aria-label": "Minimum edge confidence" }).props.value === "unknown"
+    && panelRenderer.root.findByProps({ "aria-label": "Edge source system" }).props.value === "all"
+    && !text(panelRenderer.root).includes("NODE TYPE HIDDEN")
+    && panelRenderer.root.findAllByType("output").at(-1)!.props["data-node"] === "",
+  "changing graph view must synchronously clear stale selection and manual presentation filters",
+);
+check(
+  text(panelRenderer.root).includes("Only saved risk and contradiction evidence")
+    && text(panelRenderer.root).includes("zero rows must not be read as “connected” or “risk-free.”")
+    && !text(panelRenderer.root).includes("CONNECTED")
+    && !text(panelRenderer.root).includes("DIAGNOSTIC CAP"),
+  "Recorded Risk must explain its saved-evidence boundary without claiming connectivity or misreporting the global hidden queue as a response cap",
+);
+await act(async () => {
+  panelRenderer.root.findAllByProps({ "aria-label": "Focus graph on Saved revision impact 4" })[0]!.props.onClick();
+  await flush();
+});
+check(
+  panelRenderer.root.findByProps({ "aria-label": "Return to full Recorded Risk view" }),
+  "a focused specialty view must label its reset as returning to that active view, not Project Map",
+);
+await act(async () => {
+  panelRenderer.root.findByProps({ "aria-label": "Return to full Recorded Risk view" }).props.onClick();
+  await flush();
+});
+const riskReview = panelRenderer.root.findByProps({ "aria-label": "Review confirmation of Saved revision impact 4 to Scene Two risks edge" });
+act(() => riskReview.props.onClick({ currentTarget: riskReview }));
+check(
+  panelRenderer.root.findByProps({ "aria-label": "Knowledge Graph view mode" }).props.disabled === true
+    && panelRenderer.root.findByProps({ "aria-label": "Knowledge Graph evidence scope" }).props.disabled === true,
+  "view and evidence controls must lock while an edge decision is under review",
+);
+act(() => panelRenderer.root.findByProps({ "data-knowledge-graph-edge-review": "confirm_edge" }).findAllByType("button").find((button) => text(button) === "CANCEL")!.props.onClick());
+await act(async () => {
+  panelRenderer.root.findByProps({ "aria-label": "Knowledge Graph evidence scope" }).props.onChange({ currentTarget: { value: "confirmed_only" } });
+  await flush();
+});
+check(
+  modeRequests.at(-1)?.view_mode === "recorded_risk" && modeRequests.at(-1)?.include_inferred === false,
+  "Confirmed only must be a server-backed evidence scope within the selected view",
+);
+check(
+  text(panelRenderer.root).includes("No saved risk or contradiction evidence matches this scope")
+    && panelRenderer.root.findAll((node) => typeof node.props["aria-label"] === "string" && node.props["aria-label"].startsWith("Review confirmation of ")).length === 0,
+  "Confirmed only must remove inferred risk evidence and its review actions without claiming the project is risk-free",
+);
+await act(async () => {
+  panelRenderer.root.findByProps({ "aria-label": "Knowledge Graph evidence scope" }).props.onChange({ currentTarget: { value: "inferred_and_confirmed" } });
+  await flush();
+});
+check(
+  panelRenderer.root.findAllByProps({ "aria-label": "Review confirmation of Saved revision impact 4 to Scene Two risks edge" }).length === 1,
+  "returning to Inferred + Confirmed must restore eligible traceable review actions",
+);
+await act(async () => {
+  panelRenderer.root.findByProps({ "aria-label": "Knowledge Graph view mode" }).props.onChange({ currentTarget: { value: "revision_impact" } });
+  await flush();
+});
+check(
+  modeRequests.at(-1)?.view_mode === "revision_impact"
+    && text(panelRenderer.root).includes("Saved revision-intelligence reports")
+    && panelRenderer.root.findAllByType("line").length === 2,
+  "Saved Revision Impact must expose its confirmed revision edge and inferred recorded impact as one bounded Core view",
+);
+act(() => panelRenderer.unmount());
+
+const delayedViews = new Map<KnowledgeGraphViewMode, Deferred<KnowledgeGraphReadDTO>>();
+const delayedModeApi = {
+  getKnowledgeGraph: async (projectId: number, query: KnowledgeGraphQueryDTO) => {
+    const mode = query.view_mode ?? "project_map";
+    if (mode === "project_map") return viewFixture(projectId, query);
+    const wait = deferred<KnowledgeGraphReadDTO>();
+    delayedViews.set(mode, wait);
+    return wait.promise;
+  },
+  subscribe: () => () => {},
+} as unknown as ApiClient;
+await act(async () => {
+  panelRenderer = create(panelTree(7, delayedModeApi));
+  await flush();
+});
+await act(async () => {
+  panelRenderer.root.findByProps({ "aria-label": "Knowledge Graph view mode" }).props.onChange({ currentTarget: { value: "structure" } });
+  await Promise.resolve();
+});
+await act(async () => {
+  panelRenderer.root.findByProps({ "aria-label": "Knowledge Graph view mode" }).props.onChange({ currentTarget: { value: "recorded_risk" } });
+  await Promise.resolve();
+});
+await act(async () => {
+  delayedViews.get("structure")!.resolve(viewFixture(7, { view_mode: "structure", depth: 1, limit: 48, include_inferred: true }));
+  await flush();
+});
+check(
+  panelRenderer.root.findAllByProps({ "data-view-mode": "structure" }).length === 0,
+  "a delayed response from a superseded graph view must never repopulate the canvas",
+);
+await act(async () => {
+  delayedViews.get("recorded_risk")!.resolve(viewFixture(7, { view_mode: "recorded_risk", depth: 1, limit: 48, include_inferred: true }));
+  await flush();
+});
+check(
+  panelRenderer.root.findByProps({ "data-view-mode": "recorded_risk" }),
+  "the latest graph view response must become visible after an inverted response order",
+);
+act(() => panelRenderer.unmount());
 
 const diagnosticApi = {
   getKnowledgeGraph: async (projectId: number, query: KnowledgeGraphQueryDTO) => diagnosticFixture(projectId, query),
@@ -744,6 +1030,58 @@ check(
 );
 check(text(panelRenderer.root).includes("Knowledge Graph edge decision saved"), "successful graph review must announce its committed outcome");
 check(panelRenderer.root.findAllByProps({ "aria-label": "Review confirmation of Scene One to Marlow mentions edge" }).length === 0, "confirmed edges must stop offering an ineligible confirmation action after refresh");
+act(() => panelRenderer.unmount());
+
+const oldAdapterCommand = deferred<KnowledgeGraphCommandResultDTO>();
+let oldAdapterCommandStarted = false;
+const oldAdapterApi = {
+  getKnowledgeGraph: async (projectId: number, query: KnowledgeGraphQueryDTO) => graphFixture(projectId, query),
+  executeKnowledgeGraphCommand: async () => {
+    oldAdapterCommandStarted = true;
+    return oldAdapterCommand.promise;
+  },
+  getKnowledgeGraphCommandReceipt: async () => { throw new Error("receipt lookup should not run"); },
+  subscribe: () => () => {},
+  invalidatePendingReads: () => {},
+} as unknown as ApiClient;
+const newAdapterApi = {
+  getKnowledgeGraph: async (projectId: number, query: KnowledgeGraphQueryDTO) => {
+    const fresh = graphFixture(projectId, query);
+    fresh.nodes = fresh.nodes.map((node, index) => index === 0 ? { ...node, label: "NEW ADAPTER GRAPH" } : node);
+    return fresh;
+  },
+  subscribe: () => () => {},
+} as unknown as ApiClient;
+await act(async () => {
+  panelRenderer = create(panelTree(7, oldAdapterApi));
+  await flush();
+});
+const adapterReviewButton = panelRenderer.root.findByProps({ "aria-label": "Review confirmation of Scene One to Marlow mentions edge" });
+act(() => adapterReviewButton.props.onClick({ currentTarget: adapterReviewButton }));
+await act(async () => {
+  panelRenderer.root.findByProps({ "aria-label": "Apply reviewed confirm edge" }).props.onClick();
+  await flush();
+});
+check(oldAdapterCommandStarted, "the old API adapter command must be in flight before testing ownership transfer");
+await act(async () => {
+  panelRenderer.update(panelTree(7, newAdapterApi));
+  await flush();
+});
+await act(async () => {
+  oldAdapterCommand.resolve({
+    knowledge_graph: graphFixture(7, {}, { revision: REVISION_B }),
+    changed: true,
+    affected_edge: { source: inferredEdge.source, target: inferredEdge.target, edge_type: inferredEdge.edge_type },
+    replayed: false,
+    applied_revision: REVISION_B,
+  });
+  await flush();
+});
+check(
+  text(panelRenderer.root).includes("NEW ADAPTER GRAPH")
+    && !text(panelRenderer.root).includes("Knowledge Graph edge decision saved"),
+  "an in-flight command owned by a replaced API adapter must not publish graph data or status into the new same-project context",
+);
 act(() => panelRenderer.unmount());
 
 let ambiguousAttempt = 0;
@@ -906,7 +1244,7 @@ await act(async () => {
   panelRenderer = create(panelTree(7, hiddenQueueApi));
   await flush();
 });
-check(text(panelRenderer.root).includes("The bounded map includes 25 of 26 hidden edges"), "bounded hidden diagnostics must point to the complete restore queue");
+check(text(panelRenderer.root).includes("The active view embeds 25 of 26 project-wide hidden edges"), "bounded hidden diagnostics must point to the complete restore queue");
 await act(async () => {
   panelRenderer.root.findByProps({ "aria-label": "Open the complete hidden edge review queue" }).props.onClick();
   await flush();
@@ -958,6 +1296,11 @@ await act(async () => {
   await Promise.resolve();
 });
 check(text(stateRenderer.root.findByProps({ role: "status" })).includes("Building the canonical Project Map"), "initial graph loading must be announced as a live status");
+check(
+  text(stateRenderer.root).includes("Diagnostics become available after the active graph view finishes loading")
+    && text(stateRenderer.root).includes("DIAGNOSTICS · WAITING FOR ACTIVE VIEW"),
+  "an absent graph must expose a neutral diagnostics waiting state rather than specialty-view semantics",
+);
 await act(async () => {
   loadingGraph.resolve(graphFixture(7, { focus_key: null, depth: 1, limit: 48, include_inferred: true }));
   await flush();

@@ -205,6 +205,44 @@ const canvasPlotCommandResult = (overrides: Record<string, unknown> = {}) => {
   };
 };
 
+const knowledgeGraph = (overrides: Record<string, unknown> = {}) => ({
+  project_id: 1,
+  revision: "a".repeat(64),
+  writing_mode: "novel",
+  focus_key: null,
+  depth: 1,
+  include_inferred: true,
+  view_mode: "project_map",
+  story_diagnostics_available: true,
+  nodes: [{
+    key: "project:project:1", node_type: "project", source_type: "project",
+    source_id: "1", label: "Project", summary: "", metadata: {}, degree: 1,
+  }, {
+    key: "scene:scene:2", node_type: "scene", source_type: "scene",
+    source_id: "2", label: "Scene", summary: "", metadata: {}, degree: 1,
+  }],
+  edges: [{
+    source: "project:project:1", target: "scene:scene:2", edge_type: "contains",
+    confidence: "confirmed", provenance: "project structure", source_system: "structure",
+    explanation: "Scene membership.", is_user_confirmed: false, is_inferred: false,
+    is_hidden: false, metadata: {},
+  }],
+  node_count: 2,
+  edge_count: 1,
+  returned_node_count: 2,
+  returned_edge_count: 1,
+  truncated: false,
+  orphan_keys: [],
+  orphan_count: 0,
+  weak_links: [],
+  weak_link_count: 0,
+  hidden_edges: [],
+  hidden_edge_count: 0,
+  warnings: [],
+  unavailable: [],
+  ...overrides,
+});
+
 const inlineCommentAnchor = (overrides: Record<string, unknown> = {}) => ({
   start_scene_id: 2,
   start_field: "content",
@@ -445,6 +483,7 @@ const psykeCommandExecution = (overrides: Record<string, unknown> = {}) => ({
 });
 
 const originalFetch = globalThis.fetch;
+let lastRequestUrl = "";
 const client = createHttpApiClient("", "", {
   healthTimeoutMs: 0,
   readTimeoutMs: 0,
@@ -453,7 +492,10 @@ const client = createHttpApiClient("", "", {
 });
 
 const installResponse = (factory: () => Response): void => {
-  globalThis.fetch = async () => factory();
+  globalThis.fetch = async (input) => {
+    lastRequestUrl = String(input);
+    return factory();
+  };
 };
 
 async function expectValid<T>(
@@ -1215,6 +1257,68 @@ try {
     "POST",
     "/api/projects/1/canvas-plot/commands",
     "$.applied_revision",
+  );
+
+  await expectValid(
+    "Knowledge Graph defaults an omitted view mode to Project Map",
+    () => client.getKnowledgeGraph(1),
+    knowledgeGraph(),
+    (value) => value.view_mode === "project_map" && value.story_diagnostics_available,
+  );
+  check(
+    "default Knowledge Graph transport omits the defaulted view query",
+    lastRequestUrl === "/api/projects/1/knowledge-graph",
+  );
+  await expectValid(
+    "Knowledge Graph validates and echoes a requested Structure view",
+    () => client.getKnowledgeGraph(1, { view_mode: "structure" }),
+    knowledgeGraph({
+      view_mode: "structure",
+      story_diagnostics_available: false,
+      hidden_edge_count: 3,
+    }),
+    (value) => value.view_mode === "structure" && !value.story_diagnostics_available,
+  );
+  check(
+    "Knowledge Graph transport serializes the requested view mode",
+    lastRequestUrl === "/api/projects/1/knowledge-graph?view_mode=structure",
+  );
+  await expectInvalid(
+    "Knowledge Graph rejects an unknown response view mode",
+    () => client.getKnowledgeGraph(1),
+    json(knowledgeGraph({ view_mode: "future_mode" })),
+    "GET",
+    "/api/projects/1/knowledge-graph",
+    "$.view_mode",
+  );
+  await expectInvalid(
+    "Knowledge Graph rejects a response for a different requested view",
+    () => client.getKnowledgeGraph(1, { view_mode: "recorded_risk" }),
+    json(knowledgeGraph()),
+    "GET",
+    "/api/projects/1/knowledge-graph?view_mode=recorded_risk",
+    "$.view_mode",
+  );
+  await expectInvalid(
+    "Knowledge Graph requires the story-diagnostics availability signal",
+    () => client.getKnowledgeGraph(1),
+    json(knowledgeGraph({ story_diagnostics_available: undefined })),
+    "GET",
+    "/api/projects/1/knowledge-graph",
+    "$.story_diagnostics_available",
+  );
+  await expectInvalid(
+    "specialty graph views cannot claim Project Map story diagnostics",
+    () => client.getKnowledgeGraph(1, { view_mode: "revision_impact" }),
+    json(knowledgeGraph({
+      view_mode: "revision_impact",
+      story_diagnostics_available: false,
+      orphan_keys: ["scene:scene:2"],
+      orphan_count: 1,
+    })),
+    "GET",
+    "/api/projects/1/knowledge-graph?view_mode=revision_impact",
+    "$.orphan_count",
   );
 
   await expectValid(

@@ -195,6 +195,35 @@ def test_impact_map_save_creates_report_and_items():
     assert len(db.get_revision_impact_items(m.created_report_id)) >= 1
 
 
+def test_revision_impact_item_reads_support_a_deterministic_database_limit():
+    db, pid, s1, _ = _film()
+    report = db.create_revision_impact_report(
+        pid,
+        scene_id=s1,
+        title="Bounded impact",
+        items=[
+            {
+                "target_type": "scene",
+                "target_id": str(s1),
+                "label": f"Finding {index}",
+            }
+            for index in range(3)
+        ],
+    )
+
+    all_items = db.get_revision_impact_items(report.id)
+    bounded = db.get_revision_impact_items(report.id, limit=2)
+    assert len(all_items) == 3
+    assert [item.id for item in bounded] == [item.id for item in all_items[:2]]
+    assert db.get_revision_impact_items(report.id, limit=0) == []
+    with pytest.raises(ValueError):
+        db.get_revision_impact_items(report.id, limit=-1)
+    with pytest.raises(ValueError):
+        db.get_revision_impact_items(report.id, limit=True)
+    with pytest.raises(ValueError):
+        db.get_revision_impact_items(report.id, limit="2")
+
+
 def test_impact_map_no_llm(monkeypatch):
     import logosforge.assistant as assistant
     calls = []

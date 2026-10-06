@@ -24,8 +24,8 @@ def test_http_and_mcp_contract_versions_are_deliberately_independent():
     from logosforge.api.app import API_CONTRACT_VERSION
     from logosforge.librechat.mcp_server import SERVER_VERSION
 
-    assert API_CONTRACT_VERSION == "1.7.0"
-    assert SERVER_VERSION == "1.6.0"
+    assert API_CONTRACT_VERSION == "1.8.0"
+    assert SERVER_VERSION == "1.7.0"
 
 
 def test_project_map_exposes_traceable_graph_and_pretruncation_diagnostics():
@@ -39,6 +39,8 @@ def test_project_map_exposes_traceable_graph_and_pretruncation_diagnostics():
     assert body["focus_key"] is None
     assert body["depth"] == 1
     assert body["include_inferred"] is True
+    assert body["view_mode"] == "project_map"
+    assert body["story_diagnostics_available"] is True
     assert body["returned_node_count"] == len(body["nodes"])
     assert body["returned_edge_count"] == len(body["edges"])
     assert body["node_count"] >= body["returned_node_count"]
@@ -180,6 +182,14 @@ def test_graph_query_validation_and_read_only_behavior():
     assert client.get(root, params={"limit": 0}).status_code == 422
     assert client.get(root, params={"limit": 201}).status_code == 422
     assert client.get(root, params={"focus_key": "x" * 1025}).status_code == 422
+    for view_mode in (
+        "project_map", "structure", "recorded_risk", "revision_impact",
+    ):
+        assert client.get(root, params={"view_mode": view_mode}).status_code == 200
+    for invalid_view_mode in ("risk", "Structure", "predictive_risk"):
+        assert client.get(
+            root, params={"view_mode": invalid_view_mode},
+        ).status_code == 422
     assert client.get(root).status_code == 200
 
     after = (
@@ -226,3 +236,257 @@ def test_graph_is_built_once_per_http_request(monkeypatch):
     response = client.get(f"/api/projects/{project.id}/knowledge-graph")
     assert response.status_code == 200
     assert calls == 1
+
+
+def _risk_graph_project():
+    db = Database()
+    project = db.create_project("Graph views", narrative_engine="novel")
+    first = db.create_scene(
+        project.id,
+        "Opening",
+        content="Alice arrives.",
+        act="Act 1",
+        chapter="Chapter 1",
+    )
+    second = db.create_scene(
+        project.id,
+        "Aftermath",
+        content="Silence follows.",
+        act="Act 1",
+        chapter="Chapter 1",
+    )
+    unrelated = db.create_scene(
+        project.id,
+        "Coda",
+        act="Act 1",
+        chapter="Chapter 1",
+    )
+    alice = db.create_psyke_entry(project.id, "Alice", "character")
+    report = db.create_revision_impact_report(
+        project.id,
+        scene_id=first.id,
+        title="Opening impact",
+        impact_level="high",
+        confidence="confirmed",
+        items=[{
+            "target_type": "psyke_entry",
+            "target_id": str(alice.id),
+            "label": "Alice",
+            "impact_kind": "character_change",
+            "severity": "warning",
+            "confidence": "possible",
+            "explanation": "Alice may need a follow-up beat.",
+            "suggested_action": "Review Alice's progression.",
+        }],
+    )
+    db.create_apply_operation(
+        project.id,
+        target_type="scene",
+        target_id=second.id,
+        status="previewed",
+        conflicts=[{
+            "conflict_type": "hash_mismatch",
+            "severity": "warning",
+            "message": "The scene changed.",
+        }],
+    )
+    client = TestClient(create_api(db=db))
+    return client, db, project, first, second, unrelated, alice, report
+
+
+def test_specialty_views_project_before_bounds_with_exact_semantics():
+    client, db, project, first, _, _, alice, report = _risk_graph_project()
+    for index in range(12):
+        db.create_psyke_entry(project.id, f"Noise {index:02d}", "object")
+    root = f"/api/projects/{project.id}/knowledge-graph"
+
+    project_map = client.get(root, params={"limit": 200}).json()
+    structure = client.get(
+        root, params={"view_mode": "structure", "limit": 2},
+    ).json()
+    assert structure["view_mode"] == "structure"
+    assert structure["story_diagnostics_available"] is False
+    assert structure["orphan_keys"] == []
+    assert structure["orphan_count"] == 0
+    assert structure["weak_links"] == []
+    assert structure["weak_link_count"] == 0
+    assert structure["node_count"] < project_map["node_count"]
+    assert structure["node_count"] > structure["returned_node_count"]
+    assert structure["truncated"] is True
+    assert all(node["node_type"] in {
+        "project", "act", "chapter", "scene", "plot_block", "timeline_event",
+    } for node in structure["nodes"])
+    assert all(edge["edge_type"] in {
+        "contains", "belongs_to", "precedes", "follows",
+    } for edge in structure["edges"])
+
+    recorded_risk = client.get(
+        root, params={"view_mode": "recorded_risk", "limit": 200},
+    ).json()
+    assert recorded_risk["story_diagnostics_available"] is False
+    assert {edge["edge_type"] for edge in recorded_risk["edges"]} == {
+        "risks", "contradicts",
+    }
+    risk_endpoints = {
+        key for edge in recorded_risk["edges"]
+        for key in (edge["source"], edge["target"])
+    }
+    assert {node["key"] for node in recorded_risk["nodes"]} == risk_endpoints
+
+    revision = client.get(
+        root, params={"view_mode": "revision_impact", "limit": 200},
+    ).json()
+    assert revision["story_diagnostics_available"] is False
+    assert {edge["source_system"] for edge in revision["edges"]} == {
+        P.SS_REVISION,
+    }
+    assert {edge["edge_type"] for edge in revision["edges"]} == {
+        P.ET_REVISES, P.ET_RISKS,
+    }
+    revision_endpoints = {
+        key for edge in revision["edges"]
+        for key in (edge["source"], edge["target"])
+    }
+    assert {node["key"] for node in revision["nodes"]} == revision_endpoints
+    assert node_key(P.NT_CHARACTER, "psyke", alice.id) in revision_endpoints
+    assert node_key(P.NT_PSYKE_ENTRY, "psyke", alice.id) not in revision_endpoints
+    item_edge = next(edge for edge in revision["edges"]
+                     if edge["edge_type"] == P.ET_RISKS)
+    assert item_edge["metadata"] == {
+        "impact_kind": "character_change",
+        "item_id": db.get_revision_impact_items(report.id)[0].id,
+        "label": "Alice",
+        "severity": "warning",
+        "suggested_action": "Review Alice's progression.",
+    }
+
+
+def test_view_mode_and_inferred_evidence_scope_are_orthogonal():
+    client, _, project, first, _, _, alice, _ = _risk_graph_project()
+    root = f"/api/projects/{project.id}/knowledge-graph"
+
+    structure_all = client.get(root, params={
+        "view_mode": "structure", "include_inferred": "true", "limit": 200,
+    }).json()
+    structure_confirmed = client.get(root, params={
+        "view_mode": "structure", "include_inferred": "false", "limit": 200,
+    }).json()
+    assert any(edge["edge_type"] == P.ET_PRECEDES
+               for edge in structure_all["edges"])
+    assert all(edge["edge_type"] != P.ET_PRECEDES
+               for edge in structure_confirmed["edges"])
+    assert all(not edge["is_inferred"] for edge in structure_confirmed["edges"])
+
+    risk_all = client.get(root, params={
+        "view_mode": "recorded_risk", "include_inferred": "true",
+    }).json()
+    risk_confirmed = client.get(root, params={
+        "view_mode": "recorded_risk", "include_inferred": "false",
+    }).json()
+    assert risk_all["edge_count"] > 0
+    assert risk_confirmed["edge_count"] == 0
+    assert risk_confirmed["node_count"] == 0
+
+    revision_confirmed = client.get(root, params={
+        "view_mode": "revision_impact", "include_inferred": "false",
+    }).json()
+    assert {edge["edge_type"] for edge in revision_confirmed["edges"]} == {
+        P.ET_REVISES,
+    }
+    assert node_key(P.NT_SCENE, "scene", first.id) in {
+        node["key"] for node in revision_confirmed["nodes"]
+    }
+    assert node_key(P.NT_CHARACTER, "psyke", alice.id) not in {
+        node["key"] for node in revision_confirmed["nodes"]
+    }
+
+
+def test_specialty_focus_outside_projection_is_indistinguishable_from_unknown():
+    client, _, project, _, _, unrelated, alice, _ = _risk_graph_project()
+    root = f"/api/projects/{project.id}/knowledge-graph"
+
+    excluded_structure = client.get(root, params={
+        "view_mode": "structure",
+        "focus_key": node_key(P.NT_CHARACTER, "psyke", alice.id),
+    })
+    unknown_structure = client.get(root, params={
+        "view_mode": "structure",
+        "focus_key": "scene:scene:999999",
+    })
+    assert excluded_structure.status_code == unknown_structure.status_code == 404
+    assert excluded_structure.json() == unknown_structure.json()
+
+    excluded_risk = client.get(root, params={
+        "view_mode": "recorded_risk",
+        "focus_key": node_key(P.NT_SCENE, "scene", unrelated.id),
+    })
+    assert excluded_risk.status_code == 404
+    assert excluded_risk.json()["error"]["code"] == "not_found"
+
+    evidence_excluded = client.get(root, params={
+        "view_mode": "revision_impact",
+        "include_inferred": "false",
+        "focus_key": node_key(P.NT_CHARACTER, "psyke", alice.id),
+    })
+    assert evidence_excluded.status_code == 404
+
+
+def test_specialty_views_are_bounded_deterministic_and_ignore_hidden_injection():
+    from logosforge.knowledge_graph import build_knowledge_graph, hide_edge
+
+    client, db, project, *_ = _risk_graph_project()
+    graph = build_knowledge_graph(db, project.id).graph
+    psyke_edge = next(edge for edge in graph.edges
+                      if edge.edge_type == P.ET_APPEARS_IN)
+    hide_edge(db, project.id, psyke_edge)
+    root = f"/api/projects/{project.id}/knowledge-graph"
+
+    first = client.get(root, params={
+        "view_mode": "recorded_risk", "limit": 1,
+    }).json()
+    second = client.get(root, params={
+        "view_mode": "recorded_risk", "limit": 1,
+    }).json()
+    assert first == second
+    assert len(first["nodes"]) <= 1
+    assert len(first["edges"]) <= 1
+    assert first["hidden_edge_count"] == 1
+    assert first["hidden_edges"] == []
+    assert first["truncated"] is True
+
+    structure = client.get(root, params={
+        "view_mode": "structure", "limit": 200,
+    }).json()
+    assert structure["hidden_edge_count"] == 1
+    assert structure["hidden_edges"] == []
+    assert all(node["node_type"] != P.NT_CHARACTER
+               for node in structure["nodes"])
+
+    hidden_page = client.get(
+        f"{root}/hidden-edges", params={"offset": 0, "limit": 100},
+    ).json()
+    assert hidden_page["hidden_edge_count"] == 1
+    assert hidden_page["returned_edge_count"] == 1
+    assert {node["key"] for node in hidden_page["nodes"]} == {
+        hidden_page["edges"][0]["source"],
+        hidden_page["edges"][0]["target"],
+    }
+
+    clean_db = Database()
+    clean_project = clean_db.create_project("Hidden only")
+    clean_db.create_scene(clean_project.id, "One")
+    clean_db.create_scene(clean_project.id, "Two")
+    clean_graph = build_knowledge_graph(clean_db, clean_project.id).graph
+    hidden_order = next(edge for edge in clean_graph.edges
+                        if edge.edge_type == P.ET_PRECEDES)
+    hide_edge(clean_db, clean_project.id, hidden_order)
+    clean_client = TestClient(create_api(db=clean_db))
+    empty_risk = clean_client.get(
+        f"/api/projects/{clean_project.id}/knowledge-graph",
+        params={"view_mode": "recorded_risk"},
+    ).json()
+    assert empty_risk["nodes"] == []
+    assert empty_risk["edges"] == []
+    assert empty_risk["hidden_edges"] == []
+    assert empty_risk["hidden_edge_count"] == 1
+    assert empty_risk["truncated"] is False

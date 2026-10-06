@@ -51,6 +51,12 @@ _IDEMPOTENCY_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$")
 _TIMELINE_RECEIPT_MISS_CODE = "timeline_receipt_not_found"
 _CANVAS_PLOT_RECEIPT_MISS_CODE = "canvas_plot_receipt_not_found"
 _KNOWLEDGE_GRAPH_RECEIPT_MISS_CODE = "knowledge_graph_receipt_not_found"
+KNOWLEDGE_GRAPH_VIEW_MODES = frozenset({
+    "project_map",
+    "structure",
+    "recorded_risk",
+    "revision_impact",
+})
 
 
 def _timeline_receipt_request_digest(
@@ -791,8 +797,9 @@ class LogosForgeMcpGateway:
         depth: int = 1,
         limit: int = 100,
         include_inferred: bool = True,
+        view_mode: str = "project_map",
     ) -> dict[str, Any]:
-        """Return one bounded canonical Project Map or focused neighborhood."""
+        """Return one bounded canonical graph view or focused neighborhood."""
         if focus_key is not None and (
             not isinstance(focus_key, str)
             or not focus_key
@@ -809,12 +816,21 @@ class LogosForgeMcpGateway:
             raise GatewayError("Knowledge Graph limit must be between 1 and 200.")
         if not isinstance(include_inferred, bool):
             raise GatewayError("include_inferred must be a boolean.")
+        if (
+            not isinstance(view_mode, str)
+            or view_mode not in KNOWLEDGE_GRAPH_VIEW_MODES
+        ):
+            raise GatewayError(
+                "Knowledge Graph view_mode must be one of: "
+                f"{', '.join(sorted(KNOWLEDGE_GRAPH_VIEW_MODES))}."
+            )
         return self.client.get_knowledge_graph(
             self._project_id(),
             focus_key=focus_key,
             depth=depth,
             limit=limit,
             include_inferred=include_inferred,
+            view_mode=view_mode,
         )
 
     def get_knowledge_graph_hidden_edges(
@@ -2070,7 +2086,10 @@ class LogosForgeMcpGateway:
         proposal: Proposal | None = None,
     ) -> dict[str, Any]:
         """Read one Project Map bracketed by the same durable receipt."""
-        current = self.client.get_knowledge_graph(project_id)
+        current = self.client.get_knowledge_graph(
+            project_id,
+            view_mode="project_map",
+        )
         raw_confirmation = self._knowledge_graph_receipt(
             proposal_id,
             project_id,
@@ -2423,6 +2442,7 @@ class LogosForgeMcpGateway:
                 depth=1,
                 limit=200,
                 include_inferred=True,
+                view_mode="project_map",
             )
             source_tool = "logosforge_get_knowledge_graph"
 

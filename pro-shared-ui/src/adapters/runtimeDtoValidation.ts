@@ -52,6 +52,7 @@ import type {
   KnowledgeGraphNodeDTO,
   KnowledgeGraphQueryDTO,
   KnowledgeGraphReadDTO,
+  KnowledgeGraphViewMode,
   KnowledgeGraphCommandDTO,
   KnowledgeGraphCommandResultDTO,
   KnowledgeGraphCommandReceiptDTO,
@@ -979,6 +980,20 @@ function graphEdgeIdentity(edge: KnowledgeGraphEdgeDTO): string {
   return [edge.source, edge.target, edge.edge_type].join("\u0000");
 }
 
+const KNOWLEDGE_GRAPH_VIEW_MODES: readonly KnowledgeGraphViewMode[] = [
+  "project_map",
+  "structure",
+  "recorded_risk",
+  "revision_impact",
+];
+
+function knowledgeGraphViewMode(value: unknown, path: string): KnowledgeGraphViewMode {
+  const mode = stringValue(value, path);
+  return KNOWLEDGE_GRAPH_VIEW_MODES.includes(mode as KnowledgeGraphViewMode)
+    ? mode as KnowledgeGraphViewMode
+    : fail(path, "project_map, structure, recorded_risk, or revision_impact", value);
+}
+
 function knowledgeGraphRead(value: unknown, path: string): KnowledgeGraphReadDTO {
   const dto = record(value, path);
   const projectId = integerValue(requireField(dto, "project_id", path), fieldPath(path, "project_id"));
@@ -999,6 +1014,23 @@ function knowledgeGraphRead(value: unknown, path: string): KnowledgeGraphReadDTO
     requireField(dto, "include_inferred", path),
     fieldPath(path, "include_inferred"),
   );
+  const viewMode = knowledgeGraphViewMode(
+    requireField(dto, "view_mode", path),
+    fieldPath(path, "view_mode"),
+  );
+  const storyDiagnosticsAvailable = booleanValue(
+    requireField(dto, "story_diagnostics_available", path),
+    fieldPath(path, "story_diagnostics_available"),
+  );
+  if (storyDiagnosticsAvailable !== (viewMode === "project_map")) {
+    fail(
+      fieldPath(path, "story_diagnostics_available"),
+      viewMode === "project_map"
+        ? "true for the project_map view"
+        : `false for the ${viewMode} view`,
+      storyDiagnosticsAvailable,
+    );
+  }
 
   const nodesPath = fieldPath(path, "nodes");
   const nodes = arrayOf(requireField(dto, "nodes", path), nodesPath, knowledgeGraphNode);
@@ -1059,6 +1091,13 @@ function knowledgeGraphRead(value: unknown, path: string): KnowledgeGraphReadDTO
   if (counts.orphan_count < orphanKeys.length) {
     fail(fieldPath(path, "orphan_count"), `at least the returned orphan key count (${orphanKeys.length})`, counts.orphan_count);
   }
+  if (!storyDiagnosticsAvailable && (orphanKeys.length > 0 || counts.orphan_count !== 0)) {
+    fail(
+      fieldPath(path, "orphan_count"),
+      "zero when story diagnostics are unavailable",
+      counts.orphan_count,
+    );
+  }
 
   const weakLinksPath = fieldPath(path, "weak_links");
   const weakLinks = arrayOf(
@@ -1082,6 +1121,13 @@ function knowledgeGraphRead(value: unknown, path: string): KnowledgeGraphReadDTO
   if (counts.weak_link_count < weakLinks.length) {
     fail(fieldPath(path, "weak_link_count"), `at least the returned weak-link count (${weakLinks.length})`, counts.weak_link_count);
   }
+  if (!storyDiagnosticsAvailable && (weakLinks.length > 0 || counts.weak_link_count !== 0)) {
+    fail(
+      fieldPath(path, "weak_link_count"),
+      "zero when story diagnostics are unavailable",
+      counts.weak_link_count,
+    );
+  }
 
   const hiddenEdgesPath = fieldPath(path, "hidden_edges");
   const hiddenEdges = arrayOf(
@@ -1103,13 +1149,20 @@ function knowledgeGraphRead(value: unknown, path: string): KnowledgeGraphReadDTO
   if (counts.hidden_edge_count < hiddenEdges.length) {
     fail(fieldPath(path, "hidden_edge_count"), `at least the returned hidden-edge count (${hiddenEdges.length})`, counts.hidden_edge_count);
   }
+  if (viewMode !== "project_map" && hiddenEdges.length > 0) {
+    fail(
+      hiddenEdgesPath,
+      `empty for the ${viewMode} view; use the complete hidden-edge queue`,
+      hiddenEdges,
+    );
+  }
 
   const truncated = booleanValue(requireField(dto, "truncated", path), fieldPath(path, "truncated"));
   const hasMissingRows = counts.node_count > nodes.length
     || counts.edge_count > edges.length
-    || counts.orphan_count > orphanKeys.length
-    || counts.weak_link_count > weakLinks.length
-    || counts.hidden_edge_count > hiddenEdges.length;
+    || (storyDiagnosticsAvailable && counts.orphan_count > orphanKeys.length)
+    || (storyDiagnosticsAvailable && counts.weak_link_count > weakLinks.length)
+    || (viewMode === "project_map" && counts.hidden_edge_count > hiddenEdges.length);
   if (truncated !== hasMissingRows) {
     fail(fieldPath(path, "truncated"), hasMissingRows ? "true when any graph collection is capped" : "false when every graph collection is returned", truncated);
   }
@@ -1131,7 +1184,7 @@ export function validateKnowledgeGraphReadDTOForRequest(
   }
   const expectedFocus = query.focus_key ?? null;
   if (graph.focus_key !== expectedFocus) {
-    fail("$.focus_key", expectedFocus === null ? "null for a Project Map request" : `the requested focus key ${expectedFocus}`, graph.focus_key);
+    fail("$.focus_key", expectedFocus === null ? "null for a full-view request" : `the requested focus key ${expectedFocus}`, graph.focus_key);
   }
   const expectedDepth = query.depth ?? 1;
   if (graph.depth !== expectedDepth) {
@@ -1140,6 +1193,13 @@ export function validateKnowledgeGraphReadDTOForRequest(
   const expectedInferred = query.include_inferred ?? true;
   if (graph.include_inferred !== expectedInferred) {
     fail("$.include_inferred", `the requested value ${expectedInferred}`, graph.include_inferred);
+  }
+  const expectedViewMode = knowledgeGraphViewMode(
+    query.view_mode ?? "project_map",
+    "$request.view_mode",
+  );
+  if (graph.view_mode !== expectedViewMode) {
+    fail("$.view_mode", `the requested view mode ${expectedViewMode}`, graph.view_mode);
   }
   const limit = query.limit ?? 100;
   if (graph.nodes.length > limit) fail("$.nodes", `at most the requested limit (${limit})`, graph.nodes);
@@ -1185,8 +1245,14 @@ export function validateKnowledgeGraphCommandResultDTOForRequest(
   if (knowledgeGraph.project_id !== projectId) {
     fail("$.knowledge_graph.project_id", `the requested project id ${projectId}`, knowledgeGraph.project_id);
   }
-  if (knowledgeGraph.focus_key !== null || knowledgeGraph.depth !== 1 || !knowledgeGraph.include_inferred) {
-    fail("$.knowledge_graph", "the default Project Map query (no focus, depth 1, inferred edges included)", knowledgeGraph);
+  if (
+    knowledgeGraph.focus_key !== null
+    || knowledgeGraph.depth !== 1
+    || !knowledgeGraph.include_inferred
+    || knowledgeGraph.view_mode !== "project_map"
+    || !knowledgeGraph.story_diagnostics_available
+  ) {
+    fail("$.knowledge_graph", "the default Project Map query (no focus, depth 1, inferred edges and story diagnostics included)", knowledgeGraph);
   }
   if (knowledgeGraph.nodes.length > 100) fail("$.knowledge_graph.nodes", "at most 100 entries", knowledgeGraph.nodes);
   if (knowledgeGraph.edges.length > 100) fail("$.knowledge_graph.edges", "at most 100 entries", knowledgeGraph.edges);

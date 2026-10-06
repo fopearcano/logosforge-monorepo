@@ -91,8 +91,12 @@ def get_knowledge_graph(
     depth: Annotated[int, Query(ge=1, le=2)] = 1,
     limit: Annotated[int, Query(ge=1, le=200)] = 100,
     include_inferred: bool = True,
+    view_mode: Annotated[
+        schemas.KnowledgeGraphViewMode,
+        Query(),
+    ] = "project_map",
 ):
-    """Return a bounded Project Map or a 1-/2-hop node neighborhood.
+    """Return a bounded canonical view or a 1-/2-hop node neighborhood.
 
     The graph is rebuilt deterministically from the resolved project only.  A
     stale or foreign ``focus_key`` is indistinguishable from any unknown key and
@@ -103,6 +107,7 @@ def get_knowledge_graph(
         depth=depth,
         limit=limit,
         include_inferred=include_inferred,
+        view_mode=view_mode,
     )
     graph = _build_graph_or_500(db, project.id)
     internal_focus_key = None
@@ -110,7 +115,12 @@ def get_knowledge_graph(
         internal_focus_key = serializers.resolve_knowledge_graph_focus_key(
             graph, query.focus_key,
         )
-        if internal_focus_key is None:
+        visible_keys = serializers.knowledge_graph_view_node_keys(
+            graph,
+            view_mode=query.view_mode,
+            include_inferred=query.include_inferred,
+        )
+        if internal_focus_key is None or internal_focus_key not in visible_keys:
             raise not_found("Knowledge Graph node not found")
     return serializers.knowledge_graph_read_to_dto(
         graph,
@@ -118,6 +128,7 @@ def get_knowledge_graph(
         depth=query.depth,
         limit=query.limit,
         include_inferred=query.include_inferred,
+        view_mode=query.view_mode,
     )
 
 

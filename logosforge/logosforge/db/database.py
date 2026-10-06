@@ -9009,11 +9009,24 @@ class Database:
         reports = self.get_revision_impact_reports(project_id)
         return reports[-1] if reports else None
 
-    def get_revision_impact_items(self, report_id: int) -> list[RevisionImpactItem]:
+    def get_revision_impact_items(
+        self,
+        report_id: int,
+        *,
+        limit: int | None = None,
+    ) -> list[RevisionImpactItem]:
         with Session(self._engine) as session:
             stmt = select(RevisionImpactItem).where(
                 RevisionImpactItem.report_id == report_id).order_by(
                 RevisionImpactItem.id)
+            if limit is not None:
+                if (
+                    isinstance(limit, bool)
+                    or not isinstance(limit, int)
+                    or limit < 0
+                ):
+                    raise ValueError("revision impact item limit must be non-negative")
+                stmt = stmt.limit(limit)
             return list(session.exec(stmt).all())
 
     # -- Rewrite sandbox (Phase 10L) -----------------------------------------

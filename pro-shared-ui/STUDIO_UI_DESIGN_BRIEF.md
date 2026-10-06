@@ -1114,6 +1114,17 @@ There are **two parallel graph systems** a Studio UI must expose together:
   central-node rewrite risk — each with severity/confidence/action + a target
   system label). **Node types (22)**, **edge types (20)**, **confidence**
   confirmed→likely→possible→unknown, **source systems (16)**.
+- **Implemented Pro canonical slice (HTTP 1.8.0):** the React panel exposes
+  `project_map`, `structure`, `recorded_risk`, and `revision_impact` as
+  server-owned projections, with `include_inferred` independently selecting
+  Confirmed only or Inferred + Confirmed evidence. Projection happens before
+  focus traversal and response caps; node degree is computed across the complete
+  selected view. Orphan/weak-link story diagnostics belong only to Project Map,
+  while the paged hidden-edge queue and persisted review revision remain global.
+  MCP gateway 1.7.0 exposes the same strict view selector for reads, but mutation
+  proposal/recovery preflight stays pinned to Project Map. Story Gravity sizing
+  and the story-order flow overlay remain follow-up work for this React panel;
+  do not confuse that status with the existing Live Visual Graph engines below.
 - **Live visual graph**: `build_graph_data` → `GraphData{nodes, edges,
   adjacency}` (link graph + PSYKE relations + scene↔character/place participation +
   act-cluster nodes + mention edges); per-writing-mode enrichment injects extra

@@ -969,6 +969,100 @@ def quantum_result_to_dto(result) -> schemas.QuantumResultDTO:
 
 _KNOWLEDGE_GRAPH_DIAGNOSTIC_CAP = 25
 _KNOWLEDGE_GRAPH_WIRE_KEY_MAX = 512
+_KNOWLEDGE_GRAPH_VIEW_MODES = frozenset({
+    "project_map",
+    "structure",
+    "recorded_risk",
+    "revision_impact",
+})
+
+
+def _knowledge_graph_view_projection(
+    graph,
+    *,
+    view_mode: str,
+    include_inferred: bool,
+) -> tuple[set[str], list[Any]]:
+    """Project the complete visible graph before any response bound is applied."""
+    from logosforge.knowledge_graph import provenance as graph_provenance
+
+    if view_mode not in _KNOWLEDGE_GRAPH_VIEW_MODES:
+        raise ValueError(f"Unsupported Knowledge Graph view mode: {view_mode}")
+
+    graph_node_keys = set(graph.nodes)
+    visible_edges = [
+        edge for edge in graph.visible_edges(include_inferred=include_inferred)
+        if edge.source in graph_node_keys and edge.target in graph_node_keys
+    ]
+    visible_edges.sort(key=_knowledge_graph_edge_sort_key)
+
+    if view_mode == "project_map":
+        return graph_node_keys, visible_edges
+
+    if view_mode == "structure":
+        structural_types = {
+            graph_provenance.NT_PROJECT,
+            graph_provenance.NT_ACT,
+            graph_provenance.NT_CHAPTER,
+            graph_provenance.NT_SCENE,
+            graph_provenance.NT_PLOT_BLOCK,
+            graph_provenance.NT_TIMELINE_EVENT,
+        }
+        structural_edges = {
+            graph_provenance.ET_CONTAINS,
+            graph_provenance.ET_BELONGS_TO,
+            graph_provenance.ET_PRECEDES,
+            graph_provenance.ET_FOLLOWS,
+        }
+        selected_keys = {
+            key for key, node in graph.nodes.items()
+            if node.node_type in structural_types
+        }
+        return selected_keys, [
+            edge for edge in visible_edges
+            if edge.edge_type in structural_edges
+            and edge.source in selected_keys
+            and edge.target in selected_keys
+        ]
+
+    if view_mode == "recorded_risk":
+        selected_edges = [
+            edge for edge in visible_edges
+            if edge.edge_type in {
+                graph_provenance.ET_RISKS,
+                graph_provenance.ET_CONTRADICTS,
+            }
+        ]
+    else:
+        selected_edges = [
+            edge for edge in visible_edges
+            if edge.source_system == graph_provenance.SS_REVISION
+            and edge.edge_type in {
+                graph_provenance.ET_REVISES,
+                graph_provenance.ET_RISKS,
+            }
+        ]
+    selected_keys = {
+        key
+        for edge in selected_edges
+        for key in (edge.source, edge.target)
+    }
+    return selected_keys, selected_edges
+
+
+def knowledge_graph_view_node_keys(
+    graph,
+    *,
+    view_mode: str,
+    include_inferred: bool,
+) -> set[str]:
+    """Return internal keys addressable by one canonical graph view."""
+    keys, _ = _knowledge_graph_view_projection(
+        graph,
+        view_mode=view_mode,
+        include_inferred=include_inferred,
+    )
+    return keys
 
 
 def knowledge_graph_wire_key(internal_key: str) -> str:
@@ -1049,30 +1143,33 @@ def knowledge_graph_read_to_dto(
     depth: int = 1,
     limit: int = 100,
     include_inferred: bool = True,
+    view_mode: str = "project_map",
 ) -> schemas.KnowledgeGraphReadDTO:
-    """Serialize a bounded Project Map or node neighborhood.
+    """Serialize a bounded canonical view or node neighborhood.
 
     The builder's graph remains the source of truth.  This adapter drops
-    dangling endpoints defensively, calculates degrees and diagnostics against
-    the complete filtered query *before* slicing, and reserves Project Map
-    capacity for edge-less orphan nodes.
+    dangling endpoints defensively, calculates degrees against the complete
+    filtered view *before* slicing, and reserves Project Map capacity for
+    edge-less orphan nodes and applicable diagnostics.
     """
     from logosforge.knowledge_graph import provenance as graph_provenance
     from logosforge.knowledge_graph import scoring as graph_scoring
 
-    node_keys = set(graph.nodes)
+    graph_node_keys = set(graph.nodes)
     full_hidden_edges = [
         edge for edge in graph.edges
         if edge.is_hidden
-        and edge.source in node_keys
-        and edge.target in node_keys
+        and edge.source in graph_node_keys
+        and edge.target in graph_node_keys
     ]
     full_hidden_edges.sort(key=_knowledge_graph_edge_sort_key)
-    full_edges = [
-        edge for edge in graph.visible_edges(include_inferred=include_inferred)
-        if edge.source in node_keys and edge.target in node_keys
-    ]
-    full_edges.sort(key=_knowledge_graph_edge_sort_key)
+    node_keys, full_edges = _knowledge_graph_view_projection(
+        graph,
+        view_mode=view_mode,
+        include_inferred=include_inferred,
+    )
+    if focus_key is not None and focus_key not in node_keys:
+        raise ValueError("Knowledge Graph focus is outside the selected view")
 
     degree_by_key = {key: 0 for key in node_keys}
     for edge in full_edges:
@@ -1114,30 +1211,35 @@ def knowledge_graph_read_to_dto(
 
     # Reuse the canonical story-orphan semantics (project membership alone does
     # not make a story node connected), but do not inherit its default UI cap.
-    canonical_orphans = graph_scoring.orphan_nodes(
-        graph,
-        cap=max(1, len(graph.nodes)),
-        include_inferred=include_inferred,
-    )
-    candidate_orphan_keys = sorted(
-        node.key for node in canonical_orphans if node.key in candidate_keys
-    )
+    diagnostics_available = view_mode == "project_map"
+    if diagnostics_available:
+        canonical_orphans = graph_scoring.orphan_nodes(
+            graph,
+            cap=max(1, len(graph.nodes)),
+            include_inferred=include_inferred,
+        )
+        candidate_orphan_keys = sorted(
+            node.key for node in canonical_orphans if node.key in candidate_keys
+        )
 
-    canonical_weak_keys = {
-        edge.dedupe_key for edge in graph_scoring.weak_link_edges(
-            graph, cap=max(1, len(graph.edges)),
+        canonical_weak_keys = {
+            edge.dedupe_key for edge in graph_scoring.weak_link_edges(
+                graph, cap=max(1, len(graph.edges)),
+            )
+        }
+        candidate_weak_links = [
+            edge for edge in candidate_edges
+            if include_inferred and edge.dedupe_key in canonical_weak_keys
+        ]
+        candidate_weak_links.sort(
+            key=lambda edge: (
+                -graph_provenance.confidence_rank(edge.confidence),
+                *_knowledge_graph_edge_sort_key(edge),
+            )
         )
-    }
-    candidate_weak_links = [
-        edge for edge in candidate_edges
-        if include_inferred and edge.dedupe_key in canonical_weak_keys
-    ]
-    candidate_weak_links.sort(
-        key=lambda edge: (
-            -graph_provenance.confidence_rank(edge.confidence),
-            *_knowledge_graph_edge_sort_key(edge),
-        )
-    )
+    else:
+        candidate_orphan_keys = []
+        candidate_weak_links = []
 
     def node_rank(key: str) -> tuple[int, int, str, str]:
         node = graph.nodes[key]
@@ -1150,7 +1252,7 @@ def knowledge_graph_read_to_dto(
 
     if focus_key is not None:
         selected_keys = sorted(candidate_keys, key=node_rank)[:limit]
-    else:
+    elif diagnostics_available:
         # Reserve a bounded portion of the Project Map for authoritative hidden
         # review state so a refresh does not strand the Restore action.  The
         # other half remains available for the useful central-node projection.
@@ -1192,6 +1294,8 @@ def knowledge_graph_read_to_dto(
             + primary[:max(0, limit - len(reserved_set))]
             + reserved_orphans
         )
+    else:
+        selected_keys = sorted(candidate_keys, key=node_rank)[:limit]
 
     selected_set = set(selected_keys)
     returned_edges = [
@@ -1207,10 +1311,14 @@ def knowledge_graph_read_to_dto(
         if edge.source in selected_set and edge.target in selected_set
     ][:weak_cap]
     hidden_cap = min(limit, _KNOWLEDGE_GRAPH_DIAGNOSTIC_CAP)
-    returned_hidden_edges = [
-        edge for edge in full_hidden_edges
-        if edge.source in selected_set and edge.target in selected_set
-    ][:hidden_cap]
+    returned_hidden_edges = (
+        [
+            edge for edge in full_hidden_edges
+            if edge.source in selected_set and edge.target in selected_set
+        ][:hidden_cap]
+        if diagnostics_available
+        else []
+    )
     hidden_edge_count = max(
         len(full_hidden_edges),
         int(getattr(graph, "persisted_hidden_edge_count", 0)),
@@ -1233,9 +1341,14 @@ def knowledge_graph_read_to_dto(
     truncated = (
         len(selected_keys) < len(candidate_keys)
         or len(returned_edges) < len(candidate_edges)
-        or len(returned_orphan_keys) < len(candidate_orphan_keys)
-        or len(returned_weak_links) < len(candidate_weak_links)
-        or len(returned_hidden_edges) < hidden_edge_count
+        or (
+            diagnostics_available
+            and (
+                len(returned_orphan_keys) < len(candidate_orphan_keys)
+                or len(returned_weak_links) < len(candidate_weak_links)
+                or len(returned_hidden_edges) < hidden_edge_count
+            )
+        )
     )
     return schemas.KnowledgeGraphReadDTO(
         project_id=int(graph.project_id),
@@ -1246,6 +1359,7 @@ def knowledge_graph_read_to_dto(
         ),
         depth=depth,
         include_inferred=include_inferred,
+        view_mode=view_mode,
         nodes=nodes,
         edges=[_knowledge_graph_edge_to_dto(edge) for edge in returned_edges],
         node_count=len(candidate_keys),
@@ -1253,6 +1367,7 @@ def knowledge_graph_read_to_dto(
         returned_node_count=len(nodes),
         returned_edge_count=len(returned_edges),
         truncated=truncated,
+        story_diagnostics_available=diagnostics_available,
         orphan_keys=[knowledge_graph_wire_key(key) for key in returned_orphan_keys],
         orphan_count=len(candidate_orphan_keys),
         weak_links=[

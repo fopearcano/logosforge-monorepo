@@ -113,20 +113,44 @@ non-screenplay modes.
 limit, include_inferred, include_deferred)`. All queries are capped,
 deterministic, read-only, current-project-only.
 
-The canonical HTTP read surface is
-`GET /api/projects/{project_id}/knowledge-graph`. It returns either a bounded
-Project Map or a one-/two-hop neighborhood around `focus_key`, with explicit
-requested/returned/total counts, truncation state, authoritative orphan and
-weak-link diagnostics, and warnings for unavailable source systems. Response
-nodes and edges are deterministic, project-scoped, and endpoint-complete.
+The canonical HTTP 1.8.0 read surface is
+`GET /api/projects/{project_id}/knowledge-graph`. Its `view_mode` selects one of
+four Core-owned projections:
 
-Every read also returns a project-wide review `revision` and a bounded hidden
-edge subset. The complete restore queue is reachable through deterministic,
-dense pages at `GET .../knowledge-graph/hidden-edges?offset=&limit=`; each page
-contains its exact unique endpoint nodes. The review revision is computed in
-one SQLite snapshot from all persisted endpoint/edge rows plus the project's id
-and immutable creation timestamp. It intentionally does not claim that the
-legacy multi-extractor live graph is one database snapshot: source edits may
+- `project_map`: every canonical node and visible edge from available sources;
+- `structure`: project/act/chapter/scene/plot-block/timeline-event nodes and
+  `contains`/`belongs_to`/`precedes`/`follows` edges;
+- `recorded_risk`: endpoints of recorded `risks`/`contradicts` evidence, not a
+  prediction that the manuscript is safe or unsafe; and
+- `revision_impact`: endpoints of revision-system `revises`/`risks` evidence.
+
+`include_inferred` is an independent evidence scope for every view: false is
+Confirmed only, true is Inferred + Confirmed. Core projects the complete graph
+by both choices before focus traversal and response caps. A `focus_key` then
+selects a one-/two-hop neighborhood inside that projection; a key outside it is
+indistinguishable from an unknown key. Per-node `degree` is calculated across
+the complete selected view before focus or truncation, so it can change when
+the view or evidence scope changes. Responses carry exact
+requested/returned/total counts, truncation state, and warnings for unavailable
+source systems. Nodes and edges remain deterministic, project-scoped, and
+endpoint-complete.
+
+Authoritative orphan and weak-link story diagnostics apply only to Project Map,
+advertised by `story_diagnostics_available=true`. Specialty views return that
+flag false with zero/empty story diagnostics; this absence must not be read as
+"connected" or "risk-free." Every read still returns the project-global
+`hidden_edge_count`, but specialty views do not inject hidden edges or their
+endpoints into the projection. The complete restore queue is reachable through
+deterministic, dense pages at
+`GET .../knowledge-graph/hidden-edges?offset=&limit=`; it is independent of view,
+evidence scope, focus, and caps, and each page contains its exact unique endpoint
+nodes.
+
+Every read also returns the same project-wide review `revision` semantics. The
+token is computed in one SQLite snapshot from all persisted endpoint/edge rows
+plus the project's id and immutable creation timestamp; changing `view_mode` or
+`include_inferred` does not redefine it. It intentionally does not claim that
+the legacy multi-extractor live graph is one database snapshot: source edits may
 change derived nodes/edges without rotating this narrower review token.
 
 `POST .../knowledge-graph/commands` accepts directional
@@ -142,10 +166,13 @@ request digest so semantically altered proof fails closed. Only a fresh changed
 command emits `knowledge_graph_changed`. Logical duplicate persisted rows fail
 closed instead of choosing an order-dependent winner.
 
-MCP gateway 1.6 exposes the same boundary through
+MCP gateway 1.7.0 exposes the same boundary through
 `logosforge_get_knowledge_graph`,
 `logosforge_get_knowledge_graph_hidden_edges`, and
-`logosforge_propose_knowledge_graph_command`. The hidden-edge read takes bounded
+`logosforge_propose_knowledge_graph_command`. Its read accepts the same strict
+four-value `view_mode` and independent `include_inferred` evidence scope as the
+HTTP surface, defaulting to Project Map. Proposal and receipt-recovery reads are
+deliberately pinned to Project Map. The hidden-edge read takes bounded
 `offset`/`limit` arguments, so Restore preflight can find every persisted hide
 decision rather than depending on the default map's diagnostic subset. The
 proposal stores exactly one `confirm_edge`, `hide_edge`, or `unhide_edge`
@@ -154,26 +181,33 @@ mutate. Restore proposals additionally require the `hidden_edge_offset` from
 the page containing the target. The gateway refetches that 100-edge page and
 requires the exact project, revision, and directional identity before it stores
 the proposal; Confirm/Hide reject the page-only offset. That proposal id is
-also the Core `Idempotency-Key`. A lost apply can
-recover the exact durable receipt, and a fresh MCP process can reconstruct the
-applied proposal while returning the current coherent Project Map and original
-`applied_revision`. Only a proved `knowledge_graph_receipt_not_found` permits
-one bounded same-command/same-key resend; ambiguous or conflicting receipt
-evidence fails closed.
+also the Core `Idempotency-Key`. A lost apply can recover the exact durable
+receipt, and a fresh MCP process can reconstruct the applied proposal while
+returning the current coherent Project Map and original `applied_revision`.
+Only a proved `knowledge_graph_receipt_not_found` permits one bounded
+same-command/same-key resend; ambiguous or conflicting receipt evidence fails
+closed.
 
 ## Graph section (UI)
 
-The Pro Graph panel now renders the canonical, API-backed **Project Map** and
-focused one-/two-hop neighborhoods instead of a PSYKE-only projection. Node
-type, minimum-confidence, and source-system filters are live; selecting a node
-can focus its neighborhood or publish its context to the Studio tools. The
-panel also presents Core-authoritative orphan and weak-link diagnostics,
-loading/error/empty/retry states, and explicit size-cap/truncation status.
+The Pro Graph panel now renders the canonical, API-backed **Project Map**,
+**Structure**, **Recorded Risk**, and **Saved Revision Impact** views. A separate
+Evidence selector applies **Confirmed only** or **Inferred + Confirmed** to any
+view. Structure isolates hierarchy and recorded order; Recorded Risk shows only
+saved risk/contradiction evidence; Saved Revision Impact shows saved
+revision-intelligence links. An empty specialty view is described as missing
+matching evidence, never as proof that the story is connected or risk-free.
 
-The initial Project Map is now paired with explicit **Confirm / Hide / Restore**
-review actions backed by the transactional HTTP contract above. Richer
-Structure/Risk/Revision/Confirmed-only modes remain deferred. The same guarded
-review actions are available to MCP clients through proposal/review/apply and
+Node type, minimum-confidence, and source-system filters remain live on top of
+the server projection; selecting a node can focus its one-/two-hop neighborhood
+or publish context to Studio tools. The panel presents Core-authoritative orphan
+and weak-link diagnostics only in Project Map, while the complete project-global
+hidden-edge queue remains available from every view. Loading/error/empty/retry
+states and explicit size-cap/truncation status cover every projection.
+
+Explicit **Confirm / Hide / Restore** review actions remain backed by the same
+transactional HTTP contract and project-wide review revision. The same guarded
+review actions remain available to MCP clients through proposal/review/apply and
 durable receipt recovery.
 
 ## Logos (deterministic, no LLM)
@@ -216,16 +250,16 @@ automatically; PSYKE-relation creation / edge confirmation require confirmation.
 Reads are per-`project_id`, so no stale graph leaks across a switch. The graph
 rebuilds on demand (no background LLM scan). Persisted confirm/hide state is
 project-scoped. The UI request identity includes project, focus, depth, limit,
-and inferred-edge mode; a delayed response from a previous project or
-superseded focus request cannot repopulate the active panel. Runtime validation
-also rejects malformed graph payloads and dangling references before render.
+view mode, and evidence scope; a delayed response from a previous project or
+superseded projection/focus request cannot repopulate the active panel. Runtime
+validation also rejects malformed graph payloads, mismatched projection
+metadata, and dangling references before render.
 
 ## Limitations & deferred
 
-- The implemented Graph UI remains a bounded Project Map/neighborhood slice;
-  richer graph modes are not yet exposed.
-- Node size currently uses explainable full-project degree; Story Gravity
-  sizing and the story-order flow overlay remain part of the richer Graph pass.
+- Node size currently uses explainable degree within the complete selected
+  view/evidence scope; Story Gravity sizing and the story-order flow overlay
+  remain deferred.
 - No force-directed render.
 - No external graph DB / Neo4j, no cloud sync, no collaboration, no AI-only
   semantic inference, no unbounded whole-project expansion.
@@ -235,10 +269,8 @@ also rejects malformed graph payloads and dangling references before render.
 
 ## Next recommended phase
 
-Extend the bounded surface with richer Structure, Risk, Revision Impact,
-Confirmed-only, and Inferred+Confirmed modes, Story Gravity sizing, and the
-story-order flow overlay; optionally wire graph decision cards directly into
-the Dashboard's radar panel.
+Add Story Gravity sizing and the story-order flow overlay; optionally wire graph
+decision cards directly into the Dashboard's radar panel.
 
 ## Semantic Continuity (Phase 10Q)
 
@@ -246,5 +278,5 @@ The Semantic Continuity Engine (docs/SemanticContinuityEngine.md) builds on this
 graph + PSYKE + scenes to detect contradictions, missing transitions and
 unresolved commitments, and to validate proposed rewrite / controlled-apply
 changes before they become canonical. Dedicated Continuity-Risk / Character-State
-/ Setup-Payoff Graph visualization modes remain deferred beyond the initial
-Project Map/neighborhood slice.
+/ Setup-Payoff Graph visualization modes remain deferred beyond the four current
+canonical views.

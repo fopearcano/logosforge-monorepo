@@ -615,6 +615,7 @@ export function createHttpApiClient(
       if (query.depth != null) params.set("depth", String(query.depth));
       if (query.limit != null) params.set("limit", String(query.limit));
       if (query.include_inferred != null) params.set("include_inferred", String(query.include_inferred));
+      if (query.view_mode != null) params.set("view_mode", query.view_mode);
       const suffix = params.toString();
       return get(
         ROUTES.knowledgeGraph(p) + (suffix ? `?${suffix}` : ""),

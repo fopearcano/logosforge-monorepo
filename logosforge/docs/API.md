@@ -102,10 +102,11 @@ GET  /api/health → { status, service, mode, version, api_version, core_version
 `core_version` is the Logosforge build (e.g. `0.9.0-alpha`). Clients (Electron
 desktop and Web/PWA) read these to verify they're talking to a compatible
 backend. `version` mirrors `api_version` for backward compatibility.
-The current additive HTTP contract version is **1.7.0**. This version is
-deliberately independent from the local MCP server contract. MCP gateway 1.6
-now maps the existing Knowledge Graph HTTP review boundary into three focused
-tools without changing this HTTP contract version.
+The current additive HTTP contract version is **1.8.0**. It adds canonical
+Knowledge Graph view projections and explicit view/diagnostic response metadata.
+This version is deliberately independent from the local MCP server contract;
+MCP gateway 1.7.0 maps the Knowledge Graph HTTP review boundary into three
+focused tools and exposes the same strict `view_mode` enum on its read tool.
 
 ### Packaged-desktop live context
 ```
@@ -170,45 +171,68 @@ resolution fields are present only for comment matches.
 ### Narrative Knowledge Graph (bounded read + transactional edge review)
 ```
 GET /api/projects/{project_id}/knowledge-graph
-    ?focus_key={node_key}&depth=1&limit=100&include_inferred=true
+    ?view_mode=project_map&focus_key={node_key}&depth=1&limit=100&include_inferred=true
 GET /api/projects/{project_id}/knowledge-graph/hidden-edges
     ?offset=0&limit=25
 POST /api/projects/{project_id}/knowledge-graph/commands
 GET /api/projects/{project_id}/knowledge-graph/command-receipt
 ```
 
-Without `focus_key`, this returns the canonical deterministic Project Map.
-Supplying a returned node key selects its one- or two-hop neighborhood.
-`depth` is bounded to 1–2 and `limit` to 1–200; the limit independently caps
-the returned node and edge collections. Graph construction, focus resolution,
-and all diagnostics are scoped to the project in the path. An unknown, stale,
-or foreign focus key returns the same generic 404 without consulting or naming
-another project.
+Without `focus_key`, this returns a bounded canonical view. `view_mode` defaults
+to `project_map` and accepts exactly:
 
-The response contains a `revision` plus typed nodes and edges with confidence,
-provenance, source-system, confirmation, inference, and hidden state. The
-revision covers the complete persisted review layer (endpoint reference rows
-and directional edge-review rows), bound to the project's id and immutable
-creation timestamp. It deliberately does **not** claim to revision the derived
-graph assembled by the legacy extractors: source-content edits can change that
-derived graph while leaving the review revision unchanged. Per-node `degree` is the
-node's degree in the complete project graph after applying
-`include_inferred`, before focus or response truncation; it therefore remains a
-stable global signal inside a focused neighborhood. Total counts,
-`orphan_count`, `weak_link_count`, and authoritative project-wide
-`hidden_edge_count` are computed against the complete
-filtered map/neighborhood before response truncation. `orphan_keys` and the
-bounded `weak_links`/`hidden_edges` diagnostics reference only nodes included in the response,
-so a client never has to infer diagnostics from a partial slice. `truncated`
-signals that any primary or diagnostic collection was capped. Overlong legacy
-structural identifiers are represented by stable `kg:sha256:...` wire keys;
-those returned keys remain valid `focus_key` values.
+* `project_map` — all canonical nodes and visible edges from available source
+  systems;
+* `structure` — project/act/chapter/scene/plot-block/timeline-event nodes joined
+  by `contains`, `belongs_to`, `precedes`, or `follows` edges;
+* `recorded_risk` — endpoints of saved `risks` and `contradicts` evidence; and
+* `revision_impact` — endpoints of revision-system `revises` and `risks`
+  evidence.
+
+`include_inferred` is orthogonal to that choice: `false` means Confirmed only,
+while `true` means Inferred + Confirmed. Core applies both the selected view and
+evidence scope to the complete visible graph before focus traversal or response
+caps. Supplying a returned node key then selects its one- or two-hop
+neighborhood within that projection. `depth` is bounded to 1–2 and `limit` to
+1–200; the limit independently caps the returned node and edge collections.
+Graph construction and focus resolution are scoped to the project in the path.
+An unknown, stale, foreign, or selected-view-excluded focus key returns the same
+generic 404 without consulting or naming another project.
+
+The response contains the exact `view_mode`, `include_inferred`, and
+`story_diagnostics_available` values used, plus a `revision` and typed nodes and
+edges with confidence, provenance, source-system, confirmation, inference, and
+hidden state. The revision covers the complete persisted review layer (endpoint
+reference rows and directional edge-review rows), bound to the project's id and
+immutable creation timestamp. It is unchanged in meaning across view/evidence
+choices and deliberately does **not** claim to revision the derived graph
+assembled by the legacy extractors: source-content edits can change that graph
+while leaving the review revision unchanged.
+
+Per-node `degree` is calculated in the complete selected view after applying
+`include_inferred`, before focus traversal or response truncation. It is
+therefore stable across focused neighborhoods of the same view/evidence scope,
+but can legitimately change when either selector changes. Primary total counts
+describe the complete selected map/neighborhood before response truncation.
+Story-level `orphan_count`, `orphan_keys`, `weak_link_count`, and `weak_links`
+apply only when `view_mode=project_map`; `story_diagnostics_available` is then
+true. Specialty views set it false and return zero/empty story diagnostics, so
+those values must not be interpreted as proof that the story is connected or
+risk-free. Project Map diagnostic rows reference only returned nodes, and
+`truncated` signals a capped primary collection or applicable Project Map
+diagnostic collection. Overlong legacy structural identifiers are represented
+by stable `kg:sha256:...` wire keys; those returned keys remain valid
+`focus_key` values when included in the selected projection.
 
 The primary GET remains read-only, rebuilds once per request without an LLM,
-emits no change event, and never persists a graph snapshot. The paginated
-`hidden-edges` route is the complete restore queue independent of Project Map,
-focus, and diagnostic caps. It returns deterministic dense pages (up to 100
-edges), plus the exact unique endpoint-node records for that page.
+emits no change event, and never persists a graph snapshot. Its
+`hidden_edge_count` remains project-global in every view. Project Map can include
+a bounded `hidden_edges` diagnostic subset for returned nodes; specialty views
+return that subset empty rather than injecting nodes from outside their
+projection. The paginated `hidden-edges` route is the complete restore queue,
+independent of view mode, evidence scope, focus, and diagnostic caps. It returns
+deterministic dense pages (up to 100 edges), plus the exact unique endpoint-node
+records for that page.
 
 The command POST accepts one unwrapped discriminated request:
 
@@ -247,16 +271,19 @@ changed command publishes `knowledge_graph_changed`; rejects and exact replays
 do not. Persisted logical duplicates fail closed as server-state corruption
 rather than choosing an order-dependent winner.
 
-MCP gateway 1.6 exposes the primary read, hidden-edge page, and guarded command
+MCP gateway 1.7.0 exposes the primary read, hidden-edge page, and guarded command
 proposal as `logosforge_get_knowledge_graph`,
 `logosforge_get_knowledge_graph_hidden_edges`, and
-`logosforge_propose_knowledge_graph_command`. Restore proposals must include
-the `hidden_edge_offset` of the current page containing their edge; the gateway
-refetches a 100-edge page and verifies its project, revision, and exact
-directional identity before storing a non-mutating proposal. Confirm/Hide reject
-that page-only argument. Apply uses the proposal id as `Idempotency-Key`, and
-ambiguous delivery follows the same durable receipt/restart recovery discipline
-as Timeline and Canvas Plot.
+`logosforge_propose_knowledge_graph_command`. The read accepts the same optional
+`view_mode` values (default `project_map`) and independent `include_inferred`
+scope as HTTP. Mutation proposal and receipt-recovery reads remain explicitly
+pinned to `project_map`. Restore proposals must include the `hidden_edge_offset`
+of the current page containing their edge; the gateway refetches a 100-edge page
+and verifies its project, revision, and exact directional identity before
+storing a non-mutating proposal. Confirm/Hide reject that page-only argument.
+Apply uses the proposal id as `Idempotency-Key`, and ambiguous delivery follows
+the same durable receipt/restart recovery discipline as Timeline and Canvas
+Plot.
 
 ### Scenes / manuscript
 ```

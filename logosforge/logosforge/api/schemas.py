@@ -2093,19 +2093,28 @@ class QuantumSettingsUpdateDTO(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+KnowledgeGraphViewMode = Literal[
+    "project_map",
+    "structure",
+    "recorded_risk",
+    "revision_impact",
+]
+
+
 class KnowledgeGraphQueryDTO(BaseModel):
     """Bounded read options for the canonical Narrative Knowledge Graph.
 
-    ``focus_key`` selects a 1- or 2-hop neighborhood.  Without it, the route
-    returns a bounded project map.  The same ``limit`` caps every primary
-    response collection so clients cannot accidentally request an unbounded
-    whole-project graph.
+    ``view_mode`` selects a server-owned projection and ``focus_key`` selects a
+    1- or 2-hop neighborhood within it.  Without a focus, the route returns a
+    bounded view.  The same ``limit`` caps every primary response collection so
+    clients cannot accidentally request an unbounded whole-project graph.
     """
 
     focus_key: str | None = Field(default=None, min_length=1, max_length=512)
     depth: int = Field(default=1, ge=1, le=2)
     limit: int = Field(default=100, ge=1, le=200)
     include_inferred: bool = True
+    view_mode: KnowledgeGraphViewMode = "project_map"
 
 
 KnowledgeGraphKey = Annotated[str, Field(min_length=1, max_length=512)]
@@ -2122,9 +2131,9 @@ class KnowledgeGraphNodeDTO(BaseModel):
     label: KnowledgeGraphText = ""
     summary: KnowledgeGraphLongText = ""
     metadata: dict[str, Any] = Field(default_factory=dict)
-    # Degree is computed against the complete project graph after applying the
-    # inferred-edge filter, before focus and response truncation.  UIs must not
-    # infer global centrality from the returned neighborhood slice.
+    # Degree is computed against the complete selected view after applying the
+    # evidence filter, before focus and response truncation.  UIs must not infer
+    # view-wide centrality from the returned neighborhood slice.
     degree: int = Field(default=0, ge=0)
 
 
@@ -2156,10 +2165,11 @@ class KnowledgeGraphReadDTO(BaseModel):
     focus_key: KnowledgeGraphKey | None = None
     depth: int = Field(ge=1, le=2)
     include_inferred: bool
+    view_mode: KnowledgeGraphViewMode
     nodes: list[KnowledgeGraphNodeDTO] = Field(default_factory=list, max_length=200)
     edges: list[KnowledgeGraphEdgeDTO] = Field(default_factory=list, max_length=200)
-    # Counts describe the complete project-map or neighborhood query before
-    # response truncation; returned_* describe the arrays above.
+    # Counts describe the complete selected view or focused-neighborhood query
+    # before response truncation; returned_* describe the arrays above.
     node_count: int = Field(ge=0)
     edge_count: int = Field(ge=0)
     returned_node_count: int = Field(ge=0)
@@ -2167,6 +2177,7 @@ class KnowledgeGraphReadDTO(BaseModel):
     truncated: bool = False
     # Diagnostics are computed before truncation.  orphan_keys only references
     # nodes retained in ``nodes``; weak_links is independently bounded.
+    story_diagnostics_available: bool
     orphan_keys: list[KnowledgeGraphKey] = Field(default_factory=list, max_length=200)
     orphan_count: int = Field(default=0, ge=0)
     weak_links: list[KnowledgeGraphEdgeDTO] = Field(default_factory=list, max_length=25)
@@ -2210,6 +2221,20 @@ class KnowledgeGraphReadDTO(BaseModel):
             raise ValueError("hidden_edges must contain only hidden edges")
         if any(edge.is_hidden for edge in [*self.edges, *self.weak_links]):
             raise ValueError("primary and weak-link edges cannot be hidden")
+        diagnostics_expected = self.view_mode == "project_map"
+        if self.story_diagnostics_available != diagnostics_expected:
+            raise ValueError(
+                "story diagnostics are available only for the project map"
+            )
+        if not self.story_diagnostics_available and (
+            self.orphan_keys
+            or self.orphan_count
+            or self.weak_links
+            or self.weak_link_count
+        ):
+            raise ValueError(
+                "specialty graph views cannot advertise story diagnostics"
+            )
         return self
 
 

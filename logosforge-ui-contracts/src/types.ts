@@ -1676,7 +1676,13 @@ export interface GrammarCheckResultDTO {
 }
 
 // ── Story gravity (graph node weights) + Counterpart (reflective AI) ─────────
-/** Bounded read options for a Project Map or focused graph neighborhood. */
+/** Bounded read options for a Knowledge Graph view or focused neighborhood. */
+export type KnowledgeGraphViewMode =
+  | "project_map"
+  | "structure"
+  | "recorded_risk"
+  | "revision_impact";
+
 export interface KnowledgeGraphQueryDTO {
   focus_key?: string | null;
   /** 1..2 */
@@ -1684,6 +1690,8 @@ export interface KnowledgeGraphQueryDTO {
   /** 1..200; caps each primary response collection. */
   limit?: number;
   include_inferred?: boolean;
+  /** Defaults to project_map when omitted. */
+  view_mode?: KnowledgeGraphViewMode;
 }
 export interface KnowledgeGraphNodeDTO {
   key: string;
@@ -1693,7 +1701,7 @@ export interface KnowledgeGraphNodeDTO {
   label: string;
   summary: string;
   metadata: Record<string, unknown>;
-  /** Full-project degree after the inferred-edge filter, before focus/truncation. */
+  /** Complete selected-view degree after the evidence filter, before focus/truncation. */
   degree: number;
 }
 export interface KnowledgeGraphEdgeDTO {
@@ -1717,9 +1725,13 @@ export interface KnowledgeGraphReadDTO {
   focus_key: string | null;
   depth: number;
   include_inferred: boolean;
+  /** Exact server-owned projection used for this response. */
+  view_mode: KnowledgeGraphViewMode;
+  /** False when orphan/weak-link diagnostics do not apply to this projection. */
+  story_diagnostics_available: boolean;
   nodes: KnowledgeGraphNodeDTO[];
   edges: KnowledgeGraphEdgeDTO[];
-  /** Complete query counts before response truncation. */
+  /** Complete selected-view or focused-neighborhood counts before response truncation. */
   node_count: number;
   edge_count: number;
   returned_node_count: number;

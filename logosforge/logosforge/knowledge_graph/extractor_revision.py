@@ -12,6 +12,11 @@ from logosforge.knowledge_graph import provenance as P
 from logosforge.knowledge_graph.models import KGEdge, KGNode, node_key
 
 _MAX = 200
+_MAX_REVISION_ITEMS = 200
+_SEVERITY_MAX = 32
+_IMPACT_KIND_MAX = 64
+_LABEL_MAX = 256
+_SUGGESTED_ACTION_MAX = 512
 
 # target_type (from impact items / apply ops) -> graph node type + source_type.
 _TARGET_NODE = {
@@ -22,12 +27,24 @@ _TARGET_NODE = {
 }
 
 
-def _target_key(target_type: str, target_id) -> str | None:
-    spec = _TARGET_NODE.get((target_type or "").lower())
+def _target_key(target_type: str, target_id, *, graph=None) -> str | None:
+    target_kind = (target_type or "").lower()
+    if target_kind in {"psyke", "psyke_entry"} and graph is not None:
+        source_id = str(target_id)
+        matches = sorted(
+            node.key for node in graph.nodes.values()
+            if node.source_type == "psyke" and node.source_id == source_id
+        )
+        return matches[0] if len(matches) == 1 else None
+    spec = _TARGET_NODE.get(target_kind)
     if spec is None or target_id in (None, ""):
         return None
     nt, st = spec
     return node_key(nt, st, target_id)
+
+
+def _bounded_text(value, limit: int) -> str:
+    return str(value or "")[:limit]
 
 
 def extract_revision(db, project_id: int, graph) -> None:
@@ -37,7 +54,13 @@ def extract_revision(db, project_id: int, graph) -> None:
     except Exception:
         graph.unavailable.append("revision_intelligence")
         return
-    for rep in reports[:_MAX]:
+    reports = sorted(
+        reports,
+        key=lambda report: int(getattr(report, "id", 0) or 0),
+        reverse=True,
+    )[:_MAX]
+    remaining_item_work = _MAX_REVISION_ITEMS
+    for rep in reports:
         rkey = node_key(P.NT_REVISION_IMPACT, "revision", rep.id)
         graph.add_node(KGNode(
             key=rkey, node_type=P.NT_REVISION_IMPACT, source_type="revision",
@@ -51,13 +74,21 @@ def extract_revision(db, project_id: int, graph) -> None:
                 edge_type=P.ET_REVISES, confidence=getattr(rep, "confidence", "likely"),
                 provenance=P.PROV_REVISION_IMPACT, source_system=P.SS_REVISION,
                 explanation="Impact report for this scene's change."))
-        try:
-            items = db.get_revision_impact_items(rep.id)
-        except Exception:
+        if remaining_item_work > 0:
+            try:
+                items = db.get_revision_impact_items(
+                    rep.id,
+                    limit=remaining_item_work,
+                )
+            except Exception:
+                items = []
+        else:
             items = []
-        for it in items[:_MAX]:
+        items = items[:remaining_item_work]
+        remaining_item_work -= len(items)
+        for it in items:
             tkey = _target_key(getattr(it, "target_type", ""),
-                               getattr(it, "target_id", ""))
+                               getattr(it, "target_id", ""), graph=graph)
             if tkey is None:
                 continue
             graph.add_edge(KGEdge(
@@ -65,7 +96,26 @@ def extract_revision(db, project_id: int, graph) -> None:
                 confidence=getattr(it, "confidence", "possible"),
                 provenance=P.PROV_REVISION_IMPACT, source_system=P.SS_REVISION,
                 explanation=(getattr(it, "explanation", "")
-                             or "Revision risk touches this element.")))
+                             or "Revision risk touches this element."),
+                metadata={
+                    "item_id": getattr(it, "id", None),
+                    "severity": _bounded_text(
+                        getattr(it, "severity", "info") or "info",
+                        _SEVERITY_MAX,
+                    ),
+                    "impact_kind": _bounded_text(
+                        getattr(it, "impact_kind", ""),
+                        _IMPACT_KIND_MAX,
+                    ),
+                    "label": _bounded_text(
+                        getattr(it, "label", ""),
+                        _LABEL_MAX,
+                    ),
+                    "suggested_action": _bounded_text(
+                        getattr(it, "suggested_action", ""),
+                        _SUGGESTED_ACTION_MAX,
+                    ),
+                }))
 
 
 def extract_rewrite(db, project_id: int, graph) -> None:
@@ -121,7 +171,11 @@ def extract_apply(db, project_id: int, graph) -> None:
             source_id=str(op.id), label=f"Apply #{op.id} ({getattr(op, 'status', '')})",
             summary=(getattr(op, "after_excerpt", "") or "")[:160],
             metadata={"status": getattr(op, "status", "draft")}))
-        tkey = _target_key(getattr(op, "target_type", ""), getattr(op, "target_id", None))
+        tkey = _target_key(
+            getattr(op, "target_type", ""),
+            getattr(op, "target_id", None),
+            graph=graph,
+        )
         if tkey is None and (getattr(op, "target_type", "") or "") in ("scene", "manuscript") \
                 and getattr(op, "target_id", None):
             tkey = node_key(P.NT_SCENE, "scene", op.target_id)

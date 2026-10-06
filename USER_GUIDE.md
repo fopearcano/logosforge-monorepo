@@ -374,6 +374,18 @@ anchored threads, or **Ctrl+Shift+C** to open Comments. Mention `@assistant` or
 `@counterpart` in a reply to ask that project-aware companion to answer in the
 same thread.
 
+Pro's **Knowledge Graph** has four traceable views: **Project Map** for the whole
+canonical story graph, **Structure** for hierarchy and recorded order,
+**Recorded Risk** for saved risk/contradiction evidence, and **Saved Revision
+Impact** for saved revision-analysis links. The separate **Evidence** control
+switches any view between **Confirmed only** and **Inferred + Confirmed**. Only
+Project Map provides orphan and weak-link story diagnostics; an empty
+specialty view means no matching recorded evidence, not that the manuscript is
+connected or risk-free. The complete hidden-edge review queue remains available
+from every view. Node size reflects relationship degree within the selected
+view/evidence scope; Story Gravity and a story-order flow overlay are not yet
+part of this panel.
+
 If you connect a local MCP client such as Codex or LibreChat to the optional Pro
 gateway, it can list and search complete comment threads, propose a reply
 attributed to **MCP assistant**, and propose Resolve/Reopen. The writer still
@@ -389,12 +401,13 @@ Narrative Knowledge Graph. An agent can prepare one reviewed change at a time
 against the exact surface revision it read, and Core checks that revision again
 when applied. Timeline commands cover lanes, event membership, and
 structural/custom ordering; Canvas commands cover cards, links, frames,
-geometry, and stacking order. Knowledge Graph commands Confirm, Hide, or
-Restore one exact directional edge, and its paged hidden-edge read keeps the
-complete restore queue available even when the main map is truncated. Deleting
-a Timeline lane leaves its scenes Unassigned, removing an event leaves the
-manuscript scene intact, and deleting a Canvas card preserves any linked
-manuscript scene.
+geometry, and stacking order. Its Knowledge Graph read can request any of the
+four views and either evidence scope. Knowledge Graph commands Confirm, Hide, or
+Restore one exact directional edge; proposal and recovery preflight remain
+pinned to Project Map, and the paged hidden-edge read keeps the complete restore
+queue available even when the main map is truncated. Deleting a Timeline lane
+leaves its scenes Unassigned, removing an event leaves the manuscript scene
+intact, and deleting a Canvas card preserves any linked manuscript scene.
 
 Timeline, Canvas Plot, and Knowledge Graph applies carry a durable project
 receipt under the same reviewed proposal id. If a response is lost, the gateway

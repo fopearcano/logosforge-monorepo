@@ -43,6 +43,7 @@ import type {
   KnowledgeGraphNodeDTO,
   KnowledgeGraphQueryDTO,
   KnowledgeGraphReadDTO,
+  KnowledgeGraphViewMode,
   KnowledgeGraphCommandDTO,
   KnowledgeGraphCommandResultDTO,
   KnowledgeGraphCommandReceiptDTO,
@@ -59,6 +60,13 @@ import { ApiRequestError } from "../src/adapters/httpApiClient";
 import { trackProjectOperation } from "../src/adapters/projectSaveCoordinator";
 
 const delay = (ms = 280) => new Promise<void>((r) => setTimeout(r, ms));
+
+const KNOWLEDGE_GRAPH_VIEW_MODES = new Set<KnowledgeGraphViewMode>([
+  "project_map",
+  "structure",
+  "recorded_risk",
+  "revision_impact",
+]);
 
 // ── "Null Horizon" sample data — the same story the rest of the demo tells. ──
 
@@ -1624,8 +1632,8 @@ export function createMockApiClient(): ApiClient {
         service: "logosforge-api",
         instance_nonce: "preview-mock",
         mode: "preview-mock",
-        version: "1.7.0",
-        api_version: "1.7.0",
+        version: "1.8.0",
+        api_version: "1.8.0",
         core_version: "preview",
       };
     },
@@ -2394,8 +2402,21 @@ export function createMockApiClient(): ApiClient {
     },
     async getKnowledgeGraph(p: number, query: KnowledgeGraphQueryDTO = {}): Promise<KnowledgeGraphReadDTO> {
       await delay();
-      const project = findMockProject(projects, p, "GET", `/api/projects/${p}/knowledge-graph`);
+      const path = `/api/projects/${p}/knowledge-graph`;
+      const project = findMockProject(projects, p, "GET", path);
       const includeInferred = query.include_inferred ?? true;
+      const requestedViewMode = query.view_mode ?? "project_map";
+      if (!KNOWLEDGE_GRAPH_VIEW_MODES.has(requestedViewMode as KnowledgeGraphViewMode)) {
+        throw new ApiRequestError(
+          "GET",
+          path,
+          422,
+          "Invalid Knowledge Graph view mode",
+          "validation_error",
+        );
+      }
+      const viewMode = requestedViewMode as KnowledgeGraphViewMode;
+      const storyDiagnosticsAvailable = viewMode === "project_map";
       const depth = Math.max(1, Math.min(2, query.depth ?? 1));
       const limit = Math.max(1, Math.min(200, query.limit ?? 100));
       const projectKey = `project:project:${p}`;
@@ -2448,6 +2469,32 @@ export function createMockApiClient(): ApiClient {
             source_system: "manuscript", explanation: "The name appears in the Scene text.",
             is_user_confirmed: false, is_inferred: true, is_hidden: false, metadata: {},
           });
+
+          const revisionKey = "revision_impact:revision:1";
+          nodes.push({
+            key: revisionKey, node_type: "revision_impact", source_type: "revision",
+            source_id: "1", label: "Saved impact report", summary: "A recorded revision risk.",
+            metadata: { impact_level: "medium" }, degree: 0,
+          });
+          edges.push({
+            source: revisionKey, target: `scene:scene:${firstScene.id}`,
+            edge_type: "risks", confidence: "possible", provenance: "revision impact report",
+            source_system: "revision_intelligence", explanation: "A saved impact report touches this Scene.",
+            is_user_confirmed: false, is_inferred: true, is_hidden: false, metadata: {},
+          });
+
+          const applyKey = "controlled_apply_operation:apply:1";
+          nodes.push({
+            key: applyKey, node_type: "controlled_apply_operation", source_type: "apply",
+            source_id: "1", label: "Pending apply", summary: "A recorded apply conflict.",
+            metadata: { status: "previewed" }, degree: 0,
+          });
+          edges.push({
+            source: applyKey, target: `scene:scene:${firstScene.id}`,
+            edge_type: "contradicts", confidence: "likely", provenance: "controlled apply conflict",
+            source_system: "controlled_apply", explanation: "A pending apply conflicts with this Scene.",
+            is_user_confirmed: false, is_inferred: true, is_hidden: false, metadata: {},
+          });
         }
       }
 
@@ -2456,14 +2503,50 @@ export function createMockApiClient(): ApiClient {
         const review = reviews.get(knowledgeGraphEdgeKey(edge));
         return review ? { ...edge, ...review } : edge;
       });
+      const allNodeKeys = new Set(nodes.map((node) => node.key));
       const hiddenQueryEdges = reviewedEdges.filter((edge) => (
-        edge.is_hidden && (includeInferred || !edge.is_inferred)
+        edge.is_hidden && allNodeKeys.has(edge.source) && allNodeKeys.has(edge.target)
       ));
-      const allowedEdges = reviewedEdges.filter((edge) => (
-        !edge.is_hidden && (includeInferred || !edge.is_inferred)
+      const visibleEdges = reviewedEdges.filter((edge) => (
+        !edge.is_hidden
+        && (includeInferred || !edge.is_inferred)
+        && allNodeKeys.has(edge.source)
+        && allNodeKeys.has(edge.target)
       ));
-      const fullDegree = new Map(nodes.map((node) => [node.key, 0]));
-      for (const edge of allowedEdges) {
+
+      let projectedNodes = nodes;
+      let projectedEdges = visibleEdges;
+      if (viewMode === "structure") {
+        const structuralNodeTypes = new Set([
+          "project", "act", "chapter", "scene", "plot_block", "timeline_event",
+        ]);
+        const structuralEdgeTypes = new Set([
+          "contains", "belongs_to", "precedes", "follows",
+        ]);
+        projectedNodes = nodes.filter((node) => structuralNodeTypes.has(node.node_type));
+        const structuralKeys = new Set(projectedNodes.map((node) => node.key));
+        projectedEdges = visibleEdges.filter((edge) => (
+          structuralEdgeTypes.has(edge.edge_type)
+          && structuralKeys.has(edge.source)
+          && structuralKeys.has(edge.target)
+        ));
+      } else if (viewMode === "recorded_risk") {
+        projectedEdges = visibleEdges.filter((edge) => (
+          edge.edge_type === "risks" || edge.edge_type === "contradicts"
+        ));
+        const riskKeys = new Set(projectedEdges.flatMap((edge) => [edge.source, edge.target]));
+        projectedNodes = nodes.filter((node) => riskKeys.has(node.key));
+      } else if (viewMode === "revision_impact") {
+        projectedEdges = visibleEdges.filter((edge) => (
+          edge.source_system === "revision_intelligence"
+          && (edge.edge_type === "revises" || edge.edge_type === "risks")
+        ));
+        const revisionKeys = new Set(projectedEdges.flatMap((edge) => [edge.source, edge.target]));
+        projectedNodes = nodes.filter((node) => revisionKeys.has(node.key));
+      }
+
+      const fullDegree = new Map(projectedNodes.map((node) => [node.key, 0]));
+      for (const edge of projectedEdges) {
         fullDegree.set(edge.source, (fullDegree.get(edge.source) ?? 0) + 1);
         fullDegree.set(edge.target, (fullDegree.get(edge.target) ?? 0) + 1);
       }
@@ -2471,21 +2554,21 @@ export function createMockApiClient(): ApiClient {
         "scene", "character", "place", "object", "lore", "theme", "motif",
         "psyke_entry", "note", "plot_block",
       ]);
-      const canonicalOrphanKeys = new Set(nodes.filter((node) => (
+      const canonicalOrphanKeys = new Set(storyDiagnosticsAvailable ? nodes.filter((node) => (
         storyNodeTypes.has(node.node_type)
-        && !allowedEdges.some((edge) => {
+        && !visibleEdges.some((edge) => {
           if (edge.source !== node.key && edge.target !== node.key) return false;
           const otherKey = edge.source === node.key ? edge.target : edge.source;
           const other = nodes.find((candidate) => candidate.key === otherKey);
           return !(other?.node_type === "project" && edge.edge_type === "contains");
         })
-      )).map((node) => node.key));
-      let queryNodes = nodes;
-      let queryEdges = allowedEdges;
+      )).map((node) => node.key) : []);
+      let queryNodes = projectedNodes;
+      let queryEdges = projectedEdges;
       const focusKey = query.focus_key ?? null;
       if (focusKey) {
-        if (!nodes.some((node) => node.key === focusKey)) {
-          throw new ApiRequestError("GET", `/api/projects/${p}/knowledge-graph`, 404, "Knowledge Graph node not found", "not_found");
+        if (!projectedNodes.some((node) => node.key === focusKey)) {
+          throw new ApiRequestError("GET", path, 404, "Knowledge Graph node not found", "not_found");
         }
         const visible = new Set([focusKey]);
         let frontier = new Set([focusKey]);
@@ -2493,7 +2576,7 @@ export function createMockApiClient(): ApiClient {
         const neighborhoodEdges: KnowledgeGraphEdgeDTO[] = [];
         for (let hop = 0; hop < depth; hop += 1) {
           const next = new Set<string>();
-          for (const edge of allowedEdges) {
+          for (const edge of projectedEdges) {
             if (!frontier.has(edge.source) && !frontier.has(edge.target)) continue;
             const edgeKey = `${edge.source}\u0000${edge.target}\u0000${edge.edge_type}`;
             if (!seenEdges.has(edgeKey)) {
@@ -2506,7 +2589,7 @@ export function createMockApiClient(): ApiClient {
           for (const key of next) visible.add(key);
           frontier = next;
         }
-        queryNodes = nodes.filter((node) => visible.has(node.key));
+        queryNodes = projectedNodes.filter((node) => visible.has(node.key));
         queryEdges = neighborhoodEdges;
       }
       queryNodes = queryNodes.map((node) => ({ ...node, degree: fullDegree.get(node.key) ?? 0 }));
@@ -2533,13 +2616,18 @@ export function createMockApiClient(): ApiClient {
       }
       const returnedKeys = new Set(returnedNodes.map((node) => node.key));
       const returnedEdges = queryEdges.filter((edge) => returnedKeys.has(edge.source) && returnedKeys.has(edge.target)).slice(0, limit);
-      const weakLinks = queryEdges.filter((edge) => edge.is_inferred);
+      const weakLinks = storyDiagnosticsAvailable
+        ? queryEdges.filter((edge) => edge.is_inferred)
+        : [];
       const returnedWeakLinks = weakLinks.filter((edge) => returnedKeys.has(edge.source) && returnedKeys.has(edge.target)).slice(0, Math.min(limit, 25));
-      const returnedHiddenEdges = hiddenQueryEdges.filter((edge) => returnedKeys.has(edge.source) && returnedKeys.has(edge.target)).slice(0, Math.min(limit, 25));
+      const returnedHiddenEdges = viewMode === "project_map"
+        ? hiddenQueryEdges.filter((edge) => returnedKeys.has(edge.source) && returnedKeys.has(edge.target)).slice(0, Math.min(limit, 25))
+        : [];
       const returnedOrphanKeys = orphanNodes.filter((node) => returnedKeys.has(node.key)).map((node) => node.key);
       return {
         project_id: p, revision: knowledgeGraphRevision(p), writing_mode: project.narrative_engine, focus_key: focusKey,
-        depth, include_inferred: includeInferred,
+        depth, include_inferred: includeInferred, view_mode: viewMode,
+        story_diagnostics_available: storyDiagnosticsAvailable,
         nodes: structuredClone(returnedNodes), edges: structuredClone(returnedEdges),
         node_count: queryNodes.length, edge_count: queryEdges.length,
         returned_node_count: returnedNodes.length, returned_edge_count: returnedEdges.length,
@@ -2547,7 +2635,7 @@ export function createMockApiClient(): ApiClient {
           || returnedEdges.length < queryEdges.length
           || returnedOrphanKeys.length < orphanNodes.length
           || returnedWeakLinks.length < weakLinks.length
-          || returnedHiddenEdges.length < hiddenQueryEdges.length,
+          || (viewMode === "project_map" && returnedHiddenEdges.length < hiddenQueryEdges.length),
         orphan_keys: returnedOrphanKeys,
         orphan_count: orphanNodes.length,
         weak_links: structuredClone(returnedWeakLinks),

@@ -190,7 +190,7 @@ for (const field of ['surface', 'drafter_page_id']) {
 console.log('Whiteboard comment-scope parity tests: 2 fields mirrored');
 
 const graphDtoFields = {
-  KnowledgeGraphQueryDTO: ['focus_key', 'depth', 'limit', 'include_inferred'],
+  KnowledgeGraphQueryDTO: ['focus_key', 'depth', 'limit', 'include_inferred', 'view_mode'],
   KnowledgeGraphNodeDTO: [
     'key', 'node_type', 'source_type', 'source_id', 'label', 'summary', 'metadata', 'degree',
   ],
@@ -199,7 +199,8 @@ const graphDtoFields = {
     'explanation', 'is_user_confirmed', 'is_inferred', 'is_hidden', 'metadata',
   ],
   KnowledgeGraphReadDTO: [
-    'project_id', 'revision', 'writing_mode', 'focus_key', 'depth', 'include_inferred', 'nodes', 'edges',
+    'project_id', 'revision', 'writing_mode', 'focus_key', 'depth', 'include_inferred',
+    'view_mode', 'story_diagnostics_available', 'nodes', 'edges',
     'node_count', 'edge_count', 'returned_node_count', 'returned_edge_count', 'truncated',
     'orphan_keys', 'orphan_count', 'weak_links', 'weak_link_count', 'hidden_edges',
     'hidden_edge_count', 'warnings', 'unavailable',
@@ -235,3 +236,27 @@ for (const [dtoName, fields] of Object.entries(graphDtoFields)) {
 }
 
 console.log('Knowledge Graph contract parity tests: routes/events + 8 DTOs mirrored');
+
+const knowledgeGraphViewModes = [
+  'project_map', 'structure', 'recorded_risk', 'revision_impact',
+];
+const pythonViewMode = pythonSchemas.match(
+  /KnowledgeGraphViewMode\s*=\s*Literal\[([^\]]+)\]/,
+)?.[1] ?? '';
+const typescriptViewMode = typescriptSchemas.match(
+  /export type KnowledgeGraphViewMode\s*=([\s\S]*?);/,
+)?.[1] ?? '';
+const literalValues = (source) => [...source.matchAll(/["']([^"']+)["']/g)]
+  .map((match) => match[1]);
+for (const [surface, actual] of [
+  ['Python', literalValues(pythonViewMode)],
+  ['TypeScript', literalValues(typescriptViewMode)],
+]) {
+  if (JSON.stringify(actual) !== JSON.stringify(knowledgeGraphViewModes)) {
+    throw new Error(
+      `${surface} KnowledgeGraphViewMode must exactly match ${knowledgeGraphViewModes.join(', ')}; got ${actual.join(', ')}`,
+    );
+  }
+}
+
+console.log('Knowledge Graph view-mode parity tests: 4 literal modes mirrored');

@@ -1,7 +1,7 @@
 import { createMockApiClient } from "./mockApi";
 import { ApiRequestError } from "../src/adapters/httpApiClient";
 import { flushPendingProjectSaves, getProjectSaveStatusSnapshot } from "../src/adapters/projectSaveCoordinator";
-import type { StoryStructureDTO } from "@logosforge/ui-contracts";
+import type { KnowledgeGraphQueryDTO, StoryStructureDTO } from "@logosforge/ui-contracts";
 
 let passed = 0;
 
@@ -41,15 +41,77 @@ check(typeof api.getKnowledgeGraphCommandReceipt === "function", "preview mock m
 check(typeof api.getKnowledgeGraphHiddenEdges === "function", "preview mock must implement the complete paged hidden-edge review queue");
 
 const health = await api.health();
-check(health.status === "ok" && health.api_version === "1.7.0", "preview health must satisfy the core contract");
+check(health.status === "ok" && health.api_version === "1.8.0", "preview health must satisfy the core contract");
 const projectMap = await api.getKnowledgeGraph(1, { limit: 160, include_inferred: true });
 check(
   projectMap.project_id === 1
+    && projectMap.view_mode === "project_map"
+    && projectMap.story_diagnostics_available === true
     && projectMap.nodes.length > 1
     && projectMap.nodes.every((node) => Number.isSafeInteger(node.degree) && node.degree >= 0)
     && projectMap.weak_links.every((edge) => projectMap.nodes.some((node) => node.key === edge.source)
       && projectMap.nodes.some((node) => node.key === edge.target)),
   "preview Knowledge Graph must expose bounded canonical nodes, full-query degrees, and safe weak-link endpoints",
+);
+const structureGraph = await api.getKnowledgeGraph(1, {
+  limit: 160,
+  include_inferred: true,
+  view_mode: "structure",
+});
+check(
+  structureGraph.view_mode === "structure"
+    && !structureGraph.story_diagnostics_available
+    && structureGraph.orphan_keys.length === 0
+    && structureGraph.orphan_count === 0
+    && structureGraph.weak_links.length === 0
+    && structureGraph.weak_link_count === 0
+    && structureGraph.nodes.every((node) => [
+      "project", "act", "chapter", "scene", "plot_block", "timeline_event",
+    ].includes(node.node_type))
+    && structureGraph.edges.every((edge) => [
+      "contains", "belongs_to", "precedes", "follows",
+    ].includes(edge.edge_type)),
+  "preview Structure view must mirror the bounded Core projection without story diagnostics",
+);
+const riskGraph = await api.getKnowledgeGraph(1, {
+  limit: 160,
+  include_inferred: true,
+  view_mode: "recorded_risk",
+});
+check(
+  riskGraph.view_mode === "recorded_risk"
+    && !riskGraph.story_diagnostics_available
+    && riskGraph.edges.length === 2
+    && riskGraph.edges.every((edge) => edge.edge_type === "risks" || edge.edge_type === "contradicts")
+    && riskGraph.hidden_edges.length === 0,
+  "preview Recorded Risk view must include only recorded risk edges and exact endpoints",
+);
+const revisionGraph = await api.getKnowledgeGraph(1, {
+  limit: 160,
+  include_inferred: true,
+  view_mode: "revision_impact",
+});
+check(
+  revisionGraph.view_mode === "revision_impact"
+    && !revisionGraph.story_diagnostics_available
+    && revisionGraph.edges.length === 1
+    && revisionGraph.edges.every((edge) => edge.source_system === "revision_intelligence"
+      && (edge.edge_type === "revises" || edge.edge_type === "risks")),
+  "preview Revision Impact view must include only recorded revision-intelligence impact edges",
+);
+let invalidGraphView: unknown = null;
+try {
+  await api.getKnowledgeGraph(1, {
+    view_mode: "future_mode",
+  } as unknown as KnowledgeGraphQueryDTO);
+} catch (error) {
+  invalidGraphView = error;
+}
+check(
+  invalidGraphView instanceof ApiRequestError
+    && invalidGraphView.status === 422
+    && invalidGraphView.code === "validation_error",
+  "preview Knowledge Graph must reject unknown view modes",
 );
 const focusNode = projectMap.nodes.find((node) => node.node_type === "scene")!;
 const focusedProjectMap = await api.getKnowledgeGraph(1, {
@@ -66,7 +128,7 @@ check(
 );
 check(
   focusedProjectMap.nodes.find((node) => node.key === focusNode.key)?.degree === focusNode.degree,
-  "preview focused nodes must retain their full-project degree",
+  "preview focused nodes must retain their complete selected-view degree",
 );
 const graphReviewApi = createMockApiClient();
 const initialReviewGraph = await graphReviewApi.getKnowledgeGraph(1, { limit: 100, include_inferred: true });

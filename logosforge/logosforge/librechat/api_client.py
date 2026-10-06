@@ -216,6 +216,7 @@ class LogosForgeApiClient:
         depth: int = 1,
         limit: int = 100,
         include_inferred: bool = True,
+        view_mode: str = "project_map",
     ) -> dict:
         """Return one bounded, revisioned Narrative Knowledge Graph view."""
         pid = int(project_id) if project_id is not None else self.require_project_id()
@@ -227,6 +228,7 @@ class LogosForgeApiClient:
                 "depth": depth,
                 "limit": limit,
                 "include_inferred": include_inferred,
+                "view_mode": view_mode,
             },
         )
 

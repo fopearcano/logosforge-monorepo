@@ -326,7 +326,7 @@ export interface ApiClient {
   voiceCommit(p: number, body: VoiceCommitReqDTO): Promise<VoiceApplyResultDTO>;
   voiceCanUndo(p: number): Promise<VoiceUndoStateDTO>;
   voiceUndo(p: number): Promise<VoiceUndoResultDTO>;
-  /** Bounded canonical narrative graph or a one/two-hop focused neighborhood. */
+  /** Bounded canonical narrative graph view or a one/two-hop focused neighborhood. */
   getKnowledgeGraph(p: number, query?: KnowledgeGraphQueryDTO): Promise<KnowledgeGraphReadDTO>;
   /** Apply one revision-guarded, idempotent graph edge-review decision. */
   executeKnowledgeGraphCommand(

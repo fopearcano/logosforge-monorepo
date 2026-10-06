@@ -182,16 +182,17 @@ export function useDecisionRadar(): Resource<DecisionRadarDTO> {
   return useResource(projectId ?? null, () => api.getDecisionRadar(projectId as number), ["scenes_changed", "scene_changed", "psyke_changed", "dashboard_changed"]);
 }
 
-/** Bounded canonical narrative Project Map or a focused one/two-hop neighborhood. */
+/** Bounded canonical narrative graph view or a focused one/two-hop neighborhood. */
 export function useKnowledgeGraph(query: KnowledgeGraphQueryDTO = {}): Resource<KnowledgeGraphReadDTO> {
   const { api, projectId } = useStudio();
   const focusKey = query.focus_key ?? null;
   const depth = query.depth ?? 1;
   const limit = query.limit ?? 100;
   const includeInferred = query.include_inferred ?? true;
+  const viewMode = query.view_mode ?? "project_map";
   const key = projectId == null
     ? null
-    : `${projectId}\u0000${focusKey ?? ""}\u0000${depth}\u0000${limit}\u0000${includeInferred}`;
+    : `${projectId}\u0000${focusKey ?? ""}\u0000${depth}\u0000${limit}\u0000${includeInferred}\u0000${viewMode}`;
   return useResource(
     key,
     () => api.getKnowledgeGraph(projectId as number, {
@@ -199,6 +200,7 @@ export function useKnowledgeGraph(query: KnowledgeGraphQueryDTO = {}): Resource<
       depth,
       limit,
       include_inferred: includeInferred,
+      view_mode: viewMode,
     }),
     [
       "project_data_changed", "scene_changed", "scenes_changed", "outline_changed",

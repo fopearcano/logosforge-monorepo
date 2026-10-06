@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import warnings
+from types import SimpleNamespace
 
 import pytest
 
@@ -28,6 +29,7 @@ from logosforge.knowledge_graph import (
     query_knowledge_graph,
 )
 from logosforge.knowledge_graph import provenance as P
+from logosforge.knowledge_graph.extractor_revision import extract_revision
 
 
 @pytest.fixture(autouse=True)
@@ -275,6 +277,116 @@ def test_deferred_systems_handled_when_absent():
     db.create_scene(pid, "S", content="x")
     res = build_knowledge_graph(db, pid)  # no revision/rewrite/apply data
     assert isinstance(res.graph.unavailable, list)  # no crash
+
+
+def test_revision_extraction_is_newest_first_globally_bounded_and_deterministic():
+    from logosforge.knowledge_graph.models import KGNode, KnowledgeGraph
+
+    reports = [
+        SimpleNamespace(
+            id=report_id,
+            title=f"Report {report_id}",
+            summary="",
+            impact_level="high",
+            confidence=P.CONF_CONFIRMED,
+            scene_id=1,
+        )
+        for report_id in range(1, 206)
+    ]
+    items_by_report = {
+        205: [
+            SimpleNamespace(
+                id=item_id,
+                target_type="scene",
+                target_id=str(item_id),
+                confidence=P.CONF_POSSIBLE,
+                explanation=f"Risk {item_id}",
+                severity="warning",
+                impact_kind="depends_on",
+                label=f"Scene {item_id}",
+                suggested_action="Review it.",
+            )
+            for item_id in range(1, 151)
+        ],
+        204: [
+            SimpleNamespace(
+                id=item_id,
+                target_type="scene",
+                target_id=str(item_id),
+                confidence=P.CONF_POSSIBLE,
+                explanation=f"Risk {item_id}",
+                severity="error",
+                impact_kind="contradicts",
+                label=f"Scene {item_id}",
+                suggested_action="Resolve it.",
+            )
+            for item_id in range(151, 251)
+        ],
+    }
+    longest_item = items_by_report[205][-1]
+    longest_item.severity = "s" * 100
+    longest_item.impact_kind = "k" * 100
+    longest_item.label = "l" * 500
+    longest_item.suggested_action = "a" * 1_000
+
+    class FakeDb:
+        def __init__(self, report_rows):
+            self.report_rows = report_rows
+            self.calls = []
+
+        def get_revision_impact_reports(self, project_id):
+            assert project_id == 7
+            return list(self.report_rows)
+
+        def get_revision_impact_items(self, report_id, *, limit=None):
+            self.calls.append((report_id, limit))
+            rows = items_by_report.get(report_id, [])
+            return list(rows if limit is None else rows[:limit])
+
+    def extracted(report_rows):
+        fake = FakeDb(report_rows)
+        graph = KnowledgeGraph(project_id=7)
+        for scene_id in range(1, 251):
+            graph.add_node(KGNode(
+                key=node_key(P.NT_SCENE, "scene", scene_id),
+                node_type=P.NT_SCENE,
+                source_type="scene",
+                source_id=str(scene_id),
+                label=f"Scene {scene_id}",
+            ))
+        extract_revision(fake, 7, graph)
+        return fake, graph
+
+    ascending_db, ascending = extracted(reports)
+    descending_db, descending = extracted(list(reversed(reports)))
+
+    expected_report_ids = {str(value) for value in range(6, 206)}
+    actual_report_ids = {
+        node.source_id for node in ascending.nodes.values()
+        if node.node_type == P.NT_REVISION_IMPACT
+    }
+    assert actual_report_ids == expected_report_ids
+    assert sum(edge.edge_type == P.ET_REVISES for edge in ascending.edges) == 200
+    risk_edges = [edge for edge in ascending.edges if edge.edge_type == P.ET_RISKS]
+    assert len(risk_edges) == 200
+    assert ascending_db.calls == [(205, 200), (204, 50)]
+    assert descending_db.calls == ascending_db.calls
+    assert ascending.to_dict() == descending.to_dict()
+    assert risk_edges[0].metadata == {
+        "item_id": 1,
+        "severity": "warning",
+        "impact_kind": "depends_on",
+        "label": "Scene 1",
+        "suggested_action": "Review it.",
+    }
+    bounded_metadata = next(
+        edge.metadata for edge in risk_edges
+        if edge.metadata["item_id"] == 150
+    )
+    assert len(bounded_metadata["severity"]) == 32
+    assert len(bounded_metadata["impact_kind"]) == 64
+    assert len(bounded_metadata["label"]) == 256
+    assert len(bounded_metadata["suggested_action"]) == 512
 
 
 # ===========================================================================
