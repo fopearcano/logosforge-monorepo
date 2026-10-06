@@ -63,6 +63,13 @@ def _seed_comment(base_url: str, token: str) -> tuple[int, int, str]:
         f"/api/projects/{project_id}/scenes",
         {"title": "Opening", "content": "Packaged comment anchor"},
     )
+    _api_json(
+        base_url,
+        token,
+        "POST",
+        f"/api/projects/{project_id}/scenes",
+        {"title": "Crossing", "content": "A second scene for graph review."},
+    )
     comment = _api_json(
         base_url,
         token,
@@ -200,7 +207,7 @@ async def _exercise_installed_mcp(
     project_id: int,
     comment_id: int,
     comment_revision: str,
-) -> tuple[str, str, str, str, str, dict]:
+) -> tuple[str, str, str, str, str, dict, str, str, dict]:
     params = mcp.StdioServerParameters(
         command=str(command),
         args=command_args,
@@ -215,14 +222,17 @@ async def _exercise_installed_mcp(
         if initialized.serverInfo.name != "logosforge":
             raise RuntimeError(f"unexpected MCP server: {initialized.serverInfo.name!r}")
         listed = await session.list_tools()
-        if len(listed.tools) != 42:
-            raise RuntimeError(f"expected 42 MCP tools, received {len(listed.tools)}")
+        if len(listed.tools) != 45:
+            raise RuntimeError(f"expected 45 MCP tools, received {len(listed.tools)}")
         tool_names = {tool.name for tool in listed.tools}
         expected_tools = {
             "logosforge_get_timeline",
             "logosforge_propose_timeline_command",
             "logosforge_get_canvas_plot",
             "logosforge_propose_canvas_plot_command",
+            "logosforge_get_knowledge_graph",
+            "logosforge_get_knowledge_graph_hidden_edges",
+            "logosforge_propose_knowledge_graph_command",
             "logosforge_search",
             "logosforge_list_comments",
             "logosforge_propose_comment_reply",
@@ -488,6 +498,145 @@ async def _exercise_installed_mcp(
         if after_stale_canvas != applied_canvas_snapshot:
             raise RuntimeError("stale Canvas Plot apply changed the reviewed board")
 
+        graph_before = _structured(
+            await session.call_tool("logosforge_get_knowledge_graph", {}),
+            "installed MCP Knowledge Graph read",
+        )
+        graph_revision = graph_before.get("revision")
+        graph_edges = graph_before.get("edges")
+        if (
+            not isinstance(graph_revision, str)
+            or len(graph_revision) != 64
+            or any(char not in "0123456789abcdef" for char in graph_revision)
+            or graph_before.get("project_id") != project_id
+            or not isinstance(graph_edges, list)
+        ):
+            raise RuntimeError(
+                "installed MCP Knowledge Graph read returned an invalid map"
+            )
+        inferred_edge = next(
+            (
+                edge for edge in graph_edges
+                if isinstance(edge, dict)
+                and edge.get("is_inferred") is True
+                and edge.get("is_user_confirmed") is False
+                and edge.get("is_hidden") is False
+            ),
+            None,
+        )
+        if inferred_edge is None:
+            raise RuntimeError(
+                "installed MCP Knowledge Graph returned no reviewable edge"
+            )
+        graph_identity = {
+            key: inferred_edge[key]
+            for key in ("source", "target", "edge_type")
+        }
+        graph_command = {
+            "kind": "hide_edge",
+            "expected_revision": graph_revision,
+            **graph_identity,
+        }
+        stale_graph_command = {
+            **graph_command,
+            "kind": "confirm_edge",
+        }
+        graph_proposal = _structured(
+            await session.call_tool(
+                "logosforge_propose_knowledge_graph_command",
+                {"command": graph_command},
+            ),
+            "installed MCP Knowledge Graph proposal",
+        )
+        stale_graph_sibling = _structured(
+            await session.call_tool(
+                "logosforge_propose_knowledge_graph_command",
+                {"command": stale_graph_command},
+            ),
+            "installed MCP stale Knowledge Graph sibling proposal",
+        )
+        if graph_proposal.get("request") != {
+            "method": "POST",
+            "path": f"/api/projects/{project_id}/knowledge-graph/commands",
+            "body": graph_command,
+        }:
+            raise RuntimeError(
+                "installed MCP Knowledge Graph proposal did not store the exact command"
+            )
+        if graph_before != _structured(
+            await session.call_tool("logosforge_get_knowledge_graph", {}),
+            "installed MCP post-proposal Knowledge Graph read",
+        ):
+            raise RuntimeError("Knowledge Graph proposal creation mutated project data")
+
+        applied_graph = _structured(
+            await session.call_tool(
+                "logosforge_apply_proposal",
+                {"proposal_id": graph_proposal["proposal_id"]},
+            ),
+            "installed MCP Knowledge Graph apply",
+        )
+        applied_graph_result = applied_graph.get("result")
+        if not isinstance(applied_graph_result, dict):
+            raise RuntimeError(
+                "installed MCP Knowledge Graph apply returned no result receipt"
+            )
+        applied_graph_snapshot = applied_graph_result.get("knowledge_graph")
+        applied_graph_revision = applied_graph_result.get("applied_revision")
+        if (
+            applied_graph.get("state") != "applied"
+            or not isinstance(applied_graph_snapshot, dict)
+            or not isinstance(applied_graph_revision, str)
+            or len(applied_graph_revision) != 64
+            or applied_graph_revision != applied_graph_snapshot.get("revision")
+            or applied_graph_revision == graph_revision
+            or applied_graph_result.get("replayed") is not False
+            or applied_graph_result.get("changed") is not True
+            or applied_graph_result.get("affected_edge") != graph_identity
+            or applied_graph_snapshot.get("hidden_edge_count") != 1
+        ):
+            raise RuntimeError(
+                "Knowledge Graph apply returned an invalid fresh command receipt"
+            )
+        hidden_page = _structured(
+            await session.call_tool(
+                "logosforge_get_knowledge_graph_hidden_edges",
+                {"offset": 0, "limit": 100},
+            ),
+            "installed MCP hidden Knowledge Graph queue",
+        )
+        if (
+            hidden_page.get("revision") != applied_graph_revision
+            or hidden_page.get("hidden_edge_count") != 1
+            or hidden_page.get("returned_edge_count") != 1
+            or not any(
+                isinstance(edge, dict)
+                and all(edge.get(key) == value for key, value in graph_identity.items())
+                and edge.get("is_hidden") is True
+                for edge in hidden_page.get("edges", [])
+            )
+        ):
+            raise RuntimeError(
+                "installed MCP hidden-edge queue omitted the reviewed edge"
+            )
+
+        stale_graph_result = await session.call_tool(
+            "logosforge_apply_proposal",
+            {"proposal_id": stale_graph_sibling["proposal_id"]},
+        )
+        _expected_tool_error(
+            stale_graph_result,
+            "installed MCP stale Knowledge Graph sibling apply",
+            "HTTP 409",
+            "Knowledge Graph review state changed",
+        )
+        after_stale_graph = _structured(
+            await session.call_tool("logosforge_get_knowledge_graph", {}),
+            "installed MCP post-stale Knowledge Graph read",
+        )
+        if after_stale_graph != applied_graph_snapshot:
+            raise RuntimeError("stale Knowledge Graph apply changed the reviewed map")
+
         search = _structured(
             await session.call_tool(
                 "logosforge_search", {"query": "Inspect this packaged thread."},
@@ -676,6 +825,11 @@ async def _exercise_installed_mcp(
             raise RuntimeError(
                 "installed MCP Canvas Plot proposal returned no proposal ID"
             )
+        graph_proposal_id = graph_proposal.get("proposal_id")
+        if not isinstance(graph_proposal_id, str) or not graph_proposal_id:
+            raise RuntimeError(
+                "installed MCP Knowledge Graph proposal returned no proposal ID"
+            )
         return (
             resolved_revision,
             timeline_proposal_id,
@@ -683,10 +837,13 @@ async def _exercise_installed_mcp(
             canvas_proposal_id,
             applied_canvas_revision,
             applied_canvas_snapshot,
+            graph_proposal_id,
+            applied_graph_revision,
+            applied_graph_snapshot,
         )
 
 
-async def _recover_installed_board_receipts(
+async def _recover_installed_command_receipts(
     command: Path,
     command_args: list[str],
     env: dict[str, str],
@@ -696,8 +853,11 @@ async def _recover_installed_board_receipts(
     canvas_proposal_id: str,
     applied_canvas_revision: str,
     expected_canvas_plot: dict,
+    graph_proposal_id: str,
+    applied_graph_revision: str,
+    expected_knowledge_graph: dict,
 ) -> None:
-    """Recover Timeline and Canvas receipts in a fresh companion."""
+    """Recover Timeline, Canvas, and Knowledge Graph receipts after restart."""
     params = mcp.StdioServerParameters(
         command=str(command),
         args=command_args,
@@ -857,6 +1017,67 @@ async def _recover_installed_board_receipts(
         if recovered_canvas_result.get("canvas_plot") != restarted_canvas_plot:
             raise RuntimeError(
                 "restarted MCP Canvas receipt did not return the current board"
+            )
+
+        restarted_knowledge_graph = _structured(
+            await session.call_tool("logosforge_get_knowledge_graph", {}),
+            "restarted MCP Knowledge Graph persistence read",
+        )
+        if restarted_knowledge_graph != expected_knowledge_graph:
+            raise RuntimeError(
+                "restarted MCP did not read the persisted Knowledge Graph review"
+            )
+        expected_hidden_edges = expected_knowledge_graph.get("hidden_edges")
+        if (
+            not isinstance(expected_hidden_edges, list)
+            or len(expected_hidden_edges) != 1
+            or not isinstance(expected_hidden_edges[0], dict)
+        ):
+            raise RuntimeError(
+                "packaged Knowledge Graph did not retain exactly one hidden edge"
+            )
+        expected_graph_identity = {
+            key: expected_hidden_edges[0].get(key)
+            for key in ("source", "target", "edge_type")
+        }
+        recovered_graph = _structured(
+            await session.call_tool(
+                "logosforge_get_proposal",
+                {"proposal_id": graph_proposal_id},
+            ),
+            "restarted MCP durable Knowledge Graph receipt recovery",
+        )
+        recovered_graph_receipt = recovered_graph.get("receipt")
+        if (
+            recovered_graph.get("state") != "applied"
+            or recovered_graph.get("recovered_from_core") is not True
+            or recovered_graph.get("request") is not None
+            or not isinstance(recovered_graph_receipt, dict)
+            or recovered_graph_receipt.get("project_id") != project_id
+            or recovered_graph_receipt.get("command_kind") != "hide_edge"
+            or recovered_graph_receipt.get("applied_revision")
+            != applied_graph_revision
+            or recovered_graph_receipt.get("original_changed") is not True
+            or recovered_graph_receipt.get("original_affected_edge")
+            != expected_graph_identity
+        ):
+            raise RuntimeError(
+                "restarted MCP returned the wrong Knowledge Graph receipt"
+            )
+        recovered_graph_result = recovered_graph.get("result")
+        if (
+            not isinstance(recovered_graph_result, dict)
+            or recovered_graph_result.get("replayed") is not True
+            or recovered_graph_result.get("applied_revision")
+            != applied_graph_revision
+            or recovered_graph_result.get("changed") is not False
+            or recovered_graph_result.get("affected_edge")
+            != expected_graph_identity
+            or recovered_graph_result.get("knowledge_graph")
+            != restarted_knowledge_graph
+        ):
+            raise RuntimeError(
+                "restarted MCP Knowledge Graph receipt was not a non-mutating replay"
             )
 
 
@@ -1124,6 +1345,9 @@ def _smoke_app(app: Path, timeout: int, codex_command: str | None = None) -> Non
                     canvas_proposal_id,
                     applied_canvas_revision,
                     applied_canvas_plot,
+                    graph_proposal_id,
+                    applied_graph_revision,
+                    applied_knowledge_graph,
                 ) = asyncio.run(
                     asyncio.wait_for(
                         _exercise_installed_mcp(
@@ -1139,7 +1363,7 @@ def _smoke_app(app: Path, timeout: int, codex_command: str | None = None) -> Non
                 )
                 asyncio.run(
                     asyncio.wait_for(
-                        _recover_installed_board_receipts(
+                        _recover_installed_command_receipts(
                             installed_mcp_path,
                             [],
                             env,
@@ -1149,6 +1373,9 @@ def _smoke_app(app: Path, timeout: int, codex_command: str | None = None) -> Non
                             canvas_proposal_id,
                             applied_canvas_revision,
                             applied_canvas_plot,
+                            graph_proposal_id,
+                            applied_graph_revision,
+                            applied_knowledge_graph,
                         ),
                         timeout=20,
                     )
@@ -1171,12 +1398,12 @@ def _smoke_app(app: Path, timeout: int, codex_command: str | None = None) -> Non
             if process is not None:
                 _stop_process_tree(process, app_pid, core_pid)
         print(
-            "Packaged Pro published a verified descriptor, advertised 42 MCP tools "
-            "including canonical project search plus revisioned Timeline and Canvas "
-            "Plot orchestration, applied Timeline, Canvas Plot, reply, and resolution "
-            "proposals, recovered only the durable Timeline receipt while re-reading "
-            "persisted Canvas data after a companion restart, and rejected stale and "
-            "replayed applies."
+            "Packaged Pro published a verified descriptor, advertised 45 MCP tools "
+            "including canonical project search plus revisioned Timeline, Canvas "
+            "Plot, and Knowledge Graph orchestration; applied all three transactional "
+            "surfaces plus reply and resolution proposals; recovered their durable "
+            "receipts after a companion restart; and rejected stale and replayed "
+            "applies."
         )
 
 

@@ -50,6 +50,7 @@ _LOWER_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _IDEMPOTENCY_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$")
 _TIMELINE_RECEIPT_MISS_CODE = "timeline_receipt_not_found"
 _CANVAS_PLOT_RECEIPT_MISS_CODE = "canvas_plot_receipt_not_found"
+_KNOWLEDGE_GRAPH_RECEIPT_MISS_CODE = "knowledge_graph_receipt_not_found"
 
 
 def _timeline_receipt_request_digest(
@@ -101,6 +102,22 @@ def _canvas_plot_receipt_request_digest(
         "kind": command["kind"],
         "expected_revision": command["expected_revision"],
         "fields": fields,
+    })
+
+
+def _knowledge_graph_receipt_request_digest(
+    project_id: int,
+    command: dict[str, Any],
+) -> str:
+    """Match Core's canonical identity for one graph edge-review command."""
+    return _digest({
+        "scope": "knowledge-graph-command-v1",
+        "project_id": int(project_id),
+        "kind": command["kind"],
+        "expected_revision": command["expected_revision"],
+        "source": command["source"],
+        "target": command["target"],
+        "edge_type": command["edge_type"],
     })
 
 
@@ -200,6 +217,13 @@ _CANVAS_PLOT_COMMAND_FIELDS: dict[str, set[str]] = {
         "y", "width", "height",
     },
     "delete_frame": {"kind", "expected_revision", "frame_id"},
+}
+
+_KNOWLEDGE_GRAPH_COMMAND_FIELDS: dict[str, set[str]] = {
+    kind: {
+        "kind", "expected_revision", "source", "target", "edge_type",
+    }
+    for kind in ("confirm_edge", "hide_edge", "unhide_edge")
 }
 
 
@@ -359,6 +383,19 @@ def _canvas_plot_revision(value: Any) -> str:
         raise GatewayError(
             "expected_revision must be the exact 64-character lowercase "
             "revision returned by logosforge_get_canvas_plot."
+        )
+    return value
+
+
+def _knowledge_graph_revision(value: Any) -> str:
+    if (
+        not isinstance(value, str)
+        or _LOWER_SHA256_RE.fullmatch(value) is None
+    ):
+        raise GatewayError(
+            "expected_revision must be the exact 64-character lowercase "
+            "revision returned by logosforge_get_knowledge_graph or "
+            "logosforge_get_knowledge_graph_hidden_edges."
         )
     return value
 
@@ -556,6 +593,57 @@ def _normalize_canvas_plot_command(command: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def _normalize_knowledge_graph_command(
+    command: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate the complete transactional graph review vocabulary."""
+    if not isinstance(command, dict):
+        raise GatewayError("Knowledge Graph command must be an object.")
+    kind = command.get("kind")
+    if (
+        not isinstance(kind, str)
+        or kind not in _KNOWLEDGE_GRAPH_COMMAND_FIELDS
+    ):
+        raise GatewayError(
+            "Knowledge Graph command kind must be one of: "
+            + ", ".join(sorted(_KNOWLEDGE_GRAPH_COMMAND_FIELDS))
+            + "."
+        )
+    extra = sorted(set(command) - _KNOWLEDGE_GRAPH_COMMAND_FIELDS[kind])
+    if extra:
+        raise GatewayError(
+            "Unexpected Knowledge Graph command field(s): "
+            + ", ".join(extra)
+            + "."
+        )
+    missing = [
+        field
+        for field in ("expected_revision", "source", "target", "edge_type")
+        if field not in command
+    ]
+    if missing:
+        raise GatewayError(
+            "Knowledge Graph command requires: " + ", ".join(missing) + "."
+        )
+
+    normalized: dict[str, Any] = {
+        "kind": kind,
+        "expected_revision": _knowledge_graph_revision(
+            command["expected_revision"],
+        ),
+    }
+    for field_name, maximum in (
+        ("source", 512), ("target", 512), ("edge_type", 128),
+    ):
+        value = command[field_name]
+        if not isinstance(value, str) or not value or len(value) > maximum:
+            raise GatewayError(
+                f"{field_name} must contain 1-{maximum} characters."
+            )
+        normalized[field_name] = value
+    return normalized
+
+
 @dataclass
 class Proposal:
     proposal_id: str
@@ -572,9 +660,9 @@ class Proposal:
     guard_digest: str = ""
     review: dict[str, Any] = field(default_factory=dict)
     # ``indeterminate`` is terminal because no durable protocol proved that a
-    # retry is safe. ``recovery_pending`` is reserved for Timeline and Canvas
-    # Plot commands: Core proved receipt support, so the same proposal id may
-    # be reconciled or resent later.
+    # retry is safe. ``recovery_pending`` is reserved for Timeline, Canvas Plot,
+    # and Knowledge Graph commands: Core proved receipt support, so the same
+    # proposal id may be reconciled or resent later.
     state: str = "pending"  # pending | applying | recovery_pending | applied | failed | indeterminate | discarded
     result: Any = None
     receipt: dict[str, Any] | None = None
@@ -583,6 +671,8 @@ class Proposal:
     timeline_receipt_observed: bool = False
     canvas_plot_resend_attempted: bool = False
     canvas_plot_receipt_observed: bool = False
+    knowledge_graph_resend_attempted: bool = False
+    knowledge_graph_receipt_observed: bool = False
     error: str = ""
 
     def public(self, include_result: bool = False) -> dict[str, Any]:
@@ -693,6 +783,60 @@ class LogosForgeMcpGateway:
             node["body_sha256"] = hashlib.sha256(body.encode("utf-8")).hexdigest()
             node["body_preview"] = _preview(body, 500)
         return snapshot
+
+    def get_knowledge_graph(
+        self,
+        *,
+        focus_key: str | None = None,
+        depth: int = 1,
+        limit: int = 100,
+        include_inferred: bool = True,
+    ) -> dict[str, Any]:
+        """Return one bounded canonical Project Map or focused neighborhood."""
+        if focus_key is not None and (
+            not isinstance(focus_key, str)
+            or not focus_key
+            or len(focus_key) > 512
+        ):
+            raise GatewayError("focus_key must contain 1-512 characters.")
+        if isinstance(depth, bool) or not isinstance(depth, int) or depth not in {1, 2}:
+            raise GatewayError("Knowledge Graph depth must be 1 or 2.")
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 200
+        ):
+            raise GatewayError("Knowledge Graph limit must be between 1 and 200.")
+        if not isinstance(include_inferred, bool):
+            raise GatewayError("include_inferred must be a boolean.")
+        return self.client.get_knowledge_graph(
+            self._project_id(),
+            focus_key=focus_key,
+            depth=depth,
+            limit=limit,
+            include_inferred=include_inferred,
+        )
+
+    def get_knowledge_graph_hidden_edges(
+        self,
+        *,
+        offset: int = 0,
+        limit: int = 25,
+    ) -> dict[str, Any]:
+        """Return one bounded page from the complete hidden-edge queue."""
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise GatewayError("Hidden-edge offset must be zero or greater.")
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 100
+        ):
+            raise GatewayError("Hidden-edge limit must be between 1 and 100.")
+        return self.client.get_knowledge_graph_hidden_edges(
+            self._project_id(),
+            offset=offset,
+            limit=limit,
+        )
 
     def list_characters(self) -> list[dict]:
         return self.client.list_characters(self._project_id())
@@ -880,11 +1024,11 @@ class LogosForgeMcpGateway:
                 self._expire(proposal)
                 return proposal.public(include_result=True)
 
-        # Proposals are intentionally held in memory, but Timeline and Canvas
-        # Plot receipts survive an MCP gateway restart in Core. Recovery is
-        # strictly scoped to the selected project; never scan projects with a
-        # capability key. Probe both receipt families so a cross-family key
-        # collision can never be resolved to whichever endpoint was tried first.
+        # Proposals are intentionally held in memory, but transactional command
+        # receipts survive an MCP gateway restart in Core. Recovery is strictly
+        # scoped to the selected project; never scan projects with a capability
+        # key. Probe every receipt family so a cross-family key collision can
+        # never be resolved to whichever endpoint was tried first.
         return self._recover_unknown_durable_proposal(proposal_id)
 
     def list_proposals(self, include_finished: bool = False) -> dict[str, Any]:
@@ -930,6 +1074,7 @@ class LogosForgeMcpGateway:
                 and (
                     self._is_timeline_proposal(proposal)
                     or self._is_canvas_plot_proposal(proposal)
+                    or self._is_knowledge_graph_proposal(proposal)
                 )
             )
             if proposal.state != "pending" and not recovering:
@@ -962,15 +1107,17 @@ class LogosForgeMcpGateway:
                     )
                     raise GatewayError(proposal.error)
             # Mark before network I/O so a concurrent call cannot race the same
-            # proposal. Timeline/Canvas recovery is safe only because the exact
-            # proposal id is also Core's durable idempotency capability.
+            # proposal. Durable recovery is safe only because the exact proposal
+            # id is also Core's idempotency capability.
             proposal.state = "applying"
             proposal.error = ""
 
         if recovering:
             if self._is_timeline_proposal(proposal):
                 return self._resume_timeline_recovery(proposal)
-            return self._resume_canvas_plot_recovery(proposal)
+            if self._is_canvas_plot_proposal(proposal):
+                return self._resume_canvas_plot_recovery(proposal)
+            return self._resume_knowledge_graph_recovery(proposal)
 
         try:
             result = self._execute_proposal_request(proposal)
@@ -981,6 +1128,8 @@ class LogosForgeMcpGateway:
                 return self._recover_ambiguous_timeline_apply(proposal, exc)
             if self._is_canvas_plot_proposal(proposal):
                 return self._recover_ambiguous_canvas_plot_apply(proposal, exc)
+            if self._is_knowledge_graph_proposal(proposal):
+                return self._recover_ambiguous_knowledge_graph_apply(proposal, exc)
             self._raise_indeterminate_apply(proposal, exc)
 
         return self._complete_proposal(proposal, result)
@@ -1017,10 +1166,26 @@ class LogosForgeMcpGateway:
             )
         )
 
+    def _is_knowledge_graph_proposal(self, proposal: Proposal) -> bool:
+        if (
+            proposal.project_id is None
+            or not proposal.operation.startswith("knowledge_graph_")
+        ):
+            return False
+        return (
+            proposal.method == "POST"
+            and proposal.path
+            == self.client.project_path(
+                "knowledge-graph/commands",
+                proposal.project_id,
+            )
+        )
+
     def _execute_proposal_request(self, proposal: Proposal) -> Any:
         if (
             self._is_timeline_proposal(proposal)
             or self._is_canvas_plot_proposal(proposal)
+            or self._is_knowledge_graph_proposal(proposal)
         ):
             return self.client.request(
                 proposal.method,
@@ -1080,7 +1245,7 @@ class LogosForgeMcpGateway:
     ) -> dict[str, Any] | None:
         """Read a receipt, distinguishing a supported miss from legacy 404."""
         try:
-            return self.client.get_timeline_command_receipt(
+            receipt = self.client.get_timeline_command_receipt(
                 proposal_id,
                 project_id,
             )
@@ -1091,6 +1256,9 @@ class LogosForgeMcpGateway:
             ):
                 return None
             raise
+        if not isinstance(receipt, dict):
+            raise GatewayError("Core returned an invalid Timeline receipt response.")
+        return receipt
 
     @staticmethod
     def _validate_timeline_receipt_shape(
@@ -1375,7 +1543,7 @@ class LogosForgeMcpGateway:
     ) -> dict[str, Any] | None:
         """Read a Canvas receipt, distinguishing a supported miss from 404."""
         try:
-            return self.client.get_canvas_plot_command_receipt(
+            receipt = self.client.get_canvas_plot_command_receipt(
                 proposal_id,
                 project_id,
             )
@@ -1386,6 +1554,11 @@ class LogosForgeMcpGateway:
             ):
                 return None
             raise
+        if not isinstance(receipt, dict):
+            raise GatewayError(
+                "Core returned an invalid Canvas Plot receipt response."
+            )
+        return receipt
 
     @staticmethod
     def _validate_canvas_plot_receipt_shape(
@@ -1764,6 +1937,313 @@ class LogosForgeMcpGateway:
         except Exception as exc:  # noqa: BLE001 - fresh snapshot transport
             self._mark_canvas_plot_recovery_pending(proposal, exc)
 
+    def _knowledge_graph_receipt(
+        self,
+        proposal_id: str,
+        project_id: int,
+    ) -> dict[str, Any] | None:
+        """Read a graph receipt, distinguishing a supported miss from 404."""
+        try:
+            receipt = self.client.get_knowledge_graph_command_receipt(
+                proposal_id,
+                project_id,
+            )
+        except LogosForgeApiError as exc:
+            if (
+                exc.status_code == 404
+                and exc.error_code == _KNOWLEDGE_GRAPH_RECEIPT_MISS_CODE
+            ):
+                return None
+            raise
+        if not isinstance(receipt, dict):
+            raise GatewayError(
+                "Core returned an invalid Knowledge Graph receipt response."
+            )
+        return receipt
+
+    @staticmethod
+    def _validate_knowledge_graph_receipt_shape(
+        receipt: Any,
+        project_id: int,
+    ) -> dict[str, Any]:
+        if not isinstance(receipt, dict):
+            raise GatewayError("Core returned an invalid Knowledge Graph receipt.")
+        receipt_project_id = receipt.get("project_id")
+        raw_edge = receipt.get("original_affected_edge")
+        affected_edge = {
+            "source": raw_edge.get("source") if isinstance(raw_edge, dict) else None,
+            "target": raw_edge.get("target") if isinstance(raw_edge, dict) else None,
+            "edge_type": (
+                raw_edge.get("edge_type") if isinstance(raw_edge, dict) else None
+            ),
+        }
+        canonical = {
+            "project_id": receipt_project_id,
+            "request_digest": receipt.get("request_digest"),
+            "command_kind": receipt.get("command_kind"),
+            "expected_revision": receipt.get("expected_revision"),
+            "applied_revision": receipt.get("applied_revision"),
+            "original_changed": receipt.get("original_changed"),
+            "original_affected_edge": affected_edge,
+            "committed_at": receipt.get("committed_at"),
+        }
+
+        def valid_text(value: Any, maximum: int) -> bool:
+            return isinstance(value, str) and 1 <= len(value) <= maximum
+
+        valid = (
+            isinstance(receipt_project_id, int)
+            and not isinstance(receipt_project_id, bool)
+            and receipt_project_id == project_id
+            and isinstance(canonical["request_digest"], str)
+            and _LOWER_SHA256_RE.fullmatch(canonical["request_digest"]) is not None
+            and isinstance(canonical["command_kind"], str)
+            and canonical["command_kind"] in _KNOWLEDGE_GRAPH_COMMAND_FIELDS
+            and isinstance(canonical["expected_revision"], str)
+            and _LOWER_SHA256_RE.fullmatch(canonical["expected_revision"]) is not None
+            and isinstance(canonical["applied_revision"], str)
+            and _LOWER_SHA256_RE.fullmatch(canonical["applied_revision"]) is not None
+            and canonical["original_changed"] is True
+            and canonical["applied_revision"] != canonical["expected_revision"]
+            and valid_text(affected_edge["source"], 512)
+            and valid_text(affected_edge["target"], 512)
+            and valid_text(affected_edge["edge_type"], 128)
+            and isinstance(canonical["committed_at"], str)
+            and bool(canonical["committed_at"])
+        )
+        if valid:
+            canonical_request = {
+                "kind": canonical["command_kind"],
+                "expected_revision": canonical["expected_revision"],
+                **affected_edge,
+            }
+            valid = secrets.compare_digest(
+                canonical["request_digest"],
+                _knowledge_graph_receipt_request_digest(
+                    project_id,
+                    canonical_request,
+                ),
+            )
+        if not valid:
+            raise GatewayError("Core returned an invalid Knowledge Graph receipt.")
+        return copy.deepcopy(canonical)
+
+    def _validate_knowledge_graph_receipt_for_proposal(
+        self,
+        proposal: Proposal,
+        receipt: Any,
+    ) -> dict[str, Any]:
+        assert proposal.project_id is not None
+        canonical = self._validate_knowledge_graph_receipt_shape(
+            receipt,
+            proposal.project_id,
+        )
+        expected_digest = _knowledge_graph_receipt_request_digest(
+            proposal.project_id,
+            proposal.body,
+        )
+        expected_edge = {
+            key: proposal.body.get(key)
+            for key in ("source", "target", "edge_type")
+        }
+        if (
+            canonical["command_kind"] != proposal.body.get("kind")
+            or canonical["expected_revision"]
+            != proposal.body.get("expected_revision")
+            or canonical["original_affected_edge"] != expected_edge
+            or not secrets.compare_digest(
+                canonical["request_digest"],
+                expected_digest,
+            )
+        ):
+            raise GatewayError(
+                "Durable Knowledge Graph receipt integrity check failed; do not retry."
+            )
+        return canonical
+
+    def _recovered_knowledge_graph_result(
+        self,
+        project_id: int,
+        proposal_id: str,
+        receipt: dict[str, Any],
+        *,
+        proposal: Proposal | None = None,
+    ) -> dict[str, Any]:
+        """Read one Project Map bracketed by the same durable receipt."""
+        current = self.client.get_knowledge_graph(project_id)
+        raw_confirmation = self._knowledge_graph_receipt(
+            proposal_id,
+            project_id,
+        )
+        if raw_confirmation is None:
+            raise GatewayError(
+                "The durable Knowledge Graph receipt disappeared during recovery; "
+                "the project lifetime may have changed."
+            )
+        confirmation = (
+            self._validate_knowledge_graph_receipt_for_proposal(
+                proposal,
+                raw_confirmation,
+            )
+            if proposal is not None
+            else self._validate_knowledge_graph_receipt_shape(
+                raw_confirmation,
+                project_id,
+            )
+        )
+        if confirmation != receipt:
+            raise GatewayError(
+                "The durable Knowledge Graph receipt changed during recovery; "
+                "the project lifetime may have changed."
+            )
+        return {
+            "knowledge_graph": current,
+            "changed": False,
+            "affected_edge": copy.deepcopy(receipt["original_affected_edge"]),
+            "replayed": True,
+            "applied_revision": receipt["applied_revision"],
+        }
+
+    def _complete_knowledge_graph_recovery(
+        self,
+        proposal: Proposal,
+        raw_receipt: Any,
+    ) -> dict[str, Any]:
+        receipt = self._validate_knowledge_graph_receipt_for_proposal(
+            proposal,
+            raw_receipt,
+        )
+        assert proposal.project_id is not None
+        with self._lock:
+            proposal.receipt = receipt
+            proposal.recovered_from_core = True
+            proposal.knowledge_graph_receipt_observed = True
+        result = self._recovered_knowledge_graph_result(
+            proposal.project_id,
+            proposal.proposal_id,
+            receipt,
+            proposal=proposal,
+        )
+        with self._lock:
+            proposal.state = "applied"
+            proposal.error = ""
+            proposal.result = result
+            return proposal.public(include_result=True)
+
+    def _mark_knowledge_graph_recovery_pending(
+        self,
+        proposal: Proposal,
+        exc: Exception,
+    ) -> None:
+        public_error = (
+            "The Knowledge Graph apply is still awaiting durable recovery after "
+            "an ambiguous retry. Later, call logosforge_apply_proposal again "
+            "with this same proposal_id; do not create a replacement proposal: "
+            f"{exc}"
+        )
+        with self._lock:
+            proposal.state = "recovery_pending"
+            proposal.error = public_error
+        raise GatewayError(public_error) from exc
+
+    def _keep_knowledge_graph_recovery_pending(
+        self,
+        proposal: Proposal,
+        detail: str,
+        *,
+        cause: Exception | None = None,
+    ) -> None:
+        public_error = (
+            "The Knowledge Graph apply remains recovery_pending. No additional "
+            "mutation was sent. Later, call logosforge_apply_proposal again "
+            "with this same proposal_id to poll its durable receipt: "
+            f"{detail}"
+        )
+        with self._lock:
+            proposal.state = "recovery_pending"
+            proposal.error = public_error
+        if cause is not None:
+            raise GatewayError(public_error) from cause
+        raise GatewayError(public_error)
+
+    def _retry_knowledge_graph_once(
+        self,
+        proposal: Proposal,
+    ) -> dict[str, Any]:
+        with self._lock:
+            if (
+                proposal.knowledge_graph_resend_attempted
+                or proposal.knowledge_graph_receipt_observed
+            ):
+                self._keep_knowledge_graph_recovery_pending(
+                    proposal,
+                    "No durable receipt is currently visible; the single "
+                    "bounded resend has already been consumed.",
+                )
+            proposal.knowledge_graph_resend_attempted = True
+        try:
+            result = self._execute_proposal_request(proposal)
+        except Exception as exc:  # noqa: BLE001 - transport boundary
+            if self._is_definite_http_rejection(exc):
+                self._raise_rejected_apply(proposal, exc)
+            self._mark_knowledge_graph_recovery_pending(proposal, exc)
+        return self._complete_proposal(proposal, result)
+
+    def _recover_ambiguous_knowledge_graph_apply(
+        self,
+        proposal: Proposal,
+        original_error: Exception,
+    ) -> dict[str, Any]:
+        assert proposal.project_id is not None
+        try:
+            receipt = self._knowledge_graph_receipt(
+                proposal.proposal_id,
+                proposal.project_id,
+            )
+        except Exception as lookup_error:  # noqa: BLE001 - transport boundary
+            self._raise_indeterminate_apply(
+                proposal,
+                original_error,
+                receipt_error=lookup_error,
+            )
+        if receipt is None:
+            return self._retry_knowledge_graph_once(proposal)
+        try:
+            return self._complete_knowledge_graph_recovery(proposal, receipt)
+        except GatewayError as exc:
+            self._mark_receipt_validation_failed(proposal, exc)
+        except Exception as exc:  # noqa: BLE001 - fresh snapshot transport
+            self._mark_knowledge_graph_recovery_pending(proposal, exc)
+
+    def _resume_knowledge_graph_recovery(
+        self,
+        proposal: Proposal,
+    ) -> dict[str, Any]:
+        assert proposal.project_id is not None
+        try:
+            receipt = self._knowledge_graph_receipt(
+                proposal.proposal_id,
+                proposal.project_id,
+            )
+        except Exception as lookup_error:  # noqa: BLE001 - transport boundary
+            self._keep_knowledge_graph_recovery_pending(
+                proposal,
+                f"Receipt lookup was inconclusive: {lookup_error}",
+                cause=lookup_error,
+            )
+        if receipt is None:
+            self._keep_knowledge_graph_recovery_pending(
+                proposal,
+                "Core reported that no receipt is currently available and "
+                "the single bounded resend has already been consumed.",
+            )
+        try:
+            return self._complete_knowledge_graph_recovery(proposal, receipt)
+        except GatewayError as exc:
+            self._mark_receipt_validation_failed(proposal, exc)
+        except Exception as exc:  # noqa: BLE001 - fresh snapshot transport
+            self._mark_knowledge_graph_recovery_pending(proposal, exc)
+
     def _recover_unknown_durable_proposal(
         self,
         proposal_id: str,
@@ -1774,16 +2254,25 @@ class LogosForgeMcpGateway:
         try:
             timeline_receipt = self._timeline_receipt(proposal_id, project_id)
             canvas_receipt = self._canvas_plot_receipt(proposal_id, project_id)
+            graph_receipt = self._knowledge_graph_receipt(
+                proposal_id,
+                project_id,
+            )
         except Exception as exc:
             raise GatewayError(
                 "Unknown proposal id; durable command receipt recovery could "
-                f"not be verified across Timeline and Canvas Plot: {exc}"
+                "not be verified across Timeline, Canvas Plot, and Knowledge "
+                f"Graph: {exc}"
             ) from exc
 
-        if timeline_receipt is not None and canvas_receipt is not None:
+        receipts_present = sum(
+            receipt is not None
+            for receipt in (timeline_receipt, canvas_receipt, graph_receipt)
+        )
+        if receipts_present > 1:
             raise GatewayError(
-                "Durable receipt capability collision across Timeline and "
-                "Canvas Plot; recovery failed closed."
+                "Durable receipt capability collision across Timeline, Canvas "
+                "Plot, and Knowledge Graph; recovery failed closed."
             )
         if timeline_receipt is not None:
             receipt = self._validate_timeline_receipt_shape(
@@ -1833,6 +2322,30 @@ class LogosForgeMcpGateway:
                 "receipt": receipt,
                 "result": result,
             }
+        if graph_receipt is not None:
+            receipt = self._validate_knowledge_graph_receipt_shape(
+                graph_receipt,
+                project_id,
+            )
+            result = self._recovered_knowledge_graph_result(
+                project_id,
+                proposal_id,
+                receipt,
+            )
+            return {
+                "proposal_id": proposal_id,
+                "operation": f"knowledge_graph_{receipt['command_kind']}",
+                "summary": "Recovered durable Knowledge Graph command receipt.",
+                "project_id": project_id,
+                "state": "applied",
+                "recovered_from_core": True,
+                "request_digest": receipt["request_digest"],
+                "request": None,
+                "review": {"recovered_receipt": copy.deepcopy(receipt)},
+                "requires_user_approval": True,
+                "receipt": receipt,
+                "result": result,
+            }
         raise GatewayError("Unknown proposal id.")
 
     def _proposal(self, proposal_id: str) -> Proposal:
@@ -1866,6 +2379,204 @@ class LogosForgeMcpGateway:
             self._expire(proposal, now, raise_error=False)
 
     # -- Focused proposal builders ---------------------------------------
+
+    def propose_knowledge_graph_command(
+        self,
+        command: dict[str, Any],
+        *,
+        hidden_edge_offset: int | None = None,
+    ) -> dict[str, Any]:
+        """Store one exact graph review command after a revisioned preflight.
+
+        Restores are preflighted against a caller-selected page from the
+        complete hidden-edge queue.  This avoids both the Project Map's bounded
+        hidden diagnostic subset and an unbounded server-side scan.
+        """
+        pid = self._project_id()
+        normalized = _normalize_knowledge_graph_command(command)
+        kind = normalized["kind"]
+
+        if kind == "unhide_edge":
+            if (
+                isinstance(hidden_edge_offset, bool)
+                or not isinstance(hidden_edge_offset, int)
+                or hidden_edge_offset < 0
+            ):
+                raise GatewayError(
+                    "unhide_edge requires the non-negative hidden_edge_offset "
+                    "returned by the reviewed hidden-edge page."
+                )
+            current = self.client.get_knowledge_graph_hidden_edges(
+                pid,
+                offset=hidden_edge_offset,
+                limit=100,
+            )
+            source_tool = "logosforge_get_knowledge_graph_hidden_edges"
+        else:
+            if hidden_edge_offset is not None:
+                raise GatewayError(
+                    "hidden_edge_offset is accepted only for unhide_edge."
+                )
+            current = self.client.get_knowledge_graph(
+                pid,
+                focus_key=normalized["source"],
+                depth=1,
+                limit=200,
+                include_inferred=True,
+            )
+            source_tool = "logosforge_get_knowledge_graph"
+
+        current_project_id = (
+            current.get("project_id") if isinstance(current, dict) else None
+        )
+        if (
+            not isinstance(current, dict)
+            or isinstance(current_project_id, bool)
+            or not isinstance(current_project_id, int)
+            or current_project_id != pid
+        ):
+            raise GatewayError(
+                "The LogosForge API returned an invalid Knowledge Graph snapshot."
+            )
+        revision = current.get("revision")
+        if (
+            not isinstance(revision, str)
+            or _LOWER_SHA256_RE.fullmatch(revision) is None
+        ):
+            raise GatewayError(
+                "The LogosForge API returned an invalid Knowledge Graph revision."
+            )
+        if revision != normalized["expected_revision"]:
+            raise GatewayError(
+                "expected_revision does not match the current Knowledge Graph. "
+                f"Read it again with {source_tool} and create a fresh proposal."
+            )
+        if kind == "unhide_edge" and (
+            current.get("offset") != hidden_edge_offset
+            or current.get("limit") != 100
+        ):
+            raise GatewayError(
+                "The LogosForge API returned the wrong hidden-edge page."
+            )
+
+        raw_edges = current.get("edges")
+        raw_nodes = current.get("nodes")
+        if not isinstance(raw_edges, list) or not isinstance(raw_nodes, list):
+            raise GatewayError(
+                "The LogosForge API returned an invalid Knowledge Graph snapshot."
+            )
+        edge = next(
+            (
+                row for row in raw_edges
+                if isinstance(row, dict)
+                and row.get("source") == normalized["source"]
+                and row.get("target") == normalized["target"]
+                and row.get("edge_type") == normalized["edge_type"]
+            ),
+            None,
+        )
+        if edge is None:
+            if kind == "unhide_edge":
+                raise GatewayError(
+                    "The exact hidden edge is not present on the reviewed page. "
+                    "Read the queue again and pass that page's offset."
+                )
+            raise GatewayError(
+                "The exact directional edge is not present in the current "
+                "Knowledge Graph neighborhood."
+            )
+
+        state_fields = ("is_inferred", "is_user_confirmed", "is_hidden")
+        if any(not isinstance(edge.get(field), bool) for field in state_fields):
+            raise GatewayError(
+                "The LogosForge API returned invalid Knowledge Graph edge state."
+            )
+        if kind in {"confirm_edge", "hide_edge"} and not (
+            edge["is_inferred"]
+            and not edge["is_user_confirmed"]
+            and not edge["is_hidden"]
+        ):
+            raise GatewayError(
+                f"{kind} requires a visible, unconfirmed inferred edge."
+            )
+        if kind == "unhide_edge" and not edge["is_hidden"]:
+            raise GatewayError("unhide_edge requires a persisted hidden edge.")
+
+        nodes = [row for row in raw_nodes if isinstance(row, dict)]
+
+        def node_review(key: str) -> dict[str, Any]:
+            node = next((row for row in nodes if row.get("key") == key), None)
+            if node is None:
+                raise GatewayError(
+                    "The reviewed edge is missing an endpoint node."
+                )
+            return {
+                "key": key,
+                "node_type": _preview(node.get("node_type"), 128),
+                "label": _preview(node.get("label"), 512),
+                "summary": _preview(node.get("summary"), 1_000),
+            }
+
+        source = node_review(normalized["source"])
+        target = node_review(normalized["target"])
+        verb = {
+            "confirm_edge": "Confirm",
+            "hide_edge": "Hide",
+            "unhide_edge": "Restore",
+        }[kind]
+        summary = (
+            f"{verb} Knowledge Graph edge {normalized['edge_type']!r} from "
+            f"{_preview(source['label'] or source['key'], 200)!r} to "
+            f"{_preview(target['label'] or target['key'], 200)!r}."
+        )
+        effects = {
+            "confirm_edge": (
+                "Persist this inferred directional relationship as an explicit "
+                "user-confirmed edge."
+            ),
+            "hide_edge": (
+                "Persist a hidden review decision for this inferred edge. It "
+                "remains recoverable through the hidden-edge queue."
+            ),
+            "unhide_edge": (
+                "Remove the hidden decision. A confirmed edge remains explicit; "
+                "an unconfirmed edge is visible only while its inferred basis "
+                "exists."
+            ),
+        }
+        review: dict[str, Any] = {
+            "knowledge_graph_revision": revision,
+            "command_kind": kind,
+            "destructive": kind == "hide_edge",
+            "requires_destructive_confirmation": kind == "hide_edge",
+            "source": source,
+            "target": target,
+            "edge": {
+                "source": normalized["source"],
+                "target": normalized["target"],
+                "edge_type": normalized["edge_type"],
+                "confidence": _preview(edge.get("confidence"), 32),
+                "provenance": _preview(edge.get("provenance"), 512),
+                "source_system": _preview(edge.get("source_system"), 128),
+                "explanation": _preview(edge.get("explanation"), 1_000),
+                "is_user_confirmed": edge["is_user_confirmed"],
+                "is_inferred": edge["is_inferred"],
+                "is_hidden": edge["is_hidden"],
+            },
+            "effect": effects[kind],
+        }
+        if hidden_edge_offset is not None:
+            review["hidden_edge_offset"] = hidden_edge_offset
+
+        return self.propose_request(
+            operation=f"knowledge_graph_{kind}",
+            method="POST",
+            path=self.client.project_path("knowledge-graph/commands", pid),
+            body=normalized,
+            summary=summary,
+            project_id=pid,
+            review=review,
+        )
 
     def propose_canvas_plot_command(
         self, command: dict[str, Any],

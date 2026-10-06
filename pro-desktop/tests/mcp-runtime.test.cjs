@@ -219,23 +219,38 @@ check('packaged smoke applies one Timeline proposal and rejects its stale siblin
   packagedSmoke.includes('installed MCP stale Timeline sibling apply') &&
   packagedSmoke.includes('after_stale_timeline != applied_snapshot'));
 check('frozen smoke advertises and proposes an exact non-mutating Canvas Plot command',
-  frozenSmoke.includes('expected 42 MCP tools') &&
+  frozenSmoke.includes('expected 45 MCP tools') &&
   frozenSmoke.includes('"logosforge_get_canvas_plot"') &&
   frozenSmoke.includes('"logosforge_propose_canvas_plot_command"') &&
   frozenSmoke.includes('f"/api/projects/{project_id}/canvas-plot/commands"') &&
   frozenSmoke.includes('canvas_after != canvas_before'));
 check('packaged smoke applies one Canvas Plot proposal and rejects its stale sibling',
-  packagedSmoke.includes('expected 42 MCP tools') &&
+  packagedSmoke.includes('expected 45 MCP tools') &&
   packagedSmoke.includes('"logosforge_get_canvas_plot"') &&
   packagedSmoke.includes('"logosforge_propose_canvas_plot_command"') &&
   (packagedSmoke.match(/\{"include_bodies": True\}/g) || []).length === 4 &&
   packagedSmoke.includes('installed MCP Canvas Plot apply') &&
   packagedSmoke.includes('installed MCP stale Canvas Plot sibling apply') &&
   packagedSmoke.includes('after_stale_canvas != applied_canvas_snapshot'));
-check('packaged smoke recovers durable Timeline and Canvas receipts after companion restart',
-  packagedSmoke.includes('async def _recover_installed_board_receipts(') &&
+check('frozen smoke advertises an exact non-mutating Knowledge Graph proposal',
+  frozenSmoke.includes('expected 45 MCP tools') &&
+  frozenSmoke.includes('"logosforge_get_knowledge_graph"') &&
+  frozenSmoke.includes('"logosforge_get_knowledge_graph_hidden_edges"') &&
+  frozenSmoke.includes('"logosforge_propose_knowledge_graph_command"') &&
+  frozenSmoke.includes('f"/api/projects/{project_id}/knowledge-graph/commands"') &&
+  frozenSmoke.includes('graph_after != graph_before'));
+check('packaged smoke applies one Knowledge Graph proposal and rejects its stale sibling',
+  packagedSmoke.includes('"logosforge_get_knowledge_graph"') &&
+  packagedSmoke.includes('"logosforge_get_knowledge_graph_hidden_edges"') &&
+  packagedSmoke.includes('"logosforge_propose_knowledge_graph_command"') &&
+  packagedSmoke.includes('installed MCP Knowledge Graph apply') &&
+  packagedSmoke.includes('installed MCP stale Knowledge Graph sibling apply') &&
+  packagedSmoke.includes('after_stale_graph != applied_graph_snapshot'));
+check('packaged smoke recovers durable Timeline, Canvas, and Graph receipts after companion restart',
+  packagedSmoke.includes('async def _recover_installed_command_receipts(') &&
   packagedSmoke.includes('restarted MCP durable Timeline receipt recovery') &&
   packagedSmoke.includes('restarted MCP durable Canvas Plot receipt recovery') &&
+  packagedSmoke.includes('restarted MCP durable Knowledge Graph receipt recovery') &&
   packagedSmoke.includes('recovered.get("recovered_from_core") is not True') &&
   packagedSmoke.includes('recovered_result.get("replayed") is not True') &&
   packagedSmoke.includes('recovered_result.get("applied_revision") != applied_timeline_revision') &&
@@ -246,9 +261,12 @@ check('packaged smoke recovers durable Timeline and Canvas receipts after compan
   packagedSmoke.includes('recovered_canvas_result.get("replayed") is not True') &&
   packagedSmoke.includes('recovered_canvas_result.get("affected_node_ids") != []') &&
   packagedSmoke.includes('recovered_canvas_result.get("created_node_id") is not None') &&
+  packagedSmoke.includes('recovered_graph_receipt.get("original_affected_edge")') &&
+  packagedSmoke.includes('recovered_graph_result.get("replayed") is not True') &&
+  packagedSmoke.includes('recovered_graph_result.get("affected_edge")') &&
   packagedSmoke.includes('packaged_lane_count != 1') &&
   packagedSmoke.indexOf('_exercise_installed_mcp(') <
-    packagedSmoke.lastIndexOf('_recover_installed_board_receipts('));
+    packagedSmoke.lastIndexOf('_recover_installed_command_receipts('));
 check('fresh companion recovers the applied Canvas proposal against its persisted board',
   packagedSmoke.includes('restarted MCP Canvas Plot persistence read') &&
   packagedSmoke.includes('restarted_canvas_plot != expected_canvas_plot') &&

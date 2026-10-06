@@ -103,9 +103,9 @@ GET  /api/health → { status, service, mode, version, api_version, core_version
 desktop and Web/PWA) read these to verify they're talking to a compatible
 backend. `version` mirrors `api_version` for backward compatibility.
 The current additive HTTP contract version is **1.7.0**. This version is
-deliberately independent from the local MCP server contract: adding the
-Knowledge Graph HTTP review commands below does not add or change an MCP tool,
-so the MCP server remains at **1.5.0**.
+deliberately independent from the local MCP server contract. MCP gateway 1.6
+now maps the existing Knowledge Graph HTTP review boundary into three focused
+tools without changing this HTTP contract version.
 
 ### Packaged-desktop live context
 ```
@@ -246,6 +246,17 @@ Receipt GET requires the same header, is project-scoped, and returns
 changed command publishes `knowledge_graph_changed`; rejects and exact replays
 do not. Persisted logical duplicates fail closed as server-state corruption
 rather than choosing an order-dependent winner.
+
+MCP gateway 1.6 exposes the primary read, hidden-edge page, and guarded command
+proposal as `logosforge_get_knowledge_graph`,
+`logosforge_get_knowledge_graph_hidden_edges`, and
+`logosforge_propose_knowledge_graph_command`. Restore proposals must include
+the `hidden_edge_offset` of the current page containing their edge; the gateway
+refetches a 100-edge page and verifies its project, revision, and exact
+directional identity before storing a non-mutating proposal. Confirm/Hide reject
+that page-only argument. Apply uses the proposal id as `Idempotency-Key`, and
+ambiguous delivery follows the same durable receipt/restart recovery discipline
+as Timeline and Canvas Plot.
 
 ### Scenes / manuscript
 ```

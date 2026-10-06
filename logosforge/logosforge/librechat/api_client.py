@@ -208,6 +208,43 @@ class LogosForgeApiClient:
         pid = int(project_id) if project_id is not None else self.require_project_id()
         return self.request("GET", f"{self._prefix}/projects/{pid}/canvas-plot")
 
+    def get_knowledge_graph(
+        self,
+        project_id: int | None = None,
+        *,
+        focus_key: str | None = None,
+        depth: int = 1,
+        limit: int = 100,
+        include_inferred: bool = True,
+    ) -> dict:
+        """Return one bounded, revisioned Narrative Knowledge Graph view."""
+        pid = int(project_id) if project_id is not None else self.require_project_id()
+        return self.request(
+            "GET",
+            f"{self._prefix}/projects/{pid}/knowledge-graph",
+            query={
+                "focus_key": focus_key,
+                "depth": depth,
+                "limit": limit,
+                "include_inferred": include_inferred,
+            },
+        )
+
+    def get_knowledge_graph_hidden_edges(
+        self,
+        project_id: int | None = None,
+        *,
+        offset: int = 0,
+        limit: int = 25,
+    ) -> dict:
+        """Return one page from the complete hidden-edge review queue."""
+        pid = int(project_id) if project_id is not None else self.require_project_id()
+        return self.request(
+            "GET",
+            f"{self._prefix}/projects/{pid}/knowledge-graph/hidden-edges",
+            query={"offset": offset, "limit": limit},
+        )
+
     def get_timeline_command_receipt(
         self,
         idempotency_key: str,
@@ -243,6 +280,24 @@ class LogosForgeApiClient:
         return self.request(
             "GET",
             f"{self._prefix}/projects/{pid}/canvas-plot/command-receipt",
+            idempotency_key=idempotency_key,
+        )
+
+    def get_knowledge_graph_command_receipt(
+        self,
+        idempotency_key: str,
+        project_id: int | None = None,
+    ) -> dict:
+        """Return one durable project-scoped Knowledge Graph receipt.
+
+        The opaque retry capability is sent only in ``Idempotency-Key``.  A
+        ``knowledge_graph_receipt_not_found`` response proves receipt support
+        and a clean miss; any other 404 may come from an older Core API.
+        """
+        pid = int(project_id) if project_id is not None else self.require_project_id()
+        return self.request(
+            "GET",
+            f"{self._prefix}/projects/{pid}/knowledge-graph/command-receipt",
             idempotency_key=idempotency_key,
         )
 

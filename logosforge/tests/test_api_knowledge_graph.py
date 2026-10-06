@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
-
 from logosforge.api import create_api
 from logosforge.db import Database
 from logosforge.knowledge_graph import provenance as P
@@ -26,7 +25,7 @@ def test_http_and_mcp_contract_versions_are_deliberately_independent():
     from logosforge.librechat.mcp_server import SERVER_VERSION
 
     assert API_CONTRACT_VERSION == "1.7.0"
-    assert SERVER_VERSION == "1.5.0"
+    assert SERVER_VERSION == "1.6.0"
 
 
 def test_project_map_exposes_traceable_graph_and_pretruncation_diagnostics():

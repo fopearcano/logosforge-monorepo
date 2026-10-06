@@ -68,6 +68,13 @@ def _seed_comment(base_url: str, token: str) -> tuple[int, int, str]:
         f"/api/projects/{project_id}/scenes",
         {"title": "Opening", "content": "Frozen comment anchor"},
     )
+    _api_json(
+        base_url,
+        token,
+        "POST",
+        f"/api/projects/{project_id}/scenes",
+        {"title": "Crossing", "content": "A second scene for graph review."},
+    )
     comment = _api_json(
         base_url,
         token,
@@ -132,14 +139,17 @@ async def _exercise_mcp(
         if initialized.serverInfo.name != "logosforge":
             raise RuntimeError(f"unexpected MCP server: {initialized.serverInfo.name!r}")
         listed = await session.list_tools()
-        if len(listed.tools) != 42:
-            raise RuntimeError(f"expected 42 MCP tools, received {len(listed.tools)}")
+        if len(listed.tools) != 45:
+            raise RuntimeError(f"expected 45 MCP tools, received {len(listed.tools)}")
         tool_names = {tool.name for tool in listed.tools}
         expected_tools = {
             "logosforge_get_timeline",
             "logosforge_propose_timeline_command",
             "logosforge_get_canvas_plot",
             "logosforge_propose_canvas_plot_command",
+            "logosforge_get_knowledge_graph",
+            "logosforge_get_knowledge_graph_hidden_edges",
+            "logosforge_propose_knowledge_graph_command",
             "logosforge_search",
             "logosforge_list_comments",
             "logosforge_propose_comment_reply",
@@ -251,6 +261,61 @@ async def _exercise_mcp(
         )
         if canvas_after != canvas_before:
             raise RuntimeError("creating a Canvas Plot proposal mutated project data")
+        graph_before = _structured(
+            await session.call_tool("logosforge_get_knowledge_graph", {}),
+            "MCP Knowledge Graph read",
+        )
+        graph_revision = graph_before.get("revision")
+        graph_edges = graph_before.get("edges")
+        if (
+            not isinstance(graph_revision, str)
+            or len(graph_revision) != 64
+            or graph_before.get("project_id") != project_id
+            or not isinstance(graph_edges, list)
+        ):
+            raise RuntimeError("MCP Knowledge Graph read returned an invalid map")
+        inferred_edge = next(
+            (
+                edge for edge in graph_edges
+                if isinstance(edge, dict)
+                and edge.get("is_inferred") is True
+                and edge.get("is_user_confirmed") is False
+                and edge.get("is_hidden") is False
+            ),
+            None,
+        )
+        if inferred_edge is None:
+            raise RuntimeError("MCP Knowledge Graph read returned no reviewable edge")
+        graph_command = {
+            "kind": "hide_edge",
+            "expected_revision": graph_revision,
+            "source": inferred_edge["source"],
+            "target": inferred_edge["target"],
+            "edge_type": inferred_edge["edge_type"],
+        }
+        graph_proposal = _structured(
+            await session.call_tool(
+                "logosforge_propose_knowledge_graph_command",
+                {"command": graph_command},
+            ),
+            "MCP Knowledge Graph proposal",
+        )
+        if graph_proposal.get("state") != "pending":
+            raise RuntimeError("MCP Knowledge Graph proposal was not left pending")
+        if graph_proposal.get("request") != {
+            "method": "POST",
+            "path": f"/api/projects/{project_id}/knowledge-graph/commands",
+            "body": graph_command,
+        }:
+            raise RuntimeError(
+                "MCP Knowledge Graph proposal did not store the exact command"
+            )
+        graph_after = _structured(
+            await session.call_tool("logosforge_get_knowledge_graph", {}),
+            "MCP post-proposal Knowledge Graph read",
+        )
+        if graph_after != graph_before:
+            raise RuntimeError("creating a Knowledge Graph proposal mutated project data")
         search = _structured(
             await session.call_tool(
                 "logosforge_search", {"query": "Inspect this packaged thread."},
@@ -404,10 +469,10 @@ def smoke(executable: Path, mcp_executable: Path | None = None) -> None:
                     process.kill()
                     process.wait(timeout=10)
         print(
-            "Frozen LogosForge MCP initialized, advertised 42 tools, read and "
-            "proposed against the revisioned Timeline and Canvas Plot without "
-            "mutation, searched and read a seeded thread, and created both "
-            "comment proposal types."
+            "Frozen LogosForge MCP initialized, advertised 45 tools, read and "
+            "proposed against the revisioned Timeline, Canvas Plot, and Knowledge "
+            "Graph without mutation, searched and read a seeded thread, and "
+            "created both comment proposal types."
         )
 
 

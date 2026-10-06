@@ -142,6 +142,25 @@ request digest so semantically altered proof fails closed. Only a fresh changed
 command emits `knowledge_graph_changed`. Logical duplicate persisted rows fail
 closed instead of choosing an order-dependent winner.
 
+MCP gateway 1.6 exposes the same boundary through
+`logosforge_get_knowledge_graph`,
+`logosforge_get_knowledge_graph_hidden_edges`, and
+`logosforge_propose_knowledge_graph_command`. The hidden-edge read takes bounded
+`offset`/`limit` arguments, so Restore preflight can find every persisted hide
+decision rather than depending on the default map's diagnostic subset. The
+proposal stores exactly one `confirm_edge`, `hide_edge`, or `unhide_edge`
+command under an opaque proposal id; only the shared reviewed apply tool can
+mutate. Restore proposals additionally require the `hidden_edge_offset` from
+the page containing the target. The gateway refetches that 100-edge page and
+requires the exact project, revision, and directional identity before it stores
+the proposal; Confirm/Hide reject the page-only offset. That proposal id is
+also the Core `Idempotency-Key`. A lost apply can
+recover the exact durable receipt, and a fresh MCP process can reconstruct the
+applied proposal while returning the current coherent Project Map and original
+`applied_revision`. Only a proved `knowledge_graph_receipt_not_found` permits
+one bounded same-command/same-key resend; ambiguous or conflicting receipt
+evidence fails closed.
+
 ## Graph section (UI)
 
 The Pro Graph panel now renders the canonical, API-backed **Project Map** and
@@ -153,8 +172,9 @@ loading/error/empty/retry states, and explicit size-cap/truncation status.
 
 The initial Project Map is now paired with explicit **Confirm / Hide / Restore**
 review actions backed by the transactional HTTP contract above. Richer
-Structure/Risk/Revision/Confirmed-only modes and graph writes through MCP remain
-deferred.
+Structure/Risk/Revision/Confirmed-only modes remain deferred. The same guarded
+review actions are available to MCP clients through proposal/review/apply and
+durable receipt recovery.
 
 ## Logos (deterministic, no LLM)
 
@@ -206,8 +226,6 @@ also rejects malformed graph payloads and dangling references before render.
   richer graph modes are not yet exposed.
 - Node size currently uses explainable full-project degree; Story Gravity
   sizing and the story-order flow overlay remain part of the richer Graph pass.
-- MCP graph write tools are not yet exposed; they can now build on the guarded
-  HTTP command/receipt contract rather than legacy collector writes.
 - No force-directed render.
 - No external graph DB / Neo4j, no cloud sync, no collaboration, no AI-only
   semantic inference, no unbounded whole-project expansion.
@@ -217,8 +235,7 @@ also rejects malformed graph payloads and dangling references before render.
 
 ## Next recommended phase
 
-Expose the guarded Graph edge actions through MCP proposal/apply/recovery, then
-extend the bounded surface with richer Structure, Risk, Revision Impact,
+Extend the bounded surface with richer Structure, Risk, Revision Impact,
 Confirmed-only, and Inferred+Confirmed modes, Story Gravity sizing, and the
 story-order flow overlay; optionally wire graph decision cards directly into
 the Dashboard's radar panel.

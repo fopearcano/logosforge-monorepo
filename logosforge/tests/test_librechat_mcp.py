@@ -21,7 +21,9 @@ from unittest import mock
 
 import pytest
 from logosforge.db.database import (
+    KnowledgeGraphEdgeIdentity,
     _canvas_plot_command_request_digest,
+    _knowledge_graph_command_request_digest,
     _timeline_command_request_digest,
 )
 from logosforge.librechat import api_client as ac
@@ -30,6 +32,7 @@ from logosforge.librechat.mcp_gateway import (
     GatewayError,
     LogosForgeMcpGateway,
     _canvas_plot_receipt_request_digest,
+    _knowledge_graph_receipt_request_digest,
     _timeline_receipt_request_digest,
 )
 
@@ -150,6 +153,49 @@ def test_api_client_get_canvas_plot_uses_authoritative_project_endpoint():
     assert result == canvas_plot
 
 
+def test_api_client_knowledge_graph_reads_preserve_bounded_queries():
+    client = LogosForgeApiClient(
+        base_url="http://127.0.0.1:8765", project_id=7, auth_token="secret",
+    )
+    captured: list[dict] = []
+
+    def fake_urlopen(request, timeout=None):
+        captured.append({
+            "url": request.full_url,
+            "method": request.get_method(),
+            "authorization": request.headers.get("Authorization"),
+            "timeout": timeout,
+        })
+        return _response({"project_id": 7})
+
+    with mock.patch.object(ac.urllib.request, "urlopen", fake_urlopen):
+        client.get_knowledge_graph(
+            focus_key="scene:1",
+            depth=2,
+            limit=25,
+            include_inferred=False,
+        )
+        client.get_knowledge_graph_hidden_edges(offset=100, limit=50)
+
+    graph_url = ac.urllib.parse.urlparse(captured[0]["url"])
+    assert graph_url.path == "/api/projects/7/knowledge-graph"
+    assert ac.urllib.parse.parse_qs(graph_url.query) == {
+        "focus_key": ["scene:1"],
+        "depth": ["2"],
+        "limit": ["25"],
+        "include_inferred": ["False"],
+    }
+    hidden_url = ac.urllib.parse.urlparse(captured[1]["url"])
+    assert hidden_url.path == "/api/projects/7/knowledge-graph/hidden-edges"
+    assert ac.urllib.parse.parse_qs(hidden_url.query) == {
+        "offset": ["100"],
+        "limit": ["50"],
+    }
+    assert all(item["method"] == "GET" for item in captured)
+    assert all(item["authorization"] == "Bearer secret" for item in captured)
+    assert all(item["timeout"] == 15.0 for item in captured)
+
+
 def test_api_client_timeline_receipt_keeps_idempotency_key_out_of_url():
     client = LogosForgeApiClient(
         base_url="http://127.0.0.1:8765", project_id=7, auth_token="secret",
@@ -225,6 +271,49 @@ def test_api_client_canvas_receipt_keeps_idempotency_key_out_of_url():
 
     assert captured["url"] == (
         "http://127.0.0.1:8765/api/projects/7/canvas-plot/command-receipt"
+    )
+    assert proposal_id not in captured["url"]
+    assert captured["method"] == "GET"
+    assert captured["headers"]["idempotency-key"] == proposal_id
+    assert captured["headers"]["authorization"] == "Bearer secret"
+    assert result == receipt
+
+
+def test_api_client_graph_receipt_keeps_idempotency_key_out_of_url():
+    client = LogosForgeApiClient(
+        base_url="http://127.0.0.1:8765", project_id=7, auth_token="secret",
+    )
+    proposal_id = "lfp_abcdefghijklmnopqrstuvwx"
+    captured = {}
+    receipt = {
+        "project_id": 7,
+        "request_digest": "a" * 64,
+        "command_kind": "hide_edge",
+        "expected_revision": "b" * 64,
+        "applied_revision": "c" * 64,
+        "original_changed": True,
+        "original_affected_edge": {
+            "source": "scene:1",
+            "target": "scene:2",
+            "edge_type": "precedes",
+        },
+        "committed_at": "2026-10-06T10:00:00Z",
+    }
+
+    def fake_urlopen(request, timeout=None):
+        captured.update(
+            url=request.full_url,
+            method=request.get_method(),
+            headers={key.lower(): value for key, value in request.header_items()},
+            timeout=timeout,
+        )
+        return _response(receipt)
+
+    with mock.patch.object(ac.urllib.request, "urlopen", fake_urlopen):
+        result = client.get_knowledge_graph_command_receipt(proposal_id)
+
+    assert captured["url"] == (
+        "http://127.0.0.1:8765/api/projects/7/knowledge-graph/command-receipt"
     )
     assert proposal_id not in captured["url"]
     assert captured["method"] == "GET"
@@ -482,6 +571,28 @@ def test_canvas_receipt_request_digest_matches_core_canonical_wire(body):
     assert _canvas_request_digest(7, body) == expected
 
 
+@pytest.mark.parametrize("kind", ["confirm_edge", "hide_edge", "unhide_edge"])
+def test_knowledge_graph_receipt_digest_matches_core_canonical_wire(kind):
+    body = {
+        "kind": kind,
+        "expected_revision": "e" * 64,
+        "source": "scene:1:café",
+        "target": "scene:2:∞",
+        "edge_type": "precedes",
+    }
+    expected = _knowledge_graph_command_request_digest(
+        7,
+        body["kind"],
+        body["expected_revision"],
+        KnowledgeGraphEdgeIdentity(
+            source=body["source"],
+            target=body["target"],
+            edge_type=body["edge_type"],
+        ),
+    )
+    assert _knowledge_graph_receipt_request_digest(7, body) == expected
+
+
 class _FakeApiClient:
     """Minimal canonical-Pro-API fake with mutable server-side state."""
 
@@ -615,6 +726,91 @@ class _FakeApiClient:
         }
         self._canvas_plot_revision_sequence = 6
         self.canvas_plot_receipts: dict[tuple[int, str], dict] = {}
+        graph_nodes = [
+            {
+                "key": "scene:scene:11",
+                "node_type": "scene",
+                "source_type": "scene",
+                "source_id": "11",
+                "label": "Opening",
+                "summary": "Opening scene",
+                "metadata": {},
+                "degree": 1,
+            },
+            {
+                "key": "scene:scene:12",
+                "node_type": "scene",
+                "source_type": "scene",
+                "source_id": "12",
+                "label": "Crossing",
+                "summary": "Crossing scene",
+                "metadata": {},
+                "degree": 1,
+            },
+        ]
+        graph_edge = {
+            "source": "scene:scene:11",
+            "target": "scene:scene:12",
+            "edge_type": "precedes",
+            "confidence": "likely",
+            "provenance": "scene order",
+            "source_system": "structure",
+            "explanation": "The scenes are adjacent in manuscript order.",
+            "is_user_confirmed": False,
+            "is_inferred": True,
+            "is_hidden": False,
+            "metadata": {},
+        }
+        self.knowledge_graphs = {
+            1: {
+                "project_id": 1,
+                "revision": "7" * 64,
+                "writing_mode": "novel",
+                "focus_key": None,
+                "depth": 1,
+                "include_inferred": True,
+                "nodes": graph_nodes,
+                "edges": [graph_edge],
+                "node_count": 2,
+                "edge_count": 1,
+                "returned_node_count": 2,
+                "returned_edge_count": 1,
+                "truncated": False,
+                "orphan_keys": [],
+                "orphan_count": 0,
+                "weak_links": [copy.deepcopy(graph_edge)],
+                "weak_link_count": 1,
+                "hidden_edges": [],
+                "hidden_edge_count": 0,
+                "warnings": [],
+                "unavailable": [],
+            },
+            2: {
+                "project_id": 2,
+                "revision": "8" * 64,
+                "writing_mode": "novel",
+                "focus_key": None,
+                "depth": 1,
+                "include_inferred": True,
+                "nodes": [],
+                "edges": [],
+                "node_count": 0,
+                "edge_count": 0,
+                "returned_node_count": 0,
+                "returned_edge_count": 0,
+                "truncated": False,
+                "orphan_keys": [],
+                "orphan_count": 0,
+                "weak_links": [],
+                "weak_link_count": 0,
+                "hidden_edges": [],
+                "hidden_edge_count": 0,
+                "warnings": [],
+                "unavailable": [],
+            },
+        }
+        self._knowledge_graph_revision_sequence = 9
+        self.knowledge_graph_receipts: dict[tuple[int, str], dict] = {}
         self.comments = {
             1: [
                 {
@@ -759,6 +955,59 @@ class _FakeApiClient:
         pid = int(project_id) if project_id is not None else self.require_project_id()
         return copy.deepcopy(self.canvas_plots[pid])
 
+    def get_knowledge_graph(
+        self,
+        project_id: int | None = None,
+        *,
+        focus_key: str | None = None,
+        depth: int = 1,
+        limit: int = 100,
+        include_inferred: bool = True,
+    ) -> dict:
+        del limit
+        pid = int(project_id) if project_id is not None else self.require_project_id()
+        graph = copy.deepcopy(self.knowledge_graphs[pid])
+        graph["focus_key"] = focus_key
+        graph["depth"] = depth
+        graph["include_inferred"] = include_inferred
+        if not include_inferred:
+            graph["edges"] = [
+                edge for edge in graph["edges"] if not edge["is_inferred"]
+            ]
+            graph["returned_edge_count"] = len(graph["edges"])
+            graph["edge_count"] = len(graph["edges"])
+            graph["weak_links"] = []
+            graph["weak_link_count"] = 0
+        return graph
+
+    def get_knowledge_graph_hidden_edges(
+        self,
+        project_id: int | None = None,
+        *,
+        offset: int = 0,
+        limit: int = 25,
+    ) -> dict:
+        pid = int(project_id) if project_id is not None else self.require_project_id()
+        graph = self.knowledge_graphs[pid]
+        edges = copy.deepcopy(graph["hidden_edges"][offset:offset + limit])
+        endpoints = {
+            key for edge in edges for key in (edge["source"], edge["target"])
+        }
+        nodes = [
+            copy.deepcopy(node) for node in graph["nodes"]
+            if node["key"] in endpoints
+        ]
+        return {
+            "project_id": pid,
+            "revision": graph["revision"],
+            "offset": offset,
+            "limit": limit,
+            "hidden_edge_count": len(graph["hidden_edges"]),
+            "returned_edge_count": len(edges),
+            "nodes": nodes,
+            "edges": edges,
+        }
+
     def get_timeline_command_receipt(
         self,
         idempotency_key: str,
@@ -780,6 +1029,18 @@ class _FakeApiClient:
         return self.request(
             "GET",
             self.project_path("canvas-plot/command-receipt", pid),
+            idempotency_key=idempotency_key,
+        )
+
+    def get_knowledge_graph_command_receipt(
+        self,
+        idempotency_key: str,
+        project_id: int | None = None,
+    ) -> dict:
+        pid = int(project_id) if project_id is not None else self.require_project_id()
+        return self.request(
+            "GET",
+            self.project_path("knowledge-graph/command-receipt", pid),
             idempotency_key=idempotency_key,
         )
 
@@ -867,6 +1128,18 @@ class _FakeApiClient:
                         "Canvas Plot command receipt not found",
                         status_code=404,
                         error_code="canvas_plot_receipt_not_found",
+                    )
+                return copy.deepcopy(receipt)
+            if path.endswith("/knowledge-graph/command-receipt"):
+                project_id = int(path.split("/")[3])
+                receipt = self.knowledge_graph_receipts.get(
+                    (project_id, idempotency_key)
+                )
+                if receipt is None:
+                    raise LogosForgeApiError(
+                        "Knowledge Graph command receipt not found",
+                        status_code=404,
+                        error_code="knowledge_graph_receipt_not_found",
                     )
                 return copy.deepcopy(receipt)
             if path == "/api/projects/1/timeline":
@@ -1068,6 +1341,117 @@ class _FakeApiClient:
                 "created_node_id": created_node_id,
                 "created_link_id": None,
                 "created_frame_id": None,
+            }
+
+        if method == "POST" and path == "/api/projects/1/knowledge-graph/commands":
+            graph = self.knowledge_graphs[1]
+            assert body is not None
+            receipt_key = (1, idempotency_key)
+            request_digest = _knowledge_graph_receipt_request_digest(1, body)
+            if idempotency_key and receipt_key in self.knowledge_graph_receipts:
+                receipt = self.knowledge_graph_receipts[receipt_key]
+                if receipt["request_digest"] != request_digest:
+                    raise LogosForgeApiError(
+                        "Idempotency-Key was reused",
+                        status_code=409,
+                        error_code="idempotency_key_conflict",
+                    )
+                return {
+                    "knowledge_graph": copy.deepcopy(graph),
+                    "replayed": True,
+                    "applied_revision": receipt["applied_revision"],
+                    "changed": False,
+                    "affected_edge": copy.deepcopy(
+                        receipt["original_affected_edge"]
+                    ),
+                }
+            if body.get("expected_revision") != graph["revision"]:
+                raise LogosForgeApiError(
+                    "HTTP 409: Knowledge Graph review state changed",
+                    status_code=409,
+                    error_code="knowledge_graph_conflict",
+                )
+            identity = {
+                key: body[key] for key in ("source", "target", "edge_type")
+            }
+
+            def matches(edge):
+                return all(edge.get(key) == value for key, value in identity.items())
+
+            kind = body.get("kind")
+            if kind in {"confirm_edge", "hide_edge"}:
+                edge = next((row for row in graph["edges"] if matches(row)), None)
+                if edge is None:
+                    raise LogosForgeApiError(
+                        "Knowledge Graph edge not found",
+                        status_code=404,
+                        error_code="not_found",
+                    )
+                if kind == "confirm_edge":
+                    edge.update({
+                        "confidence": "confirmed",
+                        "is_user_confirmed": True,
+                        "is_inferred": False,
+                    })
+                    graph["weak_links"] = [
+                        row for row in graph["weak_links"] if not matches(row)
+                    ]
+                else:
+                    graph["edges"] = [
+                        row for row in graph["edges"] if not matches(row)
+                    ]
+                    graph["weak_links"] = [
+                        row for row in graph["weak_links"] if not matches(row)
+                    ]
+                    hidden = copy.deepcopy(edge)
+                    hidden["is_hidden"] = True
+                    graph["hidden_edges"].append(hidden)
+            elif kind == "unhide_edge":
+                edge = next(
+                    (row for row in graph["hidden_edges"] if matches(row)), None,
+                )
+                if edge is None:
+                    raise LogosForgeApiError(
+                        "Knowledge Graph edge not found",
+                        status_code=404,
+                        error_code="not_found",
+                    )
+                graph["hidden_edges"] = [
+                    row for row in graph["hidden_edges"] if not matches(row)
+                ]
+                visible = copy.deepcopy(edge)
+                visible["is_hidden"] = False
+                graph["edges"].append(visible)
+                if visible["is_inferred"]:
+                    graph["weak_links"].append(copy.deepcopy(visible))
+            else:
+                raise LogosForgeApiError("unsupported fake Knowledge Graph command")
+
+            graph["revision"] = (
+                f"{self._knowledge_graph_revision_sequence:064x}"
+            )
+            self._knowledge_graph_revision_sequence += 1
+            graph["edge_count"] = len(graph["edges"])
+            graph["returned_edge_count"] = len(graph["edges"])
+            graph["hidden_edge_count"] = len(graph["hidden_edges"])
+            graph["weak_link_count"] = len(graph["weak_links"])
+            if idempotency_key:
+                self.knowledge_graph_receipts[receipt_key] = {
+                    "project_id": 1,
+                    "request_digest": request_digest,
+                    "command_kind": kind,
+                    "expected_revision": body["expected_revision"],
+                    "applied_revision": graph["revision"],
+                    "original_changed": True,
+                    "original_affected_edge": identity,
+                    "committed_at": "2026-10-06T10:00:00Z",
+                }
+            return {
+                "knowledge_graph": copy.deepcopy(graph),
+                "replayed": False,
+                "applied_revision": graph["revision"],
+                "changed": True,
+                "affected_edge": identity,
             }
 
         scene_prefix = "/api/projects/1/scenes/"
@@ -1508,10 +1892,522 @@ def test_canvas_plot_noop_commands_are_rejected_before_proposal(command, message
 
     with pytest.raises(GatewayError, match=message):
         gateway.propose_canvas_plot_command(command)
-
     assert gateway.list_proposals() == {"proposals": []}
     assert not any(method == "POST" for method, _path, _body in fake.requests)
 
+
+def test_knowledge_graph_all_review_actions_are_revision_bound_and_single_use():
+    gateway, fake = _gateway(allow_writes=True)
+    initial = gateway.get_knowledge_graph()
+    edge = initial["edges"][0]
+    identity = {
+        key: edge[key] for key in ("source", "target", "edge_type")
+    }
+    hide_command = {
+        "kind": "hide_edge",
+        "expected_revision": initial["revision"],
+        **identity,
+    }
+    hide = gateway.propose_knowledge_graph_command(hide_command)
+    stale_confirm = gateway.propose_knowledge_graph_command({
+        **hide_command,
+        "kind": "confirm_edge",
+    })
+
+    assert hide["state"] == "pending"
+    assert hide["request"] == {
+        "method": "POST",
+        "path": "/api/projects/1/knowledge-graph/commands",
+        "body": hide_command,
+    }
+    assert hide["review"]["command_kind"] == "hide_edge"
+    assert hide["review"]["destructive"] is True
+    assert hide["review"]["source"]["key"] == identity["source"]
+    assert hide["review"]["target"]["key"] == identity["target"]
+    assert fake.knowledge_graphs[1]["hidden_edges"] == []
+
+    hidden = gateway.apply_proposal(hide["proposal_id"])
+    assert hidden["state"] == "applied"
+    assert hidden["result"]["changed"] is True
+    assert hidden["result"]["replayed"] is False
+    assert hidden["result"]["affected_edge"] == identity
+    assert hidden["result"]["knowledge_graph"]["hidden_edge_count"] == 1
+    assert fake.request_idempotency_keys[-1] == (
+        "POST",
+        "/api/projects/1/knowledge-graph/commands",
+        hide["proposal_id"],
+    )
+
+    with pytest.raises(GatewayError, match="HTTP 409.*Knowledge Graph"):
+        gateway.apply_proposal(stale_confirm["proposal_id"])
+    assert gateway.get_proposal(stale_confirm["proposal_id"])["state"] == "failed"
+    with pytest.raises(GatewayError, match="not pending"):
+        gateway.apply_proposal(hide["proposal_id"])
+
+    hidden_page = gateway.get_knowledge_graph_hidden_edges(offset=0, limit=100)
+    unhide_command = {
+        "kind": "unhide_edge",
+        "expected_revision": hidden_page["revision"],
+        **identity,
+    }
+    with pytest.raises(GatewayError, match="requires.*hidden_edge_offset"):
+        gateway.propose_knowledge_graph_command(unhide_command)
+    restored_proposal = gateway.propose_knowledge_graph_command(
+        unhide_command,
+        hidden_edge_offset=0,
+    )
+    assert restored_proposal["review"]["hidden_edge_offset"] == 0
+    restored = gateway.apply_proposal(restored_proposal["proposal_id"])
+    assert restored["result"]["affected_edge"] == identity
+    assert restored["result"]["knowledge_graph"]["hidden_edge_count"] == 0
+
+    restored_graph = restored["result"]["knowledge_graph"]
+    confirm_command = {
+        "kind": "confirm_edge",
+        "expected_revision": restored_graph["revision"],
+        **identity,
+    }
+    with pytest.raises(GatewayError, match="only for unhide_edge"):
+        gateway.propose_knowledge_graph_command(
+            confirm_command,
+            hidden_edge_offset=0,
+        )
+    confirm_proposal = gateway.propose_knowledge_graph_command(confirm_command)
+    confirmed = gateway.apply_proposal(confirm_proposal["proposal_id"])
+    confirmed_edge = next(
+        row for row in confirmed["result"]["knowledge_graph"]["edges"]
+        if all(row[key] == value for key, value in identity.items())
+    )
+    assert confirmed_edge["is_user_confirmed"] is True
+    assert confirmed_edge["is_inferred"] is False
+    assert confirmed_edge["confidence"] == "confirmed"
+    assert {
+        receipt["command_kind"]
+        for receipt in fake.knowledge_graph_receipts.values()
+    } == {"hide_edge", "unhide_edge", "confirm_edge"}
+
+
+@pytest.mark.parametrize("status_code", [None, 500], ids=["no-response", "server-error"])
+def test_knowledge_graph_ambiguous_apply_recovers_committed_receipt(status_code):
+    gateway, fake = _gateway(allow_writes=True)
+    current = gateway.get_knowledge_graph()
+    edge = current["edges"][0]
+    proposal = gateway.propose_knowledge_graph_command({
+        "kind": "hide_edge",
+        "expected_revision": current["revision"],
+        "source": edge["source"],
+        "target": edge["target"],
+        "edge_type": edge["edge_type"],
+    })
+    request = fake.request
+    post_keys = []
+
+    def commit_then_lose_response(
+        method, path, body=None, query=None, *, idempotency_key="",
+    ):
+        result = request(
+            method, path, body, query, idempotency_key=idempotency_key,
+        )
+        if method == "POST" and path.endswith("/knowledge-graph/commands"):
+            post_keys.append(idempotency_key)
+            del result
+            raise LogosForgeApiError(
+                "connection reset after request",
+                status_code=status_code,
+            )
+        return result
+
+    fake.request = commit_then_lose_response
+    applied = gateway.apply_proposal(proposal["proposal_id"])
+
+    assert applied["state"] == "applied"
+    assert applied["recovered_from_core"] is True
+    assert applied["result"]["replayed"] is True
+    assert applied["result"]["changed"] is False
+    assert applied["result"]["affected_edge"] == {
+        key: edge[key] for key in ("source", "target", "edge_type")
+    }
+    assert applied["result"]["knowledge_graph"] == fake.knowledge_graphs[1]
+    assert applied["receipt"]["command_kind"] == "hide_edge"
+    assert post_keys == [proposal["proposal_id"]]
+    assert fake.knowledge_graphs[1]["hidden_edge_count"] == 1
+
+
+def test_knowledge_graph_receipt_miss_allows_one_same_key_resend():
+    gateway, fake = _gateway(allow_writes=True)
+    current = gateway.get_knowledge_graph()
+    edge = current["edges"][0]
+    proposal = gateway.propose_knowledge_graph_command({
+        "kind": "hide_edge",
+        "expected_revision": current["revision"],
+        "source": edge["source"],
+        "target": edge["target"],
+        "edge_type": edge["edge_type"],
+    })
+    request = fake.request
+    post_keys = []
+
+    def lose_first_before_commit(
+        method, path, body=None, query=None, *, idempotency_key="",
+    ):
+        if method == "POST" and path.endswith("/knowledge-graph/commands"):
+            post_keys.append(idempotency_key)
+            if len(post_keys) == 1:
+                raise LogosForgeApiError("connection reset before commit")
+        return request(
+            method, path, body, query, idempotency_key=idempotency_key,
+        )
+
+    fake.request = lose_first_before_commit
+    applied = gateway.apply_proposal(proposal["proposal_id"])
+
+    assert applied["state"] == "applied"
+    assert post_keys == [proposal["proposal_id"], proposal["proposal_id"]]
+    assert fake.knowledge_graphs[1]["hidden_edge_count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("family", "command_suffix", "receipt_suffix"),
+    [
+        ("timeline", "/timeline/commands", "/timeline/command-receipt"),
+        ("canvas", "/canvas-plot/commands", "/canvas-plot/command-receipt"),
+        (
+            "knowledge_graph",
+            "/knowledge-graph/commands",
+            "/knowledge-graph/command-receipt",
+        ),
+    ],
+)
+def test_successful_null_receipt_never_authorizes_a_resend(
+    family,
+    command_suffix,
+    receipt_suffix,
+):
+    gateway, fake = _gateway(allow_writes=True)
+    if family == "timeline":
+        proposal = gateway.propose_timeline_command({
+            "kind": "create_lane",
+            "expected_revision": fake.timelines[1]["revision"],
+            "name": "Null receipt",
+        })
+    elif family == "canvas":
+        proposal = gateway.propose_canvas_plot_command({
+            "kind": "create_node",
+            "expected_revision": fake.canvas_plots[1]["revision"],
+            "title": "Null receipt",
+        })
+    else:
+        current = gateway.get_knowledge_graph()
+        edge = current["edges"][0]
+        proposal = gateway.propose_knowledge_graph_command({
+            "kind": "hide_edge",
+            "expected_revision": current["revision"],
+            "source": edge["source"],
+            "target": edge["target"],
+            "edge_type": edge["edge_type"],
+        })
+
+    request = fake.request
+    post_count = 0
+
+    def return_null_receipt_after_ambiguous_post(
+        method, path, body=None, query=None, *, idempotency_key="",
+    ):
+        nonlocal post_count
+        if method == "POST" and path.endswith(command_suffix):
+            post_count += 1
+            raise LogosForgeApiError("connection reset before commit")
+        if method == "GET" and path.endswith(receipt_suffix):
+            return None
+        return request(
+            method, path, body, query, idempotency_key=idempotency_key,
+        )
+
+    fake.request = return_null_receipt_after_ambiguous_post
+    with pytest.raises(GatewayError, match="indeterminate"):
+        gateway.apply_proposal(proposal["proposal_id"])
+
+    assert post_count == 1
+    assert gateway.get_proposal(proposal["proposal_id"])["state"] == "indeterminate"
+
+
+def test_knowledge_graph_recovery_pending_never_resends_more_than_once():
+    gateway, fake = _gateway(allow_writes=True)
+    current = gateway.get_knowledge_graph()
+    edge = current["edges"][0]
+    proposal = gateway.propose_knowledge_graph_command({
+        "kind": "hide_edge",
+        "expected_revision": current["revision"],
+        "source": edge["source"],
+        "target": edge["target"],
+        "edge_type": edge["edge_type"],
+    })
+    request = fake.request
+    post_keys = []
+
+    def lose_all_posts(
+        method, path, body=None, query=None, *, idempotency_key="",
+    ):
+        if method == "POST" and path.endswith("/knowledge-graph/commands"):
+            post_keys.append(idempotency_key)
+            raise LogosForgeApiError("connection reset before commit")
+        return request(
+            method, path, body, query, idempotency_key=idempotency_key,
+        )
+
+    fake.request = lose_all_posts
+    with pytest.raises(GatewayError, match="awaiting durable recovery"):
+        gateway.apply_proposal(proposal["proposal_id"])
+    assert gateway.get_proposal(proposal["proposal_id"])["state"] == (
+        "recovery_pending"
+    )
+
+    fake.request = request
+    for _ in range(2):
+        with pytest.raises(GatewayError, match="remains recovery_pending"):
+            gateway.apply_proposal(proposal["proposal_id"])
+    assert post_keys == [proposal["proposal_id"], proposal["proposal_id"]]
+    assert fake.knowledge_graphs[1]["hidden_edge_count"] == 0
+
+
+def test_graph_observed_receipt_blocks_resend_after_fresh_map_failure():
+    gateway, fake = _gateway(allow_writes=True)
+    current = gateway.get_knowledge_graph()
+    edge = current["edges"][0]
+    proposal = gateway.propose_knowledge_graph_command({
+        "kind": "hide_edge",
+        "expected_revision": current["revision"],
+        "source": edge["source"],
+        "target": edge["target"],
+        "edge_type": edge["edge_type"],
+    })
+    request = fake.request
+    get_graph = fake.get_knowledge_graph
+    post_count = 0
+
+    def commit_then_lose_response(
+        method, path, body=None, query=None, *, idempotency_key="",
+    ):
+        nonlocal post_count
+        result = request(
+            method, path, body, query, idempotency_key=idempotency_key,
+        )
+        if method == "POST" and path.endswith("/knowledge-graph/commands"):
+            post_count += 1
+            del result
+            raise LogosForgeApiError("response lost")
+        return result
+
+    def map_read_fails(*_args, **_kwargs):
+        raise LogosForgeApiError("fresh graph unavailable")
+
+    fake.request = commit_then_lose_response
+    fake.get_knowledge_graph = map_read_fails
+    with pytest.raises(GatewayError, match="awaiting durable recovery"):
+        gateway.apply_proposal(proposal["proposal_id"])
+    assert post_count == 1
+
+    fake.request = request
+    fake.get_knowledge_graph = get_graph
+    applied = gateway.apply_proposal(proposal["proposal_id"])
+    assert applied["state"] == "applied"
+    assert applied["recovered_from_core"] is True
+    assert post_count == 1
+    assert fake.knowledge_graphs[1]["hidden_edge_count"] == 1
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    ["request_digest", "affected_edge"],
+)
+def test_knowledge_graph_receipt_integrity_mismatch_fails_closed(tamper):
+    gateway, fake = _gateway(allow_writes=True)
+    current = gateway.get_knowledge_graph()
+    edge = current["edges"][0]
+    proposal = gateway.propose_knowledge_graph_command({
+        "kind": "hide_edge",
+        "expected_revision": current["revision"],
+        "source": edge["source"],
+        "target": edge["target"],
+        "edge_type": edge["edge_type"],
+    })
+    request = fake.request
+
+    def commit_then_tamper(
+        method, path, body=None, query=None, *, idempotency_key="",
+    ):
+        result = request(
+            method, path, body, query, idempotency_key=idempotency_key,
+        )
+        if method == "POST" and path.endswith("/knowledge-graph/commands"):
+            receipt = fake.knowledge_graph_receipts[(1, idempotency_key)]
+            if tamper == "request_digest":
+                receipt["request_digest"] = "f" * 64
+            else:
+                receipt["original_affected_edge"]["target"] = edge["source"]
+            del result
+            raise LogosForgeApiError("response lost")
+        return result
+
+    fake.request = commit_then_tamper
+    with pytest.raises(
+        GatewayError,
+        match="invalid Knowledge Graph receipt|receipt integrity check failed",
+    ):
+        gateway.apply_proposal(proposal["proposal_id"])
+    assert gateway.get_proposal(proposal["proposal_id"])["state"] == "failed"
+
+
+def test_graph_preflight_is_directional_paged_and_review_bounded():
+    gateway, fake = _gateway()
+    current = gateway.get_knowledge_graph()
+    edge = current["edges"][0]
+    reverse = {
+        "kind": "hide_edge",
+        "expected_revision": current["revision"],
+        "source": edge["target"],
+        "target": edge["source"],
+        "edge_type": edge["edge_type"],
+    }
+    with pytest.raises(GatewayError, match="exact directional edge"):
+        gateway.propose_knowledge_graph_command(reverse)
+
+    fake.knowledge_graphs[1]["nodes"][0]["label"] = "L" * 2_000
+    fake.knowledge_graphs[1]["nodes"][0]["summary"] = "S" * 4_000
+    fake.knowledge_graphs[1]["edges"][0]["explanation"] = "E" * 4_000
+    proposal = gateway.propose_knowledge_graph_command({
+        "kind": "hide_edge",
+        "expected_revision": current["revision"],
+        "source": edge["source"],
+        "target": edge["target"],
+        "edge_type": edge["edge_type"],
+    })
+    assert len(proposal["review"]["source"]["label"]) <= 513
+    assert len(proposal["review"]["source"]["summary"]) <= 1_001
+    assert len(proposal["review"]["edge"]["explanation"]) <= 1_001
+
+    writable, _ = _gateway(fake, allow_writes=True)
+    hidden = writable.apply_proposal(
+        writable.propose_knowledge_graph_command({
+            "kind": "hide_edge",
+            "expected_revision": current["revision"],
+            "source": edge["source"],
+            "target": edge["target"],
+            "edge_type": edge["edge_type"],
+        })["proposal_id"]
+    )["result"]["knowledge_graph"]
+    with pytest.raises(GatewayError, match="exact hidden edge is not present"):
+        writable.propose_knowledge_graph_command(
+            {
+                "kind": "unhide_edge",
+                "expected_revision": hidden["revision"],
+                "source": edge["source"],
+                "target": edge["target"],
+                "edge_type": edge["edge_type"],
+            },
+            hidden_edge_offset=100,
+        )
+
+
+def test_unknown_graph_proposal_recovers_from_selected_project_after_restart():
+    gateway, fake = _gateway(allow_writes=True)
+    current = gateway.get_knowledge_graph()
+    edge = current["edges"][0]
+    identity = {key: edge[key] for key in ("source", "target", "edge_type")}
+    proposal = gateway.propose_knowledge_graph_command({
+        "kind": "hide_edge",
+        "expected_revision": current["revision"],
+        **identity,
+    })
+    applied = gateway.apply_proposal(proposal["proposal_id"])
+
+    restarted, _ = _gateway(fake)
+    recovered = restarted.get_proposal(proposal["proposal_id"])
+
+    assert recovered["state"] == "applied"
+    assert recovered["recovered_from_core"] is True
+    assert recovered["request"] is None
+    assert recovered["receipt"]["command_kind"] == "hide_edge"
+    assert recovered["receipt"]["original_affected_edge"] == identity
+    assert recovered["result"] == {
+        "knowledge_graph": fake.knowledge_graphs[1],
+        "replayed": True,
+        "applied_revision": applied["result"]["applied_revision"],
+        "changed": False,
+        "affected_edge": identity,
+    }
+
+    fake.project_id = 2
+    wrong_project, _ = _gateway(fake)
+    with pytest.raises(GatewayError, match="Unknown proposal id"):
+        wrong_project.get_proposal(proposal["proposal_id"])
+
+
+@pytest.mark.parametrize("receipt_change", ["disappear", "mutate"])
+def test_graph_restart_recovery_brackets_map_with_same_receipt(receipt_change):
+    gateway, fake = _gateway(allow_writes=True)
+    current = gateway.get_knowledge_graph()
+    edge = current["edges"][0]
+    proposal = gateway.propose_knowledge_graph_command({
+        "kind": "hide_edge",
+        "expected_revision": current["revision"],
+        "source": edge["source"],
+        "target": edge["target"],
+        "edge_type": edge["edge_type"],
+    })
+    gateway.apply_proposal(proposal["proposal_id"])
+
+    restarted, _ = _gateway(fake)
+    replacement = copy.deepcopy(fake.knowledge_graphs[1])
+    replacement["revision"] = "f" * 64
+    replacement["hidden_edges"] = []
+    replacement["hidden_edge_count"] = 0
+
+    def replace_project_during_graph_read(*_args, **_kwargs):
+        key = (1, proposal["proposal_id"])
+        if receipt_change == "disappear":
+            fake.knowledge_graph_receipts.pop(key, None)
+        else:
+            fake.knowledge_graph_receipts[key]["committed_at"] = (
+                "2026-10-06T10:00:01Z"
+            )
+        fake.knowledge_graphs[1] = copy.deepcopy(replacement)
+        return copy.deepcopy(replacement)
+
+    fake.get_knowledge_graph = replace_project_during_graph_read
+    with pytest.raises(
+        GatewayError,
+        match="receipt (disappeared|changed).*project lifetime may have changed",
+    ):
+        restarted.get_proposal(proposal["proposal_id"])
+
+
+def test_restart_recovery_fails_closed_on_canvas_graph_receipt_collision():
+    gateway, fake = _gateway(allow_writes=True)
+    proposal = gateway.propose_canvas_plot_command({
+        "kind": "create_node",
+        "expected_revision": fake.canvas_plots[1]["revision"],
+        "title": "Canvas/graph collision",
+    })
+    gateway.apply_proposal(proposal["proposal_id"])
+    fake.knowledge_graph_receipts[(1, proposal["proposal_id"])] = {
+        "project_id": 1,
+        "request_digest": "a" * 64,
+        "command_kind": "hide_edge",
+        "expected_revision": "b" * 64,
+        "applied_revision": "c" * 64,
+        "original_changed": True,
+        "original_affected_edge": {
+            "source": "scene:scene:11",
+            "target": "scene:scene:12",
+            "edge_type": "precedes",
+        },
+        "committed_at": "2026-10-06T10:00:00Z",
+    }
+
+    restarted, _ = _gateway(fake)
+    with pytest.raises(GatewayError, match="capability collision.*failed closed"):
+        restarted.get_proposal(proposal["proposal_id"])
 
 @pytest.mark.parametrize("status_code", [None, 500], ids=["no-response", "server-error"])
 def test_timeline_ambiguous_apply_recovers_a_committed_receipt(status_code):
@@ -2208,13 +3104,17 @@ def test_unknown_proposal_receipt_miss_stays_unknown():
 
     with pytest.raises(GatewayError, match="Unknown proposal id"):
         gateway.get_proposal("lfp_abcdefghijklmnopqrstuvwx")
-    assert fake.requests[-2][0:2] == (
+    assert fake.requests[-3][0:2] == (
         "GET",
         "/api/projects/1/timeline/command-receipt",
     )
-    assert fake.requests[-1][0:2] == (
+    assert fake.requests[-2][0:2] == (
         "GET",
         "/api/projects/1/canvas-plot/command-receipt",
+    )
+    assert fake.requests[-1][0:2] == (
+        "GET",
+        "/api/projects/1/knowledge-graph/command-receipt",
     )
 
 
@@ -2984,12 +3884,15 @@ def test_mcp_registry_has_unique_focused_tools_and_no_legacy_self_approval():
     from logosforge.librechat import mcp_server as server
 
     names = [spec.name for spec in server.TOOL_SPECS]
-    assert len(names) == len(set(names)) == 42
+    assert len(names) == len(set(names)) == 45
     assert {
         "logosforge_get_timeline",
         "logosforge_propose_timeline_command",
         "logosforge_get_canvas_plot",
         "logosforge_propose_canvas_plot_command",
+        "logosforge_get_knowledge_graph",
+        "logosforge_get_knowledge_graph_hidden_edges",
+        "logosforge_propose_knowledge_graph_command",
         "logosforge_list_comments",
         "logosforge_propose_comment_reply",
         "logosforge_propose_comment_resolution",
@@ -3094,6 +3997,51 @@ def test_mcp_registry_has_unique_focused_tools_and_no_legacy_self_approval():
     assert canvas_by_kind["delete_frame"]["required"] == [
         "kind", "expected_revision", "frame_id",
     ]
+    graph_read = server.HANDLERS["logosforge_get_knowledge_graph"]
+    assert graph_read.input_schema == server._obj({
+        "focus_key": {
+            "type": "string", "minLength": 1, "maxLength": 512,
+        },
+        "depth": {"type": "integer", "minimum": 1, "maximum": 2},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+        "include_inferred": server.BOOL,
+    })
+    assert graph_read.read_only is True
+    assert graph_read.destructive is False
+    assert graph_read.idempotent is True
+    hidden_read = server.HANDLERS[
+        "logosforge_get_knowledge_graph_hidden_edges"
+    ]
+    assert hidden_read.input_schema == server._obj({
+        "offset": {"type": "integer", "minimum": 0},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+    })
+    assert hidden_read.read_only is True
+    assert hidden_read.destructive is False
+    assert hidden_read.idempotent is True
+    graph_proposal = server.HANDLERS[
+        "logosforge_propose_knowledge_graph_command"
+    ]
+    assert graph_proposal.read_only is True
+    assert graph_proposal.destructive is False
+    assert graph_proposal.idempotent is False
+    assert graph_proposal.input_schema["properties"]["hidden_edge_offset"] == {
+        "type": "integer", "minimum": 0,
+    }
+    graph_variants = graph_proposal.input_schema["properties"]["command"][
+        "oneOf"
+    ]
+    assert {
+        variant["properties"]["kind"]["const"]
+        for variant in graph_variants
+    } == {"confirm_edge", "hide_edge", "unhide_edge"}
+    assert all(
+        variant["required"] == [
+            "kind", "expected_revision", "source", "target", "edge_type",
+        ]
+        and variant["additionalProperties"] is False
+        for variant in graph_variants
+    )
     search = server.HANDLERS["logosforge_search"]
     assert search.input_schema == server._obj(
         {"query": {"type": "string", "maxLength": 500}}, ["query"],
@@ -3149,14 +4097,17 @@ def test_real_mcp_stdio_initializes_and_advertises_structured_tools():
 
     initialized, listed = asyncio.run(exercise())
     assert initialized.serverInfo.name == "logosforge"
-    assert initialized.serverInfo.version == "1.5.0"
+    assert initialized.serverInfo.version == "1.6.0"
     tools = {tool.name: tool for tool in listed.tools}
-    assert len(tools) == 42
+    assert len(tools) == 45
     assert {
         "logosforge_get_timeline",
         "logosforge_propose_timeline_command",
         "logosforge_get_canvas_plot",
         "logosforge_propose_canvas_plot_command",
+        "logosforge_get_knowledge_graph",
+        "logosforge_get_knowledge_graph_hidden_edges",
+        "logosforge_propose_knowledge_graph_command",
         "logosforge_list_comments",
         "logosforge_propose_comment_reply",
         "logosforge_propose_comment_resolution",
@@ -3211,6 +4162,27 @@ def test_real_mcp_stdio_initializes_and_advertises_structured_tools():
         variant["additionalProperties"] is False
         for variant in advertised_canvas_variants
     )
+    graph_annotations = tools["logosforge_get_knowledge_graph"].annotations
+    assert graph_annotations.readOnlyHint is True
+    assert graph_annotations.destructiveHint is False
+    assert graph_annotations.idempotentHint is True
+    hidden_graph_annotations = tools[
+        "logosforge_get_knowledge_graph_hidden_edges"
+    ].annotations
+    assert hidden_graph_annotations.readOnlyHint is True
+    assert hidden_graph_annotations.destructiveHint is False
+    assert hidden_graph_annotations.idempotentHint is True
+    graph_proposal = tools["logosforge_propose_knowledge_graph_command"]
+    graph_proposal_annotations = graph_proposal.annotations
+    assert graph_proposal_annotations.readOnlyHint is True
+    assert graph_proposal_annotations.destructiveHint is False
+    assert graph_proposal_annotations.idempotentHint is False
+    assert len(
+        graph_proposal.inputSchema["properties"]["command"]["oneOf"]
+    ) == 3
+    assert graph_proposal.inputSchema["properties"]["hidden_edge_offset"] == {
+        "type": "integer", "minimum": 0,
+    }
     annotations = tools["logosforge_apply_proposal"].annotations
     assert annotations.readOnlyHint is False
     assert annotations.destructiveHint is True

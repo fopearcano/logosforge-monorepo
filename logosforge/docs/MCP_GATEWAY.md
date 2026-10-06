@@ -148,15 +148,15 @@ Codex configuration.
 
 The exact schemas are reported by MCP discovery. The surface is grouped by
 responsibility rather than exposing arbitrary HTTP requests. Gateway version
-1.4 exposes 42 named tools:
+1.6 exposes 45 named tools:
 
 - Project and manuscript reads: list/select project, project context and
   snapshot, scene list/full scene, outline, notes, complete comment threads,
   search, events, and export. Comment listing is paged, can exclude resolved
   threads, and returns the revision for every thread.
 - Story intelligence reads: PSYKE entries, characters, relations,
-  progressions, diagnostics, and the canonical revisioned Timeline and Canvas
-  Plot boards.
+  progressions, diagnostics, the canonical revisioned Timeline and Canvas Plot
+  boards, and bounded Knowledge Graph maps plus the paged hidden-edge queue.
 - Desktop-aware reads: live panel/context, current scene, and current selection.
   Packaged Pro publishes authenticated, revision-ordered snapshots; they report
   unavailable (or a safe no-fresh-scene error for current scene) when no
@@ -170,7 +170,8 @@ responsibility rather than exposing arbitrary HTTP requests. Gateway version
 - Focused proposals: create a project or scene; patch a revisioned scene;
   create/patch outline nodes, PSYKE entries, relations, progressions, and
   notes; reply to a comment as `MCP assistant`; Resolve/Reopen a comment; or
-  submit one strict revision-bound Timeline or Canvas Plot command.
+  submit one strict revision-bound Timeline, Canvas Plot, or Knowledge Graph
+  command.
 - Proposal management: list, inspect, discard, and apply a stored proposal.
 
 The three comment-specific tools are `logosforge_list_comments`,
@@ -240,20 +241,47 @@ also cleans up hidden same-project legacy reverse/duplicate rows for that
 undirected pair. Deleting a frame does not delete nodes, links, or scenes. All
 three delete operations are identified as destructive in the proposal review.
 
-Timeline and Canvas Plot proposals have durable core receipts. The gateway uses
-the opaque proposal id itself as the command's `Idempotency-Key`; callers cannot
-choose or replace it. If a board apply response is lost after commit, the
-gateway asks the core for that exact family receipt. A receipt proves the
-original command committed, even after the MCP process restarts, without
-applying a second mutation. Recovery returns the current coherent board
-together with the original `applied_revision`; it does not replace newer state
-with an old snapshot. If the receipt-capable core explicitly reports the
-family-specific `timeline_receipt_not_found` or
-`canvas_plot_receipt_not_found`, the gateway may resend that exact stored
-command once with the same proposal id. It never creates a fresh key for
-recovery. A fresh gateway resolving an unknown proposal id probes both receipt
-families: exactly one match recovers the proposal, while conflicting matches
-fail closed. Receipts live for the project lifetime and are deleted with it.
+Knowledge Graph orchestration uses `logosforge_get_knowledge_graph` for a
+bounded Project Map or focused one-/two-hop neighborhood and
+`logosforge_get_knowledge_graph_hidden_edges` for deterministic pages through
+the complete restore queue. Follow either current read with
+`logosforge_propose_knowledge_graph_command`. Its exact directional edge
+identity is `(source, target, edge_type)`, and every command must carry the
+current 64-character review `revision`. The three supported commands are
+`confirm_edge`, `hide_edge`, and `unhide_edge` (Restore). Confirm and Hide are
+valid only for a visible unconfirmed inferred edge; Restore is valid only for a
+persisted hidden decision. Proposal creation performs the same eligibility
+preflight and stores the exact command plus bounded evidence and an explicit
+effect review, but does not mutate the graph. An `unhide_edge` proposal must
+also provide the
+non-negative `hidden_edge_offset` of the current hidden-edge page containing
+that identity. The gateway refetches a 100-edge page at that offset, verifies
+its project and exact revision, and refuses a Restore target absent from that
+page. The offset is rejected for Confirm/Hide.
+
+Core rechecks that review revision and edge eligibility inside the same
+transaction as the mutation and durable receipt. The revision deliberately
+covers the persisted review layer rather than every source used to rebuild the
+live derived map. Recovery therefore returns the current coherent Project Map
+while preserving the original command's `applied_revision`. The complete
+hidden queue remains available even when the default Project Map is truncated
+or an inferred basis later disappears.
+
+Timeline, Canvas Plot, and Knowledge Graph proposals have durable core
+receipts. The gateway uses the opaque proposal id itself as the command's
+`Idempotency-Key`; callers cannot choose or replace it. If a transactional
+apply response is lost after commit, the gateway asks the core for that exact
+family receipt. A receipt proves the original command committed, even after the
+MCP process restarts, without applying a second mutation. Recovery returns the
+current coherent surface together with the original `applied_revision`; it
+does not replace newer state with an old snapshot. If the receipt-capable core
+explicitly reports the family-specific `timeline_receipt_not_found`,
+`canvas_plot_receipt_not_found`, or `knowledge_graph_receipt_not_found`, the
+gateway may resend that exact stored command once with the same proposal id. It
+never creates a fresh key for recovery. A fresh gateway resolving an unknown
+proposal id probes all three receipt families: exactly one match recovers the
+proposal, while conflicting matches fail closed. Receipts live for the project
+lifetime and are deleted with it.
 
 Comment bodies, quotes, replies, scene titles, lane labels, and Canvas Plot
 node bodies and labels are
@@ -267,11 +295,11 @@ deleting threads or replies remain UI-only operations.
 Other guarded mutations compare the state observed during proposal creation
 before applying; clients should reread after a successful mutation.
 
-A definite API rejection (HTTP 4xx, including a Timeline or Canvas Plot
-revision conflict)
+A definite API rejection (HTTP 4xx, including a Timeline, Canvas Plot, or
+Knowledge Graph revision conflict)
 marks the proposal failed. Inspect the error and reread current state before
-creating a fresh proposal where appropriate. For a Timeline or Canvas Plot
-proposal, an ambiguous response enters receipt recovery: a proven,
+creating a fresh proposal where appropriate. For a Timeline, Canvas Plot, or
+Knowledge Graph proposal, an ambiguous response enters receipt recovery: a proven,
 family-specific receipt miss permits one bounded resend of the exact
 proposal/key, while a second ambiguous outcome remains `recovery_pending` for
 a later same-id reconciliation. A legacy or generic 404, failed lookup, or
@@ -292,9 +320,9 @@ The layers are cumulative:
 - Writes require API authentication by default.
 - A mutation must be proposed first, remains bound to its exact stored
   payload, expires, and is single-use.
-- Durable retry/recovery is limited to the same Timeline or Canvas Plot
-  proposal id and exact stored request. Other proposal families have no core
-  receipt in this phase.
+- Durable retry/recovery is limited to the same Timeline, Canvas Plot, or
+  Knowledge Graph proposal id and exact stored request. Other proposal families
+  have no core receipt in this phase.
 - The apply tool is marked as mutating/destructive for MCP clients that honor
   tool annotations. Client approval is an additional safeguard; it does not
   replace server validation.

@@ -384,20 +384,25 @@ Comment text is treated as project content, not as instructions to the agent.
 Creating anchored comments, changing their anchor or original body, and
 deleting threads or replies remain actions for Pro's Comments UI.
 
-The same Pro gateway can read and orchestrate the Timeline and Canvas Plot. An
-agent can prepare one reviewed change at a time against the exact board revision
-it read, and Core checks that revision again when applied. Timeline commands
-cover lanes, event membership, and structural/custom ordering; Canvas commands
-cover cards, links, frames, geometry, and stacking order. Deleting a Timeline
-lane leaves its scenes Unassigned, removing an event leaves the manuscript
-scene intact, and deleting a Canvas card preserves any linked manuscript scene.
+The same Pro gateway can read and orchestrate the Timeline, Canvas Plot, and
+Narrative Knowledge Graph. An agent can prepare one reviewed change at a time
+against the exact surface revision it read, and Core checks that revision again
+when applied. Timeline commands cover lanes, event membership, and
+structural/custom ordering; Canvas commands cover cards, links, frames,
+geometry, and stacking order. Knowledge Graph commands Confirm, Hide, or
+Restore one exact directional edge, and its paged hidden-edge read keeps the
+complete restore queue available even when the main map is truncated. Deleting
+a Timeline lane leaves its scenes Unassigned, removing an event leaves the
+manuscript scene intact, and deleting a Canvas card preserves any linked
+manuscript scene.
 
-Timeline and Canvas Plot applies carry a durable project receipt under the same
-reviewed proposal id. If a response is lost, the gateway reconciles that exact
-proposal instead of duplicating the change; this also works after restarting
-the MCP companion. Recovery never becomes a fresh proposal. Other proposal
-types remain conservative: if their apply response is uncertain, inspect
-current state and do not retry because the change may already have committed.
+Timeline, Canvas Plot, and Knowledge Graph applies carry a durable project
+receipt under the same reviewed proposal id. If a response is lost, the gateway
+reconciles that exact proposal instead of duplicating the change; this also
+works after restarting the MCP companion. Recovery never becomes a fresh
+proposal. Other proposal types remain conservative: if their apply response is
+uncertain, inspect current state and do not retry because the change may already
+have committed.
 
 Pro uses the stored quote and surrounding context to relocate marks after edits,
 including imported spans that cross title/content or scene boundaries. It saves
