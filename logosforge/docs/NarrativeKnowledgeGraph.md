@@ -111,14 +111,26 @@ non-screenplay modes.
 limit, include_inferred, include_deferred)`. All queries are capped,
 deterministic, read-only, current-project-only.
 
+The canonical HTTP read surface is
+`GET /api/projects/{project_id}/knowledge-graph`. It returns either a bounded
+Project Map or a one-/two-hop neighborhood around `focus_key`, with explicit
+requested/returned/total counts, truncation state, authoritative orphan and
+weak-link diagnostics, and warnings for unavailable source systems. Response
+nodes and edges are deterministic, project-scoped, and endpoint-complete.
+
 ## Graph section (UI)
 
-The existing Graph section is **unchanged and not broken**. The upgraded
-multi-mode visualization (Project Map / Scene & PSYKE Neighborhood / Structure /
-Risk / Revision Impact / Orphans / Confirmed-only / Inferred+Confirmed, with
-node/edge/confidence/source filters, depth selector, confirm/hide actions, size
-cap + "too many nodes" warning, 13-inch responsiveness) is **deferred** — the
-service API + Logos + Assistant context are the current surface.
+The Pro Graph panel now renders the canonical, API-backed **Project Map** and
+focused one-/two-hop neighborhoods instead of a PSYKE-only projection. Node
+type, minimum-confidence, and source-system filters are live; selecting a node
+can focus its neighborhood or publish its context to the Studio tools. The
+panel also presents Core-authoritative orphan and weak-link diagnostics,
+loading/error/empty/retry states, and explicit size-cap/truncation status.
+
+The surface is intentionally **read-only** in this slice. Confirm/hide/unhide
+actions, richer Structure/Risk/Revision/Confirmed-only modes, and graph writes
+through MCP remain deferred until their proposal, transaction, and durable
+receipt semantics are designed.
 
 ## Logos (deterministic, no LLM)
 
@@ -158,11 +170,20 @@ automatically; PSYKE-relation creation / edge confirmation require confirmation.
 
 Reads are per-`project_id`, so no stale graph leaks across a switch. The graph
 rebuilds on demand (no background LLM scan). Persisted confirm/hide state is
-project-scoped. (UI-side stale-clearing lands with the deferred Graph UI.)
+project-scoped. The UI request identity includes project, focus, depth, limit,
+and inferred-edge mode; a delayed response from a previous project or
+superseded focus request cannot repopulate the active panel. Runtime validation
+also rejects malformed graph payloads and dangling references before render.
 
 ## Limitations & deferred
 
-- No Graph **UI** upgrade yet (service-driven only); no force-directed render.
+- The implemented Graph UI is a bounded read-only Project Map/neighborhood
+  slice; richer graph modes and confirm/hide/unhide writes are not yet exposed.
+- Node size currently uses explainable full-project degree; Story Gravity
+  sizing and the story-order flow overlay remain part of the richer Graph pass.
+- No MCP graph write tools until graph mutations have transaction, review, and
+  durable command-receipt guarantees.
+- No force-directed render.
 - No external graph DB / Neo4j, no cloud sync, no collaboration, no AI-only
   semantic inference, no unbounded whole-project expansion.
 - Centrality = plain degree (explainable), not PageRank.
@@ -171,9 +192,13 @@ project-scoped. (UI-side stale-clearing lands with the deferred Graph UI.)
 
 ## Next recommended phase
 
-Build the deferred multi-mode **Graph UI** on top of this service (filters,
-neighborhood centering, confirm/hide actions, size caps), and optionally wire the
-graph decision cards directly into the Dashboard's radar panel.
+Design and implement transactional **Graph edge actions** (confirm, hide, and
+unhide) with explicit review, revision guards, durable command receipts, and
+same-proposal recovery before exposing them in Pro or MCP. Then extend the
+current bounded surface with the richer Structure, Risk, Revision Impact,
+Confirmed-only, and Inferred+Confirmed modes, Story Gravity sizing, and the
+story-order flow overlay; optionally wire graph decision cards directly into
+the Dashboard's radar panel.
 
 ## Semantic Continuity (Phase 10Q)
 
@@ -181,4 +206,5 @@ The Semantic Continuity Engine (docs/SemanticContinuityEngine.md) builds on this
 graph + PSYKE + scenes to detect contradictions, missing transitions and
 unresolved commitments, and to validate proposed rewrite / controlled-apply
 changes before they become canonical. Dedicated Continuity-Risk / Character-State
-/ Setup-Payoff Graph visualization modes are deferred with the Graph UI.
+/ Setup-Payoff Graph visualization modes remain deferred beyond the initial
+Project Map/neighborhood slice.
