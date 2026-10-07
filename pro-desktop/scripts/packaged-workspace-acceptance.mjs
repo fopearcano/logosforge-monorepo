@@ -565,6 +565,25 @@ async function selectPanel(page, name, panelId, screenLabel) {
   return surface;
 }
 
+async function setWorkspaceMode(page, name, preset) {
+  const mode = page
+    .getByRole('group', { name: 'Workspace mode', exact: true })
+    .getByRole('button', { name, exact: true });
+  await waitFor(
+    async () => await mode.isVisible() && await mode.isEnabled(),
+    `enabled ${name} workspace mode`,
+    STARTUP_TIMEOUT_MS,
+  );
+  if (await mode.getAttribute('aria-pressed') !== 'true') await mode.click();
+  const workspace = page.locator('[data-screen-label="Studio Dock Workspace"]');
+  await waitFor(
+    async () => await workspace.getAttribute('data-workspace-preset') === preset
+      && await mode.getAttribute('aria-pressed') === 'true',
+    `${name} workspace mode`,
+  );
+  record('ui', `workspace mode: ${name}`);
+}
+
 async function activateBillyDock(page) {
   const workspaceTab = await waitVisible(
     page.getByRole('tab', { name: 'AI Companions', exact: true }),
@@ -673,6 +692,7 @@ async function exerciseIntelligenceShell(session) {
   const seeded = await seedIntelligenceJourney(session, projectId);
 
   const manuscript = await selectPanel(page, 'Manuscript', 'manuscript', 'Manuscript Editor');
+  await setWorkspaceMode(page, 'FOCUS', 'focus');
   const openingHost = manuscript.locator(`[data-scene-id="${seeded.opening.id}"]`).first();
   await openingHost.waitFor({ state: 'attached', timeout: UI_TIMEOUT_MS });
   await openingHost.scrollIntoViewIfNeeded({ timeout: UI_TIMEOUT_MS });
@@ -685,6 +705,7 @@ async function exerciseIntelligenceShell(session) {
   const prose = await waitVisible(openingHost.locator('[data-prose]'), 'live seeded prose editor');
   const barrierText = `${seeded.opening.content}\n\nPackaged shell save barrier ${Date.now()}.`;
   await prose.fill(barrierText);
+  await setWorkspaceMode(page, 'COCKPIT', 'cockpit');
 
   let radarSurface = await selectPanel(page, 'Decision Radar', 'decision-radar', 'Decision Radar');
   const savedOpening = await packagedCoreJson(
@@ -694,7 +715,7 @@ async function exerciseIntelligenceShell(session) {
   assert.equal(
     savedOpening.content,
     barrierText,
-    'Decision Radar navigation crossed the workspace before the pending manuscript edit was saved',
+    'Workspace navigation crossed the save barrier before the pending manuscript edit was saved',
   );
   await waitVisible(radarSurface.getByText('GRAPH ONLINE', { exact: true }), 'Decision Radar Graph availability');
   await waitVisible(radarSurface.getByText('CONTINUITY ONLINE', { exact: true }), 'Decision Radar Continuity availability');
