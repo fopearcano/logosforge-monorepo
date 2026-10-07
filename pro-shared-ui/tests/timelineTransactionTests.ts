@@ -1,5 +1,6 @@
 import type { TimelineSnapshotDTO } from "@logosforge/ui-contracts";
 import {
+  createTimelineIdempotencyKey,
   describeTimelineIntent,
   moveTimelineEventIntent,
   planTimelineCommand,
@@ -50,10 +51,30 @@ const snapshot: TimelineSnapshotDTO = {
       character_states: [],
     },
   ],
+  links: [{
+    id: 501,
+    source_scene_id: 101,
+    target_scene_id: 102,
+    link_type: "causality",
+    color_label: "amber",
+    label: "Opening causes promise",
+    created_at: "2026-10-07T10:00:00Z",
+  }],
+  structure_links: [
+    { id: 601, source_scene_id: 101, target_type: "act", target_ref: "Act 1", target_exists: true, created_at: "2026-10-07T10:00:00Z" },
+    { id: 602, source_scene_id: 102, target_type: "chapter", target_ref: "Deleted chapter", target_exists: false, created_at: "2026-10-07T10:00:00Z" },
+  ],
   off_timeline: [
     { id: 103, title: "Reversal", structural_number: "1.2.1", act: "Act 1", chapter: "Chapter 2" },
   ],
 };
+
+{
+  const first = createTimelineIdempotencyKey();
+  const second = createTimelineIdempotencyKey();
+  check(first !== second, "each Timeline delivery must receive a fresh idempotency key");
+  check(first.startsWith("timeline-ui-") && first.length <= 128, "Timeline idempotency keys must be transport-safe and bounded");
+}
 
 {
   const planned = planTimelineCommand(snapshot, { kind: "create_lane", name: "  Mystery  ", colorLabel: "purple", index: 1 });
@@ -92,6 +113,79 @@ const snapshot: TimelineSnapshotDTO = {
 {
   const planned = planTimelineCommand(snapshot, { kind: "set_order_mode", mode: "custom" });
   check(planned.command?.kind === "set_order_mode" && planned.command.mode === "custom", "order-mode commands must use the canonical mode field");
+}
+
+{
+  const relationSnapshot = { ...snapshot, links: [], structure_links: [] };
+  const planned = planTimelineCommand(relationSnapshot, {
+    kind: "create_link",
+    sourceSceneId: 101,
+    targetSceneId: 102,
+    linkType: "setup_payoff",
+    colorLabel: " violet ",
+    label: "  planted clue  ",
+  });
+  check(planned.command?.kind === "create_link", "a valid two-event relationship must produce a command");
+  check(
+    planned.command.source_scene_id === 101
+      && planned.command.target_scene_id === 102
+      && planned.command.link_type === "setup_payoff"
+      && planned.command.color_label === "violet"
+      && planned.command.label === "planted clue",
+    "relationship creation must preserve direction and normalize optional labels",
+  );
+}
+
+{
+  const planned = planTimelineCommand(snapshot, {
+    kind: "create_link",
+    sourceSceneId: 102,
+    targetSceneId: 101,
+    linkType: "echo",
+  });
+  check(!planned.command && planned.error.includes("already"), "reverse-pair creation must respect legacy unordered uniqueness");
+}
+
+{
+  const planned = planTimelineCommand(snapshot, {
+    kind: "update_link",
+    linkId: 501,
+    linkType: "dependency",
+    colorLabel: " teal ",
+    label: "  Must follow  ",
+  });
+  check(planned.command?.kind === "update_link", "a valid relationship edit must produce a command");
+  check(planned.command.link_type === "dependency" && planned.command.color_label === "teal" && planned.command.label === "Must follow", "relationship edits must retain all explicit fields");
+  check(planTimelineCommand(snapshot, { kind: "delete_link", linkId: 501 }).command?.kind === "delete_link", "existing relationships must be deletable");
+}
+
+{
+  const relationSnapshot = { ...snapshot, structure_links: [] };
+  const planned = planTimelineCommand(relationSnapshot, {
+    kind: "create_structure_link",
+    sourceSceneId: 102,
+    targetType: "chapter",
+    targetRef: "  Chapter 1  ",
+  });
+  check(planned.command?.kind === "create_structure_link" && planned.command.target_ref === "Chapter 1", "structure relationships must bind a Timeline event to an existing named target");
+  const repaired = planTimelineCommand(snapshot, {
+    kind: "update_structure_link",
+    structureLinkId: 602,
+    targetType: "chapter",
+    targetRef: "Chapter 1",
+  });
+  check(repaired.command?.kind === "update_structure_link" && repaired.command.target_ref === "Chapter 1", "dangling structure relationships must be repairable");
+  check(planTimelineCommand(snapshot, { kind: "delete_structure_link", structureLinkId: 602 }).command?.kind === "delete_structure_link", "structure relationships must be deletable");
+}
+
+{
+  const missingTarget = planTimelineCommand(snapshot, {
+    kind: "create_structure_link",
+    sourceSceneId: 101,
+    targetType: "chapter",
+    targetRef: "Missing",
+  });
+  check(!missingTarget.command && missingTarget.error.includes("no longer available"), "new structure relationships must not create dangling targets");
 }
 
 {
@@ -139,7 +233,9 @@ const snapshot: TimelineSnapshotDTO = {
 {
   check(
     !timelineIntentCanRetry({ kind: "delete_lane", laneId: 10 })
-      && !timelineIntentCanRetry({ kind: "remove_event", sceneId: 101 }),
+      && !timelineIntentCanRetry({ kind: "remove_event", sceneId: 101 })
+      && !timelineIntentCanRetry({ kind: "delete_link", linkId: 501 })
+      && !timelineIntentCanRetry({ kind: "delete_structure_link", structureLinkId: 601 }),
     "destructive Timeline intents must require a fresh confirmation after conflict",
   );
   check(

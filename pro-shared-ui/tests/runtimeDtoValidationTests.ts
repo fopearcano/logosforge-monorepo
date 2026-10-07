@@ -143,6 +143,23 @@ const timelineSnapshot = (
     character_states: [{ character: "Marlow", state: "alert" }],
     ...eventOverrides,
   }],
+  links: [{
+    id: 8,
+    source_scene_id: 2,
+    target_scene_id: 3,
+    link_type: "causality",
+    color_label: "amber",
+    label: "causes",
+    created_at: "2026-10-05T09:02:00Z",
+  }],
+  structure_links: [{
+    id: 9,
+    source_scene_id: 2,
+    target_type: "chapter",
+    target_ref: "Chapter One",
+    target_exists: true,
+    created_at: "2026-10-05T09:03:00Z",
+  }],
   off_timeline: [{
     id: 3,
     title: "Later",
@@ -161,9 +178,29 @@ const timelineCommandResult = (overrides: Record<string, unknown> = {}) => {
     applied_revision: (timeline as { revision: string }).revision,
     changed: true,
     affected_scene_ids: [2],
+    affected_link_ids: [],
+    affected_structure_link_ids: [],
+    created_link_id: null,
+    created_structure_link_id: null,
     ...overrides,
   };
 };
+
+const timelineCommandReceipt = (overrides: Record<string, unknown> = {}) => ({
+  project_id: 1,
+  request_digest: "3184dc986b15ff5a4ec4693c92f851ee3edb3a88fb3abffb17c63f8118de4fe8",
+  command_kind: "create_link",
+  expected_revision: "c".repeat(64),
+  applied_revision: "d".repeat(64),
+  original_changed: true,
+  original_affected_scene_ids: [],
+  original_affected_link_ids: [8],
+  original_affected_structure_link_ids: [],
+  original_created_link_id: 8,
+  original_created_structure_link_id: null,
+  committed_at: "2026-10-07T12:00:00Z",
+  ...overrides,
+});
 
 const canvasPlotSnapshot = (overrides: Record<string, unknown> = {}) => ({
   project_id: 1,
@@ -1066,16 +1103,78 @@ try {
   );
 
   await expectValid(
-    "Timeline snapshots validate lanes, effective order, and off-Timeline refs",
+    "Timeline snapshots validate lanes, relationships, effective order, and off-Timeline refs",
     () => client.getTimeline(1),
     timelineSnapshot(),
-    (value) => value.lanes[0]?.event_count === 1 && value.events[0]?.lane_id === 4,
+    (value) => value.lanes[0]?.event_count === 1
+      && value.events[0]?.lane_id === 4
+      && value.links[0]?.target_scene_id === 3
+      && value.structure_links[0]?.target_exists === true,
   );
   await expectValid(
     "Timeline durations follow the Core integer contract",
     () => client.getTimeline(1),
     timelineSnapshot({ duration_minutes: -1 }),
     (value) => value.events[0]?.duration_minutes === -1,
+  );
+  await expectInvalid(
+    "Timeline links reject reverse duplicates of an existing scene pair",
+    () => client.getTimeline(1),
+    json(timelineSnapshot({}, {
+      links: [{
+        id: 8, source_scene_id: 2, target_scene_id: 3, link_type: "causality",
+        color_label: "amber", label: "causes", created_at: "2026-10-05T09:02:00Z",
+      }, {
+        id: 10, source_scene_id: 3, target_scene_id: 2, link_type: "causality",
+        color_label: "blue", label: "answers", created_at: "2026-10-05T09:04:00Z",
+      }],
+    })),
+    "GET",
+    "/api/projects/1/timeline",
+    "$.links[1]",
+  );
+  await expectInvalid(
+    "Timeline links must reference returned project scenes",
+    () => client.getTimeline(1),
+    json(timelineSnapshot({}, {
+      links: [{
+        id: 8, source_scene_id: 2, target_scene_id: 99, link_type: "causality",
+        color_label: "amber", label: "causes", created_at: "2026-10-05T09:02:00Z",
+      }],
+    })),
+    "GET",
+    "/api/projects/1/timeline",
+    "$.links[0].target_scene_id",
+  );
+  await expectInvalid(
+    "Timeline links reject parallel semantic rows for one scene pair",
+    () => client.getTimeline(1),
+    json(timelineSnapshot({}, {
+      links: [{
+        id: 8, source_scene_id: 2, target_scene_id: 3, link_type: "causality",
+        color_label: "amber", label: "causes", created_at: "2026-10-05T09:02:00Z",
+      }, {
+        id: 10, source_scene_id: 2, target_scene_id: 3, link_type: "causality",
+        color_label: "blue", label: "again", created_at: "2026-10-05T09:04:00Z",
+      }],
+    })),
+    "GET",
+    "/api/projects/1/timeline",
+    "$.links[1]",
+  );
+  await expectInvalid(
+    "Timeline structure-link dangling flags match the returned structure",
+    () => client.getTimeline(1),
+    json(timelineSnapshot({}, {
+      structure_links: [{
+        id: 9, source_scene_id: 2, target_type: "chapter",
+        target_ref: "Missing Chapter", target_exists: true,
+        created_at: "2026-10-05T09:03:00Z",
+      }],
+    })),
+    "GET",
+    "/api/projects/1/timeline",
+    "$.structure_links[0].target_exists",
   );
   await expectInvalid(
     "Timeline snapshots belong to the requested project",
@@ -1093,9 +1192,258 @@ try {
       scene_id: 2,
       lane_id: 4,
       index: 0,
-    }),
+    }, "timeline-validation-key"),
     timelineCommandResult(),
     (value) => value.changed && value.timeline.events[0]?.id === 2,
+  );
+  const createTimelineLinkCommand = {
+    kind: "create_link" as const,
+    expected_revision: "c".repeat(64),
+    source_scene_id: 2,
+    target_scene_id: 3,
+    link_type: "causality",
+    color_label: "amber",
+    label: "causes",
+  };
+  await expectValid(
+    "Timeline relationship commands validate created ids and affected rows",
+    () => client.executeTimelineCommand(1, createTimelineLinkCommand, "timeline-create-link-key"),
+    timelineCommandResult({
+      affected_scene_ids: [],
+      affected_link_ids: [8],
+      created_link_id: 8,
+    }),
+    (value) => value.created_link_id === 8 && value.affected_link_ids[0] === 8,
+  );
+  await expectInvalid(
+    "Timeline created link ids must be returned in the committed snapshot",
+    () => client.executeTimelineCommand(1, createTimelineLinkCommand, "timeline-create-link-key"),
+    json(timelineCommandResult({
+      affected_scene_ids: [],
+      affected_link_ids: [99],
+      created_link_id: 99,
+    })),
+    "POST",
+    "/api/projects/1/timeline/commands",
+    "$.created_link_id",
+  );
+  await expectInvalid(
+    "Timeline link results reject cross-family affected ids",
+    () => client.executeTimelineCommand(1, createTimelineLinkCommand, "timeline-create-link-key"),
+    json(timelineCommandResult({
+      affected_scene_ids: [],
+      affected_link_ids: [8],
+      affected_structure_link_ids: [9],
+      created_link_id: 8,
+    })),
+    "POST",
+    "/api/projects/1/timeline/commands",
+    "$.affected_structure_link_ids",
+  );
+  await expectInvalid(
+    "Timeline relationship results reject invented scene effects",
+    () => client.executeTimelineCommand(1, createTimelineLinkCommand, "timeline-create-link-key"),
+    json(timelineCommandResult({
+      affected_scene_ids: [2],
+      affected_link_ids: [8],
+      created_link_id: 8,
+    })),
+    "POST",
+    "/api/projects/1/timeline/commands",
+    "$.affected_scene_ids",
+  );
+  const updateTimelineLinkCommand = {
+    kind: "update_link" as const,
+    expected_revision: "c".repeat(64),
+    link_id: 8,
+    label: "changed",
+  };
+  await expectInvalid(
+    "Timeline link updates require their exact affected id",
+    () => client.executeTimelineCommand(1, updateTimelineLinkCommand, "timeline-update-link-key"),
+    json(timelineCommandResult({ affected_scene_ids: [], affected_link_ids: [] })),
+    "POST",
+    "/api/projects/1/timeline/commands",
+    "$.affected_link_ids",
+  );
+  const updateTimelineStructureLinkCommand = {
+    kind: "update_structure_link" as const,
+    expected_revision: "c".repeat(64),
+    structure_link_id: 9,
+    target_ref: "Chapter Prime",
+  };
+  await expectInvalid(
+    "Timeline structure-link results reject cross-family affected ids",
+    () => client.executeTimelineCommand(
+      1,
+      updateTimelineStructureLinkCommand,
+      "timeline-update-structure-link-key",
+    ),
+    json(timelineCommandResult({
+      affected_scene_ids: [],
+      affected_link_ids: [8],
+      affected_structure_link_ids: [9],
+    })),
+    "POST",
+    "/api/projects/1/timeline/commands",
+    "$.affected_link_ids",
+  );
+  await expectInvalid(
+    "Timeline structure-link updates require their exact affected id",
+    () => client.executeTimelineCommand(
+      1,
+      updateTimelineStructureLinkCommand,
+      "timeline-update-structure-link-key",
+    ),
+    json(timelineCommandResult({ affected_scene_ids: [] })),
+    "POST",
+    "/api/projects/1/timeline/commands",
+    "$.affected_structure_link_ids",
+  );
+  await expectInvalid(
+    "legacy Timeline commands reject invented relationship effects",
+    () => client.executeTimelineCommand(1, {
+      kind: "place_event",
+      expected_revision: "c".repeat(64),
+      scene_id: 2,
+      lane_id: 4,
+      index: 0,
+    }, "timeline-validation-key"),
+    json(timelineCommandResult({ affected_link_ids: [8] })),
+    "POST",
+    "/api/projects/1/timeline/commands",
+    "$.affected_link_ids",
+  );
+  await expectValid(
+    "Timeline exact-key receipts validate original relationship effects",
+    () => client.getTimelineCommandReceipt(
+      1,
+      "timeline-create-link-key",
+      createTimelineLinkCommand,
+    ),
+    timelineCommandReceipt(),
+    (value) => value.original_created_link_id === 8,
+  );
+  await expectInvalid(
+    "Timeline exact-key receipts remain bound to the submitted command",
+    () => client.getTimelineCommandReceipt(
+      1,
+      "timeline-create-link-key",
+      createTimelineLinkCommand,
+    ),
+    json(timelineCommandReceipt({ command_kind: "delete_link" })),
+    "GET",
+    "/api/projects/1/timeline/command-receipt",
+    "$.command_kind",
+  );
+  await expectInvalid(
+    "Timeline link receipts reject cross-family affected ids",
+    () => client.getTimelineCommandReceipt(
+      1,
+      "timeline-create-link-key",
+      createTimelineLinkCommand,
+    ),
+    json(timelineCommandReceipt({ original_affected_structure_link_ids: [9] })),
+    "GET",
+    "/api/projects/1/timeline/command-receipt",
+    "$.original_affected_structure_link_ids",
+  );
+  await expectInvalid(
+    "Timeline relationship receipts reject invented scene effects",
+    () => client.getTimelineCommandReceipt(
+      1,
+      "timeline-create-link-key",
+      createTimelineLinkCommand,
+    ),
+    json(timelineCommandReceipt({ original_affected_scene_ids: [2] })),
+    "GET",
+    "/api/projects/1/timeline/command-receipt",
+    "$.original_affected_scene_ids",
+  );
+  await expectInvalid(
+    "Timeline link update receipts require their exact affected id",
+    () => client.getTimelineCommandReceipt(
+      1,
+      "timeline-update-link-key",
+      updateTimelineLinkCommand,
+    ),
+    json(timelineCommandReceipt({
+      request_digest: "a1908a6d4cff8816f78945364854574b7dffa2536a067e30407a66398346389b",
+      command_kind: "update_link",
+      original_affected_link_ids: [],
+      original_created_link_id: null,
+    })),
+    "GET",
+    "/api/projects/1/timeline/command-receipt",
+    "$.original_affected_link_ids",
+  );
+  const setTimelineOrderCommand = {
+    kind: "set_order_mode" as const,
+    expected_revision: "c".repeat(64),
+    mode: "custom" as const,
+  };
+  await expectInvalid(
+    "legacy Timeline receipts reject invented relationship effects",
+    () => client.getTimelineCommandReceipt(
+      1,
+      "timeline-order-key",
+      setTimelineOrderCommand,
+    ),
+    json(timelineCommandReceipt({
+      request_digest: "0e976defaa48e2e2f71f48c8a9565c3d6ac72dae01fdfb0efa9b90473f994884",
+      command_kind: "set_order_mode",
+      original_affected_link_ids: [8],
+      original_created_link_id: null,
+    })),
+    "GET",
+    "/api/projects/1/timeline/command-receipt",
+    "$.original_affected_link_ids",
+  );
+  await expectInvalid(
+    "no-op Timeline receipts reject invented relationship effects",
+    () => client.getTimelineCommandReceipt(
+      1,
+      "timeline-order-key",
+      setTimelineOrderCommand,
+    ),
+    json(timelineCommandReceipt({
+      request_digest: "0e976defaa48e2e2f71f48c8a9565c3d6ac72dae01fdfb0efa9b90473f994884",
+      command_kind: "set_order_mode",
+      applied_revision: "c".repeat(64),
+      original_changed: false,
+      original_affected_link_ids: [8],
+      original_created_link_id: null,
+    })),
+    "GET",
+    "/api/projects/1/timeline/command-receipt",
+    "$.original_affected_link_ids",
+  );
+  await expectInvalid(
+    "Timeline receipts reject a digest for different fields with the same kind and revision",
+    () => client.getTimelineCommandReceipt(
+      1,
+      "timeline-create-link-key",
+      createTimelineLinkCommand,
+    ),
+    json(timelineCommandReceipt({
+      // Canonical digest for the same create_link/revision with label: "prevents".
+      request_digest: "d1b576f878a88857e0694046586128963b2ae04a4d11b7f4bc396277c3c47a1c",
+    })),
+    "GET",
+    "/api/projects/1/timeline/command-receipt",
+    "$.request_digest",
+  );
+  await expectInvalid(
+    "Timeline receipts reject an otherwise well-formed wrong digest",
+    () => client.getTimelineCommandReceipt(
+      1,
+      "timeline-create-link-key",
+      createTimelineLinkCommand,
+    ),
+    json(timelineCommandReceipt({ request_digest: "0".repeat(64) })),
+    "GET",
+    "/api/projects/1/timeline/command-receipt",
+    "$.request_digest",
   );
   await expectValid(
     "unchanged Timeline commands retain the guarded revision",
@@ -1103,7 +1451,7 @@ try {
       kind: "set_order_mode",
       expected_revision: "c".repeat(64),
       mode: "structural",
-    }),
+    }, "timeline-validation-key"),
     timelineCommandResult({
       timeline: timelineSnapshot(),
       changed: false,
@@ -1116,7 +1464,7 @@ try {
       kind: "create_lane",
       expected_revision: "c".repeat(64),
       name: "Subplot",
-    }),
+    }, "timeline-validation-key"),
     timelineCommandResult({
       timeline: timelineSnapshot({}, { revision: "e".repeat(64) }),
       replayed: true,
@@ -1127,12 +1475,31 @@ try {
     (value) => value.replayed && value.applied_revision === "d".repeat(64),
   );
   await expectInvalid(
+    "replayed Timeline commands reject invented relationship effects",
+    () => client.executeTimelineCommand(1, {
+      kind: "create_lane",
+      expected_revision: "c".repeat(64),
+      name: "Subplot",
+    }, "timeline-validation-key"),
+    json(timelineCommandResult({
+      timeline: timelineSnapshot({}, { revision: "e".repeat(64) }),
+      replayed: true,
+      applied_revision: "d".repeat(64),
+      changed: false,
+      affected_scene_ids: [],
+      affected_link_ids: [8],
+    })),
+    "POST",
+    "/api/projects/1/timeline/commands",
+    "$.affected_link_ids",
+  );
+  await expectInvalid(
     "replayed Timeline commands cannot claim a fresh mutation",
     () => client.executeTimelineCommand(1, {
       kind: "create_lane",
       expected_revision: "c".repeat(64),
       name: "Subplot",
-    }),
+    }, "timeline-validation-key"),
     json(timelineCommandResult({ replayed: true })),
     "POST",
     "/api/projects/1/timeline/commands",
@@ -1144,7 +1511,7 @@ try {
       kind: "create_lane",
       expected_revision: "c".repeat(64),
       name: "Subplot",
-    }),
+    }, "timeline-validation-key"),
     json(timelineCommandResult({ timeline: timelineSnapshot() })),
     "POST",
     "/api/projects/1/timeline/commands",
@@ -1156,7 +1523,7 @@ try {
       kind: "set_order_mode",
       expected_revision: "c".repeat(64),
       mode: "structural",
-    }),
+    }, "timeline-validation-key"),
     json(timelineCommandResult({ changed: false, affected_scene_ids: [] })),
     "POST",
     "/api/projects/1/timeline/commands",
@@ -1254,7 +1621,7 @@ try {
       kind: "set_order_mode",
       expected_revision: "c".repeat(64),
       mode: "structural",
-    }),
+    }, "timeline-validation-key"),
     json(timelineCommandResult({ changed: false, affected_scene_ids: [2] })),
     "POST",
     "/api/projects/1/timeline/commands",
@@ -1266,7 +1633,7 @@ try {
       kind: "remove_event",
       expected_revision: "c".repeat(64),
       scene_id: 99,
-    }),
+    }, "timeline-validation-key"),
     json(timelineCommandResult({ affected_scene_ids: [99] })),
     "POST",
     "/api/projects/1/timeline/commands",
@@ -1278,7 +1645,7 @@ try {
       kind: "create_lane",
       expected_revision: "c".repeat(64),
       name: "Subplot",
-    }),
+    }, "timeline-validation-key"),
     json(timelineCommandResult({
       timeline: timelineSnapshot({}, { project_id: 7 }),
       affected_scene_ids: [],

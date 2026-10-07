@@ -768,6 +768,38 @@ export interface TimelineLaneDTO {
   event_count: number;
 }
 
+export type TimelineLinkType =
+  | "custom"
+  | "causality"
+  | "setup_payoff"
+  | "echo"
+  | "conflict"
+  | "dependency";
+
+/** Oriented semantic relationship; Timeline permits one row per unordered scene pair. */
+export interface TimelineLinkDTO {
+  id: number;
+  source_scene_id: number;
+  target_scene_id: number;
+  link_type: TimelineLinkType;
+  color_label: string;
+  label: string;
+  created_at: string;
+}
+
+export type TimelineStructureTargetType = "act" | "chapter";
+
+/** Scene relationship to a name-keyed structural target. */
+export interface TimelineStructureLinkDTO {
+  id: number;
+  source_scene_id: number;
+  target_type: TimelineStructureTargetType;
+  target_ref: string;
+  /** False preserves a durable dangling relationship for repair in the UI. */
+  target_exists: boolean;
+  created_at: string;
+}
+
 export interface TimelineOffTimelineSceneDTO {
   id: number;
   title: string;
@@ -785,6 +817,8 @@ export interface TimelineSnapshotDTO {
   order_mode: TimelineOrderMode;
   lanes: TimelineLaneDTO[];
   events: TimelineEventDTO[];
+  links: TimelineLinkDTO[];
+  structure_links: TimelineStructureLinkDTO[];
   off_timeline: TimelineOffTimelineSceneDTO[];
 }
 
@@ -832,13 +866,60 @@ export interface TimelineSetOrderModeCommandDTO extends TimelineCommandBase {
   mode: TimelineOrderMode;
 }
 
+export interface TimelineCreateLinkCommandDTO extends TimelineCommandBase {
+  kind: "create_link";
+  source_scene_id: number;
+  target_scene_id: number;
+  link_type?: TimelineLinkType;
+  color_label?: string;
+  label?: string;
+}
+
+export interface TimelineUpdateLinkCommandDTO extends TimelineCommandBase {
+  kind: "update_link";
+  link_id: number;
+  link_type?: TimelineLinkType;
+  color_label?: string;
+  label?: string;
+}
+
+export interface TimelineDeleteLinkCommandDTO extends TimelineCommandBase {
+  kind: "delete_link";
+  link_id: number;
+}
+
+export interface TimelineCreateStructureLinkCommandDTO extends TimelineCommandBase {
+  kind: "create_structure_link";
+  source_scene_id: number;
+  target_type: TimelineStructureTargetType;
+  target_ref: string;
+}
+
+export interface TimelineUpdateStructureLinkCommandDTO extends TimelineCommandBase {
+  kind: "update_structure_link";
+  structure_link_id: number;
+  target_type?: TimelineStructureTargetType;
+  target_ref?: string;
+}
+
+export interface TimelineDeleteStructureLinkCommandDTO extends TimelineCommandBase {
+  kind: "delete_structure_link";
+  structure_link_id: number;
+}
+
 export type TimelineCommandDTO =
   | TimelineCreateLaneCommandDTO
   | TimelineUpdateLaneCommandDTO
   | TimelineDeleteLaneCommandDTO
   | TimelinePlaceEventCommandDTO
   | TimelineRemoveEventCommandDTO
-  | TimelineSetOrderModeCommandDTO;
+  | TimelineSetOrderModeCommandDTO
+  | TimelineCreateLinkCommandDTO
+  | TimelineUpdateLinkCommandDTO
+  | TimelineDeleteLinkCommandDTO
+  | TimelineCreateStructureLinkCommandDTO
+  | TimelineUpdateStructureLinkCommandDTO
+  | TimelineDeleteStructureLinkCommandDTO;
 
 export interface TimelineCommandResultDTO {
   timeline: TimelineSnapshotDTO;
@@ -848,6 +929,10 @@ export interface TimelineCommandResultDTO {
   applied_revision: string;
   changed: boolean;
   affected_scene_ids: number[];
+  affected_link_ids: number[];
+  affected_structure_link_ids: number[];
+  created_link_id: number | null;
+  created_structure_link_id: number | null;
 }
 
 /** Durable, project-scoped receipt for one idempotent Timeline command. */
@@ -859,6 +944,10 @@ export interface TimelineCommandReceiptDTO {
   applied_revision: string;
   original_changed: boolean;
   original_affected_scene_ids: number[];
+  original_affected_link_ids: number[];
+  original_affected_structure_link_ids: number[];
+  original_created_link_id: number | null;
+  original_created_structure_link_id: number | null;
   committed_at: string;
 }
 

@@ -1256,6 +1256,32 @@ class TimelineLaneDTO(BaseModel):
     event_count: int = 0
 
 
+class TimelineLinkDTO(BaseModel):
+    id: int
+    source_scene_id: int
+    target_scene_id: int
+    link_type: Literal[
+        "custom",
+        "causality",
+        "setup_payoff",
+        "echo",
+        "conflict",
+        "dependency",
+    ]
+    color_label: str = "gray"
+    label: str = ""
+    created_at: datetime
+
+
+class TimelineStructureLinkDTO(BaseModel):
+    id: int
+    source_scene_id: int
+    target_type: Literal["act", "chapter"]
+    target_ref: str
+    target_exists: bool
+    created_at: datetime
+
+
 class TimelineOffTimelineSceneDTO(BaseModel):
     id: int
     title: str
@@ -1274,6 +1300,8 @@ class TimelineSnapshotDTO(BaseModel):
     order_mode: Literal["structural", "custom"] = "structural"
     lanes: list[TimelineLaneDTO] = Field(default_factory=list)
     events: list[TimelineEventDTO] = Field(default_factory=list)
+    links: list[TimelineLinkDTO] = Field(default_factory=list)
+    structure_links: list[TimelineStructureLinkDTO] = Field(default_factory=list)
     off_timeline: list[TimelineOffTimelineSceneDTO] = Field(default_factory=list)
 
 
@@ -1342,13 +1370,109 @@ class TimelineSetOrderModeCommandDTO(_TimelineCommandBase):
     mode: Literal["structural", "custom"]
 
 
+class TimelineCreateLinkCommandDTO(_TimelineCommandBase):
+    kind: Literal["create_link"]
+    source_scene_id: int = Field(gt=0, strict=True)
+    target_scene_id: int = Field(gt=0, strict=True)
+    link_type: Literal[
+        "custom",
+        "causality",
+        "setup_payoff",
+        "echo",
+        "conflict",
+        "dependency",
+    ] = "custom"
+    color_label: str = Field(default="gray", max_length=100)
+    label: str = Field(default="", max_length=500)
+
+
+class TimelineUpdateLinkCommandDTO(_TimelineCommandBase):
+    kind: Literal["update_link"]
+    link_id: int = Field(gt=0, strict=True)
+    link_type: Literal[
+        "custom",
+        "causality",
+        "setup_payoff",
+        "echo",
+        "conflict",
+        "dependency",
+    ] | None = None
+    color_label: str | None = Field(default=None, max_length=100)
+    label: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def _requires_change(self):
+        update_fields = self.model_fields_set.intersection(
+            {"link_type", "color_label", "label"}
+        )
+        if not update_fields:
+            raise ValueError("update_link must change at least one field")
+        null_fields = sorted(
+            field for field in update_fields if getattr(self, field) is None
+        )
+        if null_fields:
+            raise ValueError(
+                "update_link fields must not be null: " + ", ".join(null_fields)
+            )
+        return self
+
+
+class TimelineDeleteLinkCommandDTO(_TimelineCommandBase):
+    kind: Literal["delete_link"]
+    link_id: int = Field(gt=0, strict=True)
+
+
+class TimelineCreateStructureLinkCommandDTO(_TimelineCommandBase):
+    kind: Literal["create_structure_link"]
+    source_scene_id: int = Field(gt=0, strict=True)
+    target_type: Literal["act", "chapter"]
+    target_ref: str = Field(min_length=1, max_length=500)
+
+
+class TimelineUpdateStructureLinkCommandDTO(_TimelineCommandBase):
+    kind: Literal["update_structure_link"]
+    structure_link_id: int = Field(gt=0, strict=True)
+    target_type: Literal["act", "chapter"] | None = None
+    target_ref: str | None = Field(default=None, min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def _requires_change(self):
+        update_fields = self.model_fields_set.intersection(
+            {"target_type", "target_ref"}
+        )
+        if not update_fields:
+            raise ValueError(
+                "update_structure_link must change at least one field"
+            )
+        null_fields = sorted(
+            field for field in update_fields if getattr(self, field) is None
+        )
+        if null_fields:
+            raise ValueError(
+                "update_structure_link fields must not be null: "
+                + ", ".join(null_fields)
+            )
+        return self
+
+
+class TimelineDeleteStructureLinkCommandDTO(_TimelineCommandBase):
+    kind: Literal["delete_structure_link"]
+    structure_link_id: int = Field(gt=0, strict=True)
+
+
 _TimelineCommandUnion = Annotated[
     TimelineCreateLaneCommandDTO
     | TimelineUpdateLaneCommandDTO
     | TimelineDeleteLaneCommandDTO
     | TimelinePlaceEventCommandDTO
     | TimelineRemoveEventCommandDTO
-    | TimelineSetOrderModeCommandDTO,
+    | TimelineSetOrderModeCommandDTO
+    | TimelineCreateLinkCommandDTO
+    | TimelineUpdateLinkCommandDTO
+    | TimelineDeleteLinkCommandDTO
+    | TimelineCreateStructureLinkCommandDTO
+    | TimelineUpdateStructureLinkCommandDTO
+    | TimelineDeleteStructureLinkCommandDTO,
     Field(discriminator="kind"),
 ]
 
@@ -1361,6 +1485,10 @@ class TimelineCommandResultDTO(BaseModel):
     timeline: TimelineSnapshotDTO
     changed: bool
     affected_scene_ids: list[int] = Field(default_factory=list)
+    affected_link_ids: list[int] = Field(default_factory=list)
+    affected_structure_link_ids: list[int] = Field(default_factory=list)
+    created_link_id: int | None = None
+    created_structure_link_id: int | None = None
     replayed: bool
     applied_revision: str = Field(
         min_length=64,
@@ -1383,6 +1511,12 @@ class TimelineCommandReceiptDTO(BaseModel):
         "place_event",
         "remove_event",
         "set_order_mode",
+        "create_link",
+        "update_link",
+        "delete_link",
+        "create_structure_link",
+        "update_structure_link",
+        "delete_structure_link",
     ]
     expected_revision: str = Field(
         min_length=64,
@@ -1396,6 +1530,10 @@ class TimelineCommandReceiptDTO(BaseModel):
     )
     original_changed: bool
     original_affected_scene_ids: list[int] = Field(default_factory=list)
+    original_affected_link_ids: list[int] = Field(default_factory=list)
+    original_affected_structure_link_ids: list[int] = Field(default_factory=list)
+    original_created_link_id: int | None = None
+    original_created_structure_link_id: int | None = None
     committed_at: datetime
 
 

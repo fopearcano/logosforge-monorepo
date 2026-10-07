@@ -64,6 +64,8 @@ def _seed_comment(base_url: str, token: str) -> tuple[int, int, str]:
         {
             "title": "Opening",
             "content": "Packaged comment anchor",
+            "act": "Act I",
+            "chapter": "One",
         },
     )
     crossing = _api_json(
@@ -74,6 +76,8 @@ def _seed_comment(base_url: str, token: str) -> tuple[int, int, str]:
         {
             "title": "Crossing",
             "content": "A second scene for graph and continuity review.",
+            "act": "Act I",
+            "chapter": "Two",
         },
     )
     _api_json(
@@ -227,7 +231,9 @@ async def _exercise_installed_mcp(
     project_id: int,
     comment_id: int,
     comment_revision: str,
-) -> tuple[str, str, str, str, str, dict, str, str, dict, str, str, dict, str]:
+) -> tuple[
+    str, str, str, int, dict, str, str, dict, str, str, dict, str, str, dict, str,
+]:
     params = mcp.StdioServerParameters(
         command=str(command),
         args=command_args,
@@ -283,6 +289,26 @@ async def _exercise_installed_mcp(
         timeline_revision = timeline_before.get("revision")
         if not isinstance(timeline_revision, str) or len(timeline_revision) != 64:
             raise RuntimeError("installed MCP Timeline read returned no valid revision")
+        off_timeline = timeline_before.get("off_timeline")
+        if not isinstance(off_timeline, list):
+            raise RuntimeError("installed MCP Timeline read returned no off-Timeline scenes")
+        seeded_timeline_scenes = {
+            row.get("title"): row
+            for row in off_timeline
+            if isinstance(row, dict) and isinstance(row.get("title"), str)
+        }
+        opening_scene_id = seeded_timeline_scenes.get("Opening", {}).get("id")
+        crossing_scene_id = seeded_timeline_scenes.get("Crossing", {}).get("id")
+        if (
+            type(opening_scene_id) is not int
+            or opening_scene_id <= 0
+            or type(crossing_scene_id) is not int
+            or crossing_scene_id <= 0
+            or opening_scene_id == crossing_scene_id
+        ):
+            raise RuntimeError(
+                "installed MCP Timeline read did not expose both seeded scenes"
+            )
         timeline_proposal = _structured(
             await session.call_tool(
                 "logosforge_propose_timeline_command",
@@ -361,6 +387,311 @@ async def _exercise_installed_mcp(
         )
         if after_stale_timeline != applied_snapshot:
             raise RuntimeError("stale Timeline apply changed the reviewed board")
+
+        async def apply_timeline_relationship_command(
+            command_body: dict,
+            label: str,
+        ) -> tuple[dict, dict, dict]:
+            proposal = _structured(
+                await session.call_tool(
+                    "logosforge_propose_timeline_command",
+                    {"command": command_body},
+                ),
+                f"{label} proposal",
+            )
+            request = proposal.get("request")
+            if (
+                not isinstance(request, dict)
+                or request.get("body") != command_body
+            ):
+                raise RuntimeError(f"{label} proposal did not preserve its exact command")
+            applied = _structured(
+                await session.call_tool(
+                    "logosforge_apply_proposal",
+                    {"proposal_id": proposal.get("proposal_id")},
+                ),
+                f"{label} apply",
+            )
+            result = applied.get("result")
+            if applied.get("state") != "applied" or not isinstance(result, dict):
+                raise RuntimeError(f"{label} did not return an applied result")
+            snapshot = result.get("timeline")
+            if (
+                not isinstance(snapshot, dict)
+                or result.get("changed") is not True
+                or result.get("replayed") is not False
+                or result.get("applied_revision") != snapshot.get("revision")
+                or snapshot.get("revision") == command_body.get("expected_revision")
+            ):
+                raise RuntimeError(f"{label} returned an invalid fresh Timeline result")
+            return proposal, result, snapshot
+
+        relationship_snapshot = after_stale_timeline
+        for scene_id, title in (
+            (opening_scene_id, "Opening"),
+            (crossing_scene_id, "Crossing"),
+        ):
+            _, placement_result, relationship_snapshot = (
+                await apply_timeline_relationship_command(
+                    {
+                        "kind": "place_event",
+                        "expected_revision": relationship_snapshot["revision"],
+                        "scene_id": scene_id,
+                        "lane_id": None,
+                    },
+                    f"installed MCP place {title} on Timeline",
+                )
+            )
+            if (
+                placement_result.get("affected_scene_ids") != []
+                or placement_result.get("affected_link_ids") != []
+                or placement_result.get("affected_structure_link_ids") != []
+                or placement_result.get("created_link_id") is not None
+                or placement_result.get("created_structure_link_id") is not None
+            ):
+                raise RuntimeError(
+                    f"placing {title} returned relationship outcome ids"
+                )
+        if {
+            event.get("id")
+            for event in relationship_snapshot.get("events", [])
+            if isinstance(event, dict)
+        } != {opening_scene_id, crossing_scene_id}:
+            raise RuntimeError("installed MCP did not place both seeded Timeline events")
+
+        _, created_link_result, relationship_snapshot = (
+            await apply_timeline_relationship_command(
+                {
+                    "kind": "create_link",
+                    "expected_revision": relationship_snapshot["revision"],
+                    "source_scene_id": opening_scene_id,
+                    "target_scene_id": crossing_scene_id,
+                    "link_type": "causality",
+                    "color_label": "amber",
+                    "label": "Packaged relationship draft",
+                },
+                "installed MCP Timeline relationship create",
+            )
+        )
+        created_link_id = created_link_result.get("created_link_id")
+        if (
+            type(created_link_id) is not int
+            or created_link_id <= 0
+            or created_link_result.get("affected_scene_ids") != []
+            or created_link_result.get("affected_link_ids") != [created_link_id]
+            or created_link_result.get("affected_structure_link_ids") != []
+            or created_link_result.get("created_structure_link_id") is not None
+        ):
+            raise RuntimeError(
+                "installed MCP Timeline relationship create returned wrong ids"
+            )
+        created_links = relationship_snapshot.get("links")
+        if (
+            not isinstance(created_links, list)
+            or len(created_links) != 1
+            or created_links[0].get("id") != created_link_id
+            or created_links[0].get("source_scene_id") != opening_scene_id
+            or created_links[0].get("target_scene_id") != crossing_scene_id
+            or created_links[0].get("link_type") != "causality"
+            or created_links[0].get("color_label") != "amber"
+            or created_links[0].get("label") != "Packaged relationship draft"
+        ):
+            raise RuntimeError(
+                "installed MCP Timeline relationship create did not persist"
+            )
+
+        _, updated_link_result, relationship_snapshot = (
+            await apply_timeline_relationship_command(
+                {
+                    "kind": "update_link",
+                    "expected_revision": relationship_snapshot["revision"],
+                    "link_id": created_link_id,
+                    "link_type": "setup_payoff",
+                    "color_label": "gold",
+                    "label": "Packaged relationship updated",
+                },
+                "installed MCP Timeline relationship update",
+            )
+        )
+        updated_links = relationship_snapshot.get("links")
+        if (
+            updated_link_result.get("affected_scene_ids") != []
+            or updated_link_result.get("affected_link_ids") != [created_link_id]
+            or updated_link_result.get("affected_structure_link_ids") != []
+            or updated_link_result.get("created_link_id") is not None
+            or updated_link_result.get("created_structure_link_id") is not None
+            or not isinstance(updated_links, list)
+            or len(updated_links) != 1
+            or updated_links[0].get("link_type") != "setup_payoff"
+            or updated_links[0].get("color_label") != "gold"
+            or updated_links[0].get("label") != "Packaged relationship updated"
+        ):
+            raise RuntimeError(
+                "installed MCP Timeline relationship update did not persist"
+            )
+
+        _, deleted_link_result, relationship_snapshot = (
+            await apply_timeline_relationship_command(
+                {
+                    "kind": "delete_link",
+                    "expected_revision": relationship_snapshot["revision"],
+                    "link_id": created_link_id,
+                },
+                "installed MCP Timeline relationship delete",
+            )
+        )
+        if (
+            deleted_link_result.get("affected_scene_ids") != []
+            or deleted_link_result.get("affected_link_ids") != [created_link_id]
+            or deleted_link_result.get("affected_structure_link_ids") != []
+            or deleted_link_result.get("created_link_id") is not None
+            or deleted_link_result.get("created_structure_link_id") is not None
+            or relationship_snapshot.get("links") != []
+        ):
+            raise RuntimeError(
+                "installed MCP Timeline relationship delete did not persist"
+            )
+
+        _, created_structure_result, relationship_snapshot = (
+            await apply_timeline_relationship_command(
+                {
+                    "kind": "create_structure_link",
+                    "expected_revision": relationship_snapshot["revision"],
+                    "source_scene_id": opening_scene_id,
+                    "target_type": "act",
+                    "target_ref": "Act I",
+                },
+                "installed MCP Timeline structure relationship create",
+            )
+        )
+        created_structure_link_id = created_structure_result.get(
+            "created_structure_link_id"
+        )
+        if (
+            type(created_structure_link_id) is not int
+            or created_structure_link_id <= 0
+            or created_structure_result.get("affected_scene_ids") != []
+            or created_structure_result.get("affected_structure_link_ids")
+            != [created_structure_link_id]
+            or created_structure_result.get("affected_link_ids") != []
+            or created_structure_result.get("created_link_id") is not None
+            or created_structure_result.get("created_structure_link_id")
+            != created_structure_link_id
+        ):
+            raise RuntimeError(
+                "installed MCP Timeline structure relationship create returned wrong ids"
+            )
+        structure_links = relationship_snapshot.get("structure_links")
+        if (
+            not isinstance(structure_links, list)
+            or len(structure_links) != 1
+            or structure_links[0].get("id") != created_structure_link_id
+            or structure_links[0].get("source_scene_id") != opening_scene_id
+            or structure_links[0].get("target_type") != "act"
+            or structure_links[0].get("target_ref") != "Act I"
+            or structure_links[0].get("target_exists") is not True
+        ):
+            raise RuntimeError(
+                "installed MCP Timeline structure relationship create did not persist"
+            )
+
+        _, updated_structure_result, relationship_snapshot = (
+            await apply_timeline_relationship_command(
+                {
+                    "kind": "update_structure_link",
+                    "expected_revision": relationship_snapshot["revision"],
+                    "structure_link_id": created_structure_link_id,
+                    "target_type": "chapter",
+                    "target_ref": "Two",
+                },
+                "installed MCP Timeline structure relationship update",
+            )
+        )
+        structure_links = relationship_snapshot.get("structure_links")
+        if (
+            updated_structure_result.get("affected_scene_ids") != []
+            or updated_structure_result.get("affected_link_ids") != []
+            or updated_structure_result.get("affected_structure_link_ids")
+            != [created_structure_link_id]
+            or updated_structure_result.get("created_link_id") is not None
+            or updated_structure_result.get("created_structure_link_id") is not None
+            or not isinstance(structure_links, list)
+            or len(structure_links) != 1
+            or structure_links[0].get("id") != created_structure_link_id
+            or structure_links[0].get("source_scene_id") != opening_scene_id
+            or structure_links[0].get("target_type") != "chapter"
+            or structure_links[0].get("target_ref") != "Two"
+            or structure_links[0].get("target_exists") is not True
+        ):
+            raise RuntimeError(
+                "installed MCP Timeline structure relationship update did not persist"
+            )
+
+        _, deleted_structure_result, relationship_snapshot = (
+            await apply_timeline_relationship_command(
+                {
+                    "kind": "delete_structure_link",
+                    "expected_revision": relationship_snapshot["revision"],
+                    "structure_link_id": created_structure_link_id,
+                },
+                "installed MCP Timeline structure relationship delete",
+            )
+        )
+        if (
+            deleted_structure_result.get("affected_scene_ids") != []
+            or deleted_structure_result.get("affected_link_ids") != []
+            or deleted_structure_result.get("affected_structure_link_ids")
+            != [created_structure_link_id]
+            or deleted_structure_result.get("created_link_id") is not None
+            or deleted_structure_result.get("created_structure_link_id") is not None
+            or relationship_snapshot.get("structure_links") != []
+        ):
+            raise RuntimeError(
+                "installed MCP Timeline structure relationship delete did not persist"
+            )
+
+        (
+            recovery_timeline_proposal,
+            recovery_link_result,
+            relationship_snapshot,
+        ) = await apply_timeline_relationship_command(
+            {
+                "kind": "create_link",
+                "expected_revision": relationship_snapshot["revision"],
+                "source_scene_id": crossing_scene_id,
+                "target_scene_id": opening_scene_id,
+                "link_type": "dependency",
+                "color_label": "cyan",
+                "label": "Persisted for companion recovery",
+            },
+            "installed MCP Timeline recovery relationship create",
+        )
+        recovery_link_id = recovery_link_result.get("created_link_id")
+        if (
+            type(recovery_link_id) is not int
+            or recovery_link_id <= 0
+            or recovery_link_result.get("affected_scene_ids") != []
+            or recovery_link_result.get("affected_link_ids") != [recovery_link_id]
+            or recovery_link_result.get("affected_structure_link_ids") != []
+            or recovery_link_result.get("created_structure_link_id") is not None
+        ):
+            raise RuntimeError(
+                "installed MCP Timeline recovery relationship returned wrong ids"
+            )
+        persisted_links = relationship_snapshot.get("links")
+        if (
+            not isinstance(persisted_links, list)
+            or len(persisted_links) != 1
+            or persisted_links[0].get("id") != recovery_link_id
+            or persisted_links[0].get("source_scene_id") != crossing_scene_id
+            or persisted_links[0].get("target_scene_id") != opening_scene_id
+            or persisted_links[0].get("link_type") != "dependency"
+            or persisted_links[0].get("color_label") != "cyan"
+            or persisted_links[0].get("label") != "Persisted for companion recovery"
+        ):
+            raise RuntimeError(
+                "installed MCP Timeline recovery relationship did not persist"
+            )
 
         canvas_before = _structured(
             await session.call_tool(
@@ -977,9 +1308,19 @@ async def _exercise_installed_mcp(
             after_replay_page, comment_id, "installed MCP post-replay comment read",
         ) != resolved:
             raise RuntimeError("replaying an applied proposal mutated the comment thread")
-        timeline_proposal_id = timeline_proposal.get("proposal_id")
+        timeline_proposal_id = recovery_timeline_proposal.get("proposal_id")
         if not isinstance(timeline_proposal_id, str) or not timeline_proposal_id:
-            raise RuntimeError("installed MCP Timeline proposal returned no proposal ID")
+            raise RuntimeError(
+                "installed MCP Timeline recovery proposal returned no proposal ID"
+            )
+        applied_timeline_revision = recovery_link_result.get("applied_revision")
+        if (
+            not isinstance(applied_timeline_revision, str)
+            or applied_timeline_revision != relationship_snapshot.get("revision")
+        ):
+            raise RuntimeError(
+                "installed MCP Timeline recovery relationship returned no revision"
+            )
         canvas_proposal_id = canvas_proposal.get("proposal_id")
         if not isinstance(canvas_proposal_id, str) or not canvas_proposal_id:
             raise RuntimeError(
@@ -998,7 +1339,9 @@ async def _exercise_installed_mcp(
         return (
             resolved_revision,
             timeline_proposal_id,
-            applied_revision,
+            applied_timeline_revision,
+            recovery_link_id,
+            relationship_snapshot,
             canvas_proposal_id,
             applied_canvas_revision,
             applied_canvas_snapshot,
@@ -1019,6 +1362,8 @@ async def _recover_installed_command_receipts(
     project_id: int,
     timeline_proposal_id: str,
     applied_timeline_revision: str,
+    expected_timeline_link_id: int,
+    expected_timeline: dict,
     canvas_proposal_id: str,
     applied_canvas_revision: str,
     expected_canvas_plot: dict,
@@ -1085,6 +1430,19 @@ async def _recover_installed_command_receipts(
             != applied_timeline_revision
         ):
             raise RuntimeError("restarted MCP returned the wrong canonical receipt")
+        if (
+            recovered_receipt.get("original_changed") is not True
+            or recovered_receipt.get("original_affected_scene_ids") != []
+            or recovered_receipt.get("original_affected_link_ids")
+            != [expected_timeline_link_id]
+            or recovered_receipt.get("original_affected_structure_link_ids") != []
+            or recovered_receipt.get("original_created_link_id")
+            != expected_timeline_link_id
+            or recovered_receipt.get("original_created_structure_link_id") is not None
+        ):
+            raise RuntimeError(
+                "restarted MCP Timeline receipt lost its exact relationship ids"
+            )
         recovered_result = recovered.get("result")
         if not isinstance(recovered_result, dict):
             raise RuntimeError("restarted MCP recovered no Timeline result receipt")
@@ -1097,6 +1455,10 @@ async def _recover_installed_command_receipts(
         if (
             recovered_result.get("changed") is not False
             or recovered_result.get("affected_scene_ids") != []
+            or recovered_result.get("affected_link_ids") != []
+            or recovered_result.get("affected_structure_link_ids") != []
+            or recovered_result.get("created_link_id") is not None
+            or recovered_result.get("created_structure_link_id") is not None
         ):
             raise RuntimeError(
                 "restarted MCP Timeline receipt was not a non-mutating replay"
@@ -1106,6 +1468,10 @@ async def _recover_installed_command_receipts(
             await session.call_tool("logosforge_get_timeline", {}),
             "restarted MCP Timeline read",
         )
+        if current_timeline != expected_timeline:
+            raise RuntimeError(
+                "restarted MCP did not read the persisted Timeline relationship snapshot"
+            )
         if recovered_result.get("timeline") != current_timeline:
             raise RuntimeError(
                 "restarted MCP receipt did not return the current Timeline snapshot"
@@ -1118,6 +1484,16 @@ async def _recover_installed_command_receipts(
         if packaged_lane_count != 1:
             raise RuntimeError(
                 "restarted MCP recovery did not preserve exactly one packaged lane"
+            )
+        persisted_links = current_timeline.get("links")
+        if (
+            not isinstance(persisted_links, list)
+            or len(persisted_links) != 1
+            or persisted_links[0].get("id") != expected_timeline_link_id
+            or current_timeline.get("structure_links") != []
+        ):
+            raise RuntimeError(
+                "restarted MCP receipt recovery repeated or lost the Timeline relationship"
             )
 
         recovered_canvas = _structured(
@@ -1585,6 +1961,8 @@ def _smoke_app(app: Path, timeout: int, codex_command: str | None = None) -> Non
                     final_comment_revision,
                     timeline_proposal_id,
                     applied_timeline_revision,
+                    expected_timeline_link_id,
+                    applied_timeline,
                     canvas_proposal_id,
                     applied_canvas_revision,
                     applied_canvas_plot,
@@ -1605,7 +1983,7 @@ def _smoke_app(app: Path, timeout: int, codex_command: str | None = None) -> Non
                             comment_id,
                             comment_revision,
                         ),
-                        timeout=45,
+                        timeout=90,
                     )
                 )
                 asyncio.run(
@@ -1617,6 +1995,8 @@ def _smoke_app(app: Path, timeout: int, codex_command: str | None = None) -> Non
                             project_id,
                             timeline_proposal_id,
                             applied_timeline_revision,
+                            expected_timeline_link_id,
+                            applied_timeline,
                             canvas_proposal_id,
                             applied_canvas_revision,
                             applied_canvas_plot,
@@ -1652,9 +2032,10 @@ def _smoke_app(app: Path, timeout: int, codex_command: str | None = None) -> Non
             "Packaged Pro published a verified descriptor, advertised 46 MCP tools "
             "including canonical project search plus revisioned Timeline, Canvas "
             "Plot, Knowledge Graph, and Semantic Continuity orchestration; applied all "
-            "four transactional surfaces plus reply and resolution proposals; recovered their durable "
-            "receipts after a companion restart; and rejected stale and replayed "
-            "applies."
+            "four transactional surfaces plus Timeline relationship and structure-link "
+            "CRUD plus reply and resolution proposals; recovered their durable receipts "
+            "with exact relationship IDs after a companion restart; and rejected stale "
+            "and replayed applies."
         )
 
 

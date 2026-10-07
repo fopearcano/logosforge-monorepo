@@ -38,12 +38,15 @@ import type {
   StoryStructureDTO,
   StoryStructureSceneDTO,
   TimelineCommandDTO,
+  TimelineCommandReceiptDTO,
   TimelineCommandResultDTO,
   TimelineEventDTO,
   TimelineLaneDTO,
+  TimelineLinkDTO,
   TimelineOffTimelineSceneDTO,
   TimelineOrderMode,
   TimelineSnapshotDTO,
+  TimelineStructureLinkDTO,
   CanvasPlotCommandDTO,
   CanvasPlotCommandResultDTO,
   CanvasPlotFrameDTO,
@@ -719,6 +722,59 @@ function timelineLane(value: unknown, path: string): TimelineLaneDTO {
   return value as TimelineLaneDTO;
 }
 
+const TIMELINE_LINK_TYPES = new Set([
+  "custom",
+  "causality",
+  "setup_payoff",
+  "echo",
+  "conflict",
+  "dependency",
+]);
+
+function timelineLink(value: unknown, path: string): TimelineLinkDTO {
+  const dto = record(value, path);
+  for (const key of ["id", "source_scene_id", "target_scene_id"] as const) {
+    const id = integerValue(requireField(dto, key, path), fieldPath(path, key));
+    if (id <= 0) fail(fieldPath(path, key), "a positive safe integer", id);
+  }
+  const linkType = stringValue(
+    requireField(dto, "link_type", path),
+    fieldPath(path, "link_type"),
+  );
+  if (!TIMELINE_LINK_TYPES.has(linkType)) {
+    fail(fieldPath(path, "link_type"), "a supported Timeline link type", linkType);
+  }
+  stringValue(requireField(dto, "color_label", path), fieldPath(path, "color_label"));
+  stringValue(requireField(dto, "label", path), fieldPath(path, "label"));
+  isoTimestamp(requireField(dto, "created_at", path), fieldPath(path, "created_at"));
+  return value as TimelineLinkDTO;
+}
+
+function timelineStructureLink(value: unknown, path: string): TimelineStructureLinkDTO {
+  const dto = record(value, path);
+  for (const key of ["id", "source_scene_id"] as const) {
+    const id = integerValue(requireField(dto, key, path), fieldPath(path, key));
+    if (id <= 0) fail(fieldPath(path, key), "a positive safe integer", id);
+  }
+  const targetType = stringValue(
+    requireField(dto, "target_type", path),
+    fieldPath(path, "target_type"),
+  );
+  if (targetType !== "act" && targetType !== "chapter") {
+    fail(fieldPath(path, "target_type"), '"act" or "chapter"', targetType);
+  }
+  const targetRef = stringValue(
+    requireField(dto, "target_ref", path),
+    fieldPath(path, "target_ref"),
+  );
+  if (!targetRef.trim()) {
+    fail(fieldPath(path, "target_ref"), "a non-empty structural reference", targetRef);
+  }
+  booleanValue(requireField(dto, "target_exists", path), fieldPath(path, "target_exists"));
+  isoTimestamp(requireField(dto, "created_at", path), fieldPath(path, "created_at"));
+  return value as TimelineStructureLinkDTO;
+}
+
 function timelineEvent(value: unknown, path: string): TimelineEventDTO {
   const dto = record(value, path);
   integerValue(requireField(dto, "id", path), fieldPath(path, "id"));
@@ -838,6 +894,91 @@ function timelineSnapshot(value: unknown, path: string): TimelineSnapshotDTO {
     }
     sceneIds.add(sceneRef.id);
   });
+
+  const linksPath = fieldPath(path, "links");
+  const links = arrayOf(requireField(dto, "links", path), linksPath, timelineLink);
+  const linkIds = new Set<number>();
+  const linkIdentities = new Set<string>();
+  links.forEach((link, index) => {
+    const linkPath = `${linksPath}[${index}]`;
+    if (linkIds.has(link.id)) {
+      fail(fieldPath(linkPath, "id"), "a unique Timeline link id", link.id);
+    }
+    if (!sceneIds.has(link.source_scene_id)) {
+      fail(
+        fieldPath(linkPath, "source_scene_id"),
+        "a scene id present in the returned Timeline",
+        link.source_scene_id,
+      );
+    }
+    if (!sceneIds.has(link.target_scene_id)) {
+      fail(
+        fieldPath(linkPath, "target_scene_id"),
+        "a scene id present in the returned Timeline",
+        link.target_scene_id,
+      );
+    }
+    if (link.source_scene_id === link.target_scene_id) {
+      fail(
+        fieldPath(linkPath, "target_scene_id"),
+        "a different scene from source_scene_id",
+        link.target_scene_id,
+      );
+    }
+    const identity = [link.source_scene_id, link.target_scene_id]
+      .sort((left, right) => left - right)
+      .join(":");
+    if (linkIdentities.has(identity)) {
+      fail(linkPath, "a unique unordered scene pair", link);
+    }
+    linkIds.add(link.id);
+    linkIdentities.add(identity);
+  });
+
+  const actRefs = new Set<string>();
+  const chapterRefs = new Set<string>();
+  for (const scene of [...events, ...offTimeline]) {
+    if (scene.act.trim()) actRefs.add(scene.act.trim());
+    if (scene.chapter.trim()) chapterRefs.add(scene.chapter.trim());
+  }
+  const structureLinksPath = fieldPath(path, "structure_links");
+  const structureLinks = arrayOf(
+    requireField(dto, "structure_links", path),
+    structureLinksPath,
+    timelineStructureLink,
+  );
+  const structureLinkIds = new Set<number>();
+  const structureLinkIdentities = new Set<string>();
+  structureLinks.forEach((link, index) => {
+    const linkPath = `${structureLinksPath}[${index}]`;
+    if (structureLinkIds.has(link.id)) {
+      fail(fieldPath(linkPath, "id"), "a unique Timeline structure-link id", link.id);
+    }
+    if (!sceneIds.has(link.source_scene_id)) {
+      fail(
+        fieldPath(linkPath, "source_scene_id"),
+        "a scene id present in the returned Timeline",
+        link.source_scene_id,
+      );
+    }
+    const targetRef = link.target_ref.trim();
+    const targetExists = link.target_type === "act"
+      ? actRefs.has(targetRef)
+      : chapterRefs.has(targetRef);
+    if (link.target_exists !== targetExists) {
+      fail(
+        fieldPath(linkPath, "target_exists"),
+        `the existence of ${link.target_type} ${JSON.stringify(targetRef)}`,
+        link.target_exists,
+      );
+    }
+    const identity = `${link.source_scene_id}\u0000${link.target_type}\u0000${targetRef}`;
+    if (structureLinkIdentities.has(identity)) {
+      fail(linkPath, "a unique scene and structural target", link);
+    }
+    structureLinkIds.add(link.id);
+    structureLinkIdentities.add(identity);
+  });
   return value as TimelineSnapshotDTO;
 }
 
@@ -882,10 +1023,145 @@ function timelineCommandResult(value: unknown, path: string): TimelineCommandRes
   if (!changed && ids.length !== 0) {
     fail(idsPath, "an empty array when changed is false", ids);
   }
+  for (const [field, label] of [
+    ["affected_link_ids", "Timeline link"],
+    ["affected_structure_link_ids", "Timeline structure-link"],
+  ] as const) {
+    const affectedPath = fieldPath(path, field);
+    const affectedIds = integerArray(requireField(dto, field, path), affectedPath);
+    const affectedSeen = new Set<number>();
+    affectedIds.forEach((id, index) => {
+      const idPath = `${affectedPath}[${index}]`;
+      if (id <= 0) fail(idPath, `a positive ${label} id`, id);
+      if (affectedSeen.has(id)) fail(idPath, `a unique ${label} id`, id);
+      affectedSeen.add(id);
+    });
+    if (!changed && affectedIds.length !== 0) {
+      fail(affectedPath, "an empty array when changed is false", affectedIds);
+    }
+  }
+  for (const field of ["created_link_id", "created_structure_link_id"] as const) {
+    const id = nullable(requireField(dto, field, path), fieldPath(path, field), integerValue);
+    if (id !== null && id <= 0) {
+      fail(fieldPath(path, field), "a positive safe integer or null", id);
+    }
+    if (!changed && id !== null) fail(fieldPath(path, field), "null when changed is false", id);
+  }
+  const createdLinkId = dto.created_link_id as number | null;
+  const createdStructureLinkId = dto.created_structure_link_id as number | null;
+  if (createdLinkId !== null) {
+    if (!(dto.affected_link_ids as number[]).includes(createdLinkId)) {
+      fail(
+        fieldPath(path, "created_link_id"),
+        "an id included in affected_link_ids",
+        createdLinkId,
+      );
+    }
+    if (!timeline.links.some((link) => link.id === createdLinkId)) {
+      fail(
+        fieldPath(path, "created_link_id"),
+        "an id present in timeline.links",
+        createdLinkId,
+      );
+    }
+  }
+  if (createdStructureLinkId !== null) {
+    if (!(dto.affected_structure_link_ids as number[]).includes(createdStructureLinkId)) {
+      fail(
+        fieldPath(path, "created_structure_link_id"),
+        "an id included in affected_structure_link_ids",
+        createdStructureLinkId,
+      );
+    }
+    if (!timeline.structure_links.some((link) => link.id === createdStructureLinkId)) {
+      fail(
+        fieldPath(path, "created_structure_link_id"),
+        "an id present in timeline.structure_links",
+        createdStructureLinkId,
+      );
+    }
+  }
   if (replayed && changed) {
     fail(fieldPath(path, "changed"), "false when replayed is true", changed);
   }
   return value as TimelineCommandResultDTO;
+}
+
+interface TimelineAffectedOutcome {
+  changed: boolean;
+  sceneIds: number[];
+  linkIds: number[];
+  structureLinkIds: number[];
+  createdLinkId: number | null;
+  createdStructureLinkId: number | null;
+  fieldPrefix: "" | "original_";
+}
+
+function requireExactTimelineAffectedIds(
+  actual: number[],
+  expected: number[],
+  path: string,
+  commandKind: TimelineCommandDTO["kind"],
+): void {
+  if (
+    actual.length !== expected.length
+    || actual.some((id, index) => id !== expected[index])
+  ) {
+    fail(
+      path,
+      expected.length === 0
+        ? `an empty array for ${commandKind}`
+        : `exactly [${expected.join(", ")}] for ${commandKind}`,
+      actual,
+    );
+  }
+}
+
+function validateTimelineAffectedFamilies(
+  command: TimelineCommandDTO,
+  outcome: TimelineAffectedOutcome,
+): void {
+  if (!outcome.changed) return;
+  const scenePath = `$.${outcome.fieldPrefix}affected_scene_ids`;
+  const linkPath = `$.${outcome.fieldPrefix}affected_link_ids`;
+  const structurePath = `$.${outcome.fieldPrefix}affected_structure_link_ids`;
+  const exact = (
+    requireEmptySceneIds: boolean,
+    linkIds: number[],
+    structureLinkIds: number[],
+  ) => {
+    if (requireEmptySceneIds) {
+      requireExactTimelineAffectedIds(outcome.sceneIds, [], scenePath, command.kind);
+    }
+    requireExactTimelineAffectedIds(outcome.linkIds, linkIds, linkPath, command.kind);
+    requireExactTimelineAffectedIds(
+      outcome.structureLinkIds,
+      structureLinkIds,
+      structurePath,
+      command.kind,
+    );
+  };
+
+  switch (command.kind) {
+    case "create_link":
+      exact(true, [outcome.createdLinkId!], []);
+      break;
+    case "update_link":
+    case "delete_link":
+      exact(true, [command.link_id], []);
+      break;
+    case "create_structure_link":
+      exact(true, [], [outcome.createdStructureLinkId!]);
+      break;
+    case "update_structure_link":
+    case "delete_structure_link":
+      exact(true, [], [command.structure_link_id]);
+      break;
+    default:
+      // Legacy lane/event/order commands may report scene effects, but never
+      // relationship effects.
+      exact(false, [], []);
+  }
 }
 
 export function validateTimelineCommandResultDTOForRequest(
@@ -930,7 +1206,166 @@ export function validateTimelineCommandResultDTOForRequest(
       result.timeline.revision,
     );
   }
+  const expectedCreatedField = command.kind === "create_link"
+    ? "created_link_id"
+    : command.kind === "create_structure_link"
+      ? "created_structure_link_id"
+      : null;
+  for (const field of ["created_link_id", "created_structure_link_id"] as const) {
+    const id = result[field];
+    if (field === expectedCreatedField && !result.replayed && result.changed && id === null) {
+      fail(`$.${field}`, `a created id for ${command.kind}`, id);
+    }
+    if (field !== expectedCreatedField && id !== null) {
+      fail(`$.${field}`, `null for ${command.kind}`, id);
+    }
+  }
+  validateTimelineAffectedFamilies(command, {
+    changed: result.changed,
+    sceneIds: result.affected_scene_ids,
+    linkIds: result.affected_link_ids,
+    structureLinkIds: result.affected_structure_link_ids,
+    createdLinkId: result.created_link_id,
+    createdStructureLinkId: result.created_structure_link_id,
+    fieldPrefix: "",
+  });
   return result;
+}
+
+export function validateTimelineCommandReceiptDTOForRequest(
+  value: unknown,
+  projectId: number,
+  command: TimelineCommandDTO,
+  expectedRequestDigest: string,
+): TimelineCommandReceiptDTO {
+  const dto = record(value, "$");
+  const returnedProjectId = integerValue(requireField(dto, "project_id", "$"), "$.project_id");
+  const requestDigest = stringValue(requireField(dto, "request_digest", "$"), "$.request_digest");
+  const commandKind = stringValue(requireField(dto, "command_kind", "$"), "$.command_kind");
+  const expectedRevision = stringValue(
+    requireField(dto, "expected_revision", "$"),
+    "$.expected_revision",
+  );
+  const appliedRevision = stringValue(
+    requireField(dto, "applied_revision", "$"),
+    "$.applied_revision",
+  );
+  const originalChanged = booleanValue(
+    requireField(dto, "original_changed", "$"),
+    "$.original_changed",
+  );
+  if (returnedProjectId !== projectId) {
+    fail("$.project_id", `the requested project id ${projectId}`, returnedProjectId);
+  }
+  if (!/^[0-9a-f]{64}$/.test(requestDigest)) {
+    fail("$.request_digest", "a 64-character lowercase hexadecimal digest", requestDigest);
+  }
+  if (!/^[0-9a-f]{64}$/.test(expectedRequestDigest)) {
+    fail(
+      "$.request_digest",
+      "validation against a canonical 64-character lowercase hexadecimal digest",
+      expectedRequestDigest,
+    );
+  }
+  if (requestDigest !== expectedRequestDigest) {
+    fail(
+      "$.request_digest",
+      "the canonical digest for the submitted Timeline command",
+      requestDigest,
+    );
+  }
+  if (commandKind !== command.kind) {
+    fail("$.command_kind", `the submitted command kind ${command.kind}`, commandKind);
+  }
+  if (expectedRevision !== command.expected_revision) {
+    fail("$.expected_revision", "the submitted expected revision", expectedRevision);
+  }
+  if (!/^[0-9a-f]{64}$/.test(appliedRevision)) {
+    fail("$.applied_revision", "a 64-character lowercase hexadecimal revision", appliedRevision);
+  }
+
+  for (const [field, label] of [
+    ["original_affected_scene_ids", "scene"],
+    ["original_affected_link_ids", "Timeline link"],
+    ["original_affected_structure_link_ids", "Timeline structure-link"],
+  ] as const) {
+    const ids = integerArray(requireField(dto, field, "$"), `$.${field}`);
+    const seen = new Set<number>();
+    ids.forEach((id, index) => {
+      if (id <= 0) fail(`$.${field}[${index}]`, `a positive ${label} id`, id);
+      if (seen.has(id)) fail(`$.${field}[${index}]`, `a unique ${label} id`, id);
+      seen.add(id);
+    });
+    if (!originalChanged && ids.length !== 0) {
+      fail(`$.${field}`, "an empty array when original_changed is false", ids);
+    }
+  }
+
+  for (const field of [
+    "original_created_link_id",
+    "original_created_structure_link_id",
+  ] as const) {
+    const id = nullable(requireField(dto, field, "$"), `$.${field}`, integerValue);
+    if (id !== null && id <= 0) fail(`$.${field}`, "a positive safe integer or null", id);
+    if (!originalChanged && id !== null) fail(`$.${field}`, "null when original_changed is false", id);
+  }
+  const originalCreatedLinkId = dto.original_created_link_id as number | null;
+  const originalCreatedStructureLinkId = dto.original_created_structure_link_id as number | null;
+  if (
+    originalCreatedLinkId !== null
+    && !(dto.original_affected_link_ids as number[]).includes(originalCreatedLinkId)
+  ) {
+    fail(
+      "$.original_created_link_id",
+      "an id included in original_affected_link_ids",
+      originalCreatedLinkId,
+    );
+  }
+  if (
+    originalCreatedStructureLinkId !== null
+    && !(dto.original_affected_structure_link_ids as number[]).includes(originalCreatedStructureLinkId)
+  ) {
+    fail(
+      "$.original_created_structure_link_id",
+      "an id included in original_affected_structure_link_ids",
+      originalCreatedStructureLinkId,
+    );
+  }
+
+  const expectedCreatedField = command.kind === "create_link"
+    ? "original_created_link_id"
+    : command.kind === "create_structure_link"
+      ? "original_created_structure_link_id"
+      : null;
+  for (const field of [
+    "original_created_link_id",
+    "original_created_structure_link_id",
+  ] as const) {
+    const id = dto[field] as number | null;
+    if (field === expectedCreatedField && originalChanged && id === null) {
+      fail(`$.${field}`, `a created id for ${command.kind}`, id);
+    }
+    if (field !== expectedCreatedField && id !== null) {
+      fail(`$.${field}`, `null for ${command.kind}`, id);
+    }
+  }
+  validateTimelineAffectedFamilies(command, {
+    changed: originalChanged,
+    sceneIds: dto.original_affected_scene_ids as number[],
+    linkIds: dto.original_affected_link_ids as number[],
+    structureLinkIds: dto.original_affected_structure_link_ids as number[],
+    createdLinkId: originalCreatedLinkId,
+    createdStructureLinkId: originalCreatedStructureLinkId,
+    fieldPrefix: "original_",
+  });
+  if (originalChanged && appliedRevision === expectedRevision) {
+    fail("$.applied_revision", "a new committed revision", appliedRevision);
+  }
+  if (!originalChanged && appliedRevision !== expectedRevision) {
+    fail("$.applied_revision", "the expected revision for a no-op command", appliedRevision);
+  }
+  isoTimestamp(requireField(dto, "committed_at", "$"), "$.committed_at");
+  return value as TimelineCommandReceiptDTO;
 }
 
 export function validateTimelineSnapshotDTOForProject(

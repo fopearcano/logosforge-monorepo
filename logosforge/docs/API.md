@@ -102,8 +102,11 @@ GET  /api/health → { status, service, mode, version, api_version, core_version
 `core_version` is the Logosforge build (e.g. `0.9.0-alpha`). Clients (Electron
 desktop and Web/PWA) read these to verify they're talking to a compatible
 backend. `version` mirrors `api_version` for backward compatibility.
-The current additive HTTP contract version is **1.13.0**. It adds the Guided
-Workflow Project OS contract: mode-filtered templates, active-run-aware
+The current additive HTTP contract version is **1.14.0**. It adds persisted
+scene-to-scene and scene-to-structure relationships to the coherent Timeline
+snapshot/revision plus six guarded relationship commands and receipt payload
+v2 (with decoding support for existing v1 receipts). Version 1.13.0 added the
+Guided Workflow Project OS contract: mode-filtered templates, active-run-aware
 recommendations, coherent revisioned run reads, bounded event history, and an
 atomic lifecycle command boundary with durable project-scoped idempotency
 receipts. Version 1.12.0 added transactional Semantic Continuity defer, dismiss,
@@ -113,8 +116,9 @@ canonical issue keys,
 structured issue/scene evidence, and an explicit availability state. HTTP 1.10.0
 introduced the equivalent Knowledge Graph feed and graph deep-link scope; the
 stable Project Intelligence feed remains unchanged. The HTTP version remains
-deliberately independent from the local MCP server contract; MCP gateway 1.9.0
-exposes 46 focused tools, including transactional Continuity review proposals.
+deliberately independent from the local MCP server contract; MCP gateway 1.10.0
+keeps the 46-tool surface and extends its existing Timeline read/proposal tools
+with the relationship commands.
 
 ### Packaged-desktop live context
 ```
@@ -338,7 +342,7 @@ changed command publishes `knowledge_graph_changed`; rejects and exact replays
 do not. Persisted logical duplicates fail closed as server-state corruption
 rather than choosing an order-dependent winner.
 
-MCP gateway 1.9.0 exposes the primary read, hidden-edge page, and guarded command
+MCP gateway 1.10.0 exposes the primary read, hidden-edge page, and guarded command
 proposal as `logosforge_get_knowledge_graph`,
 `logosforge_get_knowledge_graph_hidden_edges`, and
 `logosforge_propose_knowledge_graph_command`. The read accepts the same optional
@@ -425,7 +429,7 @@ commit time. It is project-scoped and responds with `Cache-Control: no-store` an
 are deleted with it. Failed commands leave no receipt, and corrupt or internally
 inconsistent review/receipt state fails closed rather than choosing a result.
 
-MCP gateway 1.9.0 exposes the same report through
+MCP gateway 1.10.0 exposes the same report through
 `logosforge_get_story_diagnostics` with `report: "continuity"` and prepares one
 strict status command through `logosforge_propose_continuity_command`. Proposal
 creation is read-only. Apply uses the opaque proposal id as the idempotency key,
@@ -607,7 +611,7 @@ non-cacheable. Receipts include exact no-op commands, last for the project
 lifetime, and are deleted with the project. Failed commands leave no receipt;
 calls without a key retain the original revision-guarded behavior.
 
-### Timeline (scene-derived; event id = scene id)
+### Timeline (scene-derived events plus persisted relationships)
 ```
 GET    /api/projects/{project_id}/timeline
 POST   /api/projects/{project_id}/timeline/commands
@@ -616,10 +620,22 @@ GET    /api/projects/{project_id}/timeline/command-receipt
 
 The read returns one authoritative `TimelineSnapshotDTO` containing
 `project_id`, a SHA-256 `revision`, `order_mode`, persisted lanes, ordered
-events, and `off_timeline` scenes. A scene is on the Timeline when it has a
-non-empty plotline or its id is explicitly present in Timeline membership.
+events, `off_timeline` scenes, persisted `links`, and persisted
+`structure_links`. A scene is on the Timeline when it has a non-empty plotline
+or its id is explicitly present in Timeline membership.
 Structural order follows the canonical manuscript hierarchy; custom order is
 stored independently and never rewrites manuscript `sort_order`.
+
+Each `TimelineLinkDTO` contains `id`, `source_scene_id`, `target_scene_id`,
+`link_type`, `color_label`, `label`, and `created_at`. `link_type` is exactly
+one of `custom`, `causality`, `setup_payoff`, `echo`, `conflict`, or
+`dependency`. The stored source→target orientation is preserved for display,
+while the legacy uniqueness rule allows only one link for an unordered scene
+pair regardless of direction or type. Each `TimelineStructureLinkDTO` contains
+`id`, `source_scene_id`, `target_type` (`act` or `chapter`), `target_ref`,
+`target_exists`, and `created_at`. A false `target_exists` keeps a name-keyed
+Act/Chapter relationship visible as dangling so clients can warn, repair, or
+delete it instead of guessing a replacement.
 
 Every command includes the snapshot's `expected_revision` and is applied in a
 single transaction. A stale revision returns `409` with error code
@@ -634,6 +650,28 @@ request-schema failures return `422`. Supported command kinds are:
   `index`
 - `remove_event`: `scene_id` (the underlying scene is preserved)
 - `set_order_mode`: `mode` (`structural` or `custom`)
+- `create_link`: `source_scene_id`, `target_scene_id`, optional `link_type`
+  (default `custom`), `color_label` (default `gray`), and `label` (default empty)
+- `update_link`: `link_id` and one or more of `link_type`, `color_label`, or
+  `label`
+- `delete_link`: `link_id`
+- `create_structure_link`: `source_scene_id`, `target_type`, and `target_ref`
+- `update_structure_link`: `structure_link_id` and at least one of
+  `target_type` or `target_ref`
+- `delete_structure_link`: `structure_link_id`
+
+Creating a scene link requires both endpoints to be current Timeline events;
+creating a structure link requires its source scene to be a current event.
+Dormant legacy relationship rows remain in the snapshot and may be updated or
+deleted, so users can repair old state without first recreating its membership.
+Relationship validation and the revision comparison occur in the same database
+transaction as the mutation. A missing relationship returns `404`; corrupt
+persisted relationship state fails closed with `timeline_state_corrupt`.
+
+Every command result returns the current coherent `timeline`, `changed`,
+`replayed`, `applied_revision`, `affected_scene_ids`, `affected_link_ids`,
+`affected_structure_link_ids`, `created_link_id`, and
+`created_structure_link_id`.
 
 Timeline command clients may send an `Idempotency-Key` header containing 16–128
 safe ASCII characters (`A-Z`, `a-z`, `0-9`, `.`, `_`, `:`, or `-`, beginning
@@ -641,7 +679,7 @@ with an alphanumeric character). The core stores only its SHA-256 digest. A
 first keyed command and its compact receipt commit in the same transaction;
 the result includes `replayed: false` and the committed `applied_revision`.
 Sending the exact same command with the same key returns the current coherent
-Timeline with `changed: false`, no current-call affected scene ids,
+Timeline with `changed: false`, no current-call affected or created ids,
 `replayed: true`, and the original `applied_revision`. Receipt lookup happens
 before the revision comparison, so that replay remains safe after the board
 has advanced. Reusing a key for a different request returns `409` with
@@ -650,7 +688,10 @@ has advanced. Reusing a key for a different request returns `409` with
 `GET /timeline/command-receipt` requires the same `Idempotency-Key` header and
 returns compact original-outcome metadata: the canonical request digest,
 command kind, expected and applied revisions, original changed flag, original
-affected scene ids, and commit timestamp. A genuine miss returns `404` with
+affected scene/link/structure-link ids, original created link/structure-link
+ids, and commit timestamp. Receipt payload v2 carries these
+relationship outcomes; the decoder still accepts existing v1 Timeline receipts.
+A genuine miss returns `404` with
 `timeline_receipt_not_found`; responses are non-cacheable. Receipts last for
 the project lifetime and are deleted with the project. Calls without a key
 retain the original revision-guarded command behavior.
@@ -658,7 +699,7 @@ retain the original revision-guarded command behavior.
 The former `/timeline/events` POST/PATCH/DELETE endpoints are retired because
 they could mutate scene structure without the Timeline revision guard. Create
 and edit scene prose/metadata through `/scenes`; use Timeline commands for
-membership, lanes, and board order.
+membership, lanes, board order, and relationships.
 
 ### PSYKE
 ```
@@ -817,6 +858,12 @@ notes_changed, dashboard_changed, assistant_action_completed
 The API owns its own Qt-free event broker (`logosforge/api/events.py`); it
 does not require the desktop Qt event loop, so the PyQt app and the API can run
 independently.
+
+Committed command state and receipts are authoritative; live notifications are
+published after commit and are not backed by a transactional outbox. A missed
+notification is recovered by refetching the coherent surface. Durable broker
+outbox/reconciliation is tracked separately from Phase 7C and is required
+before LAN, multi-user, or background-delivery guarantees.
 
 ---
 

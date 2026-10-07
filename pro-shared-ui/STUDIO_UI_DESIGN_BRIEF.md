@@ -181,7 +181,8 @@ All entities are project-scoped (one SQLite DB per project, via the API).
   `color_label`, `order_index`, `collapsed`), **typed timeline links**
   (`TimelineLink`: source/target scene, `link_type` ∈ custom / causality /
   setup_payoff / echo / conflict / dependency, `color_label`, `label`),
-  **structure links** (`TimelineStructureLink`: event → Act/Chapter by name),
+  **structure links** (`TimelineStructureLink`: event → Act/Chapter by name,
+  with `target_exists` exposing a dangling target),
   **canvas plot** nodes/links/frames (`CanvasPlotNode/Link/Frame`), **Timeline**
   (story-order vs structural order), **Notes**, **Tags**, **Beats**.
 - **Stages / Versions** — narrative versioning + **branching** (capture,
@@ -537,6 +538,20 @@ reorganizing plot never silently rewrites the book.
   a global **filter HUD** (character/tag/plotline/beat/tension-range) dimming
   non-matching cards across every pane, collapsed-lane "spark" summaries, and a
   "follow Outline" pulse when re-syncing Custom→Structural.
+
+**Implementation status (Pro roadmap Phase 7B):** HTTP 1.14.0 now returns scene
+links and structure links in the same coherent Timeline snapshot/revision and
+provides six atomic create/update/delete relationship commands with durable
+receipt payload v2 (plus v1 decoding). The production React panel authors,
+edits, and deletes both families, shows `target_exists=false` as a dangling
+structure warning, and performs exact-command/key receipt-first ambiguity
+recovery. Stored source→target orientation is shown, while
+one-link-per-unordered-scene-pair uniqueness is preserved. New creation requires
+current Timeline events; dormant legacy rows remain readable, repairable, and
+deletable. This is implemented locally with packaged validation pending.
+**Phase 7C** is the mode-specific projections and story-flow heat/tension
+overlay described above. Durable broker outbox work is tracked separately before
+LAN, multi-user, or background delivery.
 
 ### 4.4 PSYKE — the story bible
 (`psyke_view`, `psyke_console`, `psyke_highlighter`, `characters_view`,
@@ -1506,8 +1521,10 @@ Alpha) — a scoped, versioned, policy-governed memory-object store. All of it i
   disabled / invalid_url / connected / unreachable; optional localhost-only
   process start/stop); a **bridge** (read context, **propose** writes →
   `ActionProposal`, `apply_confirmed_action(confirmed=True)` still gated by connector
-  write settings); an **MCP server** exposing **13 tools** 1:1 with bridge ops over
-  the FastAPI connector layer.
+  write settings); the legacy bridge's **13 connector-mapped tools** remain
+  historical context. The current Pro gateway is a separate MCP 1.10.0 surface
+  of **46 focused tools**, including the existing canonical Timeline read and
+  proposal tools extended for Phase 7B relationships.
 - **Cloud-safe storage** (`cloud_storage`) — provider-neutral safe primitives (no
   OAuth/provider APIs); see §4.10.
 - **Existing views**: `PluginsView` (left plugin list `name [loaded/disabled/error]`
@@ -1528,7 +1545,8 @@ Alpha) — a scoped, versioned, policy-governed memory-object store. All of it i
   **permissions dashboard**; an action-proposal inspector (propose → confirm →
   apply, with the write-settings gate shown); a **LibreChat dock** (embedded
   `QWebEngineView` when reachable, with a connection-state banner + retry + open-in-
-  browser + optional localhost launch/stop, plus an MCP-tools panel listing the 13
+  browser + optional localhost launch/stop, plus an MCP-tools panel distinguishing
+  the legacy 13 connector-mapped tools from the Pro gateway's current 46 focused
   tools); and a **cloud-storage status strip** (detected provider for the project
   path, lock state "may be open on <device>", external-change/conflict indicator) —
   ambient systems telemetry a Studio line should expose densely. Every mutating

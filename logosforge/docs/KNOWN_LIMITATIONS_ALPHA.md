@@ -22,6 +22,12 @@ alpha. Nothing here is a data-safety risk; it's about scope and polish. See
   per-step reminders, and a multi-project workflow dashboard remain deferred;
   aggregate Graph/Radar/export checks do not auto-complete unless Core can prove
   them in the command transaction. ([GuidedWorkflows.md](GuidedWorkflows.md))
+- **Transactional Timeline Relationships** — HTTP 1.14.0, the Pro
+  author/edit/delete UI, and the existing MCP Timeline tools are implemented
+  locally for persisted scene links and scene-to-Act/Chapter links. Packaged
+  validation is pending. Phase 7C will add mode-specific projections and the
+  story-flow heat/tension overlay; it does not replace the independent Canvas
+  Plot board.
 
 ## Experimental / optional
 
@@ -132,8 +138,14 @@ alpha. Nothing here is a data-safety risk; it's about scope and polish. See
 
 ## Model / feature limits
 
-- **Plot** and **Timeline** are derived from scene fields, not standalone models
-  (no event dates / rich plot graph yet).
+- **Plot** blocks and Timeline event membership/lanes are derived from scene
+  fields rather than a dated-event/plot-thread domain. Timeline relationship
+  rows are persisted and transactional, but there are still no event dates,
+  mode-specific projections, or rendered story-flow heat/tension overlay.
+  Scene-to-scene links retain stored source→target orientation but enforce one
+  row per unordered scene pair; parallel reverse or multi-type links are not
+  supported. Scene-to-structure targets are name-keyed and may become dangling;
+  `target_exists` exposes that state for explicit repair or deletion.
 - **Continuity** flags only evidence-backed, deterministic issues; deep-NLP checks
   (voice drift, knowledge leak, object reuse, lore-rule violation) are not done.
 - **Knowledge Graph** centrality is plain degree; undefined-term detection is
@@ -211,18 +223,23 @@ alpha. Nothing here is a data-safety risk; it's about scope and polish. See
    Intel macOS 12 runner, then complete hands-on acceptance on all three native
    platforms. The HTTP 1.12.0 candidate passed the full Windows journey and a
    separate clean-Ubuntu-VM AppImage launch/relaunch smoke; the latter is not a
-   substitute for the full journey and does not validate HTTP 1.13.0.
+   substitute for the full journey and does not validate HTTP 1.13.0 or 1.14.0.
 3. Harden and authenticate API LAN/remote transport before any non-desktop
    exposure.
-4. Add richer Plot/Timeline models and opt-in semantic continuity checks.
+4. Add Phase 7C mode-specific Timeline projections and the story-flow
+   heat/tension overlay, then evaluate richer dated Plot/Timeline concepts and
+   opt-in semantic continuity checks.
 
 ## Live-event delivery boundary
 
-Guided Workflow state and command receipts are crash-safe, but
-`workflow_changed` is published after the database commit rather than through a
-transactional outbox. A process death in that narrow window can omit the live
-notification; an authoritative refetch/reconnect still returns the committed
-state. Durable broker outbox/reconciliation is a future hardening item.
+Guided Workflow and Timeline relationship state and command receipts are
+crash-safe, but their live change events are published after the database
+commit rather than through a transactional outbox. A process death in that
+narrow window can omit the live notification; an authoritative refetch or
+reconnect still returns the committed state. Durable broker
+outbox/reconciliation is tracked as a separate hardening milestone before any
+LAN, multi-user, or background-delivery guarantee; it is not part of Phase 7C's
+mode projections and story-flow overlay.
 
 ## Not a bug
 

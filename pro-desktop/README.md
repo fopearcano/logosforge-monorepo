@@ -210,8 +210,8 @@ no token or changing package-extraction path belongs in Codex configuration.
 Writes remain disabled unless the MCP client explicitly sets
 `LOGOSFORGE_MCP_ALLOW_WRITES=1`.
 
-Gateway version 1.9.0 exposes 46 named tools. In addition to paged/filterable
-comment-thread reads and revision-bound Reply/Resolve/Reopen proposals, it can
+Gateway version 1.10.0 keeps the surface at 46 named tools. In addition to
+paged/filterable comment-thread reads and revision-bound Reply/Resolve/Reopen proposals, it can
 read the canonical Timeline, Canvas Plot, and bounded Narrative Knowledge Graph
 plus the deterministic Semantic Continuity report, and propose strict guarded
 commands for all four transactional surfaces. Knowledge Graph tools also page
@@ -223,7 +223,14 @@ graph-review, Continuity review/finding, and comment revisions atomically with
 apply, rejecting intervening changes. Canvas node deletion
 removes incident Canvas links but preserves linked manuscript scenes. Timeline
 lane deletion preserves events as Unassigned and event removal preserves the
-manuscript scene. Timeline, Canvas Plot, Knowledge Graph, and Continuity
+manuscript scene. The same Timeline read/proposal tools now expose persisted
+scene links and scene-to-Act/Chapter links plus six create/update/delete
+commands. Scene links display their stored source→target orientation but remain
+unique per unordered scene pair; dangling structure targets are explicit and
+repairable. New link creation requires current Timeline events, while dormant
+legacy rows remain readable, editable, and deletable. Timeline receipt payload
+v2 records relationship outcomes and retains v1 decoding. Timeline, Canvas
+Plot, Knowledge Graph, and Continuity
 proposals use their opaque proposal id for a durable core receipt, so an
 ambiguous apply can recover the exact committed outcome across an MCP companion
 restart without duplicating the command. A proven family-specific receipt miss
@@ -248,6 +255,12 @@ resolution; stale-write rejection; and single-use proposal replay protection.
 The frozen-companion smoke separately verifies all 46 discovered tools and that
 an exact Continuity proposal is non-mutating. The optional Codex subprocess used
 by the packaged smoke remains read-only.
+
+The HTTP 1.14.0 / MCP 1.10.0 Transactional Timeline Relationships extension and
+its Pro author/edit/delete UI are implemented in the current source. Packaged
+validation of that extension is pending; the packaged acceptance claims above
+apply to the previously exercised surface and are not a release claim for
+Phase 7B.
 
 The packaged workspace acceptance exercises the production renderer rather than
 the preview harness. It crosses the manuscript save barrier, follows Radar into
@@ -278,4 +291,9 @@ Codex configuration and the proposal/review/apply safety model.
   a per-process authenticated core and stores the SQLite database in the app's stable
   user-data directory. The same packages install a stable,
   descriptor-authenticated MCP companion for local Codex orchestration.
+- **Phase 7B source status:** Transactional Timeline Relationships are
+  implemented locally under HTTP 1.14.0 and MCP 1.10.0. The next UI milestone
+  is Phase 7C mode-specific Timeline projections plus the story-flow
+  heat/tension overlay. Durable broker outbox/reconciliation is tracked
+  separately before LAN, multi-user, or background-delivery support.
 - The renderer uses bundled/local assets and runs under a restrictive CSP.

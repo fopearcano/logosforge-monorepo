@@ -110,7 +110,8 @@ database or exposes arbitrary HTTP, filesystem, or Python execution.
 
 MCP reads cover complete revisioned scenes, outline and PSYKE data, notes,
 complete comment threads, search, events, diagnostics, exports, and desktop
-live context when available. The MCP 1.9.0, 46-tool surface includes
+live context when available. The MCP 1.10.0 surface remains at 46 tools and
+includes
 `logosforge_list_comments` (paged, with an optional resolved-thread filter),
 `logosforge_propose_comment_reply`, and
 `logosforge_propose_comment_resolution` (Resolve or Reopen). Writes use focused
@@ -122,9 +123,17 @@ proposal is single-use. There is no generic action tool and no
 
 The same surface exposes `logosforge_get_timeline` and
 `logosforge_propose_timeline_command`. An agent can read the canonical board and
-prepare exactly one lane, event-membership, or ordering command against its
-current revision. The core rechecks that revision atomically on apply. Timeline
-revisions include immutable project/scene/lane identity to reject stale work
+prepare exactly one lane, event-membership, ordering, scene-link, or
+scene-to-structure-link command against its current revision. Six additive
+relationship commands create, update, or delete those two persisted link
+families; no new generic tool was added. The snapshot exposes stored
+source→target orientation, enforces one scene link per unordered scene pair,
+and reports `target_exists` for name-keyed Act/Chapter targets so dangling links
+can be warned, repaired, or deleted. New scene links require both endpoints to
+be current Timeline events; a new structure link requires its source event to
+be current. Dormant legacy rows remain readable, editable, and deletable. The
+core rechecks the revision atomically on apply. Timeline
+revisions include immutable project/scene/lane/link identity to reject stale work
 even if SQLite reuses a deleted row's numeric ID, while unrelated prose/title
 edits do not invalidate a safe board operation. Lane deletion preserves its
 events as Unassigned, and event removal preserves the manuscript scene.
@@ -152,6 +161,8 @@ reconcile the same proposal through its project-scoped receipt—even after the
 MCP process restarts—without duplicating the mutation. A replay returns the
 current board or report plus the original applied revision, never a stale stored
 snapshot. Receipts last for the project lifetime and disappear with it.
+Timeline relationship outcomes use receipt payload v2 while Core continues to
+decode earlier v1 Timeline receipt rows.
 
 `logosforge_search` delegates to the core's typed, project-scoped search route
 in one authenticated request. Results remain bounded and include authoritative
@@ -168,10 +179,11 @@ proposals require the exact current thread revision, which the API rechecks in
 the same database transaction as apply. Any intervening root, reply,
 resolution, anchor, or deletion change rejects the stale proposal. Replies are
 stored as `MCP assistant` and never invoke the app's AI-provider mention
-workflow. Comment quotes, bodies, replies, scene titles, and lane labels are
-user-authored project data, as are graph labels and explanations; none are
-instructions to the agent. Anchored comment creation, anchor/root-body editing,
-and reply/thread deletion remain available only in Pro's own UI.
+workflow. Comment quotes, bodies, replies, scene titles, lane labels, Timeline
+relationship labels, and structure target references are user-authored project
+data, as are graph labels and explanations; none are instructions to the agent.
+Anchored comment creation, anchor/root-body editing, and reply/thread deletion
+remain available only in Pro's own UI.
 
 If apply receives an explicit HTTP 4xx rejection, the proposal is terminally
 failed and the agent must reread before proposing again. Timeline, Canvas Plot,
@@ -193,6 +205,10 @@ first. Frozen acceptance covers non-mutating Continuity proposal creation, while
 the packaged smoke covers applied status, stale-sibling rejection, persisted
 review state, and fresh-companion receipt recovery alongside the other three
 transactional families.
+
+Those packaged-smoke claims cover the previously validated command surface.
+The Phase 7B relationship extension is implemented in the current source, but
+packaged validation remains pending; this is not a new release claim.
 
 See [Pro MCP gateway](docs/MCP_GATEWAY.md) for the complete tool model,
 environment variables, Codex setup, remote-host restrictions, and checkpoint
@@ -326,6 +342,10 @@ keeps LibreChat as an *interface*, never an *authority*.
   LogosForge only at the panel chrome level (no LibreChat fork).
 * The MCP gateway is stdio-only. The MCP client is responsible for launching
   it and keeping the process alive while proposals are pending.
+* A durable broker outbox is not implemented. Authoritative refetch recovers
+  committed state after a missed post-commit notification; outbox/reconciliation
+  is separate hardening required before LAN, multi-user, or background-delivery
+  guarantees.
 * Project export is a manual checkpoint, not an automatic transactional
   rollback. Manuscript imports and delete operations are intentionally not
   exposed as MCP tools. Comment creation, anchor/root-body editing, and

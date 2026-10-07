@@ -545,6 +545,21 @@ def _canvas_request_digest(project_id: int, body: dict) -> str:
             "expected_revision": "f" * 64,
             "mode": "custom",
         },
+        {
+            "kind": "create_link",
+            "expected_revision": "1" * 64,
+            "source_scene_id": 11,
+            "target_scene_id": 12,
+            "link_type": "causality",
+            "label": "therefore",
+        },
+        {
+            "kind": "update_structure_link",
+            "expected_revision": "2" * 64,
+            "structure_link_id": 41,
+            "target_type": "chapter",
+            "target_ref": "Capitolo ∞",
+        },
     ],
     ids=[
         "create-unicode-omitted-optionals",
@@ -553,6 +568,8 @@ def _canvas_request_digest(project_id: int, body: dict) -> str:
         "place-explicit-null-lane",
         "remove",
         "order-mode",
+        "create-event-link",
+        "update-structure-link",
     ],
 )
 def test_timeline_receipt_request_digest_matches_core_canonical_wire(body):
@@ -714,6 +731,8 @@ class _FakeApiClient:
                     "act": "",
                     "chapter": "",
                 }],
+                "links": [],
+                "structure_links": [],
             },
             2: {
                 "project_id": 2,
@@ -722,6 +741,8 @@ class _FakeApiClient:
                 "lanes": [],
                 "events": [],
                 "off_timeline": [],
+                "links": [],
+                "structure_links": [],
             },
         }
         self._timeline_revision_sequence = 3
@@ -1324,6 +1345,10 @@ class _FakeApiClient:
                     "applied_revision": receipt["applied_revision"],
                     "changed": False,
                     "affected_scene_ids": [],
+                    "affected_link_ids": [],
+                    "affected_structure_link_ids": [],
+                    "created_link_id": None,
+                    "created_structure_link_id": None,
                 }
             if body.get("expected_revision") != timeline["revision"]:
                 raise LogosForgeApiError(
@@ -1331,22 +1356,37 @@ class _FakeApiClient:
                     status_code=409,
                     error_code="timeline_conflict",
                 )
-            if body.get("kind") != "create_lane":
+            affected_link_ids: list[int] = []
+            created_link_id: int | None = None
+            if body.get("kind") == "create_lane":
+                lane = {
+                    "id": 301 + len(timeline["lanes"]),
+                    "name": body["name"],
+                    "color_label": body.get("color_label", ""),
+                    "order_index": len(timeline["lanes"]),
+                    "collapsed": False,
+                    "event_count": 0,
+                }
+                index = body.get("index")
+                if index is None:
+                    index = len(timeline["lanes"])
+                timeline["lanes"].insert(index, lane)
+                for order_index, row in enumerate(timeline["lanes"]):
+                    row["order_index"] = order_index
+            elif body.get("kind") == "create_link":
+                created_link_id = 401 + len(timeline["links"])
+                timeline["links"].append({
+                    "id": created_link_id,
+                    "source_scene_id": body["source_scene_id"],
+                    "target_scene_id": body["target_scene_id"],
+                    "link_type": body.get("link_type", "custom"),
+                    "color_label": body.get("color_label", "gray"),
+                    "label": body.get("label", ""),
+                    "created_at": "2026-10-07T10:00:00Z",
+                })
+                affected_link_ids.append(created_link_id)
+            else:
                 raise LogosForgeApiError("unsupported fake Timeline command")
-            lane = {
-                "id": 301 + len(timeline["lanes"]),
-                "name": body["name"],
-                "color_label": body.get("color_label", ""),
-                "order_index": len(timeline["lanes"]),
-                "collapsed": False,
-                "event_count": 0,
-            }
-            index = body.get("index")
-            if index is None:
-                index = len(timeline["lanes"])
-            timeline["lanes"].insert(index, lane)
-            for order_index, row in enumerate(timeline["lanes"]):
-                row["order_index"] = order_index
             timeline["revision"] = f"{self._timeline_revision_sequence:064x}"
             self._timeline_revision_sequence += 1
             if idempotency_key:
@@ -1358,6 +1398,10 @@ class _FakeApiClient:
                     "applied_revision": timeline["revision"],
                     "original_changed": True,
                     "original_affected_scene_ids": [],
+                    "original_affected_link_ids": affected_link_ids,
+                    "original_affected_structure_link_ids": [],
+                    "original_created_link_id": created_link_id,
+                    "original_created_structure_link_id": None,
                     "committed_at": "2026-10-04T10:00:00Z",
                 }
             return {
@@ -1366,6 +1410,10 @@ class _FakeApiClient:
                 "applied_revision": timeline["revision"],
                 "changed": True,
                 "affected_scene_ids": [],
+                "affected_link_ids": affected_link_ids,
+                "affected_structure_link_ids": [],
+                "created_link_id": created_link_id,
+                "created_structure_link_id": None,
             }
 
         if method == "POST" and path == "/api/projects/1/canvas-plot/commands":
@@ -3059,6 +3107,10 @@ def test_unknown_timeline_proposal_recovers_from_selected_project_after_restart(
         "applied_revision": recovered["receipt"]["applied_revision"],
         "changed": False,
         "affected_scene_ids": [],
+        "affected_link_ids": [],
+        "affected_structure_link_ids": [],
+        "created_link_id": None,
+        "created_structure_link_id": None,
     }
 
     fake.project_id = 2
@@ -3385,6 +3437,227 @@ def test_timeline_lane_update_and_order_mode_proposals_preserve_exact_commands()
         "structural_mode_recomputes_effective_order": False,
     }
     assert fake.timelines[1]["order_mode"] == "structural"
+
+
+def test_timeline_relationship_proposals_are_exact_reviewable_and_non_mutating():
+    gateway, fake = _gateway()
+    fake.timelines[1].update({
+        "events": [
+            {
+                "id": 11, "order_index": 1, "title": "Cause",
+                "structural_number": "1", "act": "Act I", "chapter": "Ch1",
+                "plotline": "Main", "color_label": "", "lane_id": 301,
+                "time_of_day": "", "location": "", "duration_minutes": 0,
+                "character_states": [],
+            },
+            {
+                "id": 12, "order_index": 2, "title": "Effect",
+                "structural_number": "2", "act": "Act I", "chapter": "Ch1",
+                "plotline": "Main", "color_label": "", "lane_id": 301,
+                "time_of_day": "", "location": "", "duration_minutes": 0,
+                "character_states": [],
+            },
+            {
+                "id": 13, "order_index": 3, "title": "Aftermath",
+                "structural_number": "3", "act": "Act II", "chapter": "Ch2",
+                "plotline": "Sub", "color_label": "", "lane_id": 302,
+                "time_of_day": "", "location": "", "duration_minutes": 0,
+                "character_states": [],
+            },
+        ],
+        "off_timeline": [],
+        "links": [{
+            "id": 401,
+            "source_scene_id": 11,
+            "target_scene_id": 12,
+            "link_type": "causality",
+            "color_label": "amber",
+            "label": "forces",
+            "created_at": "2026-10-07T10:00:00Z",
+        }],
+        "structure_links": [{
+            "id": 501,
+            "source_scene_id": 11,
+            "target_type": "act",
+            "target_ref": "Old Act",
+            "target_exists": False,
+            "created_at": "2026-10-07T10:00:00Z",
+        }],
+    })
+    revision = fake.timelines[1]["revision"]
+    commands = [
+        {
+            "kind": "create_link",
+            "expected_revision": revision,
+            "source_scene_id": 12,
+            "target_scene_id": 13,
+            "link_type": "setup_payoff",
+            "color_label": "cyan",
+            "label": "plants",
+        },
+        {
+            "kind": "update_link",
+            "expected_revision": revision,
+            "link_id": 401,
+            "link_type": "dependency",
+            "label": "requires",
+        },
+        {
+            "kind": "delete_link",
+            "expected_revision": revision,
+            "link_id": 401,
+        },
+        {
+            "kind": "create_structure_link",
+            "expected_revision": revision,
+            "source_scene_id": 12,
+            "target_type": "chapter",
+            "target_ref": "Ch2",
+        },
+        {
+            "kind": "update_structure_link",
+            "expected_revision": revision,
+            "structure_link_id": 501,
+            "target_type": "act",
+            "target_ref": "Act II",
+        },
+        {
+            "kind": "delete_structure_link",
+            "expected_revision": revision,
+            "structure_link_id": 501,
+        },
+    ]
+
+    proposals = [gateway.propose_timeline_command(command) for command in commands]
+
+    assert [proposal["request"]["body"] for proposal in proposals] == commands
+    assert proposals[0]["review"]["after_intent"]["direction"] == "source_to_target"
+    assert proposals[1]["review"]["changes"]["link_type"] == {
+        "before": "causality", "after": "dependency",
+    }
+    assert proposals[2]["review"]["destructive"] is True
+    assert "manuscript scenes remain" in proposals[2]["review"]["effect"]
+    assert proposals[3]["review"]["after_intent"]["target_exists"] is True
+    assert proposals[4]["review"]["structure_link"]["target_exists"] is False
+    assert proposals[5]["review"]["destructive"] is True
+    assert fake.timelines[1]["links"][0]["link_type"] == "causality"
+    assert fake.timelines[1]["structure_links"][0]["target_ref"] == "Old Act"
+    assert not any(method == "POST" for method, _path, _body in fake.requests)
+
+
+def test_timeline_link_proposal_apply_stale_sibling_and_restart_receipt_recovery():
+    gateway, fake = _gateway(allow_writes=True)
+    fake.timelines[1].update({
+        "events": [
+            {
+                "id": scene_id, "order_index": index, "title": title,
+                "structural_number": str(index), "act": "Act I",
+                "chapter": "Ch1", "plotline": "Main", "color_label": "",
+                "lane_id": None, "time_of_day": "", "location": "",
+                "duration_minutes": 0, "character_states": [],
+            }
+            for index, (scene_id, title) in enumerate(
+                ((11, "Cause"), (12, "Effect"), (13, "Aftermath")), start=1,
+            )
+        ],
+        "off_timeline": [],
+        "links": [],
+        "structure_links": [],
+    })
+    revision = fake.timelines[1]["revision"]
+    proposal = gateway.propose_timeline_command({
+        "kind": "create_link",
+        "expected_revision": revision,
+        "source_scene_id": 11,
+        "target_scene_id": 12,
+        "link_type": "causality",
+        "label": "forces",
+    })
+    stale = gateway.propose_timeline_command({
+        "kind": "create_link",
+        "expected_revision": revision,
+        "source_scene_id": 12,
+        "target_scene_id": 13,
+        "link_type": "dependency",
+    })
+    assert fake.timelines[1]["links"] == []
+
+    applied = gateway.apply_proposal(proposal["proposal_id"])
+    assert applied["state"] == "applied"
+    assert applied["result"]["created_link_id"] == 401
+    assert applied["result"]["affected_link_ids"] == [401]
+    assert fake.timelines[1]["links"] == [{
+        "id": 401,
+        "source_scene_id": 11,
+        "target_scene_id": 12,
+        "link_type": "causality",
+        "color_label": "gray",
+        "label": "forces",
+        "created_at": "2026-10-07T10:00:00Z",
+    }]
+    with pytest.raises(GatewayError, match="rejected.*Timeline changed"):
+        gateway.apply_proposal(stale["proposal_id"])
+
+    restarted, _ = _gateway(fake)
+    recovered = restarted.get_proposal(proposal["proposal_id"])
+    assert recovered["state"] == "applied"
+    assert recovered["receipt"]["original_affected_link_ids"] == [401]
+    assert recovered["receipt"]["original_created_link_id"] == 401
+    assert recovered["result"]["replayed"] is True
+    assert recovered["result"]["created_link_id"] is None
+    assert len(fake.timelines[1]["links"]) == 1
+
+
+@pytest.mark.parametrize(
+    ("command", "message"),
+    [
+        (
+            {
+                "kind": "create_link", "expected_revision": "1" * 64,
+                "source_scene_id": 11, "target_scene_id": 11,
+            },
+            "cannot link to itself",
+        ),
+        (
+            {
+                "kind": "create_link", "expected_revision": "1" * 64,
+                "source_scene_id": 11, "target_scene_id": 12,
+                "link_type": "unknown",
+            },
+            "link_type must be one of",
+        ),
+        (
+            {
+                "kind": "update_link", "expected_revision": "1" * 64,
+                "link_id": 401,
+            },
+            "must change at least one field",
+        ),
+        (
+            {
+                "kind": "create_structure_link", "expected_revision": "1" * 64,
+                "source_scene_id": 11, "target_type": "scene",
+                "target_ref": "Opening",
+            },
+            "target_type must be 'act' or 'chapter'",
+        ),
+        (
+            {
+                "kind": "update_structure_link", "expected_revision": "1" * 64,
+                "structure_link_id": 501,
+            },
+            "must change at least one field",
+        ),
+    ],
+)
+def test_timeline_relationship_command_normalization_rejects_unsafe_shapes(
+    command, message,
+):
+    gateway, fake = _gateway()
+    with pytest.raises(GatewayError, match=message):
+        gateway.propose_timeline_command(command)
+    assert gateway.list_proposals() == {"proposals": []}
+    assert not any(method == "POST" for method, _path, _body in fake.requests)
 
 
 def test_timeline_reviews_bound_legacy_snapshot_text():
@@ -4040,7 +4313,9 @@ def test_mcp_registry_has_unique_focused_tools_and_no_legacy_self_approval():
     variants = timeline_proposal.input_schema["properties"]["command"]["oneOf"]
     assert {variant["properties"]["kind"]["const"] for variant in variants} == {
         "create_lane", "update_lane", "delete_lane", "place_event",
-        "remove_event", "set_order_mode",
+        "remove_event", "set_order_mode", "create_link", "update_link",
+        "delete_link", "create_structure_link", "update_structure_link",
+        "delete_structure_link",
     }
     assert all(variant["additionalProperties"] is False for variant in variants)
     update_variant = next(
@@ -4238,7 +4513,7 @@ def test_real_mcp_stdio_initializes_and_advertises_structured_tools():
 
     initialized, listed = asyncio.run(exercise())
     assert initialized.serverInfo.name == "logosforge"
-    assert initialized.serverInfo.version == "1.9.0"
+    assert initialized.serverInfo.version == "1.10.0"
     tools = {tool.name: tool for tool in listed.tools}
     assert len(tools) == 46
     assert {

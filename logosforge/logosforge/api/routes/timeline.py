@@ -9,16 +9,19 @@ from fastapi.responses import JSONResponse
 
 from logosforge.api import schemas, serializers
 from logosforge.api.deps import get_broker, get_db, get_project
-from logosforge.api.errors import bad_request, conflict, not_found
+from logosforge.api.errors import ApiError, bad_request, conflict, not_found
 from logosforge.api.events import ApiEventBroker
 from logosforge.db import (
     Database,
     TimelineCommandError,
     TimelineIdempotencyKeyConflict,
     TimelineLaneNotFound,
+    TimelineLinkNotFound,
     TimelineProjectNotFound,
     TimelineRevisionConflict,
     TimelineSceneNotFound,
+    TimelineStateCorrupt,
+    TimelineStructureLinkNotFound,
 )
 
 router = APIRouter(tags=["timeline"])
@@ -27,6 +30,19 @@ _RECEIPT_RESPONSE_HEADERS = {
     "Cache-Control": "no-store",
     "Vary": "Authorization, Idempotency-Key",
 }
+
+_CORRUPT_TIMELINE_STATE_MESSAGE = (
+    "Timeline state is inconsistent. Repair it before continuing Timeline edits."
+)
+
+
+def _timeline_state_corrupt_error() -> ApiError:
+    """Return a stable error without disclosing malformed persisted rows."""
+    return ApiError(
+        500,
+        _CORRUPT_TIMELINE_STATE_MESSAGE,
+        code="timeline_state_corrupt",
+    )
 
 
 def _receipt_error(status_code: int, code: str, message: str) -> JSONResponse:
@@ -43,7 +59,10 @@ def _receipt_error(status_code: int, code: str, message: str) -> JSONResponse:
     response_model=schemas.TimelineSnapshotDTO,
 )
 def get_timeline(project=Depends(get_project), db: Database = Depends(get_db)):
-    snapshot = db.read_timeline_snapshot(project.id)
+    try:
+        snapshot = db.read_timeline_snapshot(project.id)
+    except TimelineStateCorrupt as exc:
+        raise _timeline_state_corrupt_error() from exc
     if snapshot is None:
         raise not_found(f"Project {project.id} not found")
     return serializers.timeline_snapshot_to_dto(snapshot)
@@ -92,6 +111,25 @@ def execute_timeline_command(
     except TimelineLaneNotFound as exc:
         missing = exc.args[0] if exc.args else payload.get("lane_id")
         raise not_found(f"Timeline lane {missing} not found") from exc
+    except TimelineLinkNotFound as exc:
+        missing = exc.args[0] if exc.args else payload.get("link_id")
+        raise ApiError(
+            404,
+            f"Timeline link {missing} not found",
+            code="timeline_link_not_found",
+        ) from exc
+    except TimelineStructureLinkNotFound as exc:
+        missing = (
+            exc.args[0]
+            if exc.args else payload.get("structure_link_id")
+        )
+        raise ApiError(
+            404,
+            f"Timeline structure link {missing} not found",
+            code="timeline_structure_link_not_found",
+        ) from exc
+    except TimelineStateCorrupt as exc:
+        raise _timeline_state_corrupt_error() from exc
     except TimelineCommandError as exc:
         raise bad_request(str(exc)) from exc
 
@@ -108,6 +146,12 @@ def execute_timeline_command(
         timeline=serializers.timeline_snapshot_to_dto(result.snapshot),
         changed=result.changed,
         affected_scene_ids=list(result.affected_scene_ids),
+        affected_link_ids=list(result.affected_link_ids),
+        affected_structure_link_ids=list(
+            result.affected_structure_link_ids
+        ),
+        created_link_id=result.created_link_id,
+        created_structure_link_id=result.created_structure_link_id,
         replayed=result.replayed,
         applied_revision=result.applied_revision or result.snapshot.revision,
     )
@@ -153,6 +197,16 @@ def get_timeline_command_receipt(
         original_changed=receipt.original_changed,
         original_affected_scene_ids=list(
             receipt.original_affected_scene_ids,
+        ),
+        original_affected_link_ids=list(
+            receipt.original_affected_link_ids,
+        ),
+        original_affected_structure_link_ids=list(
+            receipt.original_affected_structure_link_ids,
+        ),
+        original_created_link_id=receipt.original_created_link_id,
+        original_created_structure_link_id=(
+            receipt.original_created_structure_link_id
         ),
         committed_at=receipt.created_at,
     )

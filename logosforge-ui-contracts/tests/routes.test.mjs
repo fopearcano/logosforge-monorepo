@@ -347,11 +347,110 @@ for (const field of ['run_id', 'expected_revision']) {
 }
 
 const pythonApiApp = readFileSync('../logosforge/logosforge/api/app.py', 'utf8');
-if (!pythonApiApp.includes('API_CONTRACT_VERSION = "1.13.0"')) {
-  throw new Error('Guided Workflows must ship as HTTP contract 1.13.0');
+if (!pythonApiApp.includes('API_CONTRACT_VERSION = "1.14.0"')) {
+  throw new Error('Transactional Timeline relationships must ship as HTTP contract 1.14.0');
 }
 
 console.log('Guided Workflow contract parity tests: routes/event + 16 DTOs mirrored');
+
+const timelineRelationshipDtoFields = {
+  TimelineLinkDTO: [
+    'id', 'source_scene_id', 'target_scene_id', 'link_type', 'color_label',
+    'label', 'created_at',
+  ],
+  TimelineStructureLinkDTO: [
+    'id', 'source_scene_id', 'target_type', 'target_ref', 'target_exists',
+    'created_at',
+  ],
+  TimelineSnapshotDTO: [
+    'project_id', 'revision', 'order_mode', 'lanes', 'events', 'links',
+    'structure_links', 'off_timeline',
+  ],
+  TimelineCreateLinkCommandDTO: [
+    'kind', 'source_scene_id', 'target_scene_id',
+    'link_type', 'color_label', 'label',
+  ],
+  TimelineUpdateLinkCommandDTO: [
+    'kind', 'link_id', 'link_type', 'color_label', 'label',
+  ],
+  TimelineDeleteLinkCommandDTO: ['kind', 'link_id'],
+  TimelineCreateStructureLinkCommandDTO: [
+    'kind', 'source_scene_id', 'target_type', 'target_ref',
+  ],
+  TimelineUpdateStructureLinkCommandDTO: [
+    'kind', 'structure_link_id', 'target_type', 'target_ref',
+  ],
+  TimelineDeleteStructureLinkCommandDTO: [
+    'kind', 'structure_link_id',
+  ],
+  TimelineCommandResultDTO: [
+    'timeline', 'changed', 'affected_scene_ids', 'affected_link_ids',
+    'affected_structure_link_ids', 'created_link_id',
+    'created_structure_link_id', 'replayed', 'applied_revision',
+  ],
+  TimelineCommandReceiptDTO: [
+    'project_id', 'request_digest', 'command_kind', 'expected_revision',
+    'applied_revision', 'original_changed', 'original_affected_scene_ids',
+    'original_affected_link_ids', 'original_affected_structure_link_ids',
+    'original_created_link_id', 'original_created_structure_link_id',
+    'committed_at',
+  ],
+};
+for (const [dtoName, fields] of Object.entries(timelineRelationshipDtoFields)) {
+  const pythonBody = pythonSchemas.match(new RegExp(
+    `class ${dtoName}\\([^)]*\\):([\\s\\S]*?)\\n\\n(?:class |#|_)`,
+  ))?.[1] ?? '';
+  const typescriptBody = typescriptSchemas.match(new RegExp(
+    `export interface ${dtoName}[^\\{]*\\{([\\s\\S]*?)\\n\\}`,
+  ))?.[1] ?? '';
+  for (const field of fields) {
+    if (!pythonBody.includes(`${field}:`)) {
+      throw new Error(`Python ${dtoName} is missing ${field}`);
+    }
+    if (!typescriptBody.includes(field)) {
+      throw new Error(`TypeScript ${dtoName} is missing ${field}`);
+    }
+  }
+}
+const pythonTimelineCommandBase = pythonSchemas.match(
+  /class _TimelineCommandBase\(BaseModel\):([\s\S]*?)\n\nclass /,
+)?.[1] ?? '';
+const typescriptTimelineCommandBase = typescriptSchemas.match(
+  /interface TimelineCommandBase \{([\s\S]*?)\n\}/,
+)?.[1] ?? '';
+if (!pythonTimelineCommandBase.includes('expected_revision:')
+    || !typescriptTimelineCommandBase.includes('expected_revision:')) {
+  throw new Error('Timeline command bases must mirror expected_revision');
+}
+const expectedTimelineLinkTypes = [
+  'custom', 'causality', 'setup_payoff', 'echo', 'conflict', 'dependency',
+];
+const pythonTimelineLinkTypeBody = pythonSchemas.match(
+  /class TimelineLinkDTO\(BaseModel\):[\s\S]*?link_type: Literal\[([\s\S]*?)\]\n/,
+)?.[1] ?? '';
+const typescriptTimelineLinkTypeBody = typescriptSchemas.match(
+  /export type TimelineLinkType =([\s\S]*?);/,
+)?.[1] ?? '';
+const timelineLiteralValues = (body) => [...body.matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+if (JSON.stringify(timelineLiteralValues(pythonTimelineLinkTypeBody))
+    !== JSON.stringify(expectedTimelineLinkTypes)
+    || JSON.stringify(timelineLiteralValues(typescriptTimelineLinkTypeBody))
+      !== JSON.stringify(expectedTimelineLinkTypes)) {
+  throw new Error('TimelineLinkType must mirror the exact six supported semantics');
+}
+for (const kind of [
+  'create_link', 'update_link', 'delete_link',
+  'create_structure_link', 'update_structure_link', 'delete_structure_link',
+]) {
+  if (!pythonSchemas.includes(`Literal["${kind}"]`)) {
+    throw new Error(`Python TimelineCommandDTO is missing kind ${kind}`);
+  }
+  if (!typescriptSchemas.includes(`kind: "${kind}"`)) {
+    throw new Error(`TypeScript TimelineCommandDTO is missing kind ${kind}`);
+  }
+}
+
+console.log('Timeline relationship contract parity tests: 11 DTOs + 6 commands mirrored');
 
 const decisionRadarDtoFields = {
   DecisionEvidenceDTO: [

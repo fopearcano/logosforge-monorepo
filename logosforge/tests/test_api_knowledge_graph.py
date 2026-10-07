@@ -26,8 +26,8 @@ def test_http_and_mcp_contract_versions_are_deliberately_independent():
     from logosforge.api.app import API_CONTRACT_VERSION
     from logosforge.librechat.mcp_server import SERVER_VERSION
 
-    assert API_CONTRACT_VERSION == "1.13.0"
-    assert SERVER_VERSION == "1.9.0"
+    assert API_CONTRACT_VERSION == "1.14.0"
+    assert SERVER_VERSION == "1.10.0"
 
 
 def test_project_map_exposes_traceable_graph_and_pretruncation_diagnostics():

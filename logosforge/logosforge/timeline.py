@@ -123,6 +123,9 @@ def timeline_revision(
     scenes: Sequence[Any],
     lanes: Sequence[Any],
     settings: Mapping[str, Any],
+    *,
+    links: Sequence[Any] = (),
+    structure_links: Sequence[Any] = (),
 ) -> str:
     """Content-address the board topology used by guarded Timeline commands.
 
@@ -171,6 +174,28 @@ def timeline_revision(
                 bool(lane.collapsed),
             ]
             for lane in lanes
+        ],
+        "links": [
+            [
+                int(link.id),
+                _creation_identity(link),
+                int(link.source_scene_id),
+                int(link.target_scene_id),
+                link.link_type or "",
+                link.color_label or "",
+                link.label or "",
+            ]
+            for link in links
+        ],
+        "structure_links": [
+            [
+                int(link.id),
+                _creation_identity(link),
+                int(link.source_scene_id),
+                link.target_type or "",
+                link.target_ref or "",
+            ]
+            for link in structure_links
         ],
         "order_mode": projection.order_mode,
         "event_ids": list(projection.explicit_event_ids),

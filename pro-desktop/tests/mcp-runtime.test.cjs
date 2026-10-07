@@ -218,6 +218,18 @@ check('packaged smoke applies one Timeline proposal and rejects its stale siblin
   packagedSmoke.includes('installed MCP Timeline apply') &&
   packagedSmoke.includes('installed MCP stale Timeline sibling apply') &&
   packagedSmoke.includes('after_stale_timeline != applied_snapshot'));
+check('packaged smoke exercises Timeline relationship and structure-link transactions',
+  packagedSmoke.includes('installed MCP Timeline relationship create') &&
+  packagedSmoke.includes('installed MCP Timeline relationship update') &&
+  packagedSmoke.includes('installed MCP Timeline relationship delete') &&
+  packagedSmoke.includes('installed MCP Timeline structure relationship create') &&
+  packagedSmoke.includes('installed MCP Timeline structure relationship update') &&
+  packagedSmoke.includes('installed MCP Timeline structure relationship delete') &&
+  packagedSmoke.includes('created_link_result.get("created_link_id")') &&
+  packagedSmoke.includes('created_link_result.get("affected_link_ids")') &&
+  packagedSmoke.includes('created_structure_link_id = created_structure_result.get(') &&
+  packagedSmoke.includes('created_structure_result.get("affected_structure_link_ids")') &&
+  packagedSmoke.includes('structure_links[0].get("target_exists") is not True'));
 check('frozen smoke advertises and proposes an exact non-mutating Canvas Plot command',
   frozenSmoke.includes('expected 46 MCP tools') &&
   frozenSmoke.includes('"logosforge_get_canvas_plot"') &&
@@ -267,6 +279,12 @@ check('packaged smoke recovers all four durable receipts after companion restart
   packagedSmoke.includes('recovered_result.get("replayed") is not True') &&
   packagedSmoke.includes('recovered_result.get("applied_revision") != applied_timeline_revision') &&
   packagedSmoke.includes('recovered_result.get("affected_scene_ids") != []') &&
+  packagedSmoke.includes('recovered_receipt.get("original_affected_link_ids")') &&
+  packagedSmoke.includes('recovered_receipt.get("original_created_link_id")') &&
+  packagedSmoke.includes('recovered_receipt.get("original_affected_structure_link_ids")') &&
+  packagedSmoke.includes('recovered_receipt.get("original_created_structure_link_id")') &&
+  packagedSmoke.includes('recovered_result.get("affected_link_ids") != []') &&
+  packagedSmoke.includes('recovered_result.get("affected_structure_link_ids") != []') &&
   packagedSmoke.includes('recovered_canvas.get("recovered_from_core") is not True') &&
   packagedSmoke.includes('recovered_canvas_receipt.get("original_created_node_id")') &&
   packagedSmoke.includes('recovered_canvas_receipt.get("original_affected_node_ids")') &&
@@ -283,6 +301,13 @@ check('packaged smoke recovers all four durable receipts after companion restart
   packagedSmoke.includes('packaged_lane_count != 1') &&
   packagedSmoke.indexOf('_exercise_installed_mcp(') <
     packagedSmoke.lastIndexOf('_recover_installed_command_receipts('));
+check('fresh companion recovers the exact Timeline relationship without replaying it',
+  packagedSmoke.includes('installed MCP Timeline recovery relationship create') &&
+  packagedSmoke.includes('current_timeline != expected_timeline') &&
+  packagedSmoke.includes('recovered_result.get("timeline") != current_timeline') &&
+  packagedSmoke.includes('len(persisted_links) != 1') &&
+  packagedSmoke.includes('persisted_links[0].get("id") != expected_timeline_link_id') &&
+  packagedSmoke.includes('restarted MCP receipt recovery repeated or lost the Timeline relationship'));
 check('fresh companion recovers the applied Canvas proposal against its persisted board',
   packagedSmoke.includes('restarted MCP Canvas Plot persistence read') &&
   packagedSmoke.includes('restarted_canvas_plot != expected_canvas_plot') &&

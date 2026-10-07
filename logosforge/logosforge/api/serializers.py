@@ -515,12 +515,50 @@ def timeline_snapshot_to_dto(
         )
         for scene_id in projection.off_timeline_ids
     ]
+    structure_targets = {
+        "act": {
+            (scene.act or "").strip()
+            for scene in snapshot.scenes
+            if (scene.act or "").strip()
+        },
+        "chapter": {
+            (scene.chapter or "").strip()
+            for scene in snapshot.scenes
+            if (scene.chapter or "").strip()
+        },
+    }
     return schemas.TimelineSnapshotDTO(
         project_id=int(snapshot.project.id),
         revision=snapshot.revision,
         order_mode=projection.order_mode,
         lanes=lanes,
         events=events,
+        links=[
+            schemas.TimelineLinkDTO(
+                id=int(link.id),
+                source_scene_id=int(link.source_scene_id),
+                target_scene_id=int(link.target_scene_id),
+                link_type=link.link_type,
+                color_label=link.color_label or "",
+                label=link.label or "",
+                created_at=link.created_at,
+            )
+            for link in snapshot.links
+        ],
+        structure_links=[
+            schemas.TimelineStructureLinkDTO(
+                id=int(link.id),
+                source_scene_id=int(link.source_scene_id),
+                target_type=link.target_type,
+                target_ref=(link.target_ref or "").strip(),
+                target_exists=(
+                    (link.target_ref or "").strip()
+                    in structure_targets[link.target_type]
+                ),
+                created_at=link.created_at,
+            )
+            for link in snapshot.structure_links
+        ],
         off_timeline=off_timeline,
     )
 

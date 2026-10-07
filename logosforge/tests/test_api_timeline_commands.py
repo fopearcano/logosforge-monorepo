@@ -236,6 +236,10 @@ def test_idempotency_receipt_replays_once_and_survives_api_restart(tmp_path):
         "applied_revision": applied["applied_revision"],
         "original_changed": True,
         "original_affected_scene_ids": [],
+        "original_affected_link_ids": [],
+        "original_affected_structure_link_ids": [],
+        "original_created_link_id": None,
+        "original_created_structure_link_id": None,
         "committed_at": "ignored",
     }
     assert len(receipt_body["request_digest"]) == 64
@@ -248,7 +252,7 @@ def test_idempotency_receipt_replays_once_and_survives_api_restart(tmp_path):
     assert len(stored[0]) == 64
     assert key not in stored[0] and key not in stored[1]
     stored_result = json.loads(stored[1])
-    assert stored_result["schema_version"] == 1
+    assert stored_result["schema_version"] == 2
     assert set(stored_result) == {
         "schema_version",
         "kind",
@@ -256,6 +260,10 @@ def test_idempotency_receipt_replays_once_and_survives_api_restart(tmp_path):
         "applied_revision",
         "original_changed",
         "original_affected_scene_ids",
+        "original_affected_link_ids",
+        "original_affected_structure_link_ids",
+        "original_created_link_id",
+        "original_created_structure_link_id",
     }
 
     db._engine.dispose()

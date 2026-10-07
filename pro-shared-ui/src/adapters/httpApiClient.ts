@@ -1,4 +1,9 @@
-import { ROUTES, KNOWN_EVENTS, type EventMessage } from "@logosforge/ui-contracts";
+import {
+  ROUTES,
+  KNOWN_EVENTS,
+  type EventMessage,
+  type TimelineCommandDTO,
+} from "@logosforge/ui-contracts";
 import type { ApiClient } from "./api";
 import { trackProjectOperation } from "./projectSaveCoordinator";
 import {
@@ -34,6 +39,7 @@ import {
   validateStoryStructureCommandResultDTOForRequest,
   validateTimelineSnapshotDTOForProject,
   validateTimelineCommandResultDTOForRequest,
+  validateTimelineCommandReceiptDTOForRequest,
   validateCanvasPlotSnapshotDTOForProject,
   validateCanvasPlotCommandResultDTOForRequest,
   validateContinuityCommandReceiptDTOForRequest,
@@ -228,6 +234,55 @@ function cloneTransportValue<T>(value: T): T {
     try { return structuredClone(value); } catch { /* JSON fallback below */ }
   }
   try { return JSON.parse(JSON.stringify(value)) as T; } catch { return value; }
+}
+
+function stableCompactJson(value: unknown): string {
+  if (value === null) return "null";
+  if (typeof value === "string" || typeof value === "boolean") {
+    return JSON.stringify(value);
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new Error("Timeline command contains a non-finite number");
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => item === undefined ? "null" : stableCompactJson(item)).join(",")}]`;
+  }
+  if (typeof value === "object") {
+    const source = value as Record<string, unknown>;
+    const fields = Object.keys(source)
+      .sort()
+      .filter((key) => source[key] !== undefined)
+      .map((key) => `${JSON.stringify(key)}:${stableCompactJson(source[key])}`);
+    return `{${fields.join(",")}}`;
+  }
+  throw new Error(`Timeline command contains an unsupported ${typeof value} value`);
+}
+
+async function timelineCommandRequestDigest(
+  projectId: number,
+  command: TimelineCommandDTO,
+): Promise<string> {
+  const cryptoApi = globalThis.crypto;
+  if (!cryptoApi?.subtle || typeof cryptoApi.subtle.digest !== "function") {
+    throw new Error("Web Crypto SHA-256 is unavailable");
+  }
+  if (typeof TextEncoder === "undefined") {
+    throw new Error("UTF-8 encoding is unavailable");
+  }
+  const { kind, expected_revision: expectedRevision, ...fields } = command;
+  const canonical = stableCompactJson({
+    scope: "timeline-command-v1",
+    project_id: projectId,
+    kind,
+    expected_revision: expectedRevision,
+    fields,
+  });
+  const digest = await cryptoApi.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(canonical),
+  );
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 /**
@@ -495,11 +550,47 @@ export function createHttpApiClient(
       ROUTES.timeline(p),
       (value) => validateTimelineSnapshotDTOForProject(value, p),
     ),
-    executeTimelineCommand: (p, b) => writePost(
-      ROUTES.timelineCommands(p),
-      b,
-      (value) => validateTimelineCommandResultDTOForRequest(value, p, b),
+    executeTimelineCommand: (p, b, idempotencyKey) => trackProjectOperation(
+      req(
+        ROUTES.timelineCommands(p),
+        {
+          method: "POST",
+          body: JSON.stringify(b),
+          headers: { "Idempotency-Key": idempotencyKey },
+        },
+        (value) => validateTimelineCommandResultDTOForRequest(value, p, b),
+      ),
+      { persistence: true },
     ),
+    getTimelineCommandReceipt: async (p, idempotencyKey, expectedCommand) => {
+      const path = ROUTES.timelineCommandReceipt(p);
+      let expectedRequestDigest: string;
+      try {
+        expectedRequestDigest = await timelineCommandRequestDigest(p, expectedCommand);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : "unknown digest failure";
+        throw new ApiResponseValidationError(
+          "GET",
+          path,
+          `cannot validate Timeline receipt integrity: ${detail}`,
+        );
+      }
+      return req(
+        path,
+        {
+          headers: {
+            "Idempotency-Key": idempotencyKey,
+            "Cache-Control": "no-store",
+          },
+        },
+        (value) => validateTimelineCommandReceiptDTOForRequest(
+          value,
+          p,
+          expectedCommand,
+          expectedRequestDigest,
+        ),
+      );
+    },
     getCanvasPlot: (p) => get(
       ROUTES.canvasPlot(p),
       (value) => validateCanvasPlotSnapshotDTOForProject(value, p),

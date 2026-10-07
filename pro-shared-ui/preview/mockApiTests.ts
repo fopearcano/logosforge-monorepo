@@ -45,7 +45,7 @@ check(typeof api.getContinuityCommandReceipt === "function", "preview mock must 
 
 const health = await api.health();
 check(
-  health.status === "ok" && health.version === "1.13.0" && health.api_version === "1.13.0",
+  health.status === "ok" && health.version === "1.14.0" && health.api_version === "1.14.0",
   "preview health must satisfy the core contract",
 );
 const projectMap = await api.getKnowledgeGraph(1, { limit: 160, include_inferred: true });
@@ -393,6 +393,172 @@ check(
     && initialTimeline.off_timeline.map((scene) => scene.id).join(",") === "3",
   "preview Timeline snapshot must expose opt-in events, real lanes, and off-Timeline scenes",
 );
+
+const relationshipApi = createMockApiClient();
+const relationshipProject = await relationshipApi.createProject({
+  title: "Timeline relationships",
+  narrative_engine: "novel",
+});
+const relationshipFirst = await relationshipApi.createScene(relationshipProject.id, {
+  title: "First",
+  act: "Act I",
+  chapter: "One",
+});
+const relationshipSecond = await relationshipApi.createScene(relationshipProject.id, {
+  title: "Second",
+  act: "Act II",
+  chapter: "Two",
+});
+let relationshipTimeline = await relationshipApi.getTimeline(relationshipProject.id);
+const placedFirst = await relationshipApi.executeTimelineCommand(relationshipProject.id, {
+  kind: "place_event",
+  expected_revision: relationshipTimeline.revision,
+  scene_id: relationshipFirst.id,
+  lane_id: null,
+}, "timeline-preview-rel-place-first");
+const placedSecond = await relationshipApi.executeTimelineCommand(relationshipProject.id, {
+  kind: "place_event",
+  expected_revision: placedFirst.timeline.revision,
+  scene_id: relationshipSecond.id,
+  lane_id: null,
+}, "timeline-preview-rel-place-second");
+const createRelationshipCommand = {
+  kind: "create_link" as const,
+  expected_revision: placedSecond.timeline.revision,
+  source_scene_id: relationshipFirst.id,
+  target_scene_id: relationshipSecond.id,
+  link_type: "causality" as const,
+  color_label: "cyan",
+  label: "therefore",
+};
+const createRelationshipKey = "timeline-preview-rel-create-001";
+const createdRelationship = await relationshipApi.executeTimelineCommand(
+  relationshipProject.id,
+  createRelationshipCommand,
+  createRelationshipKey,
+);
+const relationshipId = createdRelationship.created_link_id!;
+check(
+  createdRelationship.changed
+    && relationshipId > 0
+    && createdRelationship.affected_link_ids.join(",") === String(relationshipId)
+    && createdRelationship.timeline.links[0]?.label === "therefore"
+    && (await relationshipApi.getTimeline(relationshipProject.id)).links[0]?.id === relationshipId,
+  "preview event-link creation must persist state and report focused created/affected ids",
+);
+const replayedRelationship = await relationshipApi.executeTimelineCommand(
+  relationshipProject.id,
+  createRelationshipCommand,
+  createRelationshipKey,
+);
+const relationshipReceipt = await relationshipApi.getTimelineCommandReceipt(
+  relationshipProject.id,
+  createRelationshipKey,
+  createRelationshipCommand,
+);
+check(
+  replayedRelationship.replayed
+    && !replayedRelationship.changed
+    && replayedRelationship.created_link_id === null
+    && replayedRelationship.affected_link_ids.length === 0
+    && replayedRelationship.applied_revision === createdRelationship.applied_revision
+    && relationshipReceipt.original_changed
+    && relationshipReceipt.original_created_link_id === relationshipId
+    && relationshipReceipt.original_affected_link_ids.join(",") === String(relationshipId),
+  "preview Timeline idempotency must replay without mutation while preserving the durable original receipt",
+);
+const timelineReverseDuplicate = await relationshipApi.executeTimelineCommand(relationshipProject.id, {
+  kind: "create_link",
+  expected_revision: createdRelationship.timeline.revision,
+  source_scene_id: relationshipSecond.id,
+  target_scene_id: relationshipFirst.id,
+  link_type: "echo",
+}, "timeline-preview-rel-reverse-01");
+check(
+  !timelineReverseDuplicate.changed
+    && timelineReverseDuplicate.created_link_id === null
+    && timelineReverseDuplicate.affected_link_ids.length === 0
+    && timelineReverseDuplicate.timeline.links.length === 1
+    && timelineReverseDuplicate.timeline.links[0]?.source_scene_id === relationshipFirst.id,
+  "preview reverse-pair creation must preserve legacy unordered uniqueness as an exact no-op",
+);
+const updatedRelationship = await relationshipApi.executeTimelineCommand(relationshipProject.id, {
+  kind: "update_link",
+  expected_revision: timelineReverseDuplicate.timeline.revision,
+  link_id: relationshipId,
+  link_type: "setup_payoff",
+  color_label: "amber",
+  label: "payoff",
+}, "timeline-preview-rel-update-001");
+check(
+  updatedRelationship.changed
+    && updatedRelationship.affected_link_ids.join(",") === String(relationshipId)
+    && updatedRelationship.timeline.links[0]?.link_type === "setup_payoff",
+  "preview event-link updates must persist typed metadata and report only the edited link",
+);
+const deletedRelationship = await relationshipApi.executeTimelineCommand(relationshipProject.id, {
+  kind: "delete_link",
+  expected_revision: updatedRelationship.timeline.revision,
+  link_id: relationshipId,
+}, "timeline-preview-rel-delete-001");
+check(
+  deletedRelationship.changed
+    && deletedRelationship.affected_link_ids.join(",") === String(relationshipId)
+    && deletedRelationship.timeline.links.length === 0,
+  "preview event-link deletion must persist and report the removed id",
+);
+const createdStructureRelationship = await relationshipApi.executeTimelineCommand(relationshipProject.id, {
+  kind: "create_structure_link",
+  expected_revision: deletedRelationship.timeline.revision,
+  source_scene_id: relationshipFirst.id,
+  target_type: "act",
+  target_ref: "Act I",
+}, "timeline-preview-structure-create-01");
+const structureRelationshipId = createdStructureRelationship.created_structure_link_id!;
+check(
+  createdStructureRelationship.changed
+    && structureRelationshipId > 0
+    && createdStructureRelationship.affected_structure_link_ids.join(",") === String(structureRelationshipId)
+    && createdStructureRelationship.timeline.structure_links[0]?.target_exists === true,
+  "preview structure-link creation must persist and resolve an existing target",
+);
+const relationshipStructure = await relationshipApi.getStoryStructure(relationshipProject.id);
+await relationshipApi.executeStoryStructureCommand(relationshipProject.id, {
+  kind: "rename_act",
+  expected_revision: relationshipStructure.revision,
+  act: "Act I",
+  new_name: "Act Alpha",
+});
+relationshipTimeline = await relationshipApi.getTimeline(relationshipProject.id);
+check(
+  relationshipTimeline.structure_links[0]?.target_ref === "Act I"
+    && relationshipTimeline.structure_links[0]?.target_exists === false,
+  "preview snapshots must retain durable structure links and derive dangling target_exists after structure changes",
+);
+const repairedStructureRelationship = await relationshipApi.executeTimelineCommand(relationshipProject.id, {
+  kind: "update_structure_link",
+  expected_revision: relationshipTimeline.revision,
+  structure_link_id: structureRelationshipId,
+  target_ref: "Act Alpha",
+}, "timeline-preview-structure-update-01");
+check(
+  repairedStructureRelationship.changed
+    && repairedStructureRelationship.affected_structure_link_ids.join(",") === String(structureRelationshipId)
+    && repairedStructureRelationship.timeline.structure_links[0]?.target_ref === "Act Alpha"
+    && repairedStructureRelationship.timeline.structure_links[0]?.target_exists === true,
+  "preview structure-link updates must repair dangling targets and report the edited id",
+);
+const deletedStructureRelationship = await relationshipApi.executeTimelineCommand(relationshipProject.id, {
+  kind: "delete_structure_link",
+  expected_revision: repairedStructureRelationship.timeline.revision,
+  structure_link_id: structureRelationshipId,
+}, "timeline-preview-structure-delete-01");
+check(
+  deletedStructureRelationship.changed
+    && deletedStructureRelationship.affected_structure_link_ids.join(",") === String(structureRelationshipId)
+    && deletedStructureRelationship.timeline.structure_links.length === 0,
+  "preview structure-link deletion must persist and report the removed id",
+);
 const timelineSemanticsApi = createMockApiClient();
 const semanticsStart = await timelineSemanticsApi.getTimeline(1);
 const addedUnassigned = await timelineSemanticsApi.executeTimelineCommand(1, {
@@ -400,7 +566,7 @@ const addedUnassigned = await timelineSemanticsApi.executeTimelineCommand(1, {
   expected_revision: semanticsStart.revision,
   scene_id: 3,
   lane_id: null,
-});
+}, "timeline-preview-add-unassigned");
 check(
   addedUnassigned.changed && addedUnassigned.affected_scene_ids.length === 0,
   "preview membership-only placement must not claim that a Scene row changed",
@@ -409,7 +575,7 @@ const removedUnassigned = await timelineSemanticsApi.executeTimelineCommand(1, {
   kind: "remove_event",
   expected_revision: addedUnassigned.timeline.revision,
   scene_id: 3,
-});
+}, "timeline-preview-remove-unassigned");
 check(
   removedUnassigned.changed && removedUnassigned.affected_scene_ids.length === 0,
   "preview membership-only removal must not claim that a Scene row changed",
@@ -481,13 +647,13 @@ const whitespaceLane = await whitespaceApi.executeTimelineCommand(whitespaceProj
   kind: "create_lane",
   expected_revision: whitespaceStart.revision,
   name: "Main",
-});
+}, "timeline-preview-whitespace-create");
 const whitespaceRenamed = await whitespaceApi.executeTimelineCommand(whitespaceProject.id, {
   kind: "update_lane",
   expected_revision: whitespaceLane.timeline.revision,
   lane_id: whitespaceLane.timeline.lanes[0]!.id,
   name: "Renamed",
-});
+}, "timeline-preview-whitespace-rename");
 check(
   whitespaceRenamed.affected_scene_ids.join(",") === String(whitespaceScene.id)
     && whitespaceRenamed.timeline.events[0]?.plotline === "Renamed"
@@ -517,25 +683,25 @@ const persistentFirst = await timelinePersistenceApi.executeTimelineCommand(time
   expected_revision: persistenceStart.revision,
   scene_id: firstPersistentScene.id,
   lane_id: null,
-});
+}, "timeline-preview-persist-first");
 const persistentCustom = await timelinePersistenceApi.executeTimelineCommand(timelinePersistenceProject.id, {
   kind: "set_order_mode",
   expected_revision: persistentFirst.timeline.revision,
   mode: "custom",
-});
+}, "timeline-preview-persist-custom");
 const persistentThird = await timelinePersistenceApi.executeTimelineCommand(timelinePersistenceProject.id, {
   kind: "place_event",
   expected_revision: persistentCustom.timeline.revision,
   scene_id: thirdPersistentScene.id,
   lane_id: null,
   index: 1,
-});
+}, "timeline-preview-persist-third");
 const persistentSecond = await timelinePersistenceApi.executeTimelineCommand(timelinePersistenceProject.id, {
   kind: "place_event",
   expected_revision: persistentThird.timeline.revision,
   scene_id: secondPersistentScene.id,
   lane_id: null,
-});
+}, "timeline-preview-persist-second");
 check(
   persistentSecond.timeline.events.map((event) => event.id).join(",")
     === [firstPersistentScene.id, thirdPersistentScene.id, secondPersistentScene.id].join(","),
@@ -562,6 +728,7 @@ const directReplacementPlaced = await timelinePersistenceApi.executeTimelineComm
     scene_id: directReplacement.id,
     lane_id: null,
   },
+  "timeline-preview-direct-replacement",
 );
 check(
   directReplacementPlaced.timeline.events.at(-1)?.id === directReplacement.id,
@@ -591,7 +758,7 @@ const createdTimelineLane = await timelineApi.executeTimelineCommand(1, {
   name: "Memory",
   color_label: "violet",
   index: 1,
-});
+}, "timeline-preview-create-memory");
 check(
   createdTimelineLane.changed
     && createdTimelineLane.timeline.revision !== initialTimeline.revision
@@ -605,7 +772,7 @@ try {
     kind: "create_lane",
     expected_revision: initialTimeline.revision,
     name: "Stale lane",
-  });
+  }, "timeline-preview-stale");
 } catch (error) {
   staleTimelineError = error;
 }
@@ -626,7 +793,7 @@ const placedTimelineEvent = await timelineApi.executeTimelineCommand(1, {
   scene_id: 3,
   lane_id: memoryLane.id,
   index: 0,
-});
+}, "timeline-preview-place-event");
 check(
   placedTimelineEvent.timeline.order_mode === "custom"
     && placedTimelineEvent.timeline.events[0]?.id === 3
@@ -645,7 +812,7 @@ const removedTimelineEvent = await timelineApi.executeTimelineCommand(1, {
   kind: "remove_event",
   expected_revision: placedTimelineEvent.timeline.revision,
   scene_id: 3,
-});
+}, "timeline-preview-remove-event");
 check(
   !removedTimelineEvent.timeline.events.some((event) => event.id === 3)
     && removedTimelineEvent.timeline.off_timeline.some((scene) => scene.id === 3)
@@ -657,7 +824,7 @@ const deletedTimelineLane = await timelineApi.executeTimelineCommand(1, {
   kind: "delete_lane",
   expected_revision: removedTimelineEvent.timeline.revision,
   lane_id: mainLane.id,
-});
+}, "timeline-preview-delete-lane");
 check(
   !deletedTimelineLane.timeline.lanes.some((lane) => lane.id === mainLane.id)
     && deletedTimelineLane.timeline.events

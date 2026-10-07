@@ -33,9 +33,12 @@ import type {
   PsykeConsolePlanRequestDTO,
   TimelineEventDTO,
   TimelineLaneDTO,
+  TimelineLinkDTO,
+  TimelineStructureLinkDTO,
   TimelineSnapshotDTO,
   TimelineCommandDTO,
   TimelineCommandResultDTO,
+  TimelineCommandReceiptDTO,
   CanvasPlotSnapshotDTO,
   CanvasPlotCommandDTO,
   CanvasPlotCommandResultDTO,
@@ -78,6 +81,15 @@ const KNOWLEDGE_GRAPH_VIEW_MODES = new Set<KnowledgeGraphViewMode>([
   "structure",
   "recorded_risk",
   "revision_impact",
+]);
+
+const TIMELINE_LINK_TYPES = new Set([
+  "custom",
+  "causality",
+  "setup_payoff",
+  "echo",
+  "conflict",
+  "dependency",
 ]);
 
 // ── "Null Horizon" sample data — the same story the rest of the demo tells. ──
@@ -551,6 +563,10 @@ export function createMockApiClient(): ApiClient {
     customOrder: number[];
     orderMode: "structural" | "custom";
     details: Map<number, MockTimelineDetails>;
+    links: TimelineLinkDTO[];
+    structureLinks: Array<Omit<TimelineStructureLinkDTO, "target_exists">>;
+    nextLinkId: number;
+    nextStructureLinkId: number;
   }
   const emptyTimelineState = (): MockTimelineState => ({
     lanes: [],
@@ -558,6 +574,10 @@ export function createMockApiClient(): ApiClient {
     customOrder: [],
     orderMode: "structural",
     details: new Map(),
+    links: [],
+    structureLinks: [],
+    nextLinkId: 1,
+    nextStructureLinkId: 1,
   });
   const timelineStates = new Map<number, MockTimelineState>(projects.map((project) => [
     project.id,
@@ -575,6 +595,10 @@ export function createMockApiClient(): ApiClient {
             performance_duration_minutes: 0,
             character_states: event.character_states.map((state) => ({ ...state })),
           }])),
+          links: [],
+          structureLinks: [],
+          nextLinkId: 1,
+          nextStructureLinkId: 1,
         }
       : emptyTimelineState(),
   ]));
@@ -591,7 +615,19 @@ export function createMockApiClient(): ApiClient {
     state.explicitEventIds.delete(sceneId);
     state.customOrder = state.customOrder.filter((id) => id !== sceneId);
     state.details.delete(sceneId);
+    state.links = state.links.filter((link) => (
+      link.source_scene_id !== sceneId && link.target_scene_id !== sceneId
+    ));
+    state.structureLinks = state.structureLinks.filter((link) => link.source_scene_id !== sceneId);
   };
+  interface MockTimelineReceipt {
+    serializedCommand: string;
+    receipt: TimelineCommandReceiptDTO;
+  }
+  const timelineReceipts = new Map<string, MockTimelineReceipt>();
+  const serializeTimelineCommand = (command: TimelineCommandDTO): string => JSON.stringify(
+    Object.fromEntries(Object.entries(command).sort(([left], [right]) => left.localeCompare(right))),
+  );
   const canvasSeed = (projectId: number): CanvasPlotSnapshotDTO => {
     const created_at = "2026-01-01T00:00:00Z";
     const nodes = projectId === fixtureProjectId ? [
@@ -1134,6 +1170,17 @@ export function createMockApiClient(): ApiClient {
         chapter: sceneRow.chapter,
       }];
     });
+    const acts = new Set(projectScenes.map((sceneRow) => sceneRow.act.trim()).filter(Boolean));
+    const chapters = new Set(projectScenes.map((sceneRow) => sceneRow.chapter.trim()).filter(Boolean));
+    const links = [...state.links]
+      .sort((left, right) => left.id - right.id)
+      .map((link) => ({ ...link }));
+    const structure_links = [...state.structureLinks]
+      .sort((left, right) => left.id - right.id)
+      .map((link) => ({
+        ...link,
+        target_exists: (link.target_type === "act" ? acts : chapters).has(link.target_ref),
+      }));
     const revisionPayload = {
       project_id: projectId,
       narrative_engine: projects.find((project) => project.id === projectId)?.narrative_engine ?? "",
@@ -1150,6 +1197,22 @@ export function createMockApiClient(): ApiClient {
         sceneRow.plotline.trim(),
         sceneRow.color_label,
       ]),
+      links: links.map((link) => [
+        link.id,
+        link.created_at,
+        link.source_scene_id,
+        link.target_scene_id,
+        link.link_type,
+        link.color_label,
+        link.label,
+      ]),
+      structure_links: structure_links.map((link) => [
+        link.id,
+        link.created_at,
+        link.source_scene_id,
+        link.target_type,
+        link.target_ref,
+      ]),
     };
     let hash = 0x811c9dc5;
     for (const char of JSON.stringify(revisionPayload)) {
@@ -1162,15 +1225,52 @@ export function createMockApiClient(): ApiClient {
       order_mode: state.orderMode,
       lanes,
       events,
+      links,
+      structure_links,
       off_timeline,
     };
   };
   const executeTimelineCommand = (
     projectId: number,
     command: TimelineCommandDTO,
+    idempotencyKey: string,
   ): TimelineCommandResultDTO => {
     const path = `/api/projects/${projectId}/timeline/commands`;
     findMockProject(projects, projectId, "POST", path);
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$/.test(idempotencyKey)) {
+      throw new ApiRequestError(
+        "POST",
+        path,
+        400,
+        "Idempotency-Key must contain 16-128 safe ASCII characters.",
+        "bad_request",
+      );
+    }
+    const receiptKey = `${projectId}\u0000${idempotencyKey}`;
+    const serializedCommand = serializeTimelineCommand(command);
+    const previous = timelineReceipts.get(receiptKey);
+    if (previous) {
+      if (previous.serializedCommand !== serializedCommand) {
+        throw new ApiRequestError(
+          "POST",
+          path,
+          409,
+          "Idempotency-Key was already used for a different Timeline command.",
+          "idempotency_key_conflict",
+        );
+      }
+      return {
+        timeline: timelineSnapshotFrom(projectId),
+        replayed: true,
+        applied_revision: previous.receipt.applied_revision,
+        changed: false,
+        affected_scene_ids: [],
+        affected_link_ids: [],
+        affected_structure_link_ids: [],
+        created_link_id: null,
+        created_structure_link_id: null,
+      };
+    }
     const current = timelineSnapshotFrom(projectId);
     if (command.expected_revision !== current.revision) {
       throw new ApiRequestError(
@@ -1191,6 +1291,10 @@ export function createMockApiClient(): ApiClient {
         ...details,
         character_states: details.character_states.map((state) => ({ ...state })),
       }])),
+      links: sourceState.links.map((link) => ({ ...link })),
+      structureLinks: sourceState.structureLinks.map((link) => ({ ...link })),
+      nextLinkId: sourceState.nextLinkId,
+      nextStructureLinkId: sourceState.nextStructureLinkId,
     };
     const candidateScenes = scenesFor(projectId).map(cloneScene);
     const reject = (detail: string, status = 400, code = "bad_request"): never => {
@@ -1219,8 +1323,65 @@ export function createMockApiClient(): ApiClient {
       }
       return value;
     };
+    const checkedText = (
+      value: unknown,
+      field: string,
+      maximum: number,
+      { allowEmpty = true, strip = false } = {},
+    ): string => {
+      if (typeof value !== "string") return reject(`${field} must be a string.`);
+      const normalized = strip ? value.trim() : value;
+      if (!allowEmpty && !normalized) return reject(`${field} cannot be empty.`);
+      if (normalized.length > maximum) return reject(`${field} cannot exceed ${maximum} characters.`);
+      return normalized;
+    };
+    const checkedLinkType = (value: unknown): TimelineLinkDTO["link_type"] => {
+      const linkType = checkedText(value, "link_type", 100, { allowEmpty: false });
+      if (!TIMELINE_LINK_TYPES.has(linkType)) {
+        return reject("link_type is not a supported Timeline link type.");
+      }
+      return linkType as TimelineLinkDTO["link_type"];
+    };
+    const linkById = (linkId: number): TimelineLinkDTO => candidate.links.find(
+      (link) => link.id === linkId,
+    ) ?? reject(`Timeline link ${linkId} not found.`, 404, "timeline_link_not_found");
+    const structureLinkById = (
+      structureLinkId: number,
+    ): Omit<TimelineStructureLinkDTO, "target_exists"> => candidate.structureLinks.find(
+      (link) => link.id === structureLinkId,
+    ) ?? reject(
+      `Timeline structure link ${structureLinkId} not found.`,
+      404,
+      "timeline_structure_link_not_found",
+    );
+    const checkedStructureTarget = (
+      targetType: unknown,
+      targetRefValue: unknown,
+    ): { targetType: "act" | "chapter"; targetRef: string } => {
+      if (targetType !== "act" && targetType !== "chapter") {
+        return reject("target_type must be 'act' or 'chapter'.");
+      }
+      const targetRef = checkedText(targetRefValue, "target_ref", 500, {
+        allowEmpty: false,
+        strip: true,
+      });
+      const existingTargets = new Set(candidateScenes
+        .map((sceneRow) => (targetType === "act" ? sceneRow.act : sceneRow.chapter).trim())
+        .filter(Boolean));
+      if (!existingTargets.has(targetRef)) {
+        return reject(`The target ${targetType} does not exist.`);
+      }
+      return { targetType, targetRef };
+    };
+    const currentEventIds = (): Set<number> => new Set(
+      timelineSnapshotFrom(projectId, candidate, candidateScenes).events.map((event) => event.id),
+    );
     let changed = false;
     let affectedSceneIds: number[] = [];
+    let affectedLinkIds: number[] = [];
+    let affectedStructureLinkIds: number[] = [];
+    let createdLinkId: number | null = null;
+    let createdStructureLinkId: number | null = null;
 
     switch (command.kind) {
       case "create_lane": {
@@ -1355,6 +1516,140 @@ export function createMockApiClient(): ApiClient {
         }
         break;
       }
+      case "create_link": {
+        const source = sceneById(command.source_scene_id);
+        const target = sceneById(command.target_scene_id);
+        if (source.id === target.id) reject("A Timeline event cannot link to itself.");
+        const membership = currentEventIds();
+        if (!membership.has(source.id) || !membership.has(target.id)) {
+          reject("Both scenes must currently be Timeline events.");
+        }
+        const linkType = checkedLinkType(command.link_type ?? "custom");
+        const colorLabel = checkedText(command.color_label ?? "gray", "color_label", 100);
+        const label = checkedText(command.label ?? "", "label", 500);
+        const duplicate = candidate.links.some((link) => (
+          (link.source_scene_id === source.id && link.target_scene_id === target.id)
+          || (link.source_scene_id === target.id && link.target_scene_id === source.id)
+        ));
+        if (!duplicate) {
+          createdLinkId = candidate.nextLinkId;
+          candidate.nextLinkId += 1;
+          candidate.links.push({
+            id: createdLinkId,
+            source_scene_id: source.id,
+            target_scene_id: target.id,
+            link_type: linkType,
+            color_label: colorLabel,
+            label,
+            created_at: new Date().toISOString(),
+          });
+          affectedLinkIds.push(createdLinkId);
+          changed = true;
+        }
+        break;
+      }
+      case "update_link": {
+        if (command.link_type === undefined
+          && command.color_label === undefined
+          && command.label === undefined) {
+          reject("update_link must change at least one field.");
+        }
+        const link = linkById(command.link_id);
+        let changedLink = false;
+        if (command.link_type !== undefined) {
+          const value = checkedLinkType(command.link_type);
+          if (link.link_type !== value) {
+            link.link_type = value;
+            changedLink = true;
+          }
+        }
+        if (command.color_label !== undefined) {
+          const value = checkedText(command.color_label, "color_label", 100);
+          if (link.color_label !== value) {
+            link.color_label = value;
+            changedLink = true;
+          }
+        }
+        if (command.label !== undefined) {
+          const value = checkedText(command.label, "label", 500);
+          if (link.label !== value) {
+            link.label = value;
+            changedLink = true;
+          }
+        }
+        if (changedLink) {
+          affectedLinkIds.push(link.id);
+          changed = true;
+        }
+        break;
+      }
+      case "delete_link": {
+        const link = linkById(command.link_id);
+        candidate.links = candidate.links.filter((row) => row.id !== link.id);
+        affectedLinkIds.push(link.id);
+        changed = true;
+        break;
+      }
+      case "create_structure_link": {
+        const source = sceneById(command.source_scene_id);
+        if (!currentEventIds().has(source.id)) {
+          reject("The source scene must currently be a Timeline event.");
+        }
+        const target = checkedStructureTarget(command.target_type, command.target_ref);
+        const duplicate = candidate.structureLinks.some((link) => (
+          link.source_scene_id === source.id
+          && link.target_type === target.targetType
+          && link.target_ref === target.targetRef
+        ));
+        if (!duplicate) {
+          createdStructureLinkId = candidate.nextStructureLinkId;
+          candidate.nextStructureLinkId += 1;
+          candidate.structureLinks.push({
+            id: createdStructureLinkId,
+            source_scene_id: source.id,
+            target_type: target.targetType,
+            target_ref: target.targetRef,
+            created_at: new Date().toISOString(),
+          });
+          affectedStructureLinkIds.push(createdStructureLinkId);
+          changed = true;
+        }
+        break;
+      }
+      case "update_structure_link": {
+        if (command.target_type === undefined && command.target_ref === undefined) {
+          reject("update_structure_link must change at least one field.");
+        }
+        const structureLink = structureLinkById(command.structure_link_id);
+        const target = checkedStructureTarget(
+          command.target_type ?? structureLink.target_type,
+          command.target_ref ?? structureLink.target_ref,
+        );
+        const duplicate = candidate.structureLinks.some((link) => (
+          link.id !== structureLink.id
+          && link.source_scene_id === structureLink.source_scene_id
+          && link.target_type === target.targetType
+          && link.target_ref === target.targetRef
+        ));
+        if (duplicate) reject("That Timeline structure link already exists.");
+        if (structureLink.target_type !== target.targetType
+          || structureLink.target_ref !== target.targetRef) {
+          structureLink.target_type = target.targetType;
+          structureLink.target_ref = target.targetRef;
+          affectedStructureLinkIds.push(structureLink.id);
+          changed = true;
+        }
+        break;
+      }
+      case "delete_structure_link": {
+        const structureLink = structureLinkById(command.structure_link_id);
+        candidate.structureLinks = candidate.structureLinks.filter(
+          (row) => row.id !== structureLink.id,
+        );
+        affectedStructureLinkIds.push(structureLink.id);
+        changed = true;
+        break;
+      }
     }
 
     if (changed) {
@@ -1368,13 +1663,39 @@ export function createMockApiClient(): ApiClient {
       timelineStates.set(projectId, candidate);
     }
     const timeline = timelineSnapshotFrom(projectId);
-    return {
+    const result: TimelineCommandResultDTO = {
       timeline,
       replayed: false,
       applied_revision: timeline.revision,
       changed,
       affected_scene_ids: changed ? affectedSceneIds : [],
+      affected_link_ids: changed ? [...new Set(affectedLinkIds)] : [],
+      affected_structure_link_ids: changed ? [...new Set(affectedStructureLinkIds)] : [],
+      created_link_id: changed ? createdLinkId : null,
+      created_structure_link_id: changed ? createdStructureLinkId : null,
     };
+    timelineReceipts.set(receiptKey, {
+      serializedCommand,
+      receipt: {
+        project_id: projectId,
+        request_digest: mockSha256({
+          scope: "timeline-command-v1",
+          project_id: projectId,
+          command: JSON.parse(serializedCommand) as unknown,
+        }),
+        command_kind: command.kind,
+        expected_revision: command.expected_revision,
+        applied_revision: timeline.revision,
+        original_changed: changed,
+        original_affected_scene_ids: result.affected_scene_ids,
+        original_affected_link_ids: result.affected_link_ids,
+        original_affected_structure_link_ids: result.affected_structure_link_ids,
+        original_created_link_id: result.created_link_id,
+        original_created_structure_link_id: result.created_structure_link_id,
+        committed_at: new Date().toISOString(),
+      },
+    });
+    return result;
   };
   const executeCanvasPlotCommand = (
     projectId: number,
@@ -1841,8 +2162,8 @@ export function createMockApiClient(): ApiClient {
         service: "logosforge-api",
         instance_nonce: "preview-mock",
         mode: "preview-mock",
-        version: "1.13.0",
-        api_version: "1.13.0",
+        version: "1.14.0",
+        api_version: "1.14.0",
         core_version: "preview",
       };
     },
@@ -1963,6 +2284,9 @@ export function createMockApiClient(): ApiClient {
       scenesByProject.delete(id);
       episodesByProject.delete(id);
       timelineStates.delete(id);
+      for (const key of timelineReceipts.keys()) {
+        if (key.startsWith(`${id}\u0000`)) timelineReceipts.delete(key);
+      }
       canvasStates.delete(id);
       canvasIds.delete(id);
       settingsByProject.delete(id);
@@ -2448,9 +2772,42 @@ export function createMockApiClient(): ApiClient {
       findMockProject(projects, p, "GET", `/api/projects/${p}/timeline`);
       return timelineSnapshotFrom(p);
     },
-    async executeTimelineCommand(p: number, body: TimelineCommandDTO) {
+    async executeTimelineCommand(
+      p: number,
+      body: TimelineCommandDTO,
+      idempotencyKey: string,
+    ) {
       await delay(120);
-      return executeTimelineCommand(p, body);
+      return executeTimelineCommand(p, body, idempotencyKey);
+    },
+    async getTimelineCommandReceipt(
+      p: number,
+      idempotencyKey: string,
+      expectedCommand: TimelineCommandDTO,
+    ) {
+      await delay(80);
+      const path = `/api/projects/${p}/timeline/command-receipt`;
+      findMockProject(projects, p, "GET", path);
+      const saved = timelineReceipts.get(`${p}\u0000${idempotencyKey}`);
+      if (!saved) {
+        throw new ApiRequestError(
+          "GET",
+          path,
+          404,
+          "No committed Timeline command exists for this Idempotency-Key.",
+          "timeline_receipt_not_found",
+        );
+      }
+      if (saved.serializedCommand !== serializeTimelineCommand(expectedCommand)) {
+        throw new ApiRequestError(
+          "GET",
+          path,
+          409,
+          "Idempotency-Key was used for a different Timeline command.",
+          "idempotency_key_conflict",
+        );
+      }
+      return structuredClone(saved.receipt);
     },
     async getCanvasPlot(p: number) {
       await delay();

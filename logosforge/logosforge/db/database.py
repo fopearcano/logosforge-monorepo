@@ -359,6 +359,7 @@ from logosforge.models import (
     SeriesArc,
     EpisodePlotline,
     TimelineLane,
+    TIMELINE_LINK_TYPES,
     TimelineCommandReceipt,
     TimelineLink,
     TimelineStructureLink,
@@ -447,6 +448,18 @@ class TimelineSceneNotFound(LookupError):
 
 class TimelineLaneNotFound(LookupError):
     """The requested lane is absent from the path-scoped Project."""
+
+
+class TimelineLinkNotFound(LookupError):
+    """The requested event link is absent from the path-scoped Project."""
+
+
+class TimelineStructureLinkNotFound(LookupError):
+    """The requested structure link is absent from the path-scoped Project."""
+
+
+class TimelineStateCorrupt(RuntimeError):
+    """Persisted Timeline rows violate project ownership or invariants."""
 
 
 class CanvasPlotRevisionConflict(RuntimeError):
@@ -630,6 +643,8 @@ class TimelineReadSnapshot:
     project: Project
     scenes: tuple[Scene, ...]
     lanes: tuple[TimelineLane, ...]
+    links: tuple[TimelineLink, ...]
+    structure_links: tuple[TimelineStructureLink, ...]
     settings: dict
     character_names_by_id: dict[int, str]
     character_states_by_scene: dict[int, tuple[tuple[int, str], ...]]
@@ -643,6 +658,10 @@ class TimelineCommandResult:
     snapshot: TimelineReadSnapshot
     changed: bool
     affected_scene_ids: tuple[int, ...] = ()
+    affected_link_ids: tuple[int, ...] = ()
+    affected_structure_link_ids: tuple[int, ...] = ()
+    created_link_id: int | None = None
+    created_structure_link_id: int | None = None
     replayed: bool = False
     applied_revision: str = ""
 
@@ -658,6 +677,10 @@ class TimelineCommandReceiptData:
     applied_revision: str
     original_changed: bool
     original_affected_scene_ids: tuple[int, ...]
+    original_affected_link_ids: tuple[int, ...]
+    original_affected_structure_link_ids: tuple[int, ...]
+    original_created_link_id: int | None
+    original_created_structure_link_id: int | None
     created_at: datetime
 
 
@@ -824,12 +847,26 @@ class WorkflowCommandReceiptData:
     created_at: datetime
 
 
-_TIMELINE_RECEIPT_SCHEMA_VERSION = 1
+_TIMELINE_RECEIPT_SCHEMA_VERSION = 2
 _CANVAS_PLOT_RECEIPT_SCHEMA_VERSION = 1
 _KNOWLEDGE_GRAPH_RECEIPT_SCHEMA_VERSION = 1
 _CONTINUITY_RECEIPT_SCHEMA_VERSION = 2
 _WORKFLOW_RECEIPT_SCHEMA_VERSION = 1
 _TIMELINE_COMMAND_KINDS = frozenset({
+    "create_lane",
+    "update_lane",
+    "delete_lane",
+    "place_event",
+    "remove_event",
+    "set_order_mode",
+    "create_link",
+    "update_link",
+    "delete_link",
+    "create_structure_link",
+    "update_structure_link",
+    "delete_structure_link",
+})
+_TIMELINE_V1_COMMAND_KINDS = frozenset({
     "create_lane",
     "update_lane",
     "delete_lane",
@@ -936,6 +973,10 @@ def _timeline_receipt_result_json(
     applied_revision: str,
     original_changed: bool,
     original_affected_scene_ids: tuple[int, ...],
+    original_affected_link_ids: tuple[int, ...],
+    original_affected_structure_link_ids: tuple[int, ...],
+    original_created_link_id: int | None,
+    original_created_structure_link_id: int | None,
 ) -> str:
     return json.dumps(
         {
@@ -945,6 +986,14 @@ def _timeline_receipt_result_json(
             "applied_revision": applied_revision,
             "original_changed": original_changed,
             "original_affected_scene_ids": list(original_affected_scene_ids),
+            "original_affected_link_ids": list(original_affected_link_ids),
+            "original_affected_structure_link_ids": list(
+                original_affected_structure_link_ids
+            ),
+            "original_created_link_id": original_created_link_id,
+            "original_created_structure_link_id": (
+                original_created_structure_link_id
+            ),
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -960,11 +1009,13 @@ def _decode_timeline_command_receipt(
         payload = json.loads(row.result_json)
     except (json.JSONDecodeError, TypeError) as exc:
         raise RuntimeError("Timeline command receipt is corrupt") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("Timeline command receipt is corrupt")
+    schema_version = payload.get("schema_version")
     if (
-        not isinstance(payload, dict)
-        or not isinstance(payload.get("schema_version"), int)
-        or isinstance(payload.get("schema_version"), bool)
-        or payload.get("schema_version") != _TIMELINE_RECEIPT_SCHEMA_VERSION
+        not isinstance(schema_version, int)
+        or isinstance(schema_version, bool)
+        or schema_version not in {1, _TIMELINE_RECEIPT_SCHEMA_VERSION}
     ):
         raise RuntimeError("Timeline command receipt has an unsupported schema")
     kind = payload.get("kind")
@@ -972,20 +1023,137 @@ def _decode_timeline_command_receipt(
     applied_revision = payload.get("applied_revision")
     original_changed = payload.get("original_changed")
     affected = payload.get("original_affected_scene_ids")
+    affected_links = (
+        payload.get("original_affected_link_ids")
+        if schema_version >= 2 else []
+    )
+    affected_structure_links = (
+        payload.get("original_affected_structure_link_ids")
+        if schema_version >= 2 else []
+    )
+    created_link_id = (
+        payload.get("original_created_link_id")
+        if schema_version >= 2 else None
+    )
+    created_structure_link_id = (
+        payload.get("original_created_structure_link_id")
+        if schema_version >= 2 else None
+    )
+
+    def valid_ids(value) -> bool:
+        return (
+            isinstance(value, list)
+            and not any(
+                isinstance(item, bool)
+                or not isinstance(item, int)
+                or item <= 0
+                for item in value
+            )
+            and len(set(value)) == len(value)
+        )
+
+    def valid_optional_id(value) -> bool:
+        return value is None or (
+            not isinstance(value, bool)
+            and isinstance(value, int)
+            and value > 0
+        )
+
+    allowed_kinds = (
+        _TIMELINE_V1_COMMAND_KINDS
+        if schema_version == 1 else _TIMELINE_COMMAND_KINDS
+    )
     if (
         not isinstance(kind, str)
-        or kind not in _TIMELINE_COMMAND_KINDS
+        or kind not in allowed_kinds
         or not isinstance(expected_revision, str)
         or _LOWER_SHA256_RE.fullmatch(expected_revision) is None
         or not isinstance(applied_revision, str)
         or _LOWER_SHA256_RE.fullmatch(applied_revision) is None
         or not isinstance(original_changed, bool)
-        or not isinstance(affected, list)
-        or any(
-            isinstance(value, bool) or not isinstance(value, int) or value <= 0
-            for value in affected
+        or not valid_ids(affected)
+        or not valid_ids(affected_links)
+        or not valid_ids(affected_structure_links)
+        or not valid_optional_id(created_link_id)
+        or not valid_optional_id(created_structure_link_id)
+    ):
+        raise RuntimeError("Timeline command receipt has invalid result data")
+    link_command = kind in {"create_link", "update_link", "delete_link"}
+    structure_link_command = kind in {
+        "create_structure_link",
+        "update_structure_link",
+        "delete_structure_link",
+    }
+    no_op_kinds = {
+        "update_lane",
+        "place_event",
+        "remove_event",
+        "set_order_mode",
+        "create_link",
+        "update_link",
+        "create_structure_link",
+        "update_structure_link",
+    }
+    if schema_version >= 2 and (
+        (original_changed and applied_revision == expected_revision)
+        or (not original_changed and applied_revision != expected_revision)
+        or (not original_changed and kind not in no_op_kinds)
+        or (created_link_id is not None and kind != "create_link")
+        or (
+            created_structure_link_id is not None
+            and kind != "create_structure_link"
         )
-        or len(set(affected)) != len(affected)
+        or (
+            created_link_id is not None
+            and created_link_id not in affected_links
+        )
+        or (
+            created_structure_link_id is not None
+            and created_structure_link_id not in affected_structure_links
+        )
+        or (
+            original_changed
+            and link_command
+            and not affected_links
+        )
+        or (
+            original_changed
+            and structure_link_command
+            and not affected_structure_links
+        )
+        or (
+            link_command
+            and (affected or affected_structure_links)
+        )
+        or (
+            structure_link_command
+            and (affected or affected_links)
+        )
+        or (
+            not link_command
+            and not structure_link_command
+            and (affected_links or affected_structure_links)
+        )
+        or (
+            original_changed
+            and kind == "create_link"
+            and created_link_id is None
+        )
+        or (
+            original_changed
+            and kind == "create_structure_link"
+            and created_structure_link_id is None
+        )
+        or (
+            not original_changed
+            and (
+                affected
+                or affected_links
+                or affected_structure_links
+                or created_link_id is not None
+                or created_structure_link_id is not None
+            )
+        )
     ):
         raise RuntimeError("Timeline command receipt has invalid result data")
     if (
@@ -1001,6 +1169,10 @@ def _decode_timeline_command_receipt(
         applied_revision=applied_revision,
         original_changed=original_changed,
         original_affected_scene_ids=tuple(affected),
+        original_affected_link_ids=tuple(affected_links),
+        original_affected_structure_link_ids=tuple(affected_structure_links),
+        original_created_link_id=created_link_id,
+        original_created_structure_link_id=created_structure_link_id,
         created_at=row.created_at,
     )
 
@@ -3429,6 +3601,50 @@ class Database:
             .where(TimelineLane.project_id == project_id)
             .order_by(TimelineLane.order_index, TimelineLane.id)
         ).all())
+        links = list(session.exec(
+            select(TimelineLink)
+            .where(TimelineLink.project_id == project_id)
+            .order_by(TimelineLink.id)
+        ).all())
+        structure_links = list(session.exec(
+            select(TimelineStructureLink)
+            .where(TimelineStructureLink.project_id == project_id)
+            .order_by(TimelineStructureLink.id)
+        ).all())
+        scene_ids = {int(scene.id) for scene in scenes}
+        link_pairs: set[tuple[int, int]] = set()
+        for link in links:
+            source_id = int(link.source_scene_id)
+            target_id = int(link.target_scene_id)
+            pair = tuple(sorted((source_id, target_id)))
+            if (
+                source_id == target_id
+                or source_id not in scene_ids
+                or target_id not in scene_ids
+                or link.link_type not in TIMELINE_LINK_TYPES
+                or pair in link_pairs
+            ):
+                raise TimelineStateCorrupt(
+                    "Timeline link state violates project ownership or uniqueness"
+                )
+            link_pairs.add(pair)
+        structure_identities: set[tuple[int, str, str]] = set()
+        for link in structure_links:
+            source_id = int(link.source_scene_id)
+            target_type = link.target_type or ""
+            target_ref = (link.target_ref or "").strip()
+            identity = (source_id, target_type, target_ref)
+            if (
+                source_id not in scene_ids
+                or target_type not in {"act", "chapter"}
+                or not target_ref
+                or identity in structure_identities
+            ):
+                raise TimelineStateCorrupt(
+                    "Timeline structure-link state violates project ownership "
+                    "or uniqueness"
+                )
+            structure_identities.add(identity)
         characters = list(session.exec(
             select(Character)
             .where(Character.project_id == project_id)
@@ -3460,13 +3676,22 @@ class Database:
             project=project,
             scenes=tuple(scenes),
             lanes=tuple(lanes),
+            links=tuple(links),
+            structure_links=tuple(structure_links),
             settings=settings,
             character_names_by_id=character_names,
             character_states_by_scene={
                 scene_id: tuple(rows)
                 for scene_id, rows in states_by_scene.items()
             },
-            revision=timeline_revision(project, scenes, lanes, settings),
+            revision=timeline_revision(
+                project,
+                scenes,
+                lanes,
+                settings,
+                links=links,
+                structure_links=structure_links,
+            ),
         )
 
     def read_timeline_snapshot(
@@ -3725,8 +3950,14 @@ class Database:
                     project = current.project
                     scenes = list(current.scenes)
                     lanes = list(current.lanes)
+                    links = list(current.links)
+                    structure_links = list(current.structure_links)
                     settings = dict(current.settings)
                     affected_scene_ids: list[int] = []
+                    affected_link_ids: list[int] = []
+                    affected_structure_link_ids: list[int] = []
+                    created_link_id: int | None = None
+                    created_structure_link_id: int | None = None
                     # A successful exact no-op still needs a durable receipt.
                     # Isolate all command writes in a savepoint so that branch
                     # can discard incidental ORM/settings normalization while
@@ -3749,6 +3980,29 @@ class Database:
                             raise TimelineLaneNotFound(value)
                         return lane
 
+                    def link_or_error(value) -> TimelineLink:
+                        if isinstance(value, bool) or not isinstance(value, int):
+                            raise TimelineCommandError("link_id must be an integer")
+                        link = next((row for row in links if row.id == value), None)
+                        if link is None:
+                            raise TimelineLinkNotFound(value)
+                        return link
+
+                    def structure_link_or_error(
+                        value,
+                    ) -> TimelineStructureLink:
+                        if isinstance(value, bool) or not isinstance(value, int):
+                            raise TimelineCommandError(
+                                "structure_link_id must be an integer"
+                            )
+                        link = next(
+                            (row for row in structure_links if row.id == value),
+                            None,
+                        )
+                        if link is None:
+                            raise TimelineStructureLinkNotFound(value)
+                        return link
+
                     def checked_index(value, maximum: int, label: str) -> int:
                         if isinstance(value, bool) or not isinstance(value, int):
                             raise TimelineCommandError(f"{label} must be an integer")
@@ -3762,6 +4016,61 @@ class Database:
                         if not isinstance(value, str) or not value.strip():
                             raise TimelineCommandError("Lane name cannot be empty")
                         return value.strip()
+
+                    def checked_text(
+                        value,
+                        label: str,
+                        *,
+                        maximum: int,
+                        allow_empty: bool = True,
+                        strip: bool = False,
+                    ) -> str:
+                        if not isinstance(value, str):
+                            raise TimelineCommandError(f"{label} must be a string")
+                        normalized = value.strip() if strip else value
+                        if not allow_empty and not normalized:
+                            raise TimelineCommandError(f"{label} cannot be empty")
+                        if len(normalized) > maximum:
+                            raise TimelineCommandError(
+                                f"{label} cannot exceed {maximum} characters"
+                            )
+                        return normalized
+
+                    def checked_link_type(value) -> str:
+                        link_type = checked_text(
+                            value, "link_type", maximum=100, allow_empty=False,
+                        )
+                        if link_type not in TIMELINE_LINK_TYPES:
+                            raise TimelineCommandError(
+                                "link_type is not a supported Timeline link type"
+                            )
+                        return link_type
+
+                    def checked_structure_target(
+                        target_type_value,
+                        target_ref_value,
+                    ) -> tuple[str, str]:
+                        if target_type_value not in {"act", "chapter"}:
+                            raise TimelineCommandError(
+                                "target_type must be 'act' or 'chapter'"
+                            )
+                        target_ref = checked_text(
+                            target_ref_value,
+                            "target_ref",
+                            maximum=500,
+                            allow_empty=False,
+                            strip=True,
+                        )
+                        existing_targets = {
+                            str(getattr(scene, target_type_value, "") or "").strip()
+                            for scene in scenes
+                        }
+                        existing_targets.discard("")
+                        if target_ref not in existing_targets:
+                            raise TimelineCommandError(
+                                f"The target {target_type_value} does not exist"
+                            )
+                        return target_type_value, target_ref
 
                     def duplicate_lane(name: str, exclude_id: int | None = None):
                         key = name.casefold()
@@ -3931,6 +4240,192 @@ class Database:
                                 projection.effective_order
                             )
 
+                    elif kind == "create_link":
+                        source = scene_or_error(fields.get("source_scene_id"))
+                        target = scene_or_error(fields.get("target_scene_id"))
+                        if int(source.id) == int(target.id):
+                            raise TimelineCommandError(
+                                "A Timeline event cannot link to itself"
+                            )
+                        membership = set(
+                            project_timeline(scenes, settings).event_ids
+                        )
+                        if (
+                            int(source.id) not in membership
+                            or int(target.id) not in membership
+                        ):
+                            raise TimelineCommandError(
+                                "Both scenes must currently be Timeline events"
+                            )
+                        link_type = checked_link_type(
+                            fields.get("link_type", "custom")
+                        )
+                        color_label = checked_text(
+                            fields.get("color_label", "gray"),
+                            "color_label",
+                            maximum=100,
+                        )
+                        label = checked_text(
+                            fields.get("label", ""),
+                            "label",
+                            maximum=500,
+                        )
+                        pair = frozenset((int(source.id), int(target.id)))
+                        duplicate = next(
+                            (
+                                row for row in links
+                                if frozenset((
+                                    int(row.source_scene_id),
+                                    int(row.target_scene_id),
+                                )) == pair
+                            ),
+                            None,
+                        )
+                        if duplicate is None:
+                            link = TimelineLink(
+                                project_id=project_id,
+                                source_scene_id=int(source.id),
+                                target_scene_id=int(target.id),
+                                link_type=link_type,
+                                color_label=color_label,
+                                label=label,
+                            )
+                            session.add(link)
+                            session.flush()
+                            assert link.id is not None
+                            links.append(link)
+                            created_link_id = int(link.id)
+                            affected_link_ids.append(int(link.id))
+
+                    elif kind == "update_link":
+                        link = link_or_error(fields.get("link_id"))
+                        updates = {
+                            key for key in ("link_type", "color_label", "label")
+                            if key in fields
+                        }
+                        if not updates:
+                            raise TimelineCommandError(
+                                "update_link must change at least one field"
+                            )
+                        changed_link = False
+                        if "link_type" in updates:
+                            value = checked_link_type(fields["link_type"])
+                            if link.link_type != value:
+                                link.link_type = value
+                                changed_link = True
+                        if "color_label" in updates:
+                            value = checked_text(
+                                fields["color_label"],
+                                "color_label",
+                                maximum=100,
+                            )
+                            if link.color_label != value:
+                                link.color_label = value
+                                changed_link = True
+                        if "label" in updates:
+                            value = checked_text(
+                                fields["label"], "label", maximum=500,
+                            )
+                            if link.label != value:
+                                link.label = value
+                                changed_link = True
+                        if changed_link:
+                            affected_link_ids.append(int(link.id))
+
+                    elif kind == "delete_link":
+                        link = link_or_error(fields.get("link_id"))
+                        affected_link_ids.append(int(link.id))
+                        session.delete(link)
+                        links = [row for row in links if row.id != link.id]
+
+                    elif kind == "create_structure_link":
+                        source = scene_or_error(fields.get("source_scene_id"))
+                        if int(source.id) not in set(
+                            project_timeline(scenes, settings).event_ids
+                        ):
+                            raise TimelineCommandError(
+                                "The source scene must currently be a Timeline event"
+                            )
+                        target_type, target_ref = checked_structure_target(
+                            fields.get("target_type"), fields.get("target_ref")
+                        )
+                        duplicate = next(
+                            (
+                                row for row in structure_links
+                                if int(row.source_scene_id) == int(source.id)
+                                and row.target_type == target_type
+                                and row.target_ref == target_ref
+                            ),
+                            None,
+                        )
+                        if duplicate is None:
+                            structure_link = TimelineStructureLink(
+                                project_id=project_id,
+                                source_scene_id=int(source.id),
+                                target_type=target_type,
+                                target_ref=target_ref,
+                            )
+                            session.add(structure_link)
+                            session.flush()
+                            assert structure_link.id is not None
+                            structure_links.append(structure_link)
+                            created_structure_link_id = int(structure_link.id)
+                            affected_structure_link_ids.append(
+                                int(structure_link.id)
+                            )
+
+                    elif kind == "update_structure_link":
+                        structure_link = structure_link_or_error(
+                            fields.get("structure_link_id")
+                        )
+                        updates = {
+                            key for key in ("target_type", "target_ref")
+                            if key in fields
+                        }
+                        if not updates:
+                            raise TimelineCommandError(
+                                "update_structure_link must change at least one field"
+                            )
+                        target_type, target_ref = checked_structure_target(
+                            fields.get("target_type", structure_link.target_type),
+                            fields.get("target_ref", structure_link.target_ref),
+                        )
+                        duplicate = next(
+                            (
+                                row for row in structure_links
+                                if row.id != structure_link.id
+                                and int(row.source_scene_id)
+                                == int(structure_link.source_scene_id)
+                                and row.target_type == target_type
+                                and row.target_ref == target_ref
+                            ),
+                            None,
+                        )
+                        if duplicate is not None:
+                            raise TimelineCommandError(
+                                "That Timeline structure link already exists"
+                            )
+                        if (
+                            structure_link.target_type != target_type
+                            or structure_link.target_ref != target_ref
+                        ):
+                            structure_link.target_type = target_type
+                            structure_link.target_ref = target_ref
+                            affected_structure_link_ids.append(
+                                int(structure_link.id)
+                            )
+
+                    elif kind == "delete_structure_link":
+                        structure_link = structure_link_or_error(
+                            fields.get("structure_link_id")
+                        )
+                        affected_structure_link_ids.append(int(structure_link.id))
+                        session.delete(structure_link)
+                        structure_links = [
+                            row for row in structure_links
+                            if row.id != structure_link.id
+                        ]
+
                     project.settings_json = json.dumps(
                         settings, ensure_ascii=False, sort_keys=True,
                     )
@@ -3955,6 +4450,10 @@ class Database:
                                     applied_revision=stable.revision,
                                     original_changed=False,
                                     original_affected_scene_ids=(),
+                                    original_affected_link_ids=(),
+                                    original_affected_structure_link_ids=(),
+                                    original_created_link_id=None,
+                                    original_created_structure_link_id=None,
                                 ),
                             ))
                             session.commit()
@@ -3970,6 +4469,12 @@ class Database:
 
                     command_savepoint.commit()
                     unique_affected = tuple(dict.fromkeys(affected_scene_ids))
+                    unique_affected_links = tuple(
+                        dict.fromkeys(affected_link_ids)
+                    )
+                    unique_affected_structure_links = tuple(
+                        dict.fromkeys(affected_structure_link_ids)
+                    )
                     if key_hash is not None:
                         assert request_digest is not None
                         session.add(TimelineCommandReceipt(
@@ -3982,6 +4487,14 @@ class Database:
                                 applied_revision=updated.revision,
                                 original_changed=True,
                                 original_affected_scene_ids=unique_affected,
+                                original_affected_link_ids=unique_affected_links,
+                                original_affected_structure_link_ids=(
+                                    unique_affected_structure_links
+                                ),
+                                original_created_link_id=created_link_id,
+                                original_created_structure_link_id=(
+                                    created_structure_link_id
+                                ),
                             ),
                         ))
                     session.commit()
@@ -3990,6 +4503,12 @@ class Database:
                         snapshot=updated,
                         changed=True,
                         affected_scene_ids=unique_affected,
+                        affected_link_ids=unique_affected_links,
+                        affected_structure_link_ids=(
+                            unique_affected_structure_links
+                        ),
+                        created_link_id=created_link_id,
+                        created_structure_link_id=created_structure_link_id,
                         applied_revision=updated.revision,
                     )
                 except Exception:

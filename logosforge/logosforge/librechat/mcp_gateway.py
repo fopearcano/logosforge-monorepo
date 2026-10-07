@@ -209,7 +209,37 @@ _TIMELINE_COMMAND_FIELDS: dict[str, set[str]] = {
     },
     "remove_event": {"kind", "expected_revision", "scene_id"},
     "set_order_mode": {"kind", "expected_revision", "mode"},
+    "create_link": {
+        "kind", "expected_revision", "source_scene_id", "target_scene_id",
+        "link_type", "color_label", "label",
+    },
+    "update_link": {
+        "kind", "expected_revision", "link_id", "link_type", "color_label",
+        "label",
+    },
+    "delete_link": {"kind", "expected_revision", "link_id"},
+    "create_structure_link": {
+        "kind", "expected_revision", "source_scene_id", "target_type",
+        "target_ref",
+    },
+    "update_structure_link": {
+        "kind", "expected_revision", "structure_link_id", "target_type",
+        "target_ref",
+    },
+    "delete_structure_link": {
+        "kind", "expected_revision", "structure_link_id",
+    },
 }
+
+_TIMELINE_LINK_TYPES = frozenset({
+    "custom",
+    "causality",
+    "setup_payoff",
+    "echo",
+    "conflict",
+    "dependency",
+})
+_TIMELINE_STRUCTURE_TARGET_TYPES = frozenset({"act", "chapter"})
 
 _CANVAS_PLOT_COMMAND_FIELDS: dict[str, set[str]] = {
     "create_node": {
@@ -395,11 +425,121 @@ def _normalize_timeline_command(command: dict[str, Any]) -> dict[str, Any]:
         normalized["scene_id"] = _timeline_integer(
             command["scene_id"], "scene_id", minimum=1,
         )
-    else:
+    elif kind == "set_order_mode":
         mode = command.get("mode")
         if mode not in {"structural", "custom"}:
             raise GatewayError("mode must be 'structural' or 'custom'.")
         normalized["mode"] = mode
+    elif kind == "create_link":
+        if "source_scene_id" not in command or "target_scene_id" not in command:
+            raise GatewayError(
+                "create_link requires source_scene_id and target_scene_id."
+            )
+        normalized["source_scene_id"] = _timeline_integer(
+            command["source_scene_id"], "source_scene_id", minimum=1,
+        )
+        normalized["target_scene_id"] = _timeline_integer(
+            command["target_scene_id"], "target_scene_id", minimum=1,
+        )
+        if normalized["source_scene_id"] == normalized["target_scene_id"]:
+            raise GatewayError("A Timeline event cannot link to itself.")
+        if "link_type" in command:
+            link_type = command["link_type"]
+            if link_type not in _TIMELINE_LINK_TYPES:
+                raise GatewayError(
+                    "link_type must be one of: "
+                    + ", ".join(sorted(_TIMELINE_LINK_TYPES))
+                    + "."
+                )
+            normalized["link_type"] = link_type
+        if "color_label" in command:
+            normalized["color_label"] = _timeline_string(
+                command["color_label"], "color_label", maximum=100,
+            )
+        if "label" in command:
+            normalized["label"] = _timeline_string(
+                command["label"], "label", maximum=500,
+            )
+    elif kind == "update_link":
+        if "link_id" not in command:
+            raise GatewayError("update_link requires link_id.")
+        normalized["link_id"] = _timeline_integer(
+            command["link_id"], "link_id", minimum=1,
+        )
+        updates = {"link_type", "color_label", "label"}.intersection(command)
+        if not updates:
+            raise GatewayError("update_link must change at least one field.")
+        if "link_type" in command:
+            link_type = command["link_type"]
+            if link_type not in _TIMELINE_LINK_TYPES:
+                raise GatewayError(
+                    "link_type must be one of: "
+                    + ", ".join(sorted(_TIMELINE_LINK_TYPES))
+                    + "."
+                )
+            normalized["link_type"] = link_type
+        if "color_label" in command:
+            normalized["color_label"] = _timeline_string(
+                command["color_label"], "color_label", maximum=100,
+            )
+        if "label" in command:
+            normalized["label"] = _timeline_string(
+                command["label"], "label", maximum=500,
+            )
+    elif kind == "delete_link":
+        if "link_id" not in command:
+            raise GatewayError("delete_link requires link_id.")
+        normalized["link_id"] = _timeline_integer(
+            command["link_id"], "link_id", minimum=1,
+        )
+    elif kind == "create_structure_link":
+        required = {"source_scene_id", "target_type", "target_ref"}
+        if not required.issubset(command):
+            raise GatewayError(
+                "create_structure_link requires source_scene_id, target_type, "
+                "and target_ref."
+            )
+        normalized["source_scene_id"] = _timeline_integer(
+            command["source_scene_id"], "source_scene_id", minimum=1,
+        )
+        target_type = command["target_type"]
+        if target_type not in _TIMELINE_STRUCTURE_TARGET_TYPES:
+            raise GatewayError("target_type must be 'act' or 'chapter'.")
+        normalized["target_type"] = target_type
+        normalized["target_ref"] = _timeline_string(
+            command["target_ref"], "target_ref", maximum=500, nonempty=True,
+        )
+    elif kind == "update_structure_link":
+        if "structure_link_id" not in command:
+            raise GatewayError(
+                "update_structure_link requires structure_link_id."
+            )
+        normalized["structure_link_id"] = _timeline_integer(
+            command["structure_link_id"], "structure_link_id", minimum=1,
+        )
+        updates = {"target_type", "target_ref"}.intersection(command)
+        if not updates:
+            raise GatewayError(
+                "update_structure_link must change at least one field."
+            )
+        if "target_type" in command:
+            target_type = command["target_type"]
+            if target_type not in _TIMELINE_STRUCTURE_TARGET_TYPES:
+                raise GatewayError("target_type must be 'act' or 'chapter'.")
+            normalized["target_type"] = target_type
+        if "target_ref" in command:
+            normalized["target_ref"] = _timeline_string(
+                command["target_ref"], "target_ref", maximum=500,
+                nonempty=True,
+            )
+    else:
+        if "structure_link_id" not in command:
+            raise GatewayError(
+                "delete_structure_link requires structure_link_id."
+            )
+        normalized["structure_link_id"] = _timeline_integer(
+            command["structure_link_id"], "structure_link_id", minimum=1,
+        )
     return normalized
 
 
@@ -1396,7 +1536,15 @@ class LogosForgeMcpGateway:
         if not isinstance(receipt, dict):
             raise GatewayError("Core returned an invalid Timeline receipt.")
         receipt_project_id = receipt.get("project_id")
-        affected = receipt.get("original_affected_scene_ids")
+        affected_scenes = receipt.get("original_affected_scene_ids", [])
+        affected_links = receipt.get("original_affected_link_ids", [])
+        affected_structure_links = receipt.get(
+            "original_affected_structure_link_ids", []
+        )
+        created_link_id = receipt.get("original_created_link_id", None)
+        created_structure_link_id = receipt.get(
+            "original_created_structure_link_id", None
+        )
         canonical = {
             "project_id": receipt_project_id,
             "request_digest": receipt.get("request_digest"),
@@ -1404,9 +1552,33 @@ class LogosForgeMcpGateway:
             "expected_revision": receipt.get("expected_revision"),
             "applied_revision": receipt.get("applied_revision"),
             "original_changed": receipt.get("original_changed"),
-            "original_affected_scene_ids": affected,
+            "original_affected_scene_ids": affected_scenes,
+            "original_affected_link_ids": affected_links,
+            "original_affected_structure_link_ids": affected_structure_links,
+            "original_created_link_id": created_link_id,
+            "original_created_structure_link_id": created_structure_link_id,
             "committed_at": receipt.get("committed_at"),
         }
+
+        def valid_ids(value: Any) -> bool:
+            return (
+                isinstance(value, list)
+                and all(
+                    not isinstance(item, bool)
+                    and isinstance(item, int)
+                    and item > 0
+                    for item in value
+                )
+                and len(set(value)) == len(value)
+            )
+
+        def valid_optional_id(value: Any) -> bool:
+            return value is None or (
+                not isinstance(value, bool)
+                and isinstance(value, int)
+                and value > 0
+            )
+
         valid = (
             isinstance(receipt_project_id, int)
             and not isinstance(receipt_project_id, bool)
@@ -1420,14 +1592,23 @@ class LogosForgeMcpGateway:
             and isinstance(canonical["applied_revision"], str)
             and _LOWER_SHA256_RE.fullmatch(canonical["applied_revision"]) is not None
             and isinstance(canonical["original_changed"], bool)
-            and isinstance(affected, list)
-            and all(
-                not isinstance(value, bool)
-                and isinstance(value, int)
-                and value > 0
-                for value in affected
+            and valid_ids(affected_scenes)
+            and valid_ids(affected_links)
+            and valid_ids(affected_structure_links)
+            and valid_optional_id(created_link_id)
+            and valid_optional_id(created_structure_link_id)
+            and not (
+                created_link_id is not None
+                and created_structure_link_id is not None
             )
-            and len(set(affected or [])) == len(affected or [])
+            and (
+                created_link_id is None
+                or created_link_id in affected_links
+            )
+            and (
+                created_structure_link_id is None
+                or created_structure_link_id in affected_structure_links
+            )
             and isinstance(canonical["committed_at"], str)
             and bool(canonical["committed_at"])
         )
@@ -1506,6 +1687,10 @@ class LogosForgeMcpGateway:
             "applied_revision": receipt["applied_revision"],
             "changed": False,
             "affected_scene_ids": [],
+            "affected_link_ids": [],
+            "affected_structure_link_ids": [],
+            "created_link_id": None,
+            "created_structure_link_id": None,
         }
 
     def _complete_timeline_recovery(
@@ -3616,6 +3801,13 @@ class LogosForgeMcpGateway:
         off_timeline = [
             row for row in current.get("off_timeline", []) if isinstance(row, dict)
         ]
+        links = [
+            row for row in current.get("links", []) if isinstance(row, dict)
+        ]
+        structure_links = [
+            row for row in current.get("structure_links", [])
+            if isinstance(row, dict)
+        ]
         lane_order = [int(row["id"]) for row in lanes if isinstance(row.get("id"), int)]
         event_order = [
             int(row["id"]) for row in events if isinstance(row.get("id"), int)
@@ -3642,8 +3834,59 @@ class LogosForgeMcpGateway:
                 )
             return scene, False
 
+        def event_by_id(scene_id: int) -> dict[str, Any]:
+            event = next(
+                (row for row in events if row.get("id") == scene_id), None,
+            )
+            if event is None:
+                raise GatewayError(
+                    f"Scene {scene_id} is not currently a Timeline event."
+                )
+            return event
+
+        def link_by_id(link_id: int) -> dict[str, Any]:
+            link = next((row for row in links if row.get("id") == link_id), None)
+            if link is None:
+                raise GatewayError(
+                    f"Timeline link {link_id} is not present in the current snapshot."
+                )
+            return link
+
+        def structure_link_by_id(structure_link_id: int) -> dict[str, Any]:
+            link = next(
+                (
+                    row for row in structure_links
+                    if row.get("id") == structure_link_id
+                ),
+                None,
+            )
+            if link is None:
+                raise GatewayError(
+                    "Timeline structure link "
+                    f"{structure_link_id} is not present in the current snapshot."
+                )
+            return link
+
+        structure_targets = {
+            "act": {
+                str(row.get("act", "")).strip()
+                for row in (*events, *off_timeline)
+                if str(row.get("act", "")).strip()
+            },
+            "chapter": {
+                str(row.get("chapter", "")).strip()
+                for row in (*events, *off_timeline)
+                if str(row.get("chapter", "")).strip()
+            },
+        }
+
         kind = normalized["kind"]
-        destructive = kind in {"delete_lane", "remove_event"}
+        destructive = kind in {
+            "delete_lane",
+            "remove_event",
+            "delete_link",
+            "delete_structure_link",
+        }
         review: dict[str, Any] = {
             "timeline_revision": revision,
             "command_kind": kind,
@@ -3841,6 +4084,215 @@ class LogosForgeMcpGateway:
                 "effect": (
                     "Timeline membership and lane assignment are removed. The "
                     "underlying manuscript scene remains and becomes off-Timeline."
+                ),
+            })
+
+        elif kind == "create_link":
+            source_id = normalized["source_scene_id"]
+            target_id = normalized["target_scene_id"]
+            source = event_by_id(source_id)
+            target = event_by_id(target_id)
+            duplicate = next((
+                row for row in links
+                if {
+                    row.get("source_scene_id"), row.get("target_scene_id"),
+                } == {source_id, target_id}
+            ), None)
+            if duplicate is not None:
+                raise GatewayError(
+                    "Those Timeline events are already connected by link "
+                    f"{duplicate.get('id')}."
+                )
+            link_type = normalized.get("link_type", "custom")
+            summary = (
+                f"Create {link_type!r} Timeline link from scene {source_id} "
+                f"({_preview(source.get('title'), 120)!r}) to scene {target_id} "
+                f"({_preview(target.get('title'), 120)!r})."
+            )
+            review.update({
+                "source": {
+                    "scene_id": source_id,
+                    "title": _preview(source.get("title"), 500),
+                },
+                "target": {
+                    "scene_id": target_id,
+                    "title": _preview(target.get("title"), 500),
+                },
+                "after_intent": {
+                    "link_type": link_type,
+                    "color_label": normalized.get("color_label", "gray"),
+                    "label": _preview(normalized.get("label", ""), 500),
+                    "direction": "source_to_target",
+                },
+            })
+
+        elif kind == "update_link":
+            link_id = normalized["link_id"]
+            link = link_by_id(link_id)
+            changes: dict[str, Any] = {}
+            for key in ("link_type", "color_label", "label"):
+                if key in normalized:
+                    before_value = link.get(
+                        key, "gray" if key == "color_label" else "",
+                    )
+                    changes[key] = {
+                        "before": _preview(before_value, 500),
+                        "after": normalized[key],
+                    }
+            if all(change["before"] == change["after"] for change in changes.values()):
+                raise GatewayError(
+                    "The requested Timeline link update would not change the link."
+                )
+            summary = (
+                f"Update Timeline link {link_id} from scene "
+                f"{link.get('source_scene_id')} to scene "
+                f"{link.get('target_scene_id')}."
+            )
+            review.update({
+                "link": {
+                    "id": link_id,
+                    "source_scene_id": link.get("source_scene_id"),
+                    "target_scene_id": link.get("target_scene_id"),
+                    "direction": "source_to_target",
+                },
+                "changes": changes,
+            })
+
+        elif kind == "delete_link":
+            link_id = normalized["link_id"]
+            link = link_by_id(link_id)
+            summary = (
+                f"Delete Timeline link {link_id} from scene "
+                f"{link.get('source_scene_id')} to scene "
+                f"{link.get('target_scene_id')}; keep both manuscript scenes."
+            )
+            review.update({
+                "link": {
+                    "id": link_id,
+                    "source_scene_id": link.get("source_scene_id"),
+                    "target_scene_id": link.get("target_scene_id"),
+                    "link_type": link.get("link_type", "custom"),
+                    "label": _preview(link.get("label"), 500),
+                },
+                "effect": (
+                    "Only the planning relationship is deleted; Timeline events "
+                    "and manuscript scenes remain unchanged."
+                ),
+            })
+
+        elif kind == "create_structure_link":
+            source_id = normalized["source_scene_id"]
+            source = event_by_id(source_id)
+            target_type = normalized["target_type"]
+            target_ref = normalized["target_ref"]
+            if target_ref not in structure_targets[target_type]:
+                raise GatewayError(
+                    f"Timeline {target_type} target {target_ref!r} is not present "
+                    "in the current manuscript structure."
+                )
+            duplicate = next((
+                row for row in structure_links
+                if row.get("source_scene_id") == source_id
+                and row.get("target_type") == target_type
+                and str(row.get("target_ref", "")).strip() == target_ref
+            ), None)
+            if duplicate is not None:
+                raise GatewayError(
+                    "That Timeline structure relationship already exists as link "
+                    f"{duplicate.get('id')}."
+                )
+            summary = (
+                f"Link Timeline scene {source_id} "
+                f"({_preview(source.get('title'), 120)!r}) to {target_type} "
+                f"{target_ref!r}."
+            )
+            review.update({
+                "source": {
+                    "scene_id": source_id,
+                    "title": _preview(source.get("title"), 500),
+                },
+                "after_intent": {
+                    "target_type": target_type,
+                    "target_ref": target_ref,
+                    "target_exists": True,
+                },
+            })
+
+        elif kind == "update_structure_link":
+            structure_link_id = normalized["structure_link_id"]
+            link = structure_link_by_id(structure_link_id)
+            target_type = normalized.get("target_type", link.get("target_type"))
+            target_ref = normalized.get(
+                "target_ref", str(link.get("target_ref", "")).strip(),
+            )
+            if target_type not in _TIMELINE_STRUCTURE_TARGET_TYPES:
+                raise GatewayError(
+                    "The current Timeline structure link has an invalid target type."
+                )
+            if target_ref not in structure_targets[target_type]:
+                raise GatewayError(
+                    f"Timeline {target_type} target {target_ref!r} is not present "
+                    "in the current manuscript structure."
+                )
+            duplicate = next((
+                row for row in structure_links
+                if row.get("id") != structure_link_id
+                and row.get("source_scene_id") == link.get("source_scene_id")
+                and row.get("target_type") == target_type
+                and str(row.get("target_ref", "")).strip() == target_ref
+            ), None)
+            if duplicate is not None:
+                raise GatewayError(
+                    "That Timeline structure relationship already exists as link "
+                    f"{duplicate.get('id')}."
+                )
+            changes: dict[str, Any] = {}
+            if "target_type" in normalized:
+                changes["target_type"] = {
+                    "before": link.get("target_type"),
+                    "after": target_type,
+                }
+            if "target_ref" in normalized:
+                changes["target_ref"] = {
+                    "before": _preview(link.get("target_ref"), 500),
+                    "after": target_ref,
+                }
+            if all(change["before"] == change["after"] for change in changes.values()):
+                raise GatewayError(
+                    "The requested structure-link update would not change the link."
+                )
+            summary = (
+                f"Update Timeline structure link {structure_link_id} to "
+                f"{target_type} {target_ref!r}."
+            )
+            review.update({
+                "structure_link": {
+                    "id": structure_link_id,
+                    "source_scene_id": link.get("source_scene_id"),
+                    "target_exists": link.get("target_exists"),
+                },
+                "changes": changes,
+            })
+
+        elif kind == "delete_structure_link":
+            structure_link_id = normalized["structure_link_id"]
+            link = structure_link_by_id(structure_link_id)
+            summary = (
+                f"Delete Timeline structure link {structure_link_id} from scene "
+                f"{link.get('source_scene_id')} to "
+                f"{link.get('target_type')} {link.get('target_ref')!r}."
+            )
+            review.update({
+                "structure_link": {
+                    "id": structure_link_id,
+                    "source_scene_id": link.get("source_scene_id"),
+                    "target_type": link.get("target_type"),
+                    "target_ref": _preview(link.get("target_ref"), 500),
+                    "target_exists": link.get("target_exists"),
+                },
+                "effect": (
+                    "Only the structure reference is deleted; the Timeline event, "
+                    "Act/Chapter, and manuscript scene remain unchanged."
                 ),
             })
 

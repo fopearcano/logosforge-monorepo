@@ -67,6 +67,7 @@ import type {
   PlotBlockUpdateDTO,
   TimelineSnapshotDTO,
   TimelineCommandDTO,
+  TimelineCommandReceiptDTO,
   TimelineCommandResultDTO,
   CanvasPlotSnapshotDTO,
   CanvasPlotCommandDTO,
@@ -227,7 +228,14 @@ export interface ApiClient {
   executeTimelineCommand(
     p: number,
     body: TimelineCommandDTO,
+    idempotencyKey: string,
   ): Promise<TimelineCommandResultDTO>;
+  /** Resolve an ambiguously completed Timeline command by capability key. */
+  getTimelineCommandReceipt(
+    p: number,
+    idempotencyKey: string,
+    expectedCommand: TimelineCommandDTO,
+  ): Promise<TimelineCommandReceiptDTO>;
   /** Independent project-owned spatial board, never derived from Scene order. */
   getCanvasPlot(p: number): Promise<CanvasPlotSnapshotDTO>;
   /** Apply one revision-guarded, atomic Canvas Plot mutation. */

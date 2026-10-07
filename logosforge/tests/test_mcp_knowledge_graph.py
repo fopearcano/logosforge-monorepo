@@ -259,7 +259,7 @@ def test_graph_digest_matches_core_canonical_wire():
 
 def test_graph_tools_are_versioned_bounded_and_strict(graph_gateway):
     _db, _client, gateway = graph_gateway
-    assert SERVER_VERSION == "1.9.0"
+    assert SERVER_VERSION == "1.10.0"
     assert len(TOOL_SPECS) == 46
     assert {
         "logosforge_get_knowledge_graph",

@@ -31,7 +31,8 @@ systems:
   (single source of truth = `Project.narrative_engine`; every section adapts).
 - **Manuscript** — scene editor with rich per-scene fields; basic grammar/spell.
 - **Outline / Plot / Timeline** — act/chapter/scene structure, plot blocks
-  (scene-derived), scene-order timeline.
+  (scene-derived), scene-order timeline, and persisted scene/structure
+  relationships with guarded authoring.
 - **Graph** — four bounded canonical projections, focus neighborhoods, Story
   Gravity/order overlays, and revision-bound Confirm/Hide/Restore review.
 - **PSYKE** — characters/places/objects/lore/themes with relations,
@@ -87,8 +88,12 @@ These are frozen. Change only to fix a confirmed regression, with tests.
 
 ## 4. Experimental / limited systems (Usable with limitations — "B"/"C")
 
-- **Plot / Timeline** — scene-derived models (no separate rich Plot/Timeline
-  tables); adequate for Alpha. *(B)*
+- **Plot / Timeline** — events and lanes remain scene-derived, while persisted
+  scene-to-scene and scene-to-Act/Chapter relationships now participate in the
+  coherent HTTP 1.14.0 snapshot, revision, command, and durable receipt
+  boundary. The Pro author/edit/delete surface is implemented locally; packaged
+  validation is pending. Mode-specific projections and the story-flow
+  heat/tension overlay remain deferred. *(B)*
 - **Counterpart** — works; thin automated coverage. *(B)*
 - **Connector** — write actions gated OFF by default; only read actions are on
   the default path. *(B)*
@@ -109,7 +114,10 @@ These are frozen. Change only to fix a confirmed regression, with tests.
 
 ## 5. Known limitations
 
-- Plot and Timeline are derived from scene fields, not standalone models.
+- Timeline event membership and lanes, and Plot blocks, are derived from scene
+  fields rather than a standalone dated-event/plot-thread domain. Persisted
+  Timeline relationships are available, but mode-specific projections and the
+  story-flow heat/tension overlay are not yet exposed.
 - Continuity intentionally omits deep-NLP checks (voice drift, knowledge leak,
   object-destroyed-then-reused, lore-rule violation) to avoid hallucinated
   findings; it flags only evidence-backed, deterministic issues.
@@ -129,7 +137,12 @@ These are frozen. Change only to fix a confirmed regression, with tests.
   the Pro Alpha.
 - Supported **API** `lan` / `remote` transport with required authentication, and
   web/PWA distribution. The React/Electron shared UI itself is implemented.
-- Richer **Plot** and **Timeline** models.
+- **Phase 7C Plot/Timeline:** mode-specific projections and the story-flow
+  heat/tension overlay over the existing transactional Timeline relationship
+  layer. Richer dated-event/plot-thread concepts remain later work.
+- A durable broker outbox/reconciliation layer before any supported LAN,
+  multi-user, or background-delivery claim. This is transport hardening,
+  separate from Phase 7C's user-facing projections.
 - **FDX** export hardening.
 - Deeper **Counterpart**, **Connector** write-action breadth, **Go McKee**
   integration.
@@ -184,7 +197,8 @@ Highest priority, lowest tolerance for change:
    the Intel macOS 12 runner. The current 1.12.0 candidate passed the full
    Windows journey and a separate clean-Ubuntu-VM AppImage launch/relaunch smoke
    as an unprivileged user with Chromium sandboxing enabled; that VM smoke is
-   not packaged validation of the newer HTTP 1.13.0 Guided Workflows changes.
+   not packaged validation of the newer HTTP 1.13.0 Guided Workflows or HTTP
+   1.14.0 Transactional Timeline Relationships changes.
 3. Complete hands-on acceptance of the installer/portable EXE, AppImage, and DMG
    on their supported operating systems before publishing.
 4. Keep desktop/localhost as the Alpha API posture. Before any future LAN/remote
@@ -192,6 +206,8 @@ Highest priority, lowest tolerance for change:
 5. Preserve the existing safety and data round-trip gates: disabled Connector
    writes and Go McKee stay inert, project lifecycle never cross-writes, and
    export/import and restart recovery lose no user data.
-6. Richer Plot/Timeline models, custom workflow templates/reminders, and a
-   multi-project workflow dashboard are Beta feature work, not blockers for
-   Alpha stability.
+6. Phase 7C mode-specific Timeline projections and story-flow heat/tension,
+   richer later Plot/Timeline concepts, custom workflow templates/reminders,
+   and a multi-project workflow dashboard are Beta feature work, not blockers
+   for Alpha stability. Durable broker outbox/reconciliation is tracked
+   separately before LAN, multi-user, or background delivery is supported.

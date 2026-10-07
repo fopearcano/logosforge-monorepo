@@ -443,6 +443,24 @@ creative/manual work always remains your decision. If command delivery is
 uncertain, keep using the offered same-receipt recovery control—Pro preserves
 the exact command/key and will never invent a replacement retry.
 
+The **Timeline** can also author, edit, and delete two kinds of persisted
+relationships. A scene-to-scene link carries one of six types—Custom,
+Causality, Setup/Payoff, Echo, Conflict, or Dependency—plus an optional label
+and color. Its stored source→target direction is shown, but reversing the same
+two scenes does not create a parallel relationship: there is at most one link
+for an unordered scene pair. A scene-to-structure link points to an Act or
+Chapter name. If that name is later renamed or removed, the relationship stays
+visible with a dangling-target warning so you can repair or delete it instead
+of losing it silently.
+
+New relationships can be created only from scenes currently on the Timeline
+(and a new scene-to-scene link requires both scenes there). Older dormant rows
+remain available for inspection, editing, and deletion. Relationship changes
+use the same revision guard and durable recovery as the rest of the Timeline:
+after an uncertain response Pro checks the exact receipt first, permits one
+same-command/same-key resend only after Core proves the receipt is missing, and
+then offers receipt-only recovery.
+
 Under **Visual Overlays**, node sizing defaults to **Story Gravity**, a
 project-wide 0–100% narrative-importance signal. Choose **View Links** to size by
 relationship degree in the complete selected view/evidence scope instead. Core
@@ -471,14 +489,17 @@ Comment text is treated as project content, not as instructions to the agent.
 Creating anchored comments, changing their anchor or original body, and
 deleting threads or replies remain actions for Pro's Comments UI.
 
-The same Pro gateway can read and orchestrate the Timeline, Canvas Plot,
-Narrative Knowledge Graph, and Semantic Continuity review state. An agent can
-prepare one reviewed change at a time against the exact surface revision it read,
-and Core checks that revision again when applied. Timeline commands cover lanes,
-event membership, and structural/custom ordering; Canvas commands cover cards,
-links, frames, geometry, and stacking order. Its Knowledge Graph read can request
-any of the four views and either evidence scope; it also receives the same Story
-Gravity availability/value fields and returned story-order metadata as Pro. A
+The same 46-tool Pro gateway (MCP contract 1.10.0) can read and orchestrate the
+Timeline, Canvas Plot, Narrative Knowledge Graph, and Semantic Continuity
+review state. An agent can prepare one reviewed change at a time against the
+exact surface revision it read, and Core checks that revision again when applied.
+Timeline commands cover lanes,
+event membership, structural/custom ordering, and both Timeline relationship
+families through the existing Timeline read and proposal tools; Canvas commands
+cover cards, links, frames, geometry, and stacking order. Its Knowledge Graph
+read can request any of the four views and either evidence scope; it also
+receives the same Story Gravity availability/value fields and returned
+story-order metadata as Pro. A
 null gravity value means no safe exact mapping, not zero importance. Knowledge
 Graph commands Confirm, Hide, or Restore one exact directional edge. Confirm and
 Hide preflight plus apply/recovery result maps remain pinned to Project Map;

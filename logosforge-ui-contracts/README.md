@@ -9,10 +9,12 @@ The **shared language** between the LogosForge Python core and every frontend
   export types/formats).
 - **`routes.ts`** — the `/api` route map.
 
-The current mirrored HTTP contract is **1.13.0**. It adds the complete Guided
-Workflows / Project OS surface: templates and deterministic recommendations,
-revisioned run and audit-event reads, atomic lifecycle commands, durable
-idempotency receipts, and the `workflow_changed` project event.
+The current mirrored HTTP contract is **1.14.0**. It promotes the Timeline's
+scene-to-scene and scene-to-structure relationships into the coherent
+revisioned snapshot, adds six transactional relationship commands, and carries
+their affected/created row identities through durable idempotency receipts.
+Scene links retain their stored orientation while preserving the legacy rule
+of one link per unordered scene pair.
 
 No logic, no React, no platform code. Every UI package depends on this so all
 frontends speak the same shapes; the core is the source of truth and these stay

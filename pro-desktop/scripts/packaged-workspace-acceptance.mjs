@@ -993,6 +993,245 @@ async function exerciseIntelligenceShell(session) {
   };
 }
 
+async function waitForTimelineSnapshot(session, projectId, predicate, label) {
+  let snapshot = null;
+  await waitFor(async () => {
+    snapshot = await packagedCoreJson(session, `/api/projects/${projectId}/timeline`);
+    return predicate(snapshot);
+  }, label, STARTUP_TIMEOUT_MS);
+  return snapshot;
+}
+
+async function exerciseTimelineRelationships(session, expectedProjectId) {
+  const { page } = session;
+  const { projectId } = await waitProReady(session);
+  assert.equal(projectId, expectedProjectId, 'Packaged shell switched projects before the Timeline journey');
+  const timelineSurface = await selectPanel(page, 'Timeline', 'timeline', 'Plot-Lane Timeline');
+  const timelineScreen = await waitVisible(
+    timelineSurface.locator('[data-screen-label="Plot-Lane Timeline"]'),
+    'Timeline relationship screen',
+  );
+
+  let timeline = await packagedCoreJson(session, `/api/projects/${projectId}/timeline`);
+  const allScenes = [...timeline.events, ...timeline.off_timeline];
+  const opening = allScenes.find((scene) => scene.title === 'Acceptance Opening');
+  const crossing = allScenes.find((scene) => scene.title === 'Acceptance Crossing');
+  assert.ok(opening?.id > 0 && crossing?.id > 0, 'Timeline did not expose both seeded acceptance scenes');
+  assert.notEqual(opening.id, crossing.id, 'Timeline acceptance scenes have the same identity');
+
+  for (const scene of [opening, crossing]) {
+    if (timeline.events.some((event) => event.id === scene.id)) continue;
+    const scenePicker = await waitVisible(
+      timelineScreen.getByRole('combobox', { name: 'Scene to add to Timeline', exact: true }),
+      `Timeline scene picker for ${scene.title}`,
+    );
+    await scenePicker.selectOption(String(scene.id));
+    const addEvent = await waitVisible(
+      scenePicker.locator('..').getByRole('button', { name: 'ADD', exact: true }),
+      `add ${scene.title} to Timeline`,
+    );
+    await waitFor(async () => await addEvent.isEnabled(), `enabled Timeline add for ${scene.title}`);
+    await addEvent.click();
+    timeline = await waitForTimelineSnapshot(
+      session,
+      projectId,
+      (candidate) => candidate.events.some((event) => event.id === scene.id),
+      `${scene.title} placement on Timeline`,
+    );
+  }
+
+  const createSource = await waitVisible(
+    timelineScreen.getByRole('button', {
+      name: `Start relationship from ${opening.title}`,
+      exact: true,
+    }),
+    'Timeline relationship source control',
+  );
+  await createSource.click();
+  let relationshipEditor = await waitVisible(
+    timelineScreen.locator('section[aria-label="Timeline relationship editor"]'),
+    'Timeline relationship editor',
+  );
+  await relationshipEditor.getByRole('combobox', { name: 'New relationship type', exact: true })
+    .selectOption('causality');
+  await relationshipEditor.getByRole('combobox', { name: 'New relationship color', exact: true })
+    .selectOption('amber');
+  await relationshipEditor.getByRole('textbox', { name: 'New relationship label', exact: true })
+    .fill('Packaged UI relationship draft');
+  await timelineScreen.getByRole('button', {
+    name: `Use ${crossing.title} as relationship target`,
+    exact: true,
+  }).click();
+  timeline = await waitForTimelineSnapshot(
+    session,
+    projectId,
+    (candidate) => candidate.links.length === 1
+      && candidate.links[0].source_scene_id === opening.id
+      && candidate.links[0].target_scene_id === crossing.id,
+    'Timeline relationship creation through the production UI',
+  );
+  const firstLinkId = timeline.links[0].id;
+  assert.ok(firstLinkId > 0, 'Timeline UI create returned no durable relationship identity');
+
+  relationshipEditor = await waitVisible(
+    timelineScreen.locator('section[aria-label="Timeline relationship editor"]'),
+    'Timeline relationship editor after create',
+  );
+  await relationshipEditor.getByRole('button', {
+    name: `Edit relationship ${firstLinkId}`,
+    exact: true,
+  }).click();
+  await relationshipEditor.getByRole('combobox', {
+    name: `Type for relationship ${firstLinkId}`,
+    exact: true,
+  }).selectOption('setup_payoff');
+  await relationshipEditor.getByRole('textbox', {
+    name: `Label for relationship ${firstLinkId}`,
+    exact: true,
+  }).fill('Packaged UI relationship updated');
+  await relationshipEditor.getByRole('button', { name: 'SAVE', exact: true }).click();
+  timeline = await waitForTimelineSnapshot(
+    session,
+    projectId,
+    (candidate) => candidate.links.length === 1
+      && candidate.links[0].id === firstLinkId
+      && candidate.links[0].link_type === 'setup_payoff'
+      && candidate.links[0].label === 'Packaged UI relationship updated',
+    'Timeline relationship update through the production UI',
+  );
+
+  const deleteRelationship = await waitVisible(
+    relationshipEditor.getByRole('button', {
+      name: `Delete relationship ${firstLinkId}`,
+      exact: true,
+    }),
+    'Timeline relationship delete control',
+  );
+  await deleteRelationship.click();
+  await relationshipEditor.getByRole('button', {
+    name: `Confirm deletion of relationship ${firstLinkId}`,
+    exact: true,
+  }).click();
+  timeline = await waitForTimelineSnapshot(
+    session,
+    projectId,
+    (candidate) => candidate.links.length === 0,
+    'Timeline relationship deletion through the production UI',
+  );
+
+  await relationshipEditor.getByRole('button', {
+    name: 'Close relationship editor',
+    exact: true,
+  }).click();
+  await relationshipEditor.waitFor({ state: 'hidden', timeout: UI_TIMEOUT_MS });
+  await timelineScreen.getByRole('button', {
+    name: `Start relationship from ${crossing.title}`,
+    exact: true,
+  }).click();
+  relationshipEditor = await waitVisible(
+    timelineScreen.locator('section[aria-label="Timeline relationship editor"]'),
+    'Timeline recovery relationship editor',
+  );
+  await relationshipEditor.getByRole('combobox', { name: 'New relationship type', exact: true })
+    .selectOption('dependency');
+  await relationshipEditor.getByRole('combobox', { name: 'New relationship color', exact: true })
+    .selectOption('blue');
+  const persistentLabel = 'Packaged UI relationship survived relaunch';
+  await relationshipEditor.getByRole('textbox', { name: 'New relationship label', exact: true })
+    .fill(persistentLabel);
+  await timelineScreen.getByRole('button', {
+    name: `Use ${opening.title} as relationship target`,
+    exact: true,
+  }).click();
+  timeline = await waitForTimelineSnapshot(
+    session,
+    projectId,
+    (candidate) => candidate.links.length === 1
+      && candidate.links[0].source_scene_id === crossing.id
+      && candidate.links[0].target_scene_id === opening.id
+      && candidate.links[0].link_type === 'dependency'
+      && candidate.links[0].label === persistentLabel,
+    'committed Timeline relationship for packaged relaunch',
+  );
+  const persistentLink = timeline.links[0];
+  assert.ok(persistentLink.id > 0, 'Timeline UI did not expose the committed relationship identity');
+  assert.deepEqual(session.pageErrors, [], 'Renderer errors occurred during the Timeline relationship journey');
+  record(
+    'journey',
+    `production Timeline UI created, edited, deleted, and committed relationship ${persistentLink.id}`,
+  );
+  return {
+    projectId,
+    linkId: persistentLink.id,
+    sourceSceneId: crossing.id,
+    targetSceneId: opening.id,
+    linkType: 'dependency',
+    colorLabel: 'blue',
+    label: persistentLabel,
+  };
+}
+
+async function verifyPersistedTimelineRelationships(session, expected) {
+  const { page } = session;
+  const { projectId } = await waitProReady(session);
+  assert.equal(projectId, expected.projectId, 'Packaged relaunch resumed the wrong Timeline project');
+  const timeline = await waitForTimelineSnapshot(
+    session,
+    projectId,
+    (candidate) => candidate.links.length === 1 && candidate.links[0].id === expected.linkId,
+    'persisted Timeline relationship after packaged relaunch',
+  );
+  const link = timeline.links[0];
+  assert.deepEqual(
+    {
+      id: link.id,
+      sourceSceneId: link.source_scene_id,
+      targetSceneId: link.target_scene_id,
+      linkType: link.link_type,
+      colorLabel: link.color_label,
+      label: link.label,
+    },
+    {
+      id: expected.linkId,
+      sourceSceneId: expected.sourceSceneId,
+      targetSceneId: expected.targetSceneId,
+      linkType: expected.linkType,
+      colorLabel: expected.colorLabel,
+      label: expected.label,
+    },
+    'Persisted Timeline relationship changed across packaged relaunch',
+  );
+  assert.deepEqual(timeline.structure_links, [], 'Timeline relaunch unexpectedly created a structure relationship');
+
+  const timelineSurface = await selectPanel(page, 'Timeline', 'timeline', 'Plot-Lane Timeline');
+  const timelineScreen = await waitVisible(
+    timelineSurface.locator('[data-screen-label="Plot-Lane Timeline"]'),
+    'restored Timeline relationship screen',
+  );
+  const relationshipSummary = await waitVisible(
+    timelineScreen.getByRole('button', { name: 'RELATIONSHIPS · 1', exact: true }),
+    'restored Timeline relationship summary',
+  );
+  await relationshipSummary.click();
+  const relationshipEditor = await waitVisible(
+    timelineScreen.locator('section[aria-label="Timeline relationship editor"]'),
+    'restored Timeline relationship editor',
+  );
+  await waitVisible(
+    relationshipEditor.getByRole('button', {
+      name: `Edit relationship ${expected.linkId}`,
+      exact: true,
+    }),
+    'restored Timeline relationship edit control',
+  );
+  await waitVisible(
+    relationshipEditor.getByText(expected.label, { exact: false }),
+    'restored Timeline relationship label',
+  );
+  assert.deepEqual(session.pageErrors, [], 'Renderer errors occurred while restoring Timeline relationships');
+  record('journey', 'production Timeline relationship and exact identity survived graceful packaged relaunch');
+}
+
 async function numericInlineBounds(locator) {
   return locator.evaluate((element) => ({
     left: Number.parseFloat(element.style.left),
@@ -1895,6 +2134,11 @@ async function main() {
     });
     const intelligenceExpected = await exerciseIntelligenceShell(first);
     await captureScreenshot(first, 'graph-radar-continuity');
+    const timelineExpected = await exerciseTimelineRelationships(
+      first,
+      intelligenceExpected.projectId,
+    );
+    await captureScreenshot(first, 'timeline-relationships');
     const canvasExpected = await exerciseCanvasPlot(first);
     await captureScreenshot(first, 'canvas-plot');
     const workspaceExpected = await exercisePointerWorkspace(first);
@@ -1907,6 +2151,7 @@ async function main() {
       ...workspaceExpected,
       canvas: canvasExpected,
       intelligence: intelligenceExpected,
+      timeline: timelineExpected,
     };
     await captureScreenshot(first, 'pointer-layout');
     await closeSession(first);
@@ -1919,6 +2164,7 @@ async function main() {
       label: 'pro-pointer-2',
     });
     await verifyPersistedIntelligence(second, expected.intelligence);
+    await verifyPersistedTimelineRelationships(second, expected.timeline);
     await verifyPersistedCanvasPlot(second, expected.canvas);
     await verifyPersistedWorkspace(second, expected);
     await captureScreenshot(second, 'restored-layout');

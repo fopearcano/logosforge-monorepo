@@ -167,6 +167,17 @@ check('packaged workspace acceptance covers Canvas Plot pointer authoring and pe
   packagedWorkspaceScript.includes('Expand ${region} dock') &&
   packagedWorkspaceScript.includes('pointer-safe board size') &&
   packagedWorkspaceScript.includes('pointer-authored Canvas Plot content and viewport survived graceful packaged relaunch'));
+check('packaged workspace acceptance covers production Timeline relationship CRUD and relaunch persistence',
+  packagedWorkspaceScript.includes("selectPanel(page, 'Timeline', 'timeline', 'Plot-Lane Timeline')") &&
+  packagedWorkspaceScript.includes("name: 'Scene to add to Timeline', exact: true") &&
+  packagedWorkspaceScript.includes('Start relationship from ${opening.title}') &&
+  packagedWorkspaceScript.includes('Use ${crossing.title} as relationship target') &&
+  packagedWorkspaceScript.includes('Edit relationship ${firstLinkId}') &&
+  packagedWorkspaceScript.includes('Delete relationship ${firstLinkId}') &&
+  packagedWorkspaceScript.includes('Confirm deletion of relationship ${firstLinkId}') &&
+  packagedWorkspaceScript.includes('Packaged UI relationship survived relaunch') &&
+  packagedWorkspaceScript.includes('verifyPersistedTimelineRelationships(second, expected.timeline)') &&
+  packagedWorkspaceScript.includes('production Timeline relationship and exact identity survived graceful packaged relaunch'));
 check('packaged workspace acceptance covers the real Graph, Radar, Continuity, and Billy shell journey',
   packagedWorkspaceScript.includes('seedIntelligenceJourney(session, projectId)') &&
   packagedWorkspaceScript.includes("'Workspace navigation crossed the save barrier before the pending manuscript edit was saved'") &&

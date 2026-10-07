@@ -1,4 +1,8 @@
-import { ApiRequestError, createHttpApiClient } from '../src/adapters/httpApiClient';
+import {
+  ApiRequestError,
+  ApiResponseValidationError,
+  createHttpApiClient,
+} from '../src/adapters/httpApiClient';
 import { flushPendingProjectSaves } from '../src/adapters/projectSaveCoordinator';
 
 const originalFetch = globalThis.fetch;
@@ -308,12 +312,19 @@ try {
     lane_id: 4,
     index: 0,
   };
-  const pendingTimelineCommand = browser.executeTimelineCommand(7, timelineCommandBody);
+  const timelineKey = 'timeline-http-key-0001';
+  const pendingTimelineCommand = browser.executeTimelineCommand(
+    7,
+    timelineCommandBody,
+    timelineKey,
+  );
   for (let i = 0; i < 6; i++) await Promise.resolve();
   const timelineCommandRequest = requests.at(-1);
+  const timelineHeaders = new Headers(timelineCommandRequest?.init.headers);
   if (timelineCommandRequest?.input !== '/api/projects/7/timeline/commands'
-      || timelineCommandRequest.init.method !== 'POST') {
-    throw new Error('Timeline command used the wrong route or method');
+      || timelineCommandRequest.init.method !== 'POST'
+      || timelineHeaders.get('Idempotency-Key') !== timelineKey) {
+    throw new Error('Timeline command did not use its route, method, and exact Idempotency-Key');
   }
   const serializedTimelineCommand = JSON.parse(String(timelineCommandRequest.init.body));
   if (serializedTimelineCommand.kind !== 'place_event'
@@ -342,12 +353,18 @@ try {
         lane_id: 4, time_of_day: '', location: '', duration_minutes: 0,
         character_states: [],
       }],
+      links: [],
+      structure_links: [],
       off_timeline: [],
     },
     replayed: false,
     applied_revision: 'e'.repeat(64),
     changed: true,
     affected_scene_ids: [11],
+    affected_link_ids: [],
+    affected_structure_link_ids: [],
+    created_link_id: null,
+    created_structure_link_id: null,
   }), { status: 200, headers: { 'content-type': 'application/json' } }));
   const timelineCommandResult = await pendingTimelineCommand;
   await timelineBarrier;
@@ -357,6 +374,91 @@ try {
       || timelineCommandResult.timeline.order_mode !== 'custom'
       || timelineCommandResult.affected_scene_ids[0] !== 11) {
     throw new Error('Timeline command response was not validated');
+  }
+
+  globalThis.fetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    requests.push({ input: String(input), init });
+    return new Response(JSON.stringify({
+      project_id: 7,
+      request_digest: '13a67007c141dbbf74beaee87e624d3da91816eb4720bb179c520e2ec5851fbe',
+      command_kind: timelineCommandBody.kind,
+      expected_revision: timelineCommandBody.expected_revision,
+      applied_revision: 'e'.repeat(64),
+      original_changed: true,
+      original_affected_scene_ids: [11],
+      original_affected_link_ids: [],
+      original_affected_structure_link_ids: [],
+      original_created_link_id: null,
+      original_created_structure_link_id: null,
+      committed_at: '2026-10-07T12:00:00Z',
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  const timelineReceipt = await browser.getTimelineCommandReceipt(
+    7,
+    timelineKey,
+    timelineCommandBody,
+  );
+  const timelineReceiptRequest = requests.at(-1);
+  const timelineReceiptHeaders = new Headers(timelineReceiptRequest?.init.headers);
+  if (timelineReceiptRequest?.input !== '/api/projects/7/timeline/command-receipt'
+      || timelineReceiptRequest.init.method !== undefined
+      || timelineReceiptHeaders.get('Idempotency-Key') !== timelineKey
+      || timelineReceiptHeaders.get('Cache-Control') !== 'no-store'
+      || timelineReceipt.original_affected_scene_ids[0] !== 11) {
+    throw new Error('Timeline receipt recovery did not use the exact no-store capability request');
+  }
+
+  globalThis.fetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    requests.push({ input: String(input), init });
+    return new Response(JSON.stringify({
+      project_id: 7,
+      // Canonical digest for the same kind/revision and ids, but index: 1.
+      request_digest: '5f141ccd2dfdefb17b28ef53f435c3172e34506281c1f9b9e645fbff10be9162',
+      command_kind: timelineCommandBody.kind,
+      expected_revision: timelineCommandBody.expected_revision,
+      applied_revision: 'e'.repeat(64),
+      original_changed: true,
+      original_affected_scene_ids: [11],
+      original_affected_link_ids: [],
+      original_affected_structure_link_ids: [],
+      original_created_link_id: null,
+      original_created_structure_link_id: null,
+      committed_at: '2026-10-07T12:00:00Z',
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  let mismatchedTimelineReceipt: unknown = null;
+  try {
+    await browser.getTimelineCommandReceipt(7, timelineKey, timelineCommandBody);
+  } catch (error) {
+    mismatchedTimelineReceipt = error;
+  }
+  if (!(mismatchedTimelineReceipt instanceof ApiResponseValidationError)
+      || mismatchedTimelineReceipt.method !== 'GET'
+      || mismatchedTimelineReceipt.path !== '/api/projects/7/timeline/command-receipt'
+      || !mismatchedTimelineReceipt.detail.includes('$.request_digest')) {
+    throw new Error('Timeline receipt digest mismatch escaped response-validation wrapping');
+  }
+
+  const cryptoDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+  const requestsBeforeUnavailableDigest = requests.length;
+  try {
+    Object.defineProperty(globalThis, 'crypto', { configurable: true, value: undefined });
+    let unavailableDigest: unknown = null;
+    try {
+      await browser.getTimelineCommandReceipt(7, timelineKey, timelineCommandBody);
+    } catch (error) {
+      unavailableDigest = error;
+    }
+    if (!(unavailableDigest instanceof ApiResponseValidationError)
+        || unavailableDigest.method !== 'GET'
+        || unavailableDigest.path !== '/api/projects/7/timeline/command-receipt'
+        || !unavailableDigest.detail.includes('Web Crypto SHA-256 is unavailable')
+        || requests.length !== requestsBeforeUnavailableDigest) {
+      throw new Error('Timeline receipt recovery did not fail closed without Web Crypto');
+    }
+  } finally {
+    if (cryptoDescriptor) Object.defineProperty(globalThis, 'crypto', cryptoDescriptor);
+    else delete (globalThis as { crypto?: Crypto }).crypto;
   }
 
   let releaseCanvasCommand!: (response: Response) => void;
