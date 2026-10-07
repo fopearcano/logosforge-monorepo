@@ -264,6 +264,11 @@ assert.match(
 );
 assert.match(
   harnessSource,
+  /if \(process\.platform === 'darwin'\) app\.quit\(\);/,
+  'macOS lifecycle shutdown must explicitly quit after the close/persistence handshake',
+);
+assert.match(
+  harnessSource,
   /app\.commandLine\.hasSwitch\('no-sandbox'\)/,
   'Packaged lifecycle must assert the effective process-wide sandbox switch',
 );

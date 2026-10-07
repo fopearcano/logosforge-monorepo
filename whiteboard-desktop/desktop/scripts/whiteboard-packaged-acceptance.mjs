@@ -957,10 +957,14 @@ async function closeSession(session, { requireGraceful = true, requirePrompt = f
         session.child.once('error', reject);
       }
     });
-    await session.app.evaluate(({ BrowserWindow }) => {
+    await session.app.evaluate(({ app, BrowserWindow }) => {
       const windows = BrowserWindow.getAllWindows();
       if (windows.length !== 1) throw new Error(`Expected one BrowserWindow, received ${windows.length}.`);
-      windows[0].close();
+      // Closing the last window quits on Windows and Linux. macOS intentionally
+      // keeps an app alive with no windows, so request a real app quit there;
+      // both paths enter the production close/persistence handshake.
+      if (process.platform === 'darwin') app.quit();
+      else windows[0].close();
     });
     await withTimeout(exited, CLOSE_TIMEOUT_MS, `${session.label} graceful close`);
     graceful = true;
