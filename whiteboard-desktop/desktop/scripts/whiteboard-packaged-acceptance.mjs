@@ -957,15 +957,23 @@ async function closeSession(session, { requireGraceful = true, requirePrompt = f
         session.child.once('error', reject);
       }
     });
-    await session.app.evaluate(({ app, BrowserWindow }) => {
+    await session.app.evaluate(({ BrowserWindow }) => {
       const windows = BrowserWindow.getAllWindows();
       if (windows.length !== 1) throw new Error(`Expected one BrowserWindow, received ${windows.length}.`);
-      // Closing the last window quits on Windows and Linux. macOS intentionally
-      // keeps an app alive with no windows, so request a real app quit there;
-      // both paths enter the production close/persistence handshake.
-      if (process.platform === 'darwin') app.quit();
-      else windows[0].close();
+      windows[0].close();
     });
+    if (process.platform === 'darwin') {
+      // macOS intentionally keeps an app alive after its last window closes.
+      // First let Whiteboard finish its real close/persistence handshake, then
+      // request a fresh app quit once that intercepted window close has settled.
+      await waitFor(
+        () => session.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length === 0),
+        `${session.label} macOS window closure`,
+        CLOSE_TIMEOUT_MS,
+        100,
+      );
+      await session.app.evaluate(({ app }) => app.quit());
+    }
     await withTimeout(exited, CLOSE_TIMEOUT_MS, `${session.label} graceful close`);
     graceful = true;
   } catch (error) {
