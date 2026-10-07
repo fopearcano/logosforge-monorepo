@@ -1,15 +1,16 @@
-# Logosforge — Alpha Scope
+# LogosForge — Alpha Scope
 
-Version: **0.9.0-alpha** · Status: **alpha** (feature freeze).
-Source of truth: `logosforge.__version__` / `logosforge.__status__` (also
-surfaced as `QApplication.applicationVersion()` and recorded in per-project lock
-metadata via `cloud_storage`).
+Core version: **0.9.0-alpha** · Pro desktop version: **0.1.0** · Status:
+**alpha release candidate**.
+The Core source of truth is `logosforge.__version__` /
+`logosforge.__status__`; the packaged Pro version is recorded in
+`pro-desktop/package.json` and its lockfile.
 
-This document is the authoritative
-scope statement for the Alpha release. It is derived from the Step 1 scope audit
-(5,885 tests collected clean; per-subsystem suites green). It defines what Alpha
-includes, what it does not, what is stable vs experimental, and what is deferred
-to Beta.
+This document is the authoritative scope statement for the Alpha release. It
+defines what Alpha includes, what it does not, what is stable vs experimental,
+and what is deferred to Beta. Test totals are intentionally not frozen here;
+the release workflows and their source-bound evidence are authoritative for a
+given candidate.
 
 Companion document: **docs/ALPHA_FREEZE.md** (what may and may not change before
 Alpha close).
@@ -18,8 +19,11 @@ Alpha close).
 
 ## 1. What Logosforge Alpha includes
 
-A local-first, single-user writing-intelligence desktop app (PySide6 + SQLite),
-with one shared AI backend and a set of mode-aware authoring tools:
+A local-first, single-user writing-intelligence system with a SQLite/Python Core
+and a packaged React/Electron Pro desktop. The historical PySide6 desktop remains
+in the repository, but the native Pro release surface is the Electron shell over
+the authenticated loopback API. Both use the same Core and mode-aware authoring
+systems:
 
 - **Projects** — create / open / switch / recent, per-project file locks,
   legacy-format compatibility, lifecycle cache clearing.
@@ -28,7 +32,8 @@ with one shared AI backend and a set of mode-aware authoring tools:
 - **Manuscript** — scene editor with rich per-scene fields; basic grammar/spell.
 - **Outline / Plot / Timeline** — act/chapter/scene structure, plot blocks
   (scene-derived), scene-order timeline.
-- **Graph** — link graph + confirmed Story Links + focus graph view.
+- **Graph** — four bounded canonical projections, focus neighborhoods, Story
+  Gravity/order overlays, and revision-bound Confirm/Hide/Restore review.
 - **PSYKE** — characters/places/objects/lore/themes with relations,
   progressions, aliases, and command surface.
 - **Notes**.
@@ -42,12 +47,14 @@ with one shared AI backend and a set of mode-aware authoring tools:
 - **Connector** — local app-control bridge (read actions on; **write actions
   gated OFF by default**).
 - **Go McKee** — optional craft-intelligence plugin (gated OFF by default).
-- **Knowledge Graph** *(service)* — traceable semantic map across PSYKE/scenes/
-  structure/notes/setup-payoff/revision (read-only; confidence + provenance).
-- **Semantic Continuity** *(service)* — deterministic continuity issues +
-  rewrite/apply change validation (preview-only).
-- **Dashboard / Decision Radar** *(service + basic UI)* — read-only project
-  intelligence and ranked decisions.
+- **Knowledge Graph** — traceable semantic map across PSYKE/scenes/structure/
+  notes/setup-payoff/revision with confidence, provenance, dedicated Pro UI, and
+  transactional edge review.
+- **Semantic Continuity** — deterministic continuity issues, a dedicated Pro
+  panel, traceable Dashboard cards, transactional Defer/Dismiss/Resolve review,
+  and a separate Billy → Controlled Apply repair handoff.
+- **Dashboard / Decision Radar** — ranked Project Intelligence, Knowledge Graph,
+  and Semantic Continuity cards with exact Graph/issue/scene deep links.
 - **Guided Workflows** *(engine)* — resumable, mode-aware step paths.
 - **Rewrite Sandbox / Controlled Apply / Revision Intelligence** — safe,
   confirm-gated change tooling.
@@ -65,8 +72,8 @@ with one shared AI backend and a set of mode-aware authoring tools:
   on its own).
 - No **cloud collaboration / multi-user / real-time sync** (cloud paths are
   treated as ordinary local folders only).
-- No **React / Electron rewrite** (the desktop UI is PySide6; the API exists but
-  remote/LAN serving is not in Alpha).
+- No **web/PWA release**. The React/Electron Pro desktop is implemented, but
+  remote/LAN serving remains outside the Alpha support boundary.
 - No **public/remote API serving** by default (desktop/localhost only).
 - No second Assistant, second Logos system, or second provider backend.
 
@@ -86,13 +93,17 @@ These are frozen. Change only to fix a confirmed regression, with tests.
   the default path. *(B)*
 - **Go McKee** — optional plugin, OFF by default. *(B)*
 - **Quantum Outliner** — stable; cache-invalidation paths are the main risk. *(B)*
-- **Knowledge Graph / Semantic Continuity / Decision Radar / Guided Workflows** —
-  services and Logos/Assistant surfaces are complete; **dedicated UI panels are
-  deferred to Beta**. *(B)*
+- **Knowledge Graph / Semantic Continuity / Decision Radar** — dedicated Pro
+  panels and guarded review flows are implemented; cross-platform packaged
+  acceptance for the current production-shell candidate is still incomplete.
+  *(B)*
+- **Guided Workflows** — the engine and Logos/Assistant surfaces exist; a
+  dedicated workflow panel remains deferred. *(B)*
 - **FDX export** — experimental/gated. *(B)*
 - **Grammar / spelling** — rule-based, no external engine; basic accuracy. *(B)*
-- **API** — functional thin layer but **only desktop/localhost mode is in Alpha**;
-  HTTP-layer test coverage is light. *(C)*
+- **API** — the versioned HTTP contract and local MCP gateway have broad
+  automated coverage, but **only authenticated desktop/localhost mode is in
+  Alpha**; LAN/remote exposure is not a supported release mode. *(B)*
 
 ## 5. Known limitations
 
@@ -102,17 +113,18 @@ These are frozen. Change only to fix a confirmed regression, with tests.
   findings; it flags only evidence-backed, deterministic issues.
 - Knowledge Graph centrality is plain degree (explainable, not PageRank);
   undefined-term detection is heuristic.
-- Several intelligence services (Knowledge Graph, Continuity, Radar, Workflows)
-  are surfaced via Logos/Assistant/services rather than dedicated UI panels.
+- Guided Workflows are surfaced through the engine and Logos/Assistant rather
+  than a dedicated workflow panel.
 - Grammar/spell is rule-based.
 - Single-user, local-only; no collaboration or remote sync.
 
 ## 6. Deferred features (→ Beta)
 
-- Dedicated **UI panels** for Knowledge Graph, Semantic Continuity, Decision
-  Radar, and Guided Workflows.
-- **API** `lan` / `remote` transport (with required auth) and the React/Electron
-  shared UI.
+- A dedicated **Guided Workflows** UI panel and persistent custom Radar filters/
+  dismissal controls. Graph, Semantic Continuity, and Decision Radar panels are
+  already part of the Pro Alpha.
+- Supported **API** `lan` / `remote` transport with required authentication, and
+  web/PWA distribution. The React/Electron shared UI itself is implemented.
 - Richer **Plot** and **Timeline** models.
 - **FDX** export hardening.
 - Deeper **Counterpart**, **Connector** write-action breadth, **Go McKee**
@@ -162,13 +174,16 @@ Highest priority, lowest tolerance for change:
 
 ## 11. Beta blockers (must be resolved before Beta scope expands)
 
-1. Confirm a **full-suite green** baseline is recorded after the Alpha-close UI
-   changes (Logos inline toggle + sidebar icons).
-2. **API**: decide Alpha posture (ship desktop/localhost only) and add HTTP-layer
-   coverage before exposing `lan`/`remote`; enforce auth for `remote`.
-3. **Safety-gate tests**: prove Connector writes blocked when disabled, API
-   desktop mode rejects non-localhost origins, Go McKee inert when disabled.
-4. **Data-safety round-trip tests**: project create→edit→autosave→version→
-   switch→reopen with no loss; export/import roundtrip.
-5. UI panels for the deferred intelligence services (Beta feature work, not a
-   blocker for Alpha *stability*).
+1. Record a **full-suite-green, source-bound** baseline for the release
+   candidate, including a Writer QA run with **0 BLOCKER** findings.
+2. Run the unchanged production-shell packaged journey on hosted Linux/Xvfb and
+   the Intel macOS 12 runner; the current candidate has passed on Windows only.
+3. Complete hands-on acceptance of the installer/portable EXE, AppImage, and DMG
+   on their supported operating systems before publishing.
+4. Keep desktop/localhost as the Alpha API posture. Before any future LAN/remote
+   exposure, add the required authentication and threat-model hardening.
+5. Preserve the existing safety and data round-trip gates: disabled Connector
+   writes and Go McKee stay inert, project lifecycle never cross-writes, and
+   export/import and restart recovery lose no user data.
+6. A dedicated Guided Workflows panel and richer Plot/Timeline models are Beta
+   feature work, not blockers for Alpha stability.

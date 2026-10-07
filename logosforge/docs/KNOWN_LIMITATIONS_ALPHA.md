@@ -4,17 +4,19 @@ Honest list of what is **incomplete, experimental, or deferred** in the private
 alpha. Nothing here is a data-safety risk; it's about scope and polish. See
 [ALPHA_SCOPE.md](ALPHA_SCOPE.md) for the full scope statement.
 
-## Deferred to beta (services exist, UI not yet)
+## Remaining beta UI/workflow gaps
 
-These work as **services + Logos/Assistant surfaces**, but have **no dedicated UI
-panel** yet:
-
-- **Knowledge Graph** — built/queried via Logos + Assistant context; the
-  multi-mode graph UI is deferred. ([NarrativeKnowledgeGraph.md](NarrativeKnowledgeGraph.md))
-- **Semantic Continuity** — checks run via Logos/Assistant; no panel yet.
+- **Knowledge Graph** — the canonical panel and transactional edge review are
+  implemented; dedicated Continuity-risk graph projections remain deferred.
+  ([NarrativeKnowledgeGraph.md](NarrativeKnowledgeGraph.md))
+- **Semantic Continuity** — the Continuity panel, traceable Decision Radar cards,
+  transactional Defer/Dismiss/Resolve review, durable recovery, and the separate
+  Billy → Controlled Apply repair handoff are implemented. Detection remains
+  intentionally deterministic; automatic prose mutation is not provided.
   ([SemanticContinuityEngine.md](SemanticContinuityEngine.md))
-- **Decision Radar / Project Intelligence** — available as data + Logos actions;
-  Radar UI deferred. ([DecisionRadar.md](DecisionRadar.md))
+- **Decision Radar / Project Intelligence** — the Dashboard panel is implemented;
+  persistent custom filters and card dismissal remain deferred.
+  ([DecisionRadar.md](DecisionRadar.md))
 - **Guided Workflows** — engine + Logos + Assistant context; no workflow panel.
   ([GuidedWorkflows.md](GuidedWorkflows.md))
 
@@ -200,10 +202,15 @@ panel** yet:
 
 ## Beta blockers (before scope expands)
 
-1. Record a full-suite-green baseline after each closing change.
-2. UI panels for the deferred intelligence services.
-3. API LAN/remote hardening + required auth before non-desktop exposure.
-4. Richer Plot/Timeline models; opt-in semantic continuity checks.
+1. Record a source-bound full-suite-green baseline, including **0 BLOCKER** Writer
+   QA findings, for the exact release candidate.
+2. Pass the unchanged production-shell packaged journey on Linux/Xvfb and the
+   Intel macOS 12 runner, then complete hands-on acceptance on all three native
+   platforms. The current candidate has passed packaged Windows acceptance.
+3. Complete the remaining Guided Workflows UI.
+4. Harden and authenticate API LAN/remote transport before any non-desktop
+   exposure.
+5. Add richer Plot/Timeline models and opt-in semantic continuity checks.
 
 ## Not a bug
 
@@ -252,10 +259,11 @@ limitations for this RC:
   links are **detected and reported**, but not yet stored as durable links.
   Per-scene A/B/C thread assignment is likewise not yet stored.
 - **Out of scope (deferred), confirmed absent:** ComfyUI / image generation,
-  Canvas Plot (hidden from navigation), production scheduling, rehearsal / writers-
-  room management, and showrunner automation that mutates data. "Showrunner" and
-  "Writers-Room" exist only as an AI prompt persona and a reflection perspective
-  label.
+  production scheduling, rehearsal / writers-room management, and showrunner
+  automation that mutates data. The independent Canvas Plot is implemented in
+  Pro; it is a writing/planning board, not a production or image-generation
+  system. "Showrunner" and "Writers-Room" exist only as an AI prompt persona and
+  a reflection perspective label.
 - **Mode-aware AI is propose-then-confirm.** Every mutating Assistant/Logos action
   goes through a preview and a confirmed Controlled Apply (STAGE checkpoint); there
   is no silent overwrite. Deterministic checks never call the provider.
@@ -360,7 +368,10 @@ Level 3 GUI computer-use) is recommended for final human-like acceptance. Test
 projects only; no real provider keys; no cloud/GitHub. See
 `docs/WRITER_QA_AGENT_PLAN.md`.
 
-**First-run findings (to fix before release):** 5 BLOCKER — wrong-mode Assistant
-output is applyable; 5 HIGH — empty output is applyable; 1 MEDIUM — Chat does not
-clarify on a missing target. Alpha release confirmation is **blocked** until the
-Writer QA suite reports **0 BLOCKER**.
+**Current gate result (2026-10-07):** all 69 deterministic scenarios pass with
+0 bugs and **0 BLOCKER** findings. Validator profile v3 rejects empty direct
+output and unmistakable wrong-format dialogue before apply/cache, and direct
+Chat writing requests without a target now ask for clarification. This closes
+the first-run 5 BLOCKER / 5 HIGH / 1 MEDIUM findings; native GUI acceptance is
+still required because the headless harness cannot assess rendering or
+fullscreen behavior.

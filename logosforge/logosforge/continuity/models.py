@@ -9,6 +9,7 @@ no DB. Evidence stores short excerpts/references, never full manuscript text.
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -124,12 +125,57 @@ class ContinuityIssueData:
     def rank(self) -> int:
         return _SEV_RANK.get(self.severity, 4)
 
-    @property
-    def issue_key(self) -> str:
+    def _identity_key(self, *, include_nodes: bool) -> str:
         base = (f"{self.issue_type}|{self.dimension}|"
                 f"{','.join(str(s) for s in sorted(self.related_scene_ids))}|"
                 f"{self.title}")
+        if include_nodes and self.related_node_ids:
+            node_ids = ",".join(sorted(str(node_id)
+                                       for node_id in self.related_node_ids))
+            base += f"|nodes:{node_ids}"
         return hashlib.sha1(base.encode("utf-8")).hexdigest()[:16]
+
+    @property
+    def issue_key(self) -> str:
+        # Preserve legacy keys for issue families without node identities while
+        # disambiguating equal-titled character/entity findings.  Persisted
+        # status is keyed here, so two distinct PSYKE rows must never couple.
+        return self._identity_key(include_nodes=True)
+
+    @property
+    def legacy_issue_key(self) -> str:
+        """Pre-node-identity key used only for unambiguous status migration."""
+        return self._identity_key(include_nodes=False)
+
+    @property
+    def review_fingerprint(self) -> str:
+        """Hash the exact derived finding presented for explicit review.
+
+        The stable issue key deliberately survives evidence and wording changes
+        so persisted status follows the same logical finding. Commands use this
+        stronger fingerprint so stale approval cannot cross such a change.
+        """
+        encoded = json.dumps(
+            {
+                "scope": "continuity-issue-review-v1",
+                "issue_key": self.issue_key,
+                "issue_type": self.issue_type,
+                "dimension": self.dimension,
+                "severity": self.severity,
+                "confidence": self.confidence,
+                "title": self.title,
+                "explanation": self.explanation,
+                "suggested_action": self.suggested_action,
+                "evidence": self.evidence,
+                "related_scene_ids": self.related_scene_ids,
+                "related_node_ids": self.related_node_ids,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
 
     def to_dict(self) -> dict[str, Any]:
         return {"issue_type": self.issue_type, "dimension": self.dimension,
@@ -139,7 +185,8 @@ class ContinuityIssueData:
                 "evidence": list(self.evidence),
                 "related_scene_ids": list(self.related_scene_ids),
                 "related_node_ids": list(self.related_node_ids),
-                "status": self.status, "issue_key": self.issue_key}
+                "status": self.status, "issue_key": self.issue_key,
+                "review_fingerprint": self.review_fingerprint}
 
 
 @dataclass
@@ -154,6 +201,10 @@ class ContinuityReport:
     states: list = field(default_factory=list)         # list[ContinuityState]
     unavailable: list = field(default_factory=list)
     warnings: list = field(default_factory=list)
+    # Content-addressed revision of the complete persisted issue-review layer.
+    # Derived findings remain recomputed; commands guard only the state they
+    # actually mutate (deferred/dismissed/resolved decisions).
+    review_revision: str = ""
 
     def open_issues(self) -> list:
         return [i for i in self.issues if i.status == "open"]
@@ -167,7 +218,10 @@ class ContinuityReport:
         return sum(1 for i in self.open_issues() if i.severity == SEV_WARNING)
 
     def top_issues(self, n: int = 5) -> list:
-        return sorted(self.open_issues(), key=lambda i: i.rank)[:n]
+        return sorted(
+            self.open_issues(),
+            key=lambda issue: (issue.rank, issue.issue_key),
+        )[:n]
 
     def summary_line(self) -> str:
         oi = self.open_issues()
@@ -177,6 +231,7 @@ class ContinuityReport:
     def to_dict(self) -> dict[str, Any]:
         return {"project_id": self.project_id, "writing_mode": self.writing_mode,
                 "scope": self.scope, "issues": [i.to_dict() for i in self.issues],
+                "review_revision": self.review_revision,
                 "unavailable": list(self.unavailable),
                 "warnings": list(self.warnings)}
 

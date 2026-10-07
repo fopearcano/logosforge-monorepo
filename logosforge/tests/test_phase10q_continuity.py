@@ -8,7 +8,6 @@ import pytest
 
 warnings.filterwarnings("ignore")
 
-from logosforge.db import Database
 from logosforge.continuity import (
     build_continuity_decision_cards,
     build_continuity_report,
@@ -20,6 +19,7 @@ from logosforge.continuity import (
     validate_continuity_change,
 )
 from logosforge.continuity import models as M
+from logosforge.db import Database
 
 
 @pytest.fixture(autouse=True)
@@ -152,7 +152,7 @@ def test_deferred_systems_degrade_cleanly():
 def test_dangling_setup_payoff_link_blocking():
     db = Database()
     pid = db.create_project("P", narrative_engine="novel").id
-    s1 = db.create_scene(pid, "A", content="x")
+    db.create_scene(pid, "A", content="x")
     s2 = db.create_scene(pid, "B", content="y")
     db.update_scene(s2.id, s2.title, content=s2.content, setup_payoff_links="9999")
     rep = build_continuity_report(db, pid)
@@ -321,12 +321,254 @@ def test_continuity_decision_cards():
     db, pid, s1, s2, s3 = _novel()
     cards = build_continuity_decision_cards(db, pid)
     assert cards and all(c.category == "continuity" for c in cards)
+    assert all(c.created_from == "semantic_continuity" for c in cards)
+    assert all(c.related_target_type == "continuity_issue" for c in cards)
+    assert all(c.related_target_key and c.evidence for c in cards)
+    assert all(c.evidence_total >= len(c.evidence) for c in cards)
 
 
 def test_decision_cards_traceable():
     db, pid, s1, s2, s3 = _novel()
     cards = build_continuity_decision_cards(db, pid)
     assert all(c.id.startswith("continuity_") for c in cards)
+    assert all(c.id.removeprefix("continuity_") == c.related_target_key
+               for c in cards)
+
+
+def test_continuity_cards_bound_evidence_and_only_link_project_scenes():
+    db, pid, s1, s2, s3 = _novel()
+    issue = M.ContinuityIssueData(
+        issue_type=M.IT_LOCATION_JUMP,
+        dimension=M.DIM_SPATIAL,
+        severity=M.SEV_WARNING,
+        confidence=M.CONF_LIKELY,
+        title="Bounded scene evidence",
+        evidence=[f"detail {index}" for index in range(10)],
+        related_scene_ids=[s1, s2, 999999],
+    )
+    report = M.ContinuityReport(project_id=pid, issues=[issue])
+
+    card = build_continuity_decision_cards(
+        db,
+        pid,
+        report=report,
+        cap=100,
+    )[0]
+
+    assert len(card.evidence) == 5
+    assert card.evidence_total == 13
+    assert card.evidence[0].related_target_key == issue.issue_key
+    scene_targets = {
+        item.related_target_id
+        for item in card.evidence
+        if item.related_target_type == "scene"
+    }
+    assert scene_targets == {s1, s2}
+
+
+def test_continuity_cards_cap_and_order_are_deterministic():
+    db, pid, *_ = _novel()
+    issues = [
+        M.ContinuityIssueData(
+            issue_type=M.IT_STATE_DRIFT,
+            dimension=M.DIM_CHARACTER,
+            severity=M.SEV_SUGGESTION,
+            confidence=M.CONF_POSSIBLE,
+            title=f"Issue {index}",
+            status=("dismissed" if index == 0 else "open"),
+        )
+        for index in range(12)
+    ]
+    report = M.ContinuityReport(project_id=pid, issues=list(reversed(issues)))
+
+    cards = build_continuity_decision_cards(db, pid, report=report, cap=100)
+
+    expected = sorted(
+        issue.issue_key for issue in issues if issue.status == "open"
+    )[:8]
+    assert len(cards) == 8
+    assert [card.related_target_key for card in cards] == expected
+
+
+def test_equal_titled_entity_issues_keep_distinct_keys_and_cards():
+    db, pid, *_ = _novel()
+    first = M.ContinuityIssueData(
+        issue_type=M.IT_STATE_DRIFT,
+        dimension=M.DIM_CHARACTER,
+        severity=M.SEV_SUGGESTION,
+        confidence=M.CONF_POSSIBLE,
+        title="'Alex' appears in only one scene.",
+        related_node_ids=[101],
+    )
+    second = M.ContinuityIssueData(
+        issue_type=M.IT_STATE_DRIFT,
+        dimension=M.DIM_CHARACTER,
+        severity=M.SEV_SUGGESTION,
+        confidence=M.CONF_POSSIBLE,
+        title="'Alex' appears in only one scene.",
+        related_node_ids=[202],
+    )
+    report = M.ContinuityReport(project_id=pid, issues=[first, second])
+
+    cards = build_continuity_decision_cards(db, pid, report=report)
+
+    assert first.issue_key != second.issue_key
+    assert len({card.id for card in cards}) == 2
+    assert len({card.related_target_key for card in cards}) == 2
+
+    legacy = M.ContinuityIssueData(
+        issue_type=first.issue_type,
+        dimension=first.dimension,
+        severity=first.severity,
+        confidence=first.confidence,
+        title=first.title,
+    )
+    assert legacy.issue_key == first.legacy_issue_key == second.legacy_issue_key
+    set_issue_status(db, pid, legacy, "resolved")
+    from logosforge.continuity import collector
+    collector._merge_status(db, pid, [first, second])
+    assert first.status == "open" and second.status == "open"
+
+
+def test_unique_node_aware_issue_honors_legacy_persisted_status():
+    db, pid, *_ = _novel()
+    current = M.ContinuityIssueData(
+        issue_type=M.IT_STATE_DRIFT,
+        dimension=M.DIM_CHARACTER,
+        severity=M.SEV_SUGGESTION,
+        confidence=M.CONF_POSSIBLE,
+        title="'Solo' appears in only one scene.",
+        related_node_ids=[101],
+    )
+    legacy = M.ContinuityIssueData(
+        issue_type=current.issue_type,
+        dimension=current.dimension,
+        severity=current.severity,
+        confidence=current.confidence,
+        title=current.title,
+    )
+    assert current.issue_key != legacy.issue_key
+    set_issue_status(db, pid, legacy, "resolved")
+    duplicate = M.ContinuityIssueData(
+        issue_type=current.issue_type,
+        dimension=current.dimension,
+        severity=current.severity,
+        confidence=current.confidence,
+        title=current.title,
+        related_node_ids=list(current.related_node_ids),
+    )
+
+    from logosforge.continuity import collector
+    collector._merge_status(db, pid, [current, duplicate])
+
+    assert current.status == "resolved" and duplicate.status == "resolved"
+
+
+def test_repeated_detector_tokens_publish_one_issue_and_one_card():
+    db = Database()
+    pid = db.create_project("Repeated link", narrative_engine="novel").id
+    scene = db.create_scene(pid, "Setup", content="A promise is made.")
+    db.update_scene(
+        scene.id,
+        scene.title,
+        content=scene.content,
+        setup_payoff_links="999,999",
+    )
+
+    report = build_continuity_report(db, pid)
+    matching = [
+        issue
+        for issue in report.issues
+        if issue.issue_type == M.IT_CONTINUITY_GAP
+    ]
+    cards = build_continuity_decision_cards(db, pid, report=report)
+    duplicate_report = M.ContinuityReport(
+        project_id=pid,
+        issues=[matching[0], matching[0]],
+    )
+    duplicate_cards = build_continuity_decision_cards(
+        db,
+        pid,
+        report=duplicate_report,
+    )
+
+    assert len(matching) == 1
+    assert len({issue.issue_key for issue in report.issues}) == len(report.issues)
+    assert len({card.id for card in cards}) == len(cards)
+    assert [card.related_target_key for card in cards].count(
+        matching[0].issue_key
+    ) == 1
+    assert len(duplicate_cards) == 1
+
+
+def test_continuity_cards_reject_a_foreign_precomputed_report():
+    db, pid, *_ = _novel()
+    foreign_pid = db.create_project(
+        "Foreign continuity",
+        narrative_engine="novel",
+    ).id
+    report = M.ContinuityReport(project_id=foreign_pid)
+
+    with pytest.raises(ValueError, match="does not belong"):
+        build_continuity_decision_cards(db, pid, report=report)
+
+
+def test_report_cap_prioritizes_open_issues_over_inactive_history(monkeypatch):
+    from logosforge.continuity import collector
+
+    db = Database()
+    pid = db.create_project("Bounded continuity", narrative_engine="novel").id
+    inactive = [
+        M.ContinuityIssueData(
+            issue_type=M.IT_CONTINUITY_GAP,
+            dimension=M.DIM_PLOT,
+            severity=M.SEV_BLOCKING,
+            confidence=M.CONF_CONFIRMED,
+            title=f"Resolved issue {index}",
+            status="resolved",
+        )
+        for index in range(collector._MAX_ISSUES)
+    ]
+    open_issue = M.ContinuityIssueData(
+        issue_type=M.IT_STATE_DRIFT,
+        dimension=M.DIM_CHARACTER,
+        severity=M.SEV_INFO,
+        confidence=M.CONF_POSSIBLE,
+        title="Still open",
+    )
+    monkeypatch.setattr(
+        collector.CD,
+        "detect_contradictions",
+        lambda *_args, **_kwargs: [*inactive, open_issue],
+    )
+    monkeypatch.setattr(
+        collector.TD,
+        "detect_missing_transitions",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        collector.ID,
+        "detect_production",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        collector.ID,
+        "detect_character_drift",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        collector.ID,
+        "detect_scenes_missing_psyke",
+        lambda *_args, **_kwargs: [],
+    )
+
+    report = collector.build_continuity_report(db, pid)
+
+    assert len(report.issues) == collector._MAX_ISSUES
+    assert report.issues[0].issue_key == open_issue.issue_key
+    assert [issue.issue_key for issue in report.open_issues()] == [
+        open_issue.issue_key
+    ]
 
 
 # ===========================================================================

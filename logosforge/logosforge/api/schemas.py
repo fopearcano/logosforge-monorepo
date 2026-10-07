@@ -7,10 +7,18 @@ stable across releases.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    RootModel,
+    field_validator,
+    model_validator,
+)
 
 # ---------------------------------------------------------------------------
 # Projects
@@ -1911,6 +1919,11 @@ class NarrativeDashboardDTO(BaseModel):
 
 class ContinuityIssueDTO(BaseModel):
     id: str  # stable issue_key
+    review_fingerprint: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
     issue_type: str
     dimension: str
     severity: str  # info | suggestion | warning | blocking
@@ -1923,11 +1936,113 @@ class ContinuityIssueDTO(BaseModel):
 
 
 class ContinuityReportDTO(BaseModel):
+    project_id: int
+    review_revision: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
     writing_mode: str
     issues: list[ContinuityIssueDTO] = Field(default_factory=list)
     blocking_count: int = 0
     warning_count: int = 0
     unavailable: list[str] = Field(default_factory=list)
+
+
+class _ContinuityCommandBase(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    issue_id: str = Field(
+        min_length=16,
+        max_length=16,
+        pattern=r"^[0-9a-f]{16}$",
+    )
+    expected_issue_fingerprint: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+
+class ContinuityDeferIssueCommandDTO(_ContinuityCommandBase):
+    kind: Literal["defer_issue"]
+
+
+class ContinuityDismissIssueCommandDTO(_ContinuityCommandBase):
+    kind: Literal["dismiss_issue"]
+
+
+class ContinuityResolveIssueCommandDTO(_ContinuityCommandBase):
+    kind: Literal["resolve_issue"]
+
+
+_ContinuityCommandUnion = Annotated[
+    ContinuityDeferIssueCommandDTO
+    | ContinuityDismissIssueCommandDTO
+    | ContinuityResolveIssueCommandDTO,
+    Field(discriminator="kind"),
+]
+
+
+class ContinuityCommandDTO(RootModel[_ContinuityCommandUnion]):
+    """Unwrapped revision-guarded Semantic Continuity review command."""
+
+
+class ContinuityCommandResultDTO(BaseModel):
+    continuity: ContinuityReportDTO
+    changed: bool
+    affected_issue_id: str = Field(
+        min_length=16,
+        max_length=16,
+        pattern=r"^[0-9a-f]{16}$",
+    )
+    previous_status: Literal["open"]
+    status: Literal["deferred", "dismissed", "resolved"]
+    replayed: bool
+    applied_revision: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+
+class ContinuityCommandReceiptDTO(BaseModel):
+    project_id: int
+    request_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    command_kind: Literal["defer_issue", "dismiss_issue", "resolve_issue"]
+    expected_revision: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    applied_revision: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    original_changed: bool
+    original_affected_issue_id: str = Field(
+        min_length=16,
+        max_length=16,
+        pattern=r"^[0-9a-f]{16}$",
+    )
+    expected_issue_fingerprint: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    previous_status: Literal["open"]
+    status: Literal["deferred", "dismissed", "resolved"]
+    committed_at: datetime
 
 
 class PacingInsightDTO(BaseModel):
@@ -2009,25 +2124,193 @@ class WorkflowRunDTO(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+KnowledgeGraphViewMode = Literal[
+    "project_map",
+    "structure",
+    "recorded_risk",
+    "revision_impact",
+]
+DecisionSeverity = Literal[
+    "blocking",
+    "warning",
+    "suggestion",
+    "opportunity",
+    "info",
+]
+DecisionConfidence = Literal["confirmed", "likely", "possible", "unknown"]
+DecisionEvidenceConfidence = Literal[
+    "",
+    "confirmed",
+    "likely",
+    "possible",
+    "unknown",
+]
+
+
+class DecisionEvidenceDTO(BaseModel):
+    kind: str = Field(min_length=1, max_length=32)
+    label: str = Field(min_length=1, max_length=512)
+    detail: str = Field(default="", max_length=1000)
+    graph_focus_key: str = Field(default="", max_length=512)
+    source_key: str = Field(default="", max_length=512)
+    target_key: str = Field(default="", max_length=512)
+    edge_type: str = Field(default="", max_length=128)
+    confidence: DecisionEvidenceConfidence = ""
+    source_system: str = Field(default="", max_length=128)
+    provenance: str = Field(default="", max_length=512)
+    related_section: str = Field(default="", max_length=128)
+    related_target_type: str = Field(default="", max_length=128)
+    related_target_id: int | None = Field(default=None, ge=1)
+    related_target_key: str = Field(default="", max_length=512)
+
+    @field_validator("kind", "label", mode="before")
+    @classmethod
+    def strip_required_text(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def validate_related_target(self) -> DecisionEvidenceDTO:
+        if self.related_target_type == "scene":
+            if self.related_target_id is None or self.related_target_key:
+                raise ValueError("scene evidence requires only related_target_id")
+        elif self.related_target_type == "continuity_issue":
+            if (
+                self.related_target_id is not None
+                or re.fullmatch(r"[0-9a-f]{16}", self.related_target_key) is None
+            ):
+                raise ValueError(
+                    "continuity issue evidence requires a canonical issue key"
+                )
+        elif (
+            not self.related_target_type
+            and (self.related_target_id is not None or self.related_target_key)
+        ):
+            raise ValueError("evidence target values require related_target_type")
+        return self
+
+
 class DecisionCardDTO(BaseModel):
-    id: str
-    category: str  # structure | psyke | continuity | rewrite | apply | export | production | graph | notes | writing_mode
-    severity: str  # blocking | warning | suggestion | opportunity | info
-    confidence: str  # confirmed | likely | possible | unknown
-    title: str
-    explanation: str = ""
-    suggested_action: str = ""
-    related_section: str = ""
-    related_target_type: str = ""
+    id: str = Field(min_length=1, max_length=512)
+    # Category names remain extensible; severity/confidence use the documented
+    # Decision Radar vocabularies.
+    category: str = Field(min_length=1, max_length=512)
+    severity: DecisionSeverity
+    confidence: DecisionConfidence
+    title: str = Field(min_length=1, max_length=512)
+    explanation: str = Field(default="", max_length=4000)
+    suggested_action: str = Field(default="", max_length=1000)
+    related_section: str = Field(default="", max_length=128)
+    related_target_type: str = Field(default="", max_length=128)
     related_target_id: int | None = None
-    created_from: str = "deterministic"
+    related_target_key: str = Field(default="", max_length=512)
+    created_from: str = Field(default="deterministic", min_length=1, max_length=64)
+    graph_focus_key: str = Field(default="", max_length=512)
+    graph_view_mode: KnowledgeGraphViewMode | None = None
+    graph_include_inferred: bool = True
+    graph_depth: int = Field(default=1, ge=1, le=2)
+    evidence: list[DecisionEvidenceDTO] = Field(default_factory=list, max_length=5)
+    evidence_total: int = Field(default=0, ge=0)
+
+    @field_validator("id", "category", "title", "created_from", mode="before")
+    @classmethod
+    def strip_required_text(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def validate_evidence_count(self) -> DecisionCardDTO:
+        if self.evidence_total < len(self.evidence):
+            raise ValueError("evidence_total cannot be smaller than evidence")
+        if bool(self.graph_focus_key) != (self.graph_view_mode is not None):
+            raise ValueError(
+                "graph_focus_key and graph_view_mode must either both be set "
+                "or both be blank"
+            )
+        if self.created_from == "knowledge_graph" and (
+            not self.graph_focus_key or not self.evidence
+        ):
+            raise ValueError(
+                "knowledge_graph cards require a graph focus and evidence"
+            )
+        if self.created_from == "semantic_continuity":
+            issue_key_valid = (
+                self.related_target_type == "continuity_issue"
+                and self.related_target_id is None
+                and re.fullmatch(
+                    r"[0-9a-f]{16}", self.related_target_key
+                ) is not None
+            )
+            evidence_valid = bool(self.evidence) and all(
+                not item.graph_focus_key
+                and not item.source_key
+                and not item.target_key
+                and not item.edge_type
+                and item.related_target_type in {"continuity_issue", "scene"}
+                and (
+                    item.related_target_type != "continuity_issue"
+                    or item.related_target_key == self.related_target_key
+                )
+                for item in self.evidence
+            )
+            has_issue_anchor = any(
+                item.related_target_type == "continuity_issue"
+                and item.related_target_key == self.related_target_key
+                for item in self.evidence
+            )
+            if (
+                not issue_key_valid
+                or self.graph_focus_key
+                or self.graph_view_mode is not None
+                or not evidence_valid
+                or not has_issue_anchor
+            ):
+                raise ValueError(
+                    "semantic_continuity cards require one canonical issue "
+                    "target and unmixed issue/scene evidence"
+                )
+        return self
 
 
 class DecisionRadarDTO(BaseModel):
     project_id: int
     generated_light: bool = False
     summary_line: str = ""
-    radar: list[DecisionCardDTO] = Field(default_factory=list)
+    radar: list[DecisionCardDTO] = Field(default_factory=list, max_length=10)
+    knowledge_graph_available: bool = False
+    knowledge_graph_cards: list[DecisionCardDTO] = Field(
+        default_factory=list,
+        max_length=8,
+    )
+    continuity_available: bool = False
+    continuity_cards: list[DecisionCardDTO] = Field(
+        default_factory=list,
+        max_length=8,
+    )
+
+    @model_validator(mode="after")
+    def validate_graph_feed(self) -> DecisionRadarDTO:
+        if not self.knowledge_graph_available and self.knowledge_graph_cards:
+            raise ValueError(
+                "knowledge_graph_cards must be empty when the graph is unavailable"
+            )
+        if any(
+            card.created_from != "knowledge_graph"
+            for card in self.knowledge_graph_cards
+        ):
+            raise ValueError(
+                "knowledge_graph_cards must have knowledge_graph provenance"
+            )
+        if not self.continuity_available and self.continuity_cards:
+            raise ValueError(
+                "continuity_cards must be empty when continuity is unavailable"
+            )
+        if any(
+            card.created_from != "semantic_continuity"
+            for card in self.continuity_cards
+        ):
+            raise ValueError(
+                "continuity_cards must have semantic_continuity provenance"
+            )
+        return self
 
 
 class QuantumResultDTO(BaseModel):
@@ -2091,14 +2374,6 @@ class QuantumSettingsUpdateDTO(BaseModel):
 # ---------------------------------------------------------------------------
 # Narrative Knowledge Graph + story gravity + Counterpart (reflective AI)
 # ---------------------------------------------------------------------------
-
-
-KnowledgeGraphViewMode = Literal[
-    "project_map",
-    "structure",
-    "recorded_risk",
-    "revision_impact",
-]
 
 
 class KnowledgeGraphQueryDTO(BaseModel):

@@ -9,6 +9,7 @@ import {
   validateConnectorActionListDTO,
   validateConnectorResultDTO,
   validateDeleteResultDTO,
+  validateDecisionRadarDTOForRequest,
   validateExtractionJobDTO,
   validateInlineCommentDTO,
   validateInlineCommentListDTO,
@@ -35,6 +36,9 @@ import {
   validateTimelineCommandResultDTOForRequest,
   validateCanvasPlotSnapshotDTOForProject,
   validateCanvasPlotCommandResultDTOForRequest,
+  validateContinuityCommandReceiptDTOForRequest,
+  validateContinuityCommandResultDTOForRequest,
+  validateContinuityReportDTOForRequest,
   validateKnowledgeGraphReadDTOForRequest,
   validateKnowledgeGraphCommandResultDTOForRequest,
   validateKnowledgeGraphCommandReceiptDTOForRequest,
@@ -581,13 +585,43 @@ export function createHttpApiClient(
     export: (p, b) => post(ROUTES.export(p), b),
 
     getDashboard: (p) => get(ROUTES.dashboard(p)),
-    getContinuity: (p) => get(ROUTES.continuity(p)),
+    getContinuity: (p) => get(
+      ROUTES.continuity(p),
+      (value) => validateContinuityReportDTOForRequest(value, p),
+    ),
+    executeContinuityCommand: (p, body, idempotencyKey) => trackProjectOperation(
+      req(
+        ROUTES.continuityCommands(p),
+        {
+          method: "POST",
+          body: JSON.stringify(body),
+          headers: { "Idempotency-Key": idempotencyKey },
+        },
+        (value) => validateContinuityCommandResultDTOForRequest(value, p, body),
+      ),
+      { persistence: true },
+    ),
+    getContinuityCommandReceipt: (p, idempotencyKey, expectedCommand) => req(
+      ROUTES.continuityCommandReceipt(p),
+      {
+        headers: {
+          "Idempotency-Key": idempotencyKey,
+          "Cache-Control": "no-store",
+        },
+      },
+      (value) => validateContinuityCommandReceiptDTOForRequest(
+        value, p, expectedCommand,
+      ),
+    ),
     getPacing: (p) => get(ROUTES.pacing(p)),
     getBalance: (p) => get(ROUTES.balance(p)),
     getStoryHealth: (p) => get(ROUTES.storyHealth(p)),
     getStructureAnalysis: (p) => get(ROUTES.structureAnalysis(p)),
     getWorkflows: (p) => get(ROUTES.workflows(p)),
-    getDecisionRadar: (p) => get(ROUTES.decisionRadar(p)),
+    getDecisionRadar: (p) => get(
+      ROUTES.decisionRadar(p),
+      (value) => validateDecisionRadarDTOForRequest(value, p),
+    ),
     getAdapt: (p) => get(ROUTES.adapt(p)),
     getReview: (p) => get(ROUTES.review(p)),
     getFormatReview: (p) => get(ROUTES.formatReview(p)),

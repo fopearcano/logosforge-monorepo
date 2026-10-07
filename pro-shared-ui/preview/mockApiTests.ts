@@ -39,10 +39,13 @@ check(typeof api.getKnowledgeGraph === "function", "preview mock must implement 
 check(typeof api.executeKnowledgeGraphCommand === "function", "preview mock must implement guarded Knowledge Graph review commands");
 check(typeof api.getKnowledgeGraphCommandReceipt === "function", "preview mock must implement durable Knowledge Graph command receipts");
 check(typeof api.getKnowledgeGraphHiddenEdges === "function", "preview mock must implement the complete paged hidden-edge review queue");
+check(typeof api.getContinuity === "function", "preview mock must implement canonical Continuity reads");
+check(typeof api.executeContinuityCommand === "function", "preview mock must implement guarded Continuity review commands");
+check(typeof api.getContinuityCommandReceipt === "function", "preview mock must implement durable Continuity command receipts");
 
 const health = await api.health();
 check(
-  health.status === "ok" && health.version === "1.9.0" && health.api_version === "1.9.0",
+  health.status === "ok" && health.version === "1.12.0" && health.api_version === "1.12.0",
   "preview health must satisfy the core contract",
 );
 const projectMap = await api.getKnowledgeGraph(1, { limit: 160, include_inferred: true });
@@ -189,6 +192,73 @@ const restoredResult = await graphReviewApi.executeKnowledgeGraphCommand(1, {
   edge_type: reviewEdge.edge_type,
 }, "preview-graph-key-0002");
 check(restoredResult.changed && restoredResult.knowledge_graph.hidden_edge_count === 0, "preview graph restore must remove the decision from the hidden queue");
+const continuityApi = createMockApiClient();
+const initialContinuity = await continuityApi.getContinuity(1);
+check(
+  initialContinuity.project_id === 1
+    && /^[0-9a-f]{64}$/.test(initialContinuity.review_revision)
+    && initialContinuity.issues.length === 2
+    && initialContinuity.issues.every((issue) => /^[0-9a-f]{16}$/.test(issue.id) && issue.status === "open"),
+  "preview Continuity must expose a project-bound revision and canonical open issue keys",
+);
+const continuityIssue = initialContinuity.issues[0]!;
+const deferContinuityCommand = {
+  kind: "defer_issue" as const,
+  expected_revision: initialContinuity.review_revision,
+  issue_id: continuityIssue.id,
+  expected_issue_fingerprint: continuityIssue.review_fingerprint,
+};
+const continuityKey = "preview-continuity-key-0001";
+const deferredContinuity = await continuityApi.executeContinuityCommand(
+  1,
+  deferContinuityCommand,
+  continuityKey,
+);
+check(
+  deferredContinuity.changed
+    && !deferredContinuity.replayed
+    && deferredContinuity.status === "deferred"
+    && deferredContinuity.continuity.issues.find((issue) => issue.id === continuityIssue.id)?.status === "deferred"
+    && deferredContinuity.applied_revision !== initialContinuity.review_revision,
+  "preview Continuity must apply one revision-guarded review decision",
+);
+const continuityReceipt = await continuityApi.getContinuityCommandReceipt(
+  1,
+  continuityKey,
+  deferContinuityCommand,
+);
+check(
+  continuityReceipt.original_changed
+    && continuityReceipt.original_affected_issue_id === continuityIssue.id
+    && continuityReceipt.applied_revision === deferredContinuity.applied_revision,
+  "preview Continuity receipt must preserve the original committed outcome",
+);
+const replayedContinuity = await continuityApi.executeContinuityCommand(
+  1,
+  deferContinuityCommand,
+  continuityKey,
+);
+check(
+  replayedContinuity.replayed
+    && !replayedContinuity.changed
+    && replayedContinuity.applied_revision === deferredContinuity.applied_revision,
+  "preview Continuity replay must be idempotent and retain the original applied revision",
+);
+let continuityKeyConflict: unknown = null;
+try {
+  await continuityApi.executeContinuityCommand(1, {
+    ...deferContinuityCommand,
+    kind: "dismiss_issue",
+  }, continuityKey);
+} catch (error) {
+  continuityKeyConflict = error;
+}
+check(
+  continuityKeyConflict instanceof ApiRequestError
+    && continuityKeyConflict.status === 409
+    && continuityKeyConflict.code === "idempotency_key_conflict",
+  "preview Continuity must reject reuse of a capability key for a different command",
+);
 const canvasApi = createMockApiClient();
 const initialCanvas = await canvasApi.getCanvasPlot(1);
 check(

@@ -99,8 +99,13 @@ for (const marker of [
   'type StudioNavigationOptions,',
   'const [pendingNote, setPendingNote] = useState<number | null>(null)',
   'const [pendingComment, setPendingComment] = useState<number | null>(null)',
-  'setPendingNote(opts?.noteId ?? null)',
-  'setPendingComment(opts?.commentId ?? null)',
+  "setPendingScene(panelId === 'manuscript' ? opts?.sceneId ?? null : null)",
+  "setPendingPsykeEntry(panelId === 'psyke' ? opts?.psykeEntryId ?? null : null)",
+  "setPendingNote(panelId === 'notes' ? opts?.noteId ?? null : null)",
+  "setPendingComment(panelId === 'comments' ? opts?.commentId ?? null : null)",
+  "setPendingKnowledgeGraph(panelId === 'graph' && opts?.graphFocusKey ? {",
+  "setPendingContinuityIssue(panelId === 'continuity' ? opts?.continuityIssueKey ?? null : null)",
+  'setPendingContinuityRepair(panelId === AI_PANEL_ID ? opts?.continuityRepair ?? null : null)',
   'setPendingNote(null)',
   'setPendingComment(null)',
   'noteTargetId: pendingNote',
@@ -109,6 +114,56 @@ for (const marker of [
   'clearCommentTarget: (commentId) => setPendingComment',
 ]) {
   if (!app.includes(marker)) failures.push(`App note/comment navigation integration missing ${marker}`);
+}
+for (const marker of [
+  'const [projectReady, setProjectReady] = useState(false)',
+  'const projectReadyRef = useRef(false)',
+  'projectReadyRef.current = false',
+  'setProjectReady(false)',
+  "const baseUrl = status.state === 'connected' && status.baseUrl ? status.baseUrl : null",
+  'if (projectReady)',
+  'projectReadyRef.current = true',
+  'setProjectReady(true)',
+  'if (!projectReadyRef.current) return',
+  'if (!projectReady)',
+  "enabled: () => projectReadyRef.current && !busy",
+  "if (projectReadyRef.current) setPaletteOpen(true)",
+  "coreStatusRef.current.state !== 'connected'",
+]) {
+  if (!app.includes(marker)) failures.push(`App project/bootstrap readiness gate missing ${marker}`);
+}
+const refreshProjectsBlock = app.match(/const refreshProjects = useCallback[\s\S]*?const changeProjectMode = useCallback/)?.[0] ?? '';
+for (const marker of [
+  'const refreshSequence = refreshProjectsSequenceRef.current + 1',
+  'refreshProjectsSequenceRef.current = refreshSequence',
+  'refreshProjectsSequenceRef.current === refreshSequence',
+  'if (!isCurrentRefresh()) return []',
+]) {
+  if (!refreshProjectsBlock.includes(marker)) {
+    failures.push(`App project refresh ordering guard missing ${marker}`);
+  }
+}
+if (!/ps = await ownerApi\.listProjects\(\);[\s\S]*?if \(!isCurrentRefresh\(\)\) return \[\];[\s\S]*?setProjects\(ps\)/.test(refreshProjectsBlock)) {
+  failures.push('App publishes project refresh results before checking latest-request ownership');
+}
+const changeProjectModeBlock = app.match(/const changeProjectMode = useCallback[\s\S]*?\n\s*useEffect\(\(\) => \{/)?.[0] ?? '';
+for (const marker of [
+  'const ownerCoreGeneration = apiCoreGeneration',
+  'coreGenerationTrackerRef.current.isCurrent(ownerCoreGeneration)',
+  "coreStatusRef.current.state === 'connected'",
+  'ownerApi.updateProject(activeId, { narrative_engine: nextMode })',
+  'if (!isCurrentCore()) return false',
+  'if (isCurrentCore()) setModeBusy(false)',
+]) {
+  if (!changeProjectModeBlock.includes(marker)) {
+    failures.push(`App writing-mode core ownership guard missing ${marker}`);
+  }
+}
+if (!/await flushPendingProjectSaves\(\{ commitActiveField: true \}\);\s*if \(!isCurrentCore\(\) \|\| projectIdRef\.current !== activeId\) return false;[\s\S]*?const committed = await trackProjectWrite\([\s\S]*?\);\s*if \(!isCurrentCore\(\) \|\| projectIdRef\.current !== activeId\) return false;/.test(changeProjectModeBlock)) {
+  failures.push('App writing-mode mutation is not guarded before and after the old-client request');
+}
+if (!/catch \(error\) \{\s*if \(!isCurrentCore\(\)\) return false;/.test(changeProjectModeBlock)) {
+  failures.push('App writing-mode failure path can publish an error from a stale core');
 }
 if (!app.includes('StudioSceneNavigator,')) {
   failures.push('App does not import the shared live scene navigator');

@@ -66,6 +66,36 @@ if (!pythonKnowledgeGraphRoute.includes('"/projects/{project_id}/knowledge-graph
   throw new Error('Python knowledge graph route is missing or drifted');
 }
 
+const continuityRoutes = [
+  ROUTES.continuity(42),
+  ROUTES.continuityCommands(42),
+  ROUTES.continuityCommandReceipt(42),
+];
+const expectedContinuityRoutes = [
+  '/api/projects/42/continuity',
+  '/api/projects/42/continuity/commands',
+  '/api/projects/42/continuity/command-receipt',
+];
+if (JSON.stringify(continuityRoutes) !== JSON.stringify(expectedContinuityRoutes)) {
+  throw new Error(`Continuity command route mismatch: ${continuityRoutes}`);
+}
+if (!KNOWN_EVENTS.includes('continuity_changed')) {
+  throw new Error('continuity_changed is missing from the known project events');
+}
+const pythonContinuityRoute = readFileSync(
+  '../logosforge/logosforge/api/routes/intelligence.py',
+  'utf8',
+);
+for (const route of [
+  '"/projects/{project_id}/continuity"',
+  '"/projects/{project_id}/continuity/commands"',
+  '"/projects/{project_id}/continuity/command-receipt"',
+]) {
+  if (!pythonContinuityRoute.includes(route)) {
+    throw new Error(`Python Continuity route is missing or drifted: ${route}`);
+  }
+}
+
 if (ROUTES.liveContext !== '/api/live-context') {
   throw new Error(`live context route mismatch: ${ROUTES.liveContext}`);
 }
@@ -189,6 +219,45 @@ for (const field of ['surface', 'drafter_page_id']) {
 
 console.log('Whiteboard comment-scope parity tests: 2 fields mirrored');
 
+const decisionRadarDtoFields = {
+  DecisionEvidenceDTO: [
+    'kind', 'label', 'detail', 'graph_focus_key', 'source_key', 'target_key',
+    'edge_type', 'confidence', 'source_system', 'provenance',
+    'related_section', 'related_target_type', 'related_target_id',
+    'related_target_key',
+  ],
+  DecisionCardDTO: [
+    'id', 'category', 'severity', 'confidence', 'title', 'explanation',
+    'suggested_action', 'related_section', 'related_target_type',
+    'related_target_id', 'related_target_key', 'created_from',
+    'graph_focus_key', 'graph_view_mode',
+    'graph_include_inferred', 'graph_depth', 'evidence', 'evidence_total',
+  ],
+  DecisionRadarDTO: [
+    'project_id', 'generated_light', 'summary_line', 'radar',
+    'knowledge_graph_available', 'knowledge_graph_cards',
+    'continuity_available', 'continuity_cards',
+  ],
+};
+for (const [dtoName, fields] of Object.entries(decisionRadarDtoFields)) {
+  const pythonBody = pythonSchemas.match(new RegExp(
+    `class ${dtoName}\\([^)]*\\):([\\s\\S]*?)\\n\\nclass `,
+  ))?.[1] ?? '';
+  const typescriptBody = typescriptSchemas.match(new RegExp(
+    `export interface ${dtoName}[^\\{]*\\{([\\s\\S]*?)\\n\\}`,
+  ))?.[1] ?? '';
+  for (const field of fields) {
+    if (!pythonBody.includes(`${field}:`)) {
+      throw new Error(`Python ${dtoName} is missing ${field}`);
+    }
+    if (!typescriptBody.includes(`${field}`)) {
+      throw new Error(`TypeScript ${dtoName} is missing ${field}`);
+    }
+  }
+}
+
+console.log('Decision Radar contract parity tests: traceable graph evidence mirrored');
+
 const graphDtoFields = {
   KnowledgeGraphQueryDTO: ['focus_key', 'depth', 'limit', 'include_inferred', 'view_mode'],
   KnowledgeGraphNodeDTO: [
@@ -236,6 +305,41 @@ for (const [dtoName, fields] of Object.entries(graphDtoFields)) {
 }
 
 console.log('Knowledge Graph contract parity tests: routes/events + 8 DTOs mirrored');
+
+const continuityDtoFields = {
+  ContinuityReportDTO: [
+    'project_id', 'review_revision', 'writing_mode', 'issues',
+    'blocking_count', 'warning_count', 'unavailable',
+  ],
+  ContinuityCommandResultDTO: [
+    'continuity', 'changed', 'affected_issue_id', 'previous_status',
+    'status', 'replayed', 'applied_revision',
+  ],
+  ContinuityCommandReceiptDTO: [
+    'project_id', 'request_digest', 'command_kind', 'expected_revision',
+    'applied_revision', 'original_changed', 'original_affected_issue_id',
+    'expected_issue_fingerprint',
+    'previous_status', 'status', 'committed_at',
+  ],
+};
+for (const [dtoName, fields] of Object.entries(continuityDtoFields)) {
+  const pythonBody = pythonSchemas.match(new RegExp(
+    `class ${dtoName}\\([^)]*\\):([\\s\\S]*?)\\n\\nclass `,
+  ))?.[1] ?? '';
+  const typescriptBody = typescriptSchemas.match(new RegExp(
+    `export interface ${dtoName}[^\\{]*\\{([\\s\\S]*?)\\n\\}`,
+  ))?.[1] ?? '';
+  for (const field of fields) {
+    if (!pythonBody.includes(`${field}:`)) {
+      throw new Error(`Python ${dtoName} is missing ${field}`);
+    }
+    if (!typescriptBody.includes(`${field}`)) {
+      throw new Error(`TypeScript ${dtoName} is missing ${field}`);
+    }
+  }
+}
+
+console.log('Continuity contract parity tests: routes/events + 3 DTOs mirrored');
 
 const knowledgeGraphViewModes = [
   'project_map', 'structure', 'recorded_risk', 'revision_impact',

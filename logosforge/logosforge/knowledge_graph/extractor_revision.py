@@ -21,6 +21,7 @@ _SUGGESTED_ACTION_MAX = 512
 # target_type (from impact items / apply ops) -> graph node type + source_type.
 _TARGET_NODE = {
     "scene": (P.NT_SCENE, "scene"),
+    "manuscript": (P.NT_SCENE, "scene"),
     "psyke_entry": (P.NT_PSYKE_ENTRY, "psyke"),
     "psyke": (P.NT_PSYKE_ENTRY, "psyke"),
     "note": (P.NT_NOTE, "note"),
@@ -40,7 +41,10 @@ def _target_key(target_type: str, target_id, *, graph=None) -> str | None:
     if spec is None or target_id in (None, ""):
         return None
     nt, st = spec
-    return node_key(nt, st, target_id)
+    candidate = node_key(nt, st, target_id)
+    if graph is not None and graph.get_node(candidate) is None:
+        return None
+    return candidate
 
 
 def _bounded_text(value, limit: int) -> str:
@@ -69,11 +73,15 @@ def extract_revision(db, project_id: int, graph) -> None:
             metadata={"impact_level": getattr(rep, "impact_level", "low")}))
         sid = getattr(rep, "scene_id", None)
         if sid:
-            graph.add_edge(KGEdge(
-                source=rkey, target=node_key(P.NT_SCENE, "scene", sid),
-                edge_type=P.ET_REVISES, confidence=getattr(rep, "confidence", "likely"),
-                provenance=P.PROV_REVISION_IMPACT, source_system=P.SS_REVISION,
-                explanation="Impact report for this scene's change."))
+            scene_key = _target_key("scene", sid, graph=graph)
+            if scene_key is not None:
+                graph.add_edge(KGEdge(
+                    source=rkey, target=scene_key,
+                    edge_type=P.ET_REVISES,
+                    confidence=getattr(rep, "confidence", "likely"),
+                    provenance=P.PROV_REVISION_IMPACT,
+                    source_system=P.SS_REVISION,
+                    explanation="Impact report for this scene's change."))
         if remaining_item_work > 0:
             try:
                 items = db.get_revision_impact_items(
@@ -130,9 +138,7 @@ def extract_rewrite(db, project_id: int, graph) -> None:
             continue
         src_type = (getattr(sess, "source_type", "") or "scene").lower()
         src_id = getattr(sess, "source_id", None)
-        src_key = None
-        if src_type in ("scene", "manuscript") and src_id:
-            src_key = node_key(P.NT_SCENE, "scene", src_id)
+        src_key = _target_key(src_type, src_id, graph=graph)
         try:
             variants = db.get_rewrite_variants(sess.id)
         except Exception:
@@ -176,9 +182,6 @@ def extract_apply(db, project_id: int, graph) -> None:
             getattr(op, "target_id", None),
             graph=graph,
         )
-        if tkey is None and (getattr(op, "target_type", "") or "") in ("scene", "manuscript") \
-                and getattr(op, "target_id", None):
-            tkey = node_key(P.NT_SCENE, "scene", op.target_id)
         if tkey is not None:
             applied = getattr(op, "status", "") == "applied"
             graph.add_edge(KGEdge(

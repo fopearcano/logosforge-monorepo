@@ -219,13 +219,13 @@ check('packaged smoke applies one Timeline proposal and rejects its stale siblin
   packagedSmoke.includes('installed MCP stale Timeline sibling apply') &&
   packagedSmoke.includes('after_stale_timeline != applied_snapshot'));
 check('frozen smoke advertises and proposes an exact non-mutating Canvas Plot command',
-  frozenSmoke.includes('expected 45 MCP tools') &&
+  frozenSmoke.includes('expected 46 MCP tools') &&
   frozenSmoke.includes('"logosforge_get_canvas_plot"') &&
   frozenSmoke.includes('"logosforge_propose_canvas_plot_command"') &&
   frozenSmoke.includes('f"/api/projects/{project_id}/canvas-plot/commands"') &&
   frozenSmoke.includes('canvas_after != canvas_before'));
 check('packaged smoke applies one Canvas Plot proposal and rejects its stale sibling',
-  packagedSmoke.includes('expected 45 MCP tools') &&
+  packagedSmoke.includes('expected 46 MCP tools') &&
   packagedSmoke.includes('"logosforge_get_canvas_plot"') &&
   packagedSmoke.includes('"logosforge_propose_canvas_plot_command"') &&
   (packagedSmoke.match(/\{"include_bodies": True\}/g) || []).length === 4 &&
@@ -233,7 +233,7 @@ check('packaged smoke applies one Canvas Plot proposal and rejects its stale sib
   packagedSmoke.includes('installed MCP stale Canvas Plot sibling apply') &&
   packagedSmoke.includes('after_stale_canvas != applied_canvas_snapshot'));
 check('frozen smoke advertises an exact non-mutating Knowledge Graph proposal',
-  frozenSmoke.includes('expected 45 MCP tools') &&
+  frozenSmoke.includes('expected 46 MCP tools') &&
   frozenSmoke.includes('"logosforge_get_knowledge_graph"') &&
   frozenSmoke.includes('"logosforge_get_knowledge_graph_hidden_edges"') &&
   frozenSmoke.includes('"logosforge_propose_knowledge_graph_command"') &&
@@ -246,11 +246,23 @@ check('packaged smoke applies one Knowledge Graph proposal and rejects its stale
   packagedSmoke.includes('installed MCP Knowledge Graph apply') &&
   packagedSmoke.includes('installed MCP stale Knowledge Graph sibling apply') &&
   packagedSmoke.includes('after_stale_graph != applied_graph_snapshot'));
-check('packaged smoke recovers durable Timeline, Canvas, and Graph receipts after companion restart',
+check('frozen smoke advertises an exact non-mutating Continuity proposal',
+  frozenSmoke.includes('"logosforge_get_story_diagnostics"') &&
+  frozenSmoke.includes('"logosforge_propose_continuity_command"') &&
+  frozenSmoke.includes('"expected_issue_fingerprint"') &&
+  frozenSmoke.includes('f"/api/projects/{project_id}/continuity/commands"') &&
+  frozenSmoke.includes('continuity_after != continuity_before'));
+check('packaged smoke applies one Continuity proposal and rejects its stale sibling',
+  packagedSmoke.includes('"logosforge_propose_continuity_command"') &&
+  packagedSmoke.includes('installed MCP Continuity apply') &&
+  packagedSmoke.includes('installed MCP stale Continuity sibling apply') &&
+  packagedSmoke.includes('after_stale_continuity != applied_continuity_report'));
+check('packaged smoke recovers all four durable receipts after companion restart',
   packagedSmoke.includes('async def _recover_installed_command_receipts(') &&
   packagedSmoke.includes('restarted MCP durable Timeline receipt recovery') &&
   packagedSmoke.includes('restarted MCP durable Canvas Plot receipt recovery') &&
   packagedSmoke.includes('restarted MCP durable Knowledge Graph receipt recovery') &&
+  packagedSmoke.includes('restarted MCP durable Continuity receipt recovery') &&
   packagedSmoke.includes('recovered.get("recovered_from_core") is not True') &&
   packagedSmoke.includes('recovered_result.get("replayed") is not True') &&
   packagedSmoke.includes('recovered_result.get("applied_revision") != applied_timeline_revision') &&
@@ -264,6 +276,10 @@ check('packaged smoke recovers durable Timeline, Canvas, and Graph receipts afte
   packagedSmoke.includes('recovered_graph_receipt.get("original_affected_edge")') &&
   packagedSmoke.includes('recovered_graph_result.get("replayed") is not True') &&
   packagedSmoke.includes('recovered_graph_result.get("affected_edge")') &&
+  packagedSmoke.includes('recovered_continuity_receipt.get("original_affected_issue_id")') &&
+  packagedSmoke.includes('recovered_continuity_receipt.get("expected_issue_fingerprint")') &&
+  packagedSmoke.includes('recovered_continuity_result.get("replayed") is not True') &&
+  packagedSmoke.includes('recovered_continuity_result.get("affected_issue_id")') &&
   packagedSmoke.includes('packaged_lane_count != 1') &&
   packagedSmoke.indexOf('_exercise_installed_mcp(') <
     packagedSmoke.lastIndexOf('_recover_installed_command_receipts('));

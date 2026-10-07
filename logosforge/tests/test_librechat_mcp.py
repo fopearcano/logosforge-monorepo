@@ -23,6 +23,7 @@ import pytest
 from logosforge.db.database import (
     KnowledgeGraphEdgeIdentity,
     _canvas_plot_command_request_digest,
+    _continuity_command_request_digest,
     _knowledge_graph_command_request_digest,
     _timeline_command_request_digest,
 )
@@ -32,6 +33,7 @@ from logosforge.librechat.mcp_gateway import (
     GatewayError,
     LogosForgeMcpGateway,
     _canvas_plot_receipt_request_digest,
+    _continuity_receipt_request_digest,
     _knowledge_graph_receipt_request_digest,
     _timeline_receipt_request_digest,
 )
@@ -324,6 +326,59 @@ def test_api_client_graph_receipt_keeps_idempotency_key_out_of_url():
     assert result == receipt
 
 
+def test_api_client_continuity_read_and_receipt_use_canonical_endpoints():
+    client = LogosForgeApiClient(
+        base_url="http://127.0.0.1:8765", project_id=7, auth_token="secret",
+    )
+    proposal_id = "lfp_abcdefghijklmnopqrstuvwx"
+    captured: list[dict] = []
+    report = {
+        "project_id": 7,
+        "review_revision": "a" * 64,
+        "issues": [],
+    }
+    receipt = {
+        "project_id": 7,
+        "request_digest": "b" * 64,
+        "command_kind": "resolve_issue",
+        "expected_revision": "a" * 64,
+        "applied_revision": "c" * 64,
+        "original_changed": True,
+        "original_affected_issue_id": "0123456789abcdef",
+        "expected_issue_fingerprint": "d" * 64,
+        "previous_status": "open",
+        "status": "resolved",
+        "committed_at": "2026-10-07T10:00:00Z",
+    }
+
+    def fake_urlopen(request, timeout=None):
+        captured.append({
+            "url": request.full_url,
+            "method": request.get_method(),
+            "headers": {
+                key.lower(): value for key, value in request.header_items()
+            },
+            "timeout": timeout,
+        })
+        return _response(receipt if "command-receipt" in request.full_url else report)
+
+    with mock.patch.object(ac.urllib.request, "urlopen", fake_urlopen):
+        assert client.get_continuity() == report
+        assert client.get_continuity_command_receipt(proposal_id) == receipt
+
+    assert captured[0]["url"] == (
+        "http://127.0.0.1:8765/api/projects/7/continuity"
+    )
+    assert "idempotency-key" not in captured[0]["headers"]
+    assert captured[1]["url"] == (
+        "http://127.0.0.1:8765/api/projects/7/continuity/command-receipt"
+    )
+    assert proposal_id not in captured[1]["url"]
+    assert captured[1]["headers"]["idempotency-key"] == proposal_id
+    assert all(item["method"] == "GET" for item in captured)
+    assert all(item["headers"]["authorization"] == "Bearer secret" for item in captured)
+
+
 def test_api_client_preserves_http_status_and_machine_error_code():
     client = LogosForgeApiClient(
         base_url="http://127.0.0.1:8765", project_id=7,
@@ -593,6 +648,27 @@ def test_knowledge_graph_receipt_digest_matches_core_canonical_wire(kind):
         ),
     )
     assert _knowledge_graph_receipt_request_digest(7, body) == expected
+
+
+@pytest.mark.parametrize(
+    "kind",
+    ["defer_issue", "dismiss_issue", "resolve_issue"],
+)
+def test_continuity_receipt_digest_matches_core_canonical_wire(kind):
+    body = {
+        "kind": kind,
+        "expected_revision": "e" * 64,
+        "issue_id": "0123456789abcdef",
+        "expected_issue_fingerprint": "f" * 64,
+    }
+    expected = _continuity_command_request_digest(
+        7,
+        body["kind"],
+        body["expected_revision"],
+        body["issue_id"],
+        body["expected_issue_fingerprint"],
+    )
+    assert _continuity_receipt_request_digest(7, body) == expected
 
 
 class _FakeApiClient:
@@ -1061,6 +1137,18 @@ class _FakeApiClient:
             idempotency_key=idempotency_key,
         )
 
+    def get_continuity_command_receipt(
+        self,
+        idempotency_key: str,
+        project_id: int | None = None,
+    ) -> dict:
+        pid = int(project_id) if project_id is not None else self.require_project_id()
+        return self.request(
+            "GET",
+            self.project_path("continuity/command-receipt", pid),
+            idempotency_key=idempotency_key,
+        )
+
     def list_characters(self, project_id: int | None = None) -> list[dict]:
         pid = int(project_id) if project_id is not None else self.require_project_id()
         if pid == 1:
@@ -1159,6 +1247,12 @@ class _FakeApiClient:
                         error_code="knowledge_graph_receipt_not_found",
                     )
                 return copy.deepcopy(receipt)
+            if path.endswith("/continuity/command-receipt"):
+                raise LogosForgeApiError(
+                    "Continuity command receipt not found",
+                    status_code=404,
+                    error_code="continuity_receipt_not_found",
+                )
             if path == "/api/projects/1/timeline":
                 return self.get_timeline(1)
             if path == "/api/projects/1/canvas-plot":
@@ -3121,17 +3215,21 @@ def test_unknown_proposal_receipt_miss_stays_unknown():
 
     with pytest.raises(GatewayError, match="Unknown proposal id"):
         gateway.get_proposal("lfp_abcdefghijklmnopqrstuvwx")
-    assert fake.requests[-3][0:2] == (
+    assert fake.requests[-4][0:2] == (
         "GET",
         "/api/projects/1/timeline/command-receipt",
     )
-    assert fake.requests[-2][0:2] == (
+    assert fake.requests[-3][0:2] == (
         "GET",
         "/api/projects/1/canvas-plot/command-receipt",
     )
-    assert fake.requests[-1][0:2] == (
+    assert fake.requests[-2][0:2] == (
         "GET",
         "/api/projects/1/knowledge-graph/command-receipt",
+    )
+    assert fake.requests[-1][0:2] == (
+        "GET",
+        "/api/projects/1/continuity/command-receipt",
     )
 
 
@@ -3901,7 +3999,7 @@ def test_mcp_registry_has_unique_focused_tools_and_no_legacy_self_approval():
     from logosforge.librechat import mcp_server as server
 
     names = [spec.name for spec in server.TOOL_SPECS]
-    assert len(names) == len(set(names)) == 45
+    assert len(names) == len(set(names)) == 46
     assert {
         "logosforge_get_timeline",
         "logosforge_propose_timeline_command",
@@ -3910,6 +4008,7 @@ def test_mcp_registry_has_unique_focused_tools_and_no_legacy_self_approval():
         "logosforge_get_knowledge_graph",
         "logosforge_get_knowledge_graph_hidden_edges",
         "logosforge_propose_knowledge_graph_command",
+        "logosforge_propose_continuity_command",
         "logosforge_list_comments",
         "logosforge_propose_comment_reply",
         "logosforge_propose_comment_resolution",
@@ -4068,6 +4167,22 @@ def test_mcp_registry_has_unique_focused_tools_and_no_legacy_self_approval():
         and variant["additionalProperties"] is False
         for variant in graph_variants
     )
+    continuity_proposal = server.HANDLERS[
+        "logosforge_propose_continuity_command"
+    ]
+    assert continuity_proposal.read_only is True
+    assert continuity_proposal.destructive is False
+    assert continuity_proposal.idempotent is False
+    assert continuity_proposal.input_schema["properties"]["command"] == (
+        server.CONTINUITY_COMMAND_SCHEMA
+    )
+    assert server.CONTINUITY_COMMAND_SCHEMA["additionalProperties"] is False
+    assert server.CONTINUITY_COMMAND_SCHEMA["required"] == [
+        "kind",
+        "expected_revision",
+        "issue_id",
+        "expected_issue_fingerprint",
+    ]
     search = server.HANDLERS["logosforge_search"]
     assert search.input_schema == server._obj(
         {"query": {"type": "string", "maxLength": 500}}, ["query"],
@@ -4123,9 +4238,9 @@ def test_real_mcp_stdio_initializes_and_advertises_structured_tools():
 
     initialized, listed = asyncio.run(exercise())
     assert initialized.serverInfo.name == "logosforge"
-    assert initialized.serverInfo.version == "1.8.0"
+    assert initialized.serverInfo.version == "1.9.0"
     tools = {tool.name: tool for tool in listed.tools}
-    assert len(tools) == 45
+    assert len(tools) == 46
     assert {
         "logosforge_get_timeline",
         "logosforge_propose_timeline_command",
@@ -4134,6 +4249,7 @@ def test_real_mcp_stdio_initializes_and_advertises_structured_tools():
         "logosforge_get_knowledge_graph",
         "logosforge_get_knowledge_graph_hidden_edges",
         "logosforge_propose_knowledge_graph_command",
+        "logosforge_propose_continuity_command",
         "logosforge_list_comments",
         "logosforge_propose_comment_reply",
         "logosforge_propose_comment_resolution",
@@ -4208,6 +4324,45 @@ def test_real_mcp_stdio_initializes_and_advertises_structured_tools():
     ) == 3
     assert graph_proposal.inputSchema["properties"]["hidden_edge_offset"] == {
         "type": "integer", "minimum": 0,
+    }
+    continuity_proposal = tools["logosforge_propose_continuity_command"]
+    continuity_annotations = continuity_proposal.annotations
+    assert continuity_annotations.readOnlyHint is True
+    assert continuity_annotations.destructiveHint is False
+    assert continuity_annotations.idempotentHint is False
+    assert continuity_proposal.inputSchema["properties"]["command"] == {
+        "type": "object",
+        "properties": {
+            "kind": {
+                "type": "string",
+                "enum": ["defer_issue", "dismiss_issue", "resolve_issue"],
+            },
+            "expected_revision": {
+                "type": "string",
+                "minLength": 64,
+                "maxLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+            },
+            "issue_id": {
+                "type": "string",
+                "minLength": 16,
+                "maxLength": 16,
+                "pattern": "^[0-9a-f]{16}$",
+            },
+            "expected_issue_fingerprint": {
+                "type": "string",
+                "minLength": 64,
+                "maxLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+            },
+        },
+        "required": [
+            "kind",
+            "expected_revision",
+            "issue_id",
+            "expected_issue_fingerprint",
+        ],
+        "additionalProperties": False,
     }
     annotations = tools["logosforge_apply_proposal"].annotations
     assert annotations.readOnlyHint is False

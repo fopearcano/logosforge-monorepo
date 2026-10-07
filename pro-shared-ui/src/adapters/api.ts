@@ -110,6 +110,9 @@ import type {
   ExportResponseDTO,
   NarrativeDashboardDTO,
   ContinuityReportDTO,
+  ContinuityCommandDTO,
+  ContinuityCommandResultDTO,
+  ContinuityCommandReceiptDTO,
   PacingInsightDTO,
   BalanceDataDTO,
   StoryHealthDTO,
@@ -298,6 +301,18 @@ export interface ApiClient {
   // Derived intelligence (read-only, computed by the core)
   getDashboard(p: number): Promise<NarrativeDashboardDTO>;
   getContinuity(p: number): Promise<ContinuityReportDTO>;
+  /** Apply one revision-guarded, idempotent Continuity review decision. */
+  executeContinuityCommand(
+    p: number,
+    body: ContinuityCommandDTO,
+    idempotencyKey: string,
+  ): Promise<ContinuityCommandResultDTO>;
+  /** Resolve an ambiguously completed Continuity command by capability key. */
+  getContinuityCommandReceipt(
+    p: number,
+    idempotencyKey: string,
+    expectedCommand: ContinuityCommandDTO,
+  ): Promise<ContinuityCommandReceiptDTO>;
   getPacing(p: number): Promise<PacingInsightDTO[]>;
   getBalance(p: number): Promise<BalanceDataDTO>;
   getStoryHealth(p: number): Promise<StoryHealthDTO>;

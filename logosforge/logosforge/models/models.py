@@ -650,6 +650,21 @@ class ContinuityIssue(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=_now)
 
 
+class ContinuityCommandReceipt(SQLModel, table=True):
+    """Durable exactly-once receipt for a Continuity review command.
+
+    The raw caller capability is never persisted.  Receipts are scoped by
+    project and retain only the compact, committed status transition needed to
+    recover an ambiguous retry after a process restart.
+    """
+
+    project_id: int = Field(foreign_key="project.id", primary_key=True)
+    idempotency_key_hash: str = Field(primary_key=True, max_length=64)
+    request_digest: str = Field(max_length=64)
+    result_json: str
+    created_at: datetime = Field(default_factory=_now)
+
+
 class ContinuityCheckRun(SQLModel, table=True):
     """A lightweight record of a continuity check run (Phase 10Q)."""
 

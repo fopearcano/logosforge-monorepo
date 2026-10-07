@@ -34,7 +34,12 @@ def mode_format_ok(text: str, writing_mode: str) -> bool:
         return bool(_UPPER_CUE.search(t) or "(" in t)
     if writing_mode == "novel":
         # Wrong if it is clearly a screenplay (slug + character cues).
-        return not (bool(_SLUG.search(t)) and bool(_UPPER_CUE.search(t)))
+        return not (bool(_PANEL.search(t))
+                    or bool(_SLUG.search(t))
+                    or len(_UPPER_CUE.findall(t)) >= 2)
+    if writing_mode == "series":
+        # Series can use prose or teleplay, but not Graphic Novel panel fields.
+        return not bool(_PANEL.search(t))
     return True
 
 

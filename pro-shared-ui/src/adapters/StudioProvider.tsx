@@ -1,5 +1,5 @@
 import { createContext, useContext, type ReactNode } from "react";
-import type { WritingMode } from "@logosforge/ui-contracts";
+import type { KnowledgeGraphViewMode, WritingMode } from "@logosforge/ui-contracts";
 import type { ApiClient } from "./api";
 import type { PlatformAdapter } from "./platform";
 import { SelectionProvider } from "./selection";
@@ -17,10 +17,42 @@ export interface StudioNavigationOptions {
   psykeEntryId?: number;
   noteId?: number;
   commentId?: number;
+  graphFocusKey?: string;
+  graphViewMode?: KnowledgeGraphViewMode;
+  graphIncludeInferred?: boolean;
+  graphDepth?: 1 | 2;
+  continuityIssueKey?: string;
+  /** Proposal-only handoff into Billy; no AI call or manuscript write occurs. */
+  continuityRepair?: ContinuityRepairTarget;
+  aiTool?: string;
+}
+
+export interface ContinuityRepairTarget {
+  /** Unique one-shot capability so a stale clear cannot consume a newer handoff. */
+  handoffId: string;
+  ownerProjectId: number;
+  issueId: string;
+  sceneId: number | null;
+  draft: string;
+}
+
+export interface KnowledgeGraphNavigationTarget {
+  focusKey: string;
+  viewMode: KnowledgeGraphViewMode;
+  includeInferred: boolean;
+  depth: 1 | 2;
 }
 
 export interface NavTarget {
-  navigate?: (panel: string, opts?: StudioNavigationOptions) => void;
+  /**
+   * Open a workspace surface after the host's pending-save barrier. Hosts that
+   * can observe that barrier return false when navigation was stopped; legacy
+   * embedders may still return void.
+   */
+  navigate?: (
+    panel: string,
+    opts?: StudioNavigationOptions,
+  ) => void | boolean | Promise<void | boolean>;
   manuscriptTargetSceneId?: number | null;
   clearManuscriptTarget?: (sceneId?: number) => void;
   /** PSYKE entry requested by an external surface such as the Console. */
@@ -32,6 +64,15 @@ export interface NavTarget {
   /** Comment thread requested by an external surface such as the Omnibox. */
   commentTargetId?: number | null;
   clearCommentTarget?: (commentId?: number) => void;
+  /** Exact canonical graph neighborhood requested by Decision Radar or another surface. */
+  knowledgeGraphTarget?: KnowledgeGraphNavigationTarget | null;
+  clearKnowledgeGraphTarget?: (focusKey?: string) => void;
+  /** Exact computed Semantic Continuity issue requested by another surface. */
+  continuityTargetIssueKey?: string | null;
+  clearContinuityTarget?: (issueKey?: string) => void;
+  /** One-shot Continuity repair brief for the AI companion surface. */
+  continuityRepairTarget?: ContinuityRepairTarget | null;
+  clearContinuityRepairTarget?: (handoffId?: string) => void;
   /** Switch the active project (host owns projectId state). */
   selectProject?: (id: number) => Promise<boolean>;
   /** Ask the host to re-fetch its project list (after create/rename/delete). */
@@ -94,7 +135,10 @@ export function useProjectId(): number | undefined {
 }
 
 /** Switch panels / open a scene from any panel. No-op outside a provider or if the host didn't inject nav. */
-export function useNavigate(): (panel: string, opts?: StudioNavigationOptions) => void {
+export function useNavigate(): (
+  panel: string,
+  opts?: StudioNavigationOptions,
+) => void | boolean | Promise<void | boolean> {
   const nav = useContext(StudioContext)?.navigate;
   return nav ?? (() => {});
 }
@@ -137,4 +181,40 @@ export function useCommentTarget(): { commentId: number | null; clear: () => voi
   const ctx = useContext(StudioContext);
   const commentId = ctx?.commentTargetId ?? null;
   return { commentId, clear: () => ctx?.clearCommentTarget?.(commentId ?? undefined) };
+}
+
+/** The exact canonical graph neighborhood another surface asked Graph to reveal. */
+export function useKnowledgeGraphTarget(): {
+  target: KnowledgeGraphNavigationTarget | null;
+  clear: () => void;
+} {
+  const ctx = useContext(StudioContext);
+  const target = ctx?.knowledgeGraphTarget ?? null;
+  return {
+    target,
+    clear: () => ctx?.clearKnowledgeGraphTarget?.(target?.focusKey),
+  };
+}
+
+/** The exact current Semantic Continuity issue another surface asked to reveal. */
+export function useContinuityTarget(): { issueKey: string | null; clear: () => void } {
+  const ctx = useContext(StudioContext);
+  const issueKey = ctx?.continuityTargetIssueKey ?? null;
+  return {
+    issueKey,
+    clear: () => ctx?.clearContinuityTarget?.(issueKey ?? undefined),
+  };
+}
+
+/** Proposal-only Continuity repair brief another surface asked Billy to stage. */
+export function useContinuityRepairTarget(): {
+  target: ContinuityRepairTarget | null;
+  clear: () => void;
+} {
+  const ctx = useContext(StudioContext);
+  const target = ctx?.continuityRepairTarget ?? null;
+  return {
+    target,
+    clear: () => ctx?.clearContinuityRepairTarget?.(target?.handoffId),
+  };
 }

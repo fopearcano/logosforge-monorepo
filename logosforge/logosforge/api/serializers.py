@@ -814,10 +814,13 @@ def dashboard_to_dto(data) -> schemas.NarrativeDashboardDTO:
 def continuity_report_to_dto(report) -> schemas.ContinuityReportDTO:
     """Map ``continuity.models.ContinuityReport`` onto its DTO (issues + counts)."""
     return schemas.ContinuityReportDTO(
+        project_id=report.project_id,
+        review_revision=report.review_revision,
         writing_mode=report.writing_mode,
         issues=[
             schemas.ContinuityIssueDTO(
                 id=i.issue_key,
+                review_fingerprint=i.review_fingerprint,
                 issue_type=i.issue_type,
                 dimension=i.dimension,
                 severity=i.severity,
@@ -930,29 +933,145 @@ def workflows_to_dtos(views) -> list[schemas.WorkflowRunDTO]:
     return [workflow_run_to_dto(v) for v in views]
 
 
-def decision_card_to_dto(card) -> schemas.DecisionCardDTO:
-    return schemas.DecisionCardDTO(
-        id=card.id,
-        category=card.category,
-        severity=card.severity,
-        confidence=card.confidence,
-        title=card.title,
-        explanation=card.explanation,
-        suggested_action=card.suggested_action,
-        related_section=card.related_section,
-        related_target_type=card.related_target_type,
-        related_target_id=card.related_target_id,
-        created_from=card.created_from,
+_DECISION_SEVERITIES = {
+    "blocking",
+    "warning",
+    "suggestion",
+    "opportunity",
+    "info",
+}
+_DECISION_CONFIDENCES = {"confirmed", "likely", "possible", "unknown"}
+
+
+def _decision_confidence(value, *, allow_blank: bool = False) -> str:
+    normalized = str(value or "")
+    if allow_blank and not normalized:
+        return ""
+    return normalized if normalized in _DECISION_CONFIDENCES else "unknown"
+
+
+def decision_evidence_to_dto(evidence) -> schemas.DecisionEvidenceDTO:
+    focus_key = str(getattr(evidence, "graph_focus_key", "") or "")
+    source_key = str(getattr(evidence, "source_key", "") or "")
+    target_key = str(getattr(evidence, "target_key", "") or "")
+    return schemas.DecisionEvidenceDTO(
+        kind=str(getattr(evidence, "kind", "") or "")[:32],
+        label=str(getattr(evidence, "label", "") or "")[:512],
+        detail=str(getattr(evidence, "detail", "") or "")[:1000],
+        graph_focus_key=(knowledge_graph_wire_key(focus_key) if focus_key else ""),
+        source_key=(knowledge_graph_wire_key(source_key) if source_key else ""),
+        target_key=(knowledge_graph_wire_key(target_key) if target_key else ""),
+        edge_type=str(getattr(evidence, "edge_type", "") or "")[:128],
+        confidence=_decision_confidence(
+            getattr(evidence, "confidence", ""),
+            allow_blank=True,
+        ),
+        source_system=str(getattr(evidence, "source_system", "") or "")[:128],
+        provenance=str(getattr(evidence, "provenance", "") or "")[:512],
+        related_section=str(
+            getattr(evidence, "related_section", "") or ""
+        )[:128],
+        related_target_type=str(
+            getattr(evidence, "related_target_type", "") or ""
+        )[:128],
+        related_target_id=getattr(evidence, "related_target_id", None),
+        related_target_key=str(
+            getattr(evidence, "related_target_key", "") or ""
+        )[:512],
     )
 
 
-def decision_radar_to_dto(report) -> schemas.DecisionRadarDTO:
+def decision_card_to_dto(card) -> schemas.DecisionCardDTO:
+    graph_focus_key = str(getattr(card, "graph_focus_key", "") or "")
+    evidence = list(getattr(card, "evidence", []) or [])[:5]
+    card_id = str(card.id)
+    if len(card_id) > 512:
+        digest = hashlib.sha256(card_id.encode("utf-8")).hexdigest()
+        card_id = f"decision:sha256:{digest}"
+    return schemas.DecisionCardDTO(
+        id=card_id,
+        category=str(card.category)[:512],
+        severity=(
+            str(card.severity)
+            if str(card.severity) in _DECISION_SEVERITIES
+            else "info"
+        ),
+        confidence=_decision_confidence(card.confidence),
+        title=str(card.title)[:512],
+        explanation=str(card.explanation or "")[:4000],
+        suggested_action=str(card.suggested_action or "")[:1000],
+        related_section=str(card.related_section or "")[:128],
+        related_target_type=str(card.related_target_type or "")[:128],
+        related_target_id=card.related_target_id,
+        related_target_key=str(
+            getattr(card, "related_target_key", "") or ""
+        )[:512],
+        created_from=str(card.created_from)[:64],
+        graph_focus_key=(
+            knowledge_graph_wire_key(graph_focus_key) if graph_focus_key else ""
+        ),
+        graph_view_mode=(getattr(card, "graph_view_mode", "") or None),
+        graph_include_inferred=bool(
+            getattr(card, "graph_include_inferred", True)
+        ),
+        graph_depth=int(getattr(card, "graph_depth", 1) or 1),
+        evidence=[decision_evidence_to_dto(item) for item in evidence],
+        evidence_total=max(
+            len(evidence),
+            int(getattr(card, "evidence_total", 0) or 0),
+        ),
+    )
+
+
+def decision_radar_to_dto(
+    report,
+    *,
+    knowledge_graph_available: bool = False,
+    knowledge_graph_cards=(),
+    continuity_available: bool = False,
+    continuity_cards=(),
+) -> schemas.DecisionRadarDTO:
     """Map a ``project_intelligence.ProjectIntelligenceReport`` onto the radar DTO."""
+    graph_cards = list(knowledge_graph_cards)[:8]
+    summary_line = report.summary_line()
+    if knowledge_graph_available:
+        graph_warnings = sum(
+            1 for card in graph_cards if getattr(card, "severity", "") == "warning"
+        )
+        summary_line += (
+            f" Knowledge Graph: {len(graph_cards)} card(s), "
+            f"{graph_warnings} warning(s)."
+        )
+    else:
+        summary_line += " Knowledge Graph unavailable."
+    bounded_continuity_cards = list(continuity_cards)[:8]
+    if continuity_available:
+        urgent = sum(
+            1
+            for card in bounded_continuity_cards
+            if getattr(card, "severity", "") in {"blocking", "warning"}
+        )
+        summary_line += (
+            f" Continuity: {len(bounded_continuity_cards)} card(s), "
+            f"{urgent} blocking/warning."
+        )
+    else:
+        summary_line += " Continuity unavailable."
     return schemas.DecisionRadarDTO(
         project_id=report.project_id,
         generated_light=bool(getattr(report, "light", False)),
-        summary_line=report.summary_line(),
+        summary_line=summary_line,
         radar=[decision_card_to_dto(c) for c in report.radar],
+        knowledge_graph_available=knowledge_graph_available,
+        knowledge_graph_cards=[
+            decision_card_to_dto(card)
+            for card in graph_cards
+        ],
+        continuity_available=continuity_available,
+        continuity_cards=[
+            decision_card_to_dto(card)
+            for card in bounded_continuity_cards
+        ],
     )
 
 

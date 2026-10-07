@@ -143,7 +143,7 @@ export function useDashboard(): Resource<NarrativeDashboardDTO> {
 /** Continuity issues (contradictions, drift, gaps) by dimension + counts. */
 export function useContinuity(): Resource<ContinuityReportDTO> {
   const { api, projectId } = useStudio();
-  return useResource(projectId ?? null, () => api.getContinuity(projectId as number), ["scenes_changed", "scene_changed", "psyke_changed"]);
+  return useResource(projectId ?? null, () => api.getContinuity(projectId as number), ["scenes_changed", "scene_changed", "psyke_changed", "continuity_changed"]);
 }
 
 /** Pacing insights (monotony, disappearance, stagnation, …) — up to 5. */
@@ -179,7 +179,19 @@ export function useWorkflows(): Resource<WorkflowRunDTO[]> {
 /** Decision radar — ranked decision cards (blocking→info) for the active project. */
 export function useDecisionRadar(): Resource<DecisionRadarDTO> {
   const { api, projectId } = useStudio();
-  return useResource(projectId ?? null, () => api.getDecisionRadar(projectId as number), ["scenes_changed", "scene_changed", "psyke_changed", "dashboard_changed"]);
+  return useResource(projectId ?? null, () => api.getDecisionRadar(projectId as number), [
+    "scenes_changed",
+    "scene_changed",
+    "psyke_changed",
+    "notes_changed",
+    "outline_changed",
+    "plot_changed",
+    "timeline_changed",
+    "project_data_changed",
+    "knowledge_graph_changed",
+    "continuity_changed",
+    "dashboard_changed",
+  ]);
 }
 
 /** Bounded canonical narrative graph view or a focused one/two-hop neighborhood. */

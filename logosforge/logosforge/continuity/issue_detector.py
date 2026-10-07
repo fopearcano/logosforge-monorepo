@@ -104,7 +104,7 @@ def detect_character_drift(pf: ProjectFacts) -> list[M.ContinuityIssueData]:
                 explanation="A defined character with a single appearance may be an "
                             "unresolved arc or stray reference.",
                 suggested_action="Develop the arc or confirm the brief appearance.",
-                related_scene_ids=[]))
+                related_scene_ids=[], related_node_ids=[e.id]))
         elif len(idxs) >= 3 and max(idxs) < last_third_start:
             issues.append(M.ContinuityIssueData(
                 issue_type=M.IT_STATE_DRIFT, dimension=M.DIM_CHARACTER,
@@ -113,7 +113,7 @@ def detect_character_drift(pf: ProjectFacts) -> list[M.ContinuityIssueData]:
                 explanation="A recurring character is absent from the last ~40% of "
                             "the project.",
                 suggested_action="Resolve or reintroduce the character's arc.",
-                related_scene_ids=[]))
+                related_scene_ids=[], related_node_ids=[e.id]))
         if len(issues) >= _CAP:
             break
     return issues[:_CAP]

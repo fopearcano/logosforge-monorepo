@@ -110,7 +110,7 @@ database or exposes arbitrary HTTP, filesystem, or Python execution.
 
 MCP reads cover complete revisioned scenes, outline and PSYKE data, notes,
 complete comment threads, search, events, diagnostics, exports, and desktop
-live context when available. The 45-tool surface includes
+live context when available. The MCP 1.9.0, 46-tool surface includes
 `logosforge_list_comments` (paged, with an optional resolved-thread filter),
 `logosforge_propose_comment_reply`, and
 `logosforge_propose_comment_resolution` (Resolve or Reopen). Writes use focused
@@ -129,18 +129,28 @@ even if SQLite reuses a deleted row's numeric ID, while unrelated prose/title
 edits do not invalidate a safe board operation. Lane deletion preserves its
 events as Unassigned, and event removal preserves the manuscript scene.
 
-Gateway 1.6 also exposes the bounded canonical Narrative Knowledge Graph,
+The gateway also exposes the bounded canonical Narrative Knowledge Graph,
 complete paged hidden-edge queue, and one strict proposal tool for Confirm,
 Hide, or Restore. Every command binds the exact directional edge identity and
 current review revision. Restore additionally names the offset of the current
 hidden-edge page; the gateway refetches that page and requires the exact target
 before storing the proposal.
 
-Each opaque Timeline, Canvas Plot, or Knowledge Graph proposal id is a durable
-core idempotency key. If the apply response is lost, the gateway can reconcile
-the same proposal through its project-scoped receipt—even after the MCP process
-restarts—without duplicating the mutation. A replay returns the current board
-or Project Map plus the original applied revision, never a stale stored
+Semantic Continuity uses the existing diagnostic read plus
+`logosforge_propose_continuity_command`. An agent may propose Defer, Dismiss, or
+Resolve for one exact open finding. The request must copy both the report's
+persisted review revision and the issue's SHA-256 review fingerprint, which binds
+the exact derived wording, evidence, severity/confidence, suggested action, and
+related scene/node references. A changed finding cannot inherit an older
+approval merely because its stable issue key survived. Applying the proposal
+records status only; it does not edit manuscript prose or run AI. Pro's separate
+Billy → Controlled Apply flow remains the repair path.
+
+Each opaque Timeline, Canvas Plot, Knowledge Graph, or Continuity proposal id is
+a durable core idempotency key. If the apply response is lost, the gateway can
+reconcile the same proposal through its project-scoped receipt—even after the
+MCP process restarts—without duplicating the mutation. A replay returns the
+current board or report plus the original applied revision, never a stale stored
 snapshot. Receipts last for the project lifetime and disappear with it.
 
 `logosforge_search` delegates to the core's typed, project-scoped search route
@@ -165,7 +175,7 @@ and reply/thread deletion remain available only in Pro's own UI.
 
 If apply receives an explicit HTTP 4xx rejection, the proposal is terminally
 failed and the agent must reread before proposing again. Timeline, Canvas Plot,
-and Knowledge Graph proposals have durable recovery: a unique,
+Knowledge Graph, and Continuity proposals have durable recovery: a unique,
 family-specific receipt miss from a receipt-capable core permits one bounded
 resend of the exact same proposal and key. An old-core/generic 404 makes that
 original ambiguous apply terminally `indeterminate`; it cannot prove a safe
@@ -175,6 +185,14 @@ fresh proposal/key. For every other proposal type, a lost response or HTTP 5xx
 remains terminally `indeterminate`; inspect current state and never retry
 because the mutation may already have committed. The shared apply tool is
 therefore still not generally idempotent.
+
+When a restarted gateway is asked about an unknown proposal id, it probes all
+four durable receipt families. Exactly one match is accepted; multiple matches
+fail closed as a collision rather than selecting whichever family answered
+first. Frozen acceptance covers non-mutating Continuity proposal creation, while
+the packaged smoke covers applied status, stale-sibling rejection, persisted
+review state, and fresh-companion receipt recovery alongside the other three
+transactional families.
 
 See [Pro MCP gateway](docs/MCP_GATEWAY.md) for the complete tool model,
 environment variables, Codex setup, remote-host restrictions, and checkpoint
@@ -312,6 +330,8 @@ keeps LibreChat as an *interface*, never an *authority*.
   rollback. Manuscript imports and delete operations are intentionally not
   exposed as MCP tools. Comment creation, anchor/root-body editing, and
   reply/thread deletion are likewise UI-only.
+* Continuity commands record Defer/Dismiss/Resolve status only. Manuscript repair
+  stays in Pro's explicit Billy and Controlled Apply workflow.
 * Auto-launch covers only a simple local startup command; Docker-stack
   orchestration is deferred (§6).
 * `get_entity_context` for non-character PSYKE types filters the full entry

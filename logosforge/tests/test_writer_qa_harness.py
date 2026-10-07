@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import warnings
+from dataclasses import replace
 
 warnings.filterwarnings("ignore")
 
@@ -82,11 +83,14 @@ def test_invalid_not_cacheable():
     assert validate(RESPONSES["invalid_planning_markdown"], c).cache_allowed is False
 
 
-# 9 + 12. Wrong-mode output is surfaced as a BLOCKER (a real validator gap).
-def test_wrong_mode_is_blocker():
-    bug = evaluate_scenario(_by_name("screenplay.manuscript.dialogue.wrong_mode"))
-    assert bug is not None and bug.severity == "BLOCKER"
-    assert "wrong-mode" in bug.actual_behavior
+# 9 + 12. Clearly wrong-mode output is blocked before it can be applied.
+def test_wrong_mode_is_blocked_no_bug():
+    scenario = _by_name("screenplay.manuscript.dialogue.wrong_mode")
+    assert evaluate_scenario(scenario) is None
+    contract = route(section="Manuscript", writing_mode="screenplay",
+                     action="Dialogue")
+    result = validate(RESPONSES[scenario.provider_profile], contract)
+    assert result.status == "invalid" and result.apply_allowed is False
 
 
 # 10. Hidden-context dumps are detected (blocked) by the validator.
@@ -104,26 +108,32 @@ def test_missing_target_clarifies():
     assert c.needs_clarification is True
 
 
-# 12b. Empty output is flagged HIGH (usability gap), not BLOCKER.
-def test_empty_output_is_high():
-    bug = evaluate_scenario(_by_name("novel.manuscript.dialogue.empty"))
-    assert bug is not None and bug.severity == "HIGH"
-    assert "empty" in bug.actual_behavior
+# 12b. Empty output is invalid and never apply/cache-allowed.
+def test_empty_output_is_blocked_no_bug():
+    scenario = _by_name("novel.manuscript.dialogue.empty")
+    assert evaluate_scenario(scenario) is None
+    result = validate("", route(section="Manuscript", writing_mode="novel",
+                                action="Dialogue"))
+    assert result.status == "invalid"
+    assert result.apply_allowed is False and result.cache_allowed is False
 
 
 # 13-14. Bugs carry reproduction steps + expected/actual.
 def test_bug_has_repro_and_expected_actual():
-    bug = evaluate_scenario(_by_name("screenplay.manuscript.dialogue.wrong_mode"))
+    safe = _by_name("screenplay.manuscript.Dialogue.valid")
+    deliberately_wrong_expectation = replace(
+        safe, expected_status="invalid", expected_apply=False, severity="HIGH")
+    bug = evaluate_scenario(deliberately_wrong_expectation)
     assert len(bug.reproduction_steps) >= 3
     assert bug.expected_behavior and bug.actual_behavior
     assert bug.suggested_fix_area
 
 
-# 15. Exit code fails on BLOCKER (the full suite finds wrong-mode blockers).
-def test_exit_code_fails_on_blocker(tmp_path):
+# 15. The release-gate suite exits cleanly after safety blockers are closed.
+def test_exit_code_passes_when_blockers_closed(tmp_path):
     rc = run_writer_qa.main(["--suite", "all",
                              "--report", str(tmp_path / "r")])
-    assert rc == 1
+    assert rc == 0
     assert (tmp_path / "r.json").exists()
 
 

@@ -77,7 +77,7 @@ def core_scenarios() -> list[Scenario]:
         s.append(_bad(mode, "invalid_context_dump", "context_dump_blocked"))
         s.append(_bad(mode, "invalid_meta_reasoning", "meta_blocked"))
         # Wrong-mode + empty outputs SHOULD be blocked too (surfaces gaps).
-        s.append(_bad(mode, "invalid_wrong_mode", "wrong_mode", "BLOCKER"))
+        s.append(_bad(mode, f"invalid_wrong_mode_{mode}", "wrong_mode", "BLOCKER"))
         s.append(_bad(mode, "invalid_empty", "empty", "HIGH"))
         # provider error must be handled gracefully.
         s.append(Scenario(
@@ -167,7 +167,7 @@ def core_scenarios() -> list[Scenario]:
         writing_mode="novel", action="ask", target="no_target",
         instruction="continue the scene", provider_profile="valid_novel_prose",
         expected_output_kind=CLARIFICATION, expected_status="valid",
-        expected_apply=False, expect_clarification=False, entry_point="chat",
+        expected_apply=False, expect_clarification=True, entry_point="chat",
         severity="MEDIUM"))
 
     # K. Dexter text — transcript handling (never raw audio).

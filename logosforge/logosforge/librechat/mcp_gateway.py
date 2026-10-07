@@ -51,6 +51,7 @@ _IDEMPOTENCY_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$")
 _TIMELINE_RECEIPT_MISS_CODE = "timeline_receipt_not_found"
 _CANVAS_PLOT_RECEIPT_MISS_CODE = "canvas_plot_receipt_not_found"
 _KNOWLEDGE_GRAPH_RECEIPT_MISS_CODE = "knowledge_graph_receipt_not_found"
+_CONTINUITY_RECEIPT_MISS_CODE = "continuity_receipt_not_found"
 KNOWLEDGE_GRAPH_VIEW_MODES = frozenset({
     "project_map",
     "structure",
@@ -124,6 +125,21 @@ def _knowledge_graph_receipt_request_digest(
         "source": command["source"],
         "target": command["target"],
         "edge_type": command["edge_type"],
+    })
+
+
+def _continuity_receipt_request_digest(
+    project_id: int,
+    command: dict[str, Any],
+) -> str:
+    """Match Core's canonical identity for one Continuity review command."""
+    return _digest({
+        "scope": "continuity-command-v1",
+        "project_id": int(project_id),
+        "kind": command["kind"],
+        "expected_revision": command["expected_revision"],
+        "issue_key": command["issue_id"],
+        "expected_issue_fingerprint": command["expected_issue_fingerprint"],
     })
 
 
@@ -230,6 +246,13 @@ _KNOWLEDGE_GRAPH_COMMAND_FIELDS: dict[str, set[str]] = {
         "kind", "expected_revision", "source", "target", "edge_type",
     }
     for kind in ("confirm_edge", "hide_edge", "unhide_edge")
+}
+
+_CONTINUITY_COMMAND_FIELDS: dict[str, set[str]] = {
+    kind: {
+        "kind", "expected_revision", "issue_id", "expected_issue_fingerprint",
+    }
+    for kind in ("defer_issue", "dismiss_issue", "resolve_issue")
 }
 
 
@@ -650,6 +673,69 @@ def _normalize_knowledge_graph_command(
     return normalized
 
 
+def _normalize_continuity_command(
+    command: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate the complete transactional Continuity review vocabulary."""
+    if not isinstance(command, dict):
+        raise GatewayError("Continuity command must be an object.")
+    kind = command.get("kind")
+    if not isinstance(kind, str) or kind not in _CONTINUITY_COMMAND_FIELDS:
+        raise GatewayError(
+            "Continuity command kind must be one of: "
+            + ", ".join(sorted(_CONTINUITY_COMMAND_FIELDS))
+            + "."
+        )
+    extra = sorted(set(command) - _CONTINUITY_COMMAND_FIELDS[kind])
+    if extra:
+        raise GatewayError(
+            "Unexpected Continuity command field(s): "
+            + ", ".join(extra)
+            + "."
+        )
+    missing = [
+        field
+        for field in (
+            "expected_revision", "issue_id", "expected_issue_fingerprint",
+        )
+        if field not in command
+    ]
+    if missing:
+        raise GatewayError(
+            "Continuity command requires: " + ", ".join(missing) + "."
+        )
+    expected_revision = command["expected_revision"]
+    if (
+        not isinstance(expected_revision, str)
+        or _LOWER_SHA256_RE.fullmatch(expected_revision) is None
+    ):
+        raise GatewayError(
+            "expected_revision must be the exact 64-character lowercase "
+            "review revision returned by the Continuity report."
+        )
+    issue_id = command["issue_id"]
+    if (
+        not isinstance(issue_id, str)
+        or re.fullmatch(r"[0-9a-f]{16}", issue_id) is None
+    ):
+        raise GatewayError("issue_id must be a 16-character lowercase hex id.")
+    fingerprint = command["expected_issue_fingerprint"]
+    if (
+        not isinstance(fingerprint, str)
+        or _LOWER_SHA256_RE.fullmatch(fingerprint) is None
+    ):
+        raise GatewayError(
+            "expected_issue_fingerprint must be the exact 64-character "
+            "lowercase fingerprint returned for the reviewed issue."
+        )
+    return {
+        "kind": kind,
+        "expected_revision": expected_revision,
+        "issue_id": issue_id,
+        "expected_issue_fingerprint": fingerprint,
+    }
+
+
 @dataclass
 class Proposal:
     proposal_id: str
@@ -667,8 +753,8 @@ class Proposal:
     review: dict[str, Any] = field(default_factory=dict)
     # ``indeterminate`` is terminal because no durable protocol proved that a
     # retry is safe. ``recovery_pending`` is reserved for Timeline, Canvas Plot,
-    # and Knowledge Graph commands: Core proved receipt support, so the same
-    # proposal id may be reconciled or resent later.
+    # Knowledge Graph, and Continuity commands: Core proved receipt support, so
+    # the same proposal id may be reconciled or resent later.
     state: str = "pending"  # pending | applying | recovery_pending | applied | failed | indeterminate | discarded
     result: Any = None
     receipt: dict[str, Any] | None = None
@@ -679,6 +765,8 @@ class Proposal:
     canvas_plot_receipt_observed: bool = False
     knowledge_graph_resend_attempted: bool = False
     knowledge_graph_receipt_observed: bool = False
+    continuity_resend_attempted: bool = False
+    continuity_receipt_observed: bool = False
     error: str = ""
 
     def public(self, include_result: bool = False) -> dict[str, Any]:
@@ -789,6 +877,9 @@ class LogosForgeMcpGateway:
             node["body_sha256"] = hashlib.sha256(body.encode("utf-8")).hexdigest()
             node["body_preview"] = _preview(body, 500)
         return snapshot
+
+    def get_continuity(self) -> dict[str, Any]:
+        return self.client.get_continuity(self._project_id())
 
     def get_knowledge_graph(
         self,
@@ -1091,6 +1182,7 @@ class LogosForgeMcpGateway:
                     self._is_timeline_proposal(proposal)
                     or self._is_canvas_plot_proposal(proposal)
                     or self._is_knowledge_graph_proposal(proposal)
+                    or self._is_continuity_proposal(proposal)
                 )
             )
             if proposal.state != "pending" and not recovering:
@@ -1133,7 +1225,9 @@ class LogosForgeMcpGateway:
                 return self._resume_timeline_recovery(proposal)
             if self._is_canvas_plot_proposal(proposal):
                 return self._resume_canvas_plot_recovery(proposal)
-            return self._resume_knowledge_graph_recovery(proposal)
+            if self._is_knowledge_graph_proposal(proposal):
+                return self._resume_knowledge_graph_recovery(proposal)
+            return self._resume_continuity_recovery(proposal)
 
         try:
             result = self._execute_proposal_request(proposal)
@@ -1146,6 +1240,8 @@ class LogosForgeMcpGateway:
                 return self._recover_ambiguous_canvas_plot_apply(proposal, exc)
             if self._is_knowledge_graph_proposal(proposal):
                 return self._recover_ambiguous_knowledge_graph_apply(proposal, exc)
+            if self._is_continuity_proposal(proposal):
+                return self._recover_ambiguous_continuity_apply(proposal, exc)
             self._raise_indeterminate_apply(proposal, exc)
 
         return self._complete_proposal(proposal, result)
@@ -1197,11 +1293,27 @@ class LogosForgeMcpGateway:
             )
         )
 
+    def _is_continuity_proposal(self, proposal: Proposal) -> bool:
+        if (
+            proposal.project_id is None
+            or not proposal.operation.startswith("continuity_")
+        ):
+            return False
+        return (
+            proposal.method == "POST"
+            and proposal.path
+            == self.client.project_path(
+                "continuity/commands",
+                proposal.project_id,
+            )
+        )
+
     def _execute_proposal_request(self, proposal: Proposal) -> Any:
         if (
             self._is_timeline_proposal(proposal)
             or self._is_canvas_plot_proposal(proposal)
             or self._is_knowledge_graph_proposal(proposal)
+            or self._is_continuity_proposal(proposal)
         ):
             return self.client.request(
                 proposal.method,
@@ -2263,6 +2375,347 @@ class LogosForgeMcpGateway:
         except Exception as exc:  # noqa: BLE001 - fresh snapshot transport
             self._mark_knowledge_graph_recovery_pending(proposal, exc)
 
+    def _continuity_receipt(
+        self,
+        proposal_id: str,
+        project_id: int,
+    ) -> dict[str, Any] | None:
+        """Read a Continuity receipt, distinguishing a supported miss."""
+        try:
+            receipt = self.client.get_continuity_command_receipt(
+                proposal_id,
+                project_id,
+            )
+        except LogosForgeApiError as exc:
+            if (
+                exc.status_code == 404
+                and exc.error_code == _CONTINUITY_RECEIPT_MISS_CODE
+            ):
+                return None
+            raise
+        if not isinstance(receipt, dict):
+            raise GatewayError(
+                "Core returned an invalid Continuity receipt response."
+            )
+        return receipt
+
+    @staticmethod
+    def _validate_continuity_receipt_shape(
+        receipt: Any,
+        project_id: int,
+    ) -> dict[str, Any]:
+        if not isinstance(receipt, dict):
+            raise GatewayError("Core returned an invalid Continuity receipt.")
+        canonical = {
+            "project_id": receipt.get("project_id"),
+            "request_digest": receipt.get("request_digest"),
+            "command_kind": receipt.get("command_kind"),
+            "expected_revision": receipt.get("expected_revision"),
+            "applied_revision": receipt.get("applied_revision"),
+            "original_changed": receipt.get("original_changed"),
+            "original_affected_issue_id": receipt.get(
+                "original_affected_issue_id"
+            ),
+            "expected_issue_fingerprint": receipt.get(
+                "expected_issue_fingerprint"
+            ),
+            "previous_status": receipt.get("previous_status"),
+            "status": receipt.get("status"),
+            "committed_at": receipt.get("committed_at"),
+        }
+        expected_status = {
+            "defer_issue": "deferred",
+            "dismiss_issue": "dismissed",
+            "resolve_issue": "resolved",
+        }
+        receipt_project_id = canonical["project_id"]
+        valid = (
+            isinstance(receipt_project_id, int)
+            and not isinstance(receipt_project_id, bool)
+            and receipt_project_id == project_id
+            and isinstance(canonical["request_digest"], str)
+            and _LOWER_SHA256_RE.fullmatch(canonical["request_digest"])
+            is not None
+            and isinstance(canonical["command_kind"], str)
+            and canonical["command_kind"] in _CONTINUITY_COMMAND_FIELDS
+            and isinstance(canonical["expected_revision"], str)
+            and _LOWER_SHA256_RE.fullmatch(canonical["expected_revision"])
+            is not None
+            and isinstance(canonical["applied_revision"], str)
+            and _LOWER_SHA256_RE.fullmatch(canonical["applied_revision"])
+            is not None
+            and canonical["original_changed"] is True
+            and canonical["applied_revision"] != canonical["expected_revision"]
+            and isinstance(canonical["original_affected_issue_id"], str)
+            and re.fullmatch(
+                r"[0-9a-f]{16}", canonical["original_affected_issue_id"]
+            )
+            is not None
+            and isinstance(canonical["expected_issue_fingerprint"], str)
+            and _LOWER_SHA256_RE.fullmatch(
+                canonical["expected_issue_fingerprint"]
+            )
+            is not None
+            and canonical["previous_status"] == "open"
+            and canonical["status"]
+            == expected_status.get(canonical["command_kind"])
+            and isinstance(canonical["committed_at"], str)
+            and bool(canonical["committed_at"])
+        )
+        if valid:
+            canonical_request = {
+                "kind": canonical["command_kind"],
+                "expected_revision": canonical["expected_revision"],
+                "issue_id": canonical["original_affected_issue_id"],
+                "expected_issue_fingerprint": canonical[
+                    "expected_issue_fingerprint"
+                ],
+            }
+            valid = secrets.compare_digest(
+                canonical["request_digest"],
+                _continuity_receipt_request_digest(
+                    project_id,
+                    canonical_request,
+                ),
+            )
+        if not valid:
+            raise GatewayError("Core returned an invalid Continuity receipt.")
+        return copy.deepcopy(canonical)
+
+    def _validate_continuity_receipt_for_proposal(
+        self,
+        proposal: Proposal,
+        receipt: Any,
+    ) -> dict[str, Any]:
+        assert proposal.project_id is not None
+        canonical = self._validate_continuity_receipt_shape(
+            receipt,
+            proposal.project_id,
+        )
+        expected_status = {
+            "defer_issue": "deferred",
+            "dismiss_issue": "dismissed",
+            "resolve_issue": "resolved",
+        }.get(proposal.body.get("kind"))
+        expected_digest = _continuity_receipt_request_digest(
+            proposal.project_id,
+            proposal.body,
+        )
+        if (
+            canonical["command_kind"] != proposal.body.get("kind")
+            or canonical["expected_revision"]
+            != proposal.body.get("expected_revision")
+            or canonical["original_affected_issue_id"]
+            != proposal.body.get("issue_id")
+            or canonical["expected_issue_fingerprint"]
+            != proposal.body.get("expected_issue_fingerprint")
+            or canonical["status"] != expected_status
+            or not secrets.compare_digest(
+                canonical["request_digest"],
+                expected_digest,
+            )
+        ):
+            raise GatewayError(
+                "Durable Continuity receipt integrity check failed; do not retry."
+            )
+        return canonical
+
+    def _recovered_continuity_result(
+        self,
+        project_id: int,
+        proposal_id: str,
+        receipt: dict[str, Any],
+        *,
+        proposal: Proposal | None = None,
+    ) -> dict[str, Any]:
+        """Read one Continuity report bracketed by the same receipt."""
+        current = self.client.get_continuity(project_id)
+        current_project_id = (
+            current.get("project_id") if isinstance(current, dict) else None
+        )
+        if (
+            not isinstance(current, dict)
+            or isinstance(current_project_id, bool)
+            or not isinstance(current_project_id, int)
+            or current_project_id != project_id
+            or not isinstance(current.get("review_revision"), str)
+            or _LOWER_SHA256_RE.fullmatch(current["review_revision"]) is None
+        ):
+            raise GatewayError(
+                "Core returned an invalid Continuity report during recovery."
+            )
+        raw_confirmation = self._continuity_receipt(proposal_id, project_id)
+        if raw_confirmation is None:
+            raise GatewayError(
+                "The durable Continuity receipt disappeared during recovery; "
+                "the project lifetime may have changed."
+            )
+        confirmation = (
+            self._validate_continuity_receipt_for_proposal(
+                proposal,
+                raw_confirmation,
+            )
+            if proposal is not None
+            else self._validate_continuity_receipt_shape(
+                raw_confirmation,
+                project_id,
+            )
+        )
+        if confirmation != receipt:
+            raise GatewayError(
+                "The durable Continuity receipt changed during recovery; "
+                "the project lifetime may have changed."
+            )
+        return {
+            "continuity": current,
+            "changed": False,
+            "affected_issue_id": receipt["original_affected_issue_id"],
+            "previous_status": receipt["previous_status"],
+            "status": receipt["status"],
+            "replayed": True,
+            "applied_revision": receipt["applied_revision"],
+        }
+
+    def _complete_continuity_recovery(
+        self,
+        proposal: Proposal,
+        raw_receipt: Any,
+    ) -> dict[str, Any]:
+        receipt = self._validate_continuity_receipt_for_proposal(
+            proposal,
+            raw_receipt,
+        )
+        assert proposal.project_id is not None
+        with self._lock:
+            proposal.receipt = receipt
+            proposal.recovered_from_core = True
+            proposal.continuity_receipt_observed = True
+        result = self._recovered_continuity_result(
+            proposal.project_id,
+            proposal.proposal_id,
+            receipt,
+            proposal=proposal,
+        )
+        with self._lock:
+            proposal.state = "applied"
+            proposal.error = ""
+            proposal.result = result
+            return proposal.public(include_result=True)
+
+    def _mark_continuity_recovery_pending(
+        self,
+        proposal: Proposal,
+        exc: Exception,
+    ) -> None:
+        public_error = (
+            "The Continuity apply is still awaiting durable recovery after "
+            "an ambiguous retry. Later, call logosforge_apply_proposal again "
+            "with this same proposal_id; do not create a replacement proposal: "
+            f"{exc}"
+        )
+        with self._lock:
+            proposal.state = "recovery_pending"
+            proposal.error = public_error
+        raise GatewayError(public_error) from exc
+
+    def _keep_continuity_recovery_pending(
+        self,
+        proposal: Proposal,
+        detail: str,
+        *,
+        cause: Exception | None = None,
+    ) -> None:
+        public_error = (
+            "The Continuity apply remains recovery_pending. No additional "
+            "mutation was sent. Later, call logosforge_apply_proposal again "
+            "with this same proposal_id to poll its durable receipt: "
+            f"{detail}"
+        )
+        with self._lock:
+            proposal.state = "recovery_pending"
+            proposal.error = public_error
+        if cause is not None:
+            raise GatewayError(public_error) from cause
+        raise GatewayError(public_error)
+
+    def _retry_continuity_once(
+        self,
+        proposal: Proposal,
+    ) -> dict[str, Any]:
+        with self._lock:
+            if (
+                proposal.continuity_resend_attempted
+                or proposal.continuity_receipt_observed
+            ):
+                self._keep_continuity_recovery_pending(
+                    proposal,
+                    "No durable receipt is currently visible; the single "
+                    "bounded resend has already been consumed.",
+                )
+            proposal.continuity_resend_attempted = True
+        try:
+            result = self._execute_proposal_request(proposal)
+        except Exception as exc:  # noqa: BLE001 - transport boundary
+            if self._is_definite_http_rejection(exc):
+                self._raise_rejected_apply(proposal, exc)
+            self._mark_continuity_recovery_pending(proposal, exc)
+        return self._complete_proposal(proposal, result)
+
+    def _recover_ambiguous_continuity_apply(
+        self,
+        proposal: Proposal,
+        original_error: Exception,
+    ) -> dict[str, Any]:
+        assert proposal.project_id is not None
+        try:
+            receipt = self._continuity_receipt(
+                proposal.proposal_id,
+                proposal.project_id,
+            )
+        except Exception as lookup_error:  # noqa: BLE001 - transport boundary
+            self._raise_indeterminate_apply(
+                proposal,
+                original_error,
+                receipt_error=lookup_error,
+            )
+        if receipt is None:
+            return self._retry_continuity_once(proposal)
+        try:
+            return self._complete_continuity_recovery(proposal, receipt)
+        except GatewayError as exc:
+            self._mark_receipt_validation_failed(proposal, exc)
+        except Exception as exc:  # noqa: BLE001 - fresh snapshot transport
+            self._mark_continuity_recovery_pending(proposal, exc)
+
+    def _resume_continuity_recovery(
+        self,
+        proposal: Proposal,
+    ) -> dict[str, Any]:
+        assert proposal.project_id is not None
+        try:
+            receipt = self._continuity_receipt(
+                proposal.proposal_id,
+                proposal.project_id,
+            )
+        except Exception as lookup_error:  # noqa: BLE001 - transport boundary
+            self._keep_continuity_recovery_pending(
+                proposal,
+                f"Receipt lookup was inconclusive: {lookup_error}",
+                cause=lookup_error,
+            )
+        if receipt is None:
+            self._keep_continuity_recovery_pending(
+                proposal,
+                "Core reported that no receipt is currently available and "
+                "the single bounded resend has already been consumed.",
+            )
+        try:
+            return self._complete_continuity_recovery(proposal, receipt)
+        except GatewayError as exc:
+            self._mark_receipt_validation_failed(proposal, exc)
+        except Exception as exc:  # noqa: BLE001 - fresh snapshot transport
+            self._mark_continuity_recovery_pending(proposal, exc)
+
     def _recover_unknown_durable_proposal(
         self,
         proposal_id: str,
@@ -2277,21 +2730,30 @@ class LogosForgeMcpGateway:
                 proposal_id,
                 project_id,
             )
+            continuity_receipt = self._continuity_receipt(
+                proposal_id,
+                project_id,
+            )
         except Exception as exc:
             raise GatewayError(
                 "Unknown proposal id; durable command receipt recovery could "
                 "not be verified across Timeline, Canvas Plot, and Knowledge "
-                f"Graph: {exc}"
+                f"Graph, and Continuity: {exc}"
             ) from exc
 
         receipts_present = sum(
             receipt is not None
-            for receipt in (timeline_receipt, canvas_receipt, graph_receipt)
+            for receipt in (
+                timeline_receipt,
+                canvas_receipt,
+                graph_receipt,
+                continuity_receipt,
+            )
         )
         if receipts_present > 1:
             raise GatewayError(
                 "Durable receipt capability collision across Timeline, Canvas "
-                "Plot, and Knowledge Graph; recovery failed closed."
+                "Plot, Knowledge Graph, and Continuity; recovery failed closed."
             )
         if timeline_receipt is not None:
             receipt = self._validate_timeline_receipt_shape(
@@ -2365,6 +2827,30 @@ class LogosForgeMcpGateway:
                 "receipt": receipt,
                 "result": result,
             }
+        if continuity_receipt is not None:
+            receipt = self._validate_continuity_receipt_shape(
+                continuity_receipt,
+                project_id,
+            )
+            result = self._recovered_continuity_result(
+                project_id,
+                proposal_id,
+                receipt,
+            )
+            return {
+                "proposal_id": proposal_id,
+                "operation": f"continuity_{receipt['command_kind']}",
+                "summary": "Recovered durable Continuity command receipt.",
+                "project_id": project_id,
+                "state": "applied",
+                "recovered_from_core": True,
+                "request_digest": receipt["request_digest"],
+                "request": None,
+                "review": {"recovered_receipt": copy.deepcopy(receipt)},
+                "requires_user_approval": True,
+                "receipt": receipt,
+                "result": result,
+            }
         raise GatewayError("Unknown proposal id.")
 
     def _proposal(self, proposal_id: str) -> Proposal:
@@ -2398,6 +2884,142 @@ class LogosForgeMcpGateway:
             self._expire(proposal, now, raise_error=False)
 
     # -- Focused proposal builders ---------------------------------------
+
+    def propose_continuity_command(
+        self,
+        command: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Store one exact Continuity decision after a revisioned preflight."""
+        pid = self._project_id()
+        normalized = _normalize_continuity_command(command)
+        current = self.client.get_continuity(pid)
+        current_project_id = (
+            current.get("project_id") if isinstance(current, dict) else None
+        )
+        if (
+            not isinstance(current, dict)
+            or isinstance(current_project_id, bool)
+            or not isinstance(current_project_id, int)
+            or current_project_id != pid
+        ):
+            raise GatewayError(
+                "The LogosForge API returned an invalid Continuity report."
+            )
+        revision = current.get("review_revision")
+        if (
+            not isinstance(revision, str)
+            or _LOWER_SHA256_RE.fullmatch(revision) is None
+        ):
+            raise GatewayError(
+                "The LogosForge API returned an invalid Continuity review revision."
+            )
+        if revision != normalized["expected_revision"]:
+            raise GatewayError(
+                "expected_revision does not match the current Continuity report. "
+                "Read it again with logosforge_get_story_diagnostics using "
+                "report='continuity' and create a fresh proposal."
+            )
+        raw_issues = current.get("issues")
+        if not isinstance(raw_issues, list):
+            raise GatewayError(
+                "The LogosForge API returned an invalid Continuity issue list."
+            )
+        matches = [
+            issue
+            for issue in raw_issues
+            if isinstance(issue, dict)
+            and issue.get("id") == normalized["issue_id"]
+        ]
+        if len(matches) != 1 or matches[0].get("status") != "open":
+            raise GatewayError(
+                "The exact open Continuity issue is not present in the current "
+                "report. Read it again and create a fresh proposal."
+            )
+        issue = matches[0]
+        fingerprint = issue.get("review_fingerprint")
+        if (
+            not isinstance(fingerprint, str)
+            or _LOWER_SHA256_RE.fullmatch(fingerprint) is None
+        ):
+            raise GatewayError(
+                "The LogosForge API returned an invalid Continuity issue "
+                "fingerprint."
+            )
+        if not secrets.compare_digest(
+            fingerprint,
+            normalized["expected_issue_fingerprint"],
+        ):
+            raise GatewayError(
+                "expected_issue_fingerprint does not match the current derived "
+                "finding. Read the Continuity report again and create a fresh "
+                "proposal."
+            )
+
+        kind = normalized["kind"]
+        verb = {
+            "defer_issue": "Defer",
+            "dismiss_issue": "Dismiss",
+            "resolve_issue": "Resolve",
+        }[kind]
+        title = _preview(issue.get("title"), 500)
+        summary = f"{verb} Continuity issue {title or normalized['issue_id']!r}."
+        effects = {
+            "defer_issue": (
+                "Persist a deferred review decision so this exact finding no "
+                "longer appears in the open queue."
+            ),
+            "dismiss_issue": (
+                "Persist a dismissed review decision so this exact finding no "
+                "longer appears in the open queue."
+            ),
+            "resolve_issue": (
+                "Persist a resolved review decision so this exact finding no "
+                "longer appears in the open queue."
+            ),
+        }
+        related_scene_ids = issue.get("related_scene_ids")
+        if not isinstance(related_scene_ids, list) or any(
+            isinstance(scene_id, bool) or not isinstance(scene_id, int)
+            for scene_id in related_scene_ids
+        ):
+            raise GatewayError(
+                "The LogosForge API returned invalid Continuity scene evidence."
+            )
+        review = {
+            "continuity_revision": revision,
+            "command_kind": kind,
+            "destructive": kind == "dismiss_issue",
+            "requires_destructive_confirmation": kind == "dismiss_issue",
+            "issue": {
+                "id": normalized["issue_id"],
+                "review_fingerprint": fingerprint,
+                "issue_type": _preview(issue.get("issue_type"), 128),
+                "dimension": _preview(issue.get("dimension"), 128),
+                "severity": _preview(issue.get("severity"), 64),
+                "confidence": _preview(issue.get("confidence"), 64),
+                "title": title,
+                "explanation": _preview(issue.get("explanation"), 2_000),
+                "suggested_action": _preview(
+                    issue.get("suggested_action"),
+                    2_000,
+                ),
+                "related_scene_ids": _bounded_sequence(
+                    related_scene_ids,
+                    limit=100,
+                ),
+                "status": "open",
+            },
+            "effect": effects[kind],
+        }
+        return self.propose_request(
+            operation=f"continuity_{kind}",
+            method="POST",
+            path=self.client.project_path("continuity/commands", pid),
+            body=normalized,
+            summary=summary,
+            project_id=pid,
+            review=review,
+        )
 
     def propose_knowledge_graph_command(
         self,

@@ -47,6 +47,11 @@ import type {
   KnowledgeGraphCommandDTO,
   KnowledgeGraphCommandResultDTO,
   KnowledgeGraphCommandReceiptDTO,
+  ContinuityCommandDTO,
+  ContinuityCommandResultDTO,
+  ContinuityCommandReceiptDTO,
+  ContinuityIssueDTO,
+  ContinuityReportDTO,
   PlotBlockDTO,
   PlotSceneDTO,
   ExportRequestDTO,
@@ -171,6 +176,7 @@ const MOCK_PERSISTENT_METHODS = new Set([
   "executeTimelineCommand",
   "executeCanvasPlotCommand",
   "executeKnowledgeGraphCommand",
+  "executeContinuityCommand",
 ]);
 
 function mockMethodPersists(name: string): boolean {
@@ -1597,6 +1603,40 @@ export function createMockApiClient(): ApiClient {
   }
   const knowledgeGraphReviews = new Map<number, Map<string, MockKnowledgeGraphReview>>();
   const knowledgeGraphReceipts = new Map<string, MockKnowledgeGraphReceipt>();
+  interface MockContinuityReceipt {
+    serializedCommand: string;
+    receipt: ContinuityCommandReceiptDTO;
+  }
+  const continuityStatuses = new Map<number, Map<string, ContinuityIssueDTO["status"]>>();
+  const continuityReceipts = new Map<string, MockContinuityReceipt>();
+  const continuityIssues: readonly ContinuityIssueDTO[] = [
+    {
+      id: "c200000000000002",
+      review_fingerprint: "2".repeat(64),
+      issue_type: "state_drift",
+      dimension: "character",
+      severity: "blocking",
+      confidence: "confirmed",
+      title: "Vesper's stance contradicts an earlier scene",
+      explanation: "She withholds in Observation Ring but already confessed earlier.",
+      suggested_action: "Reconcile the confession order.",
+      related_scene_ids: [2, 12],
+      status: "open",
+    },
+    {
+      id: "c100000000000001",
+      review_fingerprint: "1".repeat(64),
+      issue_type: "location_jump",
+      dimension: "spatial",
+      severity: "warning",
+      confidence: "likely",
+      title: "Location jump without transition",
+      explanation: "Scene moves to the reactor with no bridging beat.",
+      suggested_action: "Add a transition or establish the move.",
+      related_scene_ids: [12, 21],
+      status: "open",
+    },
+  ];
   const knowledgeGraphEdgeKey = (edge: { source: string; target: string; edge_type: string }) => (
     [edge.source, edge.target, edge.edge_type].join("\u0000")
   );
@@ -1622,6 +1662,35 @@ export function createMockApiClient(): ApiClient {
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([key, state]) => [key, state.is_hidden, state.is_user_confirmed]),
   ]);
+  const continuityStatusFor = (projectId: number) => {
+    let statuses = continuityStatuses.get(projectId);
+    if (!statuses) {
+      statuses = new Map();
+      continuityStatuses.set(projectId, statuses);
+    }
+    return statuses;
+  };
+  const continuityRevision = (projectId: number): string => mockSha256([
+    projectId,
+    [...continuityStatusFor(projectId).entries()].sort(([left], [right]) => left.localeCompare(right)),
+  ]);
+  const continuityReport = (projectId: number): ContinuityReportDTO => {
+    const project = findMockProject(projects, projectId, "GET", `/api/projects/${projectId}/continuity`);
+    const statuses = continuityStatusFor(projectId);
+    const issues = fixtureRowsFor(projectId, continuityIssues).map((issue) => ({
+      ...structuredClone(issue),
+      status: statuses.get(issue.id) ?? issue.status,
+    }));
+    return {
+      project_id: projectId,
+      review_revision: continuityRevision(projectId),
+      writing_mode: project.narrative_engine,
+      issues,
+      blocking_count: issues.filter((issue) => issue.status === "open" && issue.severity === "blocking").length,
+      warning_count: issues.filter((issue) => issue.status === "open" && issue.severity === "warning").length,
+      unavailable: [],
+    };
+  };
   let commandPlanSequence = 1;
   const commandPlans = new Map<string, PsykeConsoleCommandPlanDTO & { entry_type?: string; entry_name?: string }>();
   const client: ApiClient = {
@@ -1632,8 +1701,8 @@ export function createMockApiClient(): ApiClient {
         service: "logosforge-api",
         instance_nonce: "preview-mock",
         mode: "preview-mock",
-        version: "1.9.0",
-        api_version: "1.9.0",
+        version: "1.12.0",
+        api_version: "1.12.0",
         core_version: "preview",
       };
     },
@@ -2268,18 +2337,96 @@ export function createMockApiClient(): ApiClient {
         themes: PSYKE.filter((e) => e.type === "theme").map((e, i) => ({ entry_id: e.id, name: e.name, present_scenes: [2], total_scenes: n, flags: ["Underused"], presence_source: i === 0 ? "controlling_idea" : "prose" })),
       };
     },
-    async getContinuity() {
+    async getContinuity(p: number) {
       await delay();
-      return {
-        writing_mode: "screenplay",
-        issues: [
-          { id: "c2", issue_type: "state_drift", dimension: "character", severity: "blocking", confidence: "confirmed", title: "Vesper's stance contradicts an earlier scene", explanation: "She withholds in Observation Ring but already confessed earlier.", suggested_action: "Reconcile the confession order.", related_scene_ids: [2, 12], status: "open" },
-          { id: "c1", issue_type: "location_jump", dimension: "spatial", severity: "warning", confidence: "likely", title: "Location jump without transition", explanation: "Scene moves to the reactor with no bridging beat.", suggested_action: "Add a transition or establish the move.", related_scene_ids: [12, 21], status: "open" },
-        ],
-        blocking_count: 1,
-        warning_count: 1,
-        unavailable: [],
+      return structuredClone(continuityReport(p));
+    },
+    async executeContinuityCommand(
+      p: number,
+      command: ContinuityCommandDTO,
+      idempotencyKey: string,
+    ): Promise<ContinuityCommandResultDTO> {
+      const path = `/api/projects/${p}/continuity/commands`;
+      await delay(120);
+      findMockProject(projects, p, "POST", path);
+      if (!/^[\x21-\x7e]{16,128}$/.test(idempotencyKey)) {
+        throw new ApiRequestError("POST", path, 400, "Invalid Idempotency-Key", "bad_request");
+      }
+      const receiptKey = `${p}\u0000${idempotencyKey}`;
+      const serializedCommand = JSON.stringify(command);
+      const previous = continuityReceipts.get(receiptKey);
+      if (previous) {
+        if (previous.serializedCommand !== serializedCommand) {
+          throw new ApiRequestError("POST", path, 409, "Idempotency-Key was already used for a different Continuity command", "idempotency_key_conflict");
+        }
+        return {
+          continuity: structuredClone(continuityReport(p)),
+          changed: false,
+          affected_issue_id: previous.receipt.original_affected_issue_id,
+          previous_status: "open",
+          status: previous.receipt.status,
+          replayed: true,
+          applied_revision: previous.receipt.applied_revision,
+        };
+      }
+      const current = continuityReport(p);
+      if (command.expected_revision !== current.review_revision) {
+        throw new ApiRequestError("POST", path, 409, "Continuity review state changed", "continuity_conflict");
+      }
+      const issue = current.issues.find((candidate) => candidate.id === command.issue_id);
+      if (!issue || issue.status !== "open") {
+        throw new ApiRequestError("POST", path, 404, "Open Continuity issue not found", "continuity_issue_not_found");
+      }
+      if (command.expected_issue_fingerprint !== issue.review_fingerprint) {
+        throw new ApiRequestError("POST", path, 409, "Continuity issue changed", "continuity_conflict");
+      }
+      const status = command.kind === "defer_issue"
+        ? "deferred" as const
+        : command.kind === "dismiss_issue"
+          ? "dismissed" as const
+          : "resolved" as const;
+      continuityStatusFor(p).set(command.issue_id, status);
+      const next = continuityReport(p);
+      const receipt: ContinuityCommandReceiptDTO = {
+        project_id: p,
+        request_digest: mockSha256(command),
+        command_kind: command.kind,
+        expected_revision: command.expected_revision,
+        applied_revision: next.review_revision,
+        original_changed: true,
+        original_affected_issue_id: command.issue_id,
+        expected_issue_fingerprint: command.expected_issue_fingerprint,
+        previous_status: "open",
+        status,
+        committed_at: new Date().toISOString(),
       };
+      continuityReceipts.set(receiptKey, { serializedCommand, receipt });
+      return {
+        continuity: structuredClone(next),
+        changed: true,
+        affected_issue_id: command.issue_id,
+        previous_status: "open",
+        status,
+        replayed: false,
+        applied_revision: next.review_revision,
+      };
+    },
+    async getContinuityCommandReceipt(
+      p: number,
+      idempotencyKey: string,
+      expectedCommand: ContinuityCommandDTO,
+    ): Promise<ContinuityCommandReceiptDTO> {
+      const path = `/api/projects/${p}/continuity/command-receipt`;
+      await delay(80);
+      findMockProject(projects, p, "GET", path);
+      const saved = continuityReceipts.get(`${p}\u0000${idempotencyKey}`);
+      if (!saved) {
+        throw new ApiRequestError("GET", path, 404, "Continuity command receipt not found", "continuity_receipt_not_found");
+      }
+      if (saved.serializedCommand !== JSON.stringify(expectedCommand)) {
+        throw new ApiRequestError("GET", path, 409, "Idempotency-Key was used for a different Continuity command", "idempotency_key_conflict");
+      }
+      return structuredClone(saved.receipt);
     },
     async getPacing() {
       await delay();
@@ -2338,11 +2485,30 @@ export function createMockApiClient(): ApiClient {
         generated_light: false,
         summary_line: "Decision radar: 1 blocking, 2 warning, 1 suggestion.",
         radar: [
-          { id: "d1", category: "continuity", severity: "blocking", confidence: "confirmed", title: "Vesper's stance contradicts an earlier scene", explanation: "She withholds in Observation Ring but confessed earlier.", suggested_action: "Reconcile the confession order.", related_section: "Continuity", related_target_type: "scene", related_target_id: 12, created_from: "deterministic" },
-          { id: "d2", category: "structure", severity: "warning", confidence: "likely", title: "Middle act is underdeveloped", explanation: "Act II is thin compared to the outer acts.", suggested_action: "Add complications or a subplot.", related_section: "Structure", related_target_type: "", related_target_id: null, created_from: "deterministic" },
-          { id: "d3", category: "psyke", severity: "warning", confidence: "possible", title: "THE WARDEN has no progression", explanation: "Static arc — no scene-pinned states.", suggested_action: "Add progression milestones.", related_section: "PSYKE", related_target_type: "psyke", related_target_id: 3, created_from: "deterministic" },
-          { id: "d4", category: "export", severity: "suggestion", confidence: "likely", title: "2 scenes missing slug lines", explanation: "Fountain export flagged missing slugs.", suggested_action: "Add scene headings.", related_section: "Export", related_target_type: "", related_target_id: null, created_from: "deterministic" },
+          { id: "d1", category: "continuity", severity: "blocking", confidence: "confirmed", title: "Vesper's stance contradicts an earlier scene", explanation: "She withholds in Observation Ring but confessed earlier.", suggested_action: "Reconcile the confession order.", related_section: "Continuity", related_target_type: "scene", related_target_id: 12, related_target_key: "", created_from: "deterministic", graph_focus_key: "", graph_view_mode: null, graph_include_inferred: true, graph_depth: 1 as const, evidence: [], evidence_total: 0 },
+          { id: "d2", category: "structure", severity: "warning", confidence: "likely", title: "Middle act is underdeveloped", explanation: "Act II is thin compared to the outer acts.", suggested_action: "Add complications or a subplot.", related_section: "Structure", related_target_type: "", related_target_id: null, related_target_key: "", created_from: "deterministic", graph_focus_key: "", graph_view_mode: null, graph_include_inferred: true, graph_depth: 1 as const, evidence: [], evidence_total: 0 },
+          { id: "d3", category: "psyke", severity: "warning", confidence: "possible", title: "THE WARDEN has no progression", explanation: "Static arc — no scene-pinned states.", suggested_action: "Add progression milestones.", related_section: "PSYKE", related_target_type: "psyke", related_target_id: 3, related_target_key: "", created_from: "deterministic", graph_focus_key: "", graph_view_mode: null, graph_include_inferred: true, graph_depth: 1 as const, evidence: [], evidence_total: 0 },
+          { id: "d4", category: "export", severity: "suggestion", confidence: "likely", title: "2 scenes missing slug lines", explanation: "Fountain export flagged missing slugs.", suggested_action: "Add scene headings.", related_section: "Export", related_target_type: "", related_target_id: null, related_target_key: "", created_from: "deterministic", graph_focus_key: "", graph_view_mode: null, graph_include_inferred: true, graph_depth: 1 as const, evidence: [], evidence_total: 0 },
         ],
+        knowledge_graph_available: true,
+        knowledge_graph_cards: [{
+          id: "kg_theme_theme:psyke:6", category: "psyke", severity: "opportunity", confidence: "likely",
+          title: "Theme 'Static' is not connected to any scene.", explanation: "The canonical graph has no scene edge for this theme.",
+          suggested_action: "Tie the theme to the scenes that express it.", related_section: "PSYKE", related_target_type: "", related_target_id: null, related_target_key: "",
+          created_from: "knowledge_graph", graph_focus_key: "theme:psyke:6", graph_view_mode: "project_map" as const,
+          graph_include_inferred: true, graph_depth: 1 as const, evidence_total: 1,
+          evidence: [{ kind: "node", label: "Static", detail: "theme source psyke:6.", graph_focus_key: "theme:psyke:6", source_key: "", target_key: "", edge_type: "", confidence: "confirmed", source_system: "psyke", provenance: "psyke:6", related_section: "", related_target_type: "", related_target_id: null, related_target_key: "" }],
+        }],
+        continuity_available: true,
+        continuity_cards: [{
+          id: "continuity_0123456789abcdef", category: "continuity", severity: "warning", confidence: "likely",
+          title: "Location jump without transition", explanation: "The later scene has no travel cue.",
+          suggested_action: "Add a transition or confirm the jump is intentional.", related_section: "Continuity",
+          related_target_type: "continuity_issue", related_target_id: null, related_target_key: "0123456789abcdef",
+          created_from: "semantic_continuity", graph_focus_key: "", graph_view_mode: null,
+          graph_include_inferred: true, graph_depth: 1 as const, evidence_total: 2,
+          evidence: [{ kind: "continuity_issue", label: "Location jump without transition", detail: "location jump · spatial", graph_focus_key: "", source_key: "", target_key: "", edge_type: "", confidence: "likely", source_system: "semantic_continuity", provenance: "continuity:location_jump", related_section: "Continuity", related_target_type: "continuity_issue", related_target_id: null, related_target_key: "0123456789abcdef" }, { kind: "scene", label: "Observation Ring", detail: "Scene #12 is explicitly related to this issue.", graph_focus_key: "", source_key: "", target_key: "", edge_type: "", confidence: "likely", source_system: "manuscript", provenance: "scene:12", related_section: "Manuscript", related_target_type: "scene", related_target_id: 12, related_target_key: "" }],
+        }],
       };
     },
     async getAdapt() {

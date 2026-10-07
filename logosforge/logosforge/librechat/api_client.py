@@ -208,6 +208,11 @@ class LogosForgeApiClient:
         pid = int(project_id) if project_id is not None else self.require_project_id()
         return self.request("GET", f"{self._prefix}/projects/{pid}/canvas-plot")
 
+    def get_continuity(self, project_id: int | None = None) -> dict:
+        """Return the canonical revisioned Semantic Continuity report."""
+        pid = int(project_id) if project_id is not None else self.require_project_id()
+        return self.request("GET", f"{self._prefix}/projects/{pid}/continuity")
+
     def get_knowledge_graph(
         self,
         project_id: int | None = None,
@@ -300,6 +305,24 @@ class LogosForgeApiClient:
         return self.request(
             "GET",
             f"{self._prefix}/projects/{pid}/knowledge-graph/command-receipt",
+            idempotency_key=idempotency_key,
+        )
+
+    def get_continuity_command_receipt(
+        self,
+        idempotency_key: str,
+        project_id: int | None = None,
+    ) -> dict:
+        """Return one durable project-scoped Continuity command receipt.
+
+        The opaque retry capability is sent only in ``Idempotency-Key``.  A
+        ``continuity_receipt_not_found`` response proves receipt support and a
+        clean miss; any other 404 may come from an older Core API.
+        """
+        pid = int(project_id) if project_id is not None else self.require_project_id()
+        return self.request(
+            "GET",
+            f"{self._prefix}/projects/{pid}/continuity/command-receipt",
             idempotency_key=idempotency_key,
         )
 

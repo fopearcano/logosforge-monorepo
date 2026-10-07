@@ -272,10 +272,15 @@ cross-project leak; no full graph dump. Disable via
 `build_graph_decision_cards` produces deterministic, traceable cards — isolated
 PSYKE/element, scenes with no PSYKE links, undefined note terms, weakly-connected
 plot blocks, many inferred edges to review, a theme not tied to scenes, a
-risk touching a central node. Surfaced via the `Generate Decision Cards from
-Graph` Logos action (kept as a dedicated feed so the core 10N radar contract —
-capped at 10, fixed card ids — is unchanged). No AI; no automatic fixes; actions
-route through existing safe systems.
+risk touching a central node. It remains available through the `Generate
+Decision Cards from Graph` Logos action and is also exposed by the Decision
+Radar endpoint as a separate, bounded `knowledge_graph_cards` feed so the core
+10N feed stays unchanged. Each card carries a canonical public graph target and
+up to five exact evidence facts; aggregate cards also state the uncapped evidence
+total. Undefined-term evidence retains its originating Note node. The Pro
+Dashboard merges/ranks the two feeds under one ten-card display cap, exposes the
+evidence, and deep-links the exact scoped graph neighborhood. No AI; no automatic
+fixes; remediation still routes through existing safe systems.
 
 ## Guided Workflows
 
@@ -309,8 +314,9 @@ metadata, and dangling references before render.
 
 ## Next recommended phase
 
-Surface deterministic Knowledge Graph decision cards in the Dashboard Decision
-Radar, preserving their traceable source evidence and adding graph deep links.
+Add a transactional Semantic Continuity review lifecycle with proposal,
+confirmation, durable receipts, and idempotent retry recovery, then connect
+repair proposals to Controlled Apply.
 
 ## Semantic Continuity (Phase 10Q)
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { EventName } from "@logosforge/ui-contracts";
 import { useStudio } from "../adapters/StudioProvider";
 
@@ -6,8 +6,15 @@ export interface Resource<T> {
   data: T | undefined;
   loading: boolean;
   error: string | null;
-  /** Force a re-fetch (also runs automatically when `key` or a `refetchOn` event changes). */
-  refetch: () => void;
+  /**
+   * Force a re-fetch and return its monotonic request id. Consumers that must
+   * act only on post-request data can compare it with the settled ids below.
+   */
+  refetch: () => number;
+  /** Most recent request id that either succeeded or failed for this identity. */
+  lastSettledRequest: number;
+  /** Most recent request id that published authoritative data. */
+  lastSuccessfulRequest: number;
 }
 
 /**
@@ -28,12 +35,22 @@ export function useResource<T>(
   const [loading, setLoading] = useState(key != null);
   const [error, setError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
+  const requestSequence = useRef(0);
+  // Keep settlement and success generations in one state value. Consumers use
+  // the pair as a barrier, so publishing them in separate renders could make a
+  // successful request briefly look like a settled failure.
+  const [requestState, setRequestState] = useState({
+    settled: -1,
+    successful: -1,
+  });
   const refetch = useCallback(() => {
     // A live event can arrive while the identical GET is still pending. Clear
     // transport coalescing first so the post-event generation cannot join and
     // publish the pre-event snapshot.
     api.invalidatePendingReads?.();
-    setNonce((n) => n + 1);
+    const requestId = ++requestSequence.current;
+    setNonce(requestId);
+    return requestId;
   }, [api]);
 
   // A resource value belongs to one exact key + API instance. Keeping A's data
@@ -42,6 +59,7 @@ export function useResource<T>(
   useEffect(() => {
     setData(undefined);
     setError(null);
+    setRequestState({ settled: -1, successful: -1 });
   }, [key, api]);
 
   useEffect(() => {
@@ -58,12 +76,17 @@ export function useResource<T>(
         if (!cancelled) {
           setData(d);
           setLoading(false);
+          setRequestState({ settled: nonce, successful: nonce });
         }
       },
       (e) => {
         if (!cancelled) {
           setError(e instanceof Error ? e.message : String(e));
           setLoading(false);
+          setRequestState((current) => ({
+            settled: Math.max(current.settled, nonce),
+            successful: current.successful,
+          }));
         }
       },
     );
@@ -93,5 +116,12 @@ export function useResource<T>(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, projectId, refetch, refetchOn.join(",")]);
 
-  return { data, loading, error, refetch };
+  return {
+    data,
+    loading,
+    error,
+    refetch,
+    lastSettledRequest: requestState.settled,
+    lastSuccessfulRequest: requestState.successful,
+  };
 }

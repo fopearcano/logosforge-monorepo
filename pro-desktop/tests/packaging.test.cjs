@@ -167,6 +167,23 @@ check('packaged workspace acceptance covers Canvas Plot pointer authoring and pe
   packagedWorkspaceScript.includes('Expand ${region} dock') &&
   packagedWorkspaceScript.includes('pointer-safe board size') &&
   packagedWorkspaceScript.includes('pointer-authored Canvas Plot content and viewport survived graceful packaged relaunch'));
+check('packaged workspace acceptance covers the real Graph, Radar, Continuity, and Billy shell journey',
+  packagedWorkspaceScript.includes('seedIntelligenceJourney(session, projectId)') &&
+  packagedWorkspaceScript.includes("'Decision Radar navigation crossed the workspace before the pending manuscript edit was saved'") &&
+  packagedWorkspaceScript.includes("name: 'OPEN GRAPH EVIDENCE', exact: true") &&
+  packagedWorkspaceScript.includes("name: 'OPEN CONTINUITY ISSUE', exact: true") &&
+  packagedWorkspaceScript.includes("'Billy existing-draft preservation decision'") &&
+  packagedWorkspaceScript.includes("'Logos companion selection before Continuity handoff'") &&
+  packagedWorkspaceScript.includes("'Continuity handoff reselected Billy in the production companion dock'") &&
+  packagedWorkspaceScript.includes("'keyboard focus transferred from the hidden Manuscript to Billy'") &&
+  packagedWorkspaceScript.includes("name: 'SEND', exact: true") &&
+  packagedWorkspaceScript.includes('`/api/projects/${projectId}/assistant/chat`') &&
+  packagedWorkspaceScript.includes("name: 'CONTROLLED APPLY', exact: true") &&
+  packagedWorkspaceScript.includes("name: '✓ APPLY', exact: true") &&
+  packagedWorkspaceScript.includes("'Controlled Apply did not send the exact revision-bound scene mutation'") &&
+  packagedWorkspaceScript.includes("name: 'CONFIRM DECISION', exact: true") &&
+  packagedWorkspaceScript.includes("'Confirmed Controlled Apply mutation did not survive relaunch'") &&
+  packagedWorkspaceScript.includes("'Durable Continuity review state did not survive packaged relaunch'"));
 check('packaged Windows CI runs and preserves diagnostics for the Pro pointer journey',
   packagedWindowsWorkflow.includes('npm run test:packaged-workspace') &&
   packagedWindowsWorkflow.includes('LOGOSFORGE_PRO_WORKSPACE_ACCEPTANCE_ROOT') &&

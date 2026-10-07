@@ -12,7 +12,7 @@ identically:
 
     project_loaded, project_data_changed, scene_changed, scenes_changed,
     outline_changed, plot_changed, canvas_plot_changed, timeline_changed,
-    knowledge_graph_changed, psyke_changed,
+    knowledge_graph_changed, continuity_changed, psyke_changed,
     notes_changed, comments_changed, characters_changed, dashboard_changed,
     assistant_action_completed
 """
@@ -35,6 +35,7 @@ KNOWN_EVENTS = (
     "canvas_plot_changed",
     "timeline_changed",
     "knowledge_graph_changed",
+    "continuity_changed",
     "psyke_changed",
     "notes_changed",
     "comments_changed",

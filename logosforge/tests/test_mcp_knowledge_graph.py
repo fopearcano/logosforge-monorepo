@@ -191,6 +191,17 @@ class _InProcessApiClient:
             idempotency_key=idempotency_key,
         )
 
+    def get_continuity_command_receipt(
+        self,
+        idempotency_key: str,
+        project_id: int | None = None,
+    ) -> dict:
+        return self.request(
+            "GET",
+            self.project_path("continuity/command-receipt", project_id),
+            idempotency_key=idempotency_key,
+        )
+
 
 @pytest.fixture
 def graph_gateway(tmp_path):
@@ -248,8 +259,8 @@ def test_graph_digest_matches_core_canonical_wire():
 
 def test_graph_tools_are_versioned_bounded_and_strict(graph_gateway):
     _db, _client, gateway = graph_gateway
-    assert SERVER_VERSION == "1.8.0"
-    assert len(TOOL_SPECS) == 45
+    assert SERVER_VERSION == "1.9.0"
+    assert len(TOOL_SPECS) == 46
     assert {
         "logosforge_get_knowledge_graph",
         "logosforge_get_knowledge_graph_hidden_edges",

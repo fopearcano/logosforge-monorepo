@@ -565,6 +565,383 @@ async function selectPanel(page, name, panelId, screenLabel) {
   return surface;
 }
 
+async function activateBillyDock(page) {
+  const workspaceTab = await waitVisible(
+    page.getByRole('tab', { name: 'AI Companions', exact: true }),
+    'AI Companions workspace tab',
+  );
+  await workspaceTab.click();
+  const surface = await waitVisible(
+    page.locator('section[data-panel-id="ai-companions"]'),
+    'AI Companions workspace surface',
+  );
+  const billyTab = await waitVisible(surface.getByTitle('Billy', { exact: true }), 'Billy companion tab');
+  if (await billyTab.getAttribute('aria-pressed') !== 'true') await billyTab.click();
+  await waitVisible(surface.locator('[data-screen-label="Billy Assistant"]'), 'Billy Assistant');
+  return surface;
+}
+
+async function packagedCoreJson(session, route, init = {}) {
+  const status = await session.page.evaluate(async () => globalThis.logosforge?.getCoreStatus());
+  assert.equal(status?.state, 'connected', `${session.label} packaged core is not connected`);
+  assert.ok(status.baseUrl && status.authToken, `${session.label} did not expose its authenticated core endpoint`);
+  const endpoint = new URL(status.baseUrl);
+  assert.equal(endpoint.protocol, 'http:', `${session.label} packaged core must use loopback HTTP`);
+  assert.equal(endpoint.hostname, '127.0.0.1', `${session.label} packaged core left the loopback boundary`);
+  assert.equal(Number(endpoint.port), session.port, `${session.label} packaged core port changed`);
+  const target = new URL(route, endpoint);
+  assert.equal(target.origin, endpoint.origin, `Refusing to send the packaged Core bearer token to ${target.origin}`);
+  const response = await fetch(target, {
+    ...init,
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${status.authToken}`,
+      ...(init.body == null ? {} : { 'Content-Type': 'application/json' }),
+      ...init.headers,
+    },
+  });
+  const raw = await response.text();
+  let body = null;
+  if (raw) {
+    try {
+      body = JSON.parse(raw);
+    } catch {
+      body = raw;
+    }
+  }
+  assert.ok(
+    response.ok,
+    `${init.method ?? 'GET'} ${route} failed with ${response.status}: ${typeof body === 'string' ? body : JSON.stringify(body)}`,
+  );
+  return body;
+}
+
+async function seedIntelligenceJourney(session, projectId) {
+  const post = (route, body) => packagedCoreJson(session, route, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+  const patch = (route, body) => packagedCoreJson(session, route, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  });
+
+  await post(`/api/projects/${projectId}/psyke/entries`, {
+    name: 'Alice',
+    type: 'character',
+  });
+  await post(`/api/projects/${projectId}/psyke/entries`, {
+    name: 'Lonely Relic',
+    type: 'object',
+  });
+  const opening = await post(`/api/projects/${projectId}/scenes`, {
+    title: 'Acceptance Opening',
+    content: 'Alice waits beside the sealed window.',
+  });
+  const crossing = await post(`/api/projects/${projectId}/scenes`, {
+    title: 'Acceptance Crossing',
+    content: 'Alice studies the silent stonework.',
+  });
+  await patch(`/api/projects/${projectId}/scenes/${opening.id}`, { location: 'Kitchen' });
+  await patch(`/api/projects/${projectId}/scenes/${crossing.id}`, { location: 'Castle' });
+
+  const radar = await packagedCoreJson(session, `/api/projects/${projectId}/decision-radar`);
+  const continuity = await packagedCoreJson(session, `/api/projects/${projectId}/continuity`);
+  assert.ok(radar.knowledge_graph_available, 'Packaged Decision Radar did not expose Knowledge Graph evidence');
+  assert.ok(radar.knowledge_graph_cards.length > 0, 'Packaged Decision Radar returned no Knowledge Graph cards');
+  assert.ok(radar.continuity_available, 'Packaged Decision Radar did not expose Semantic Continuity evidence');
+  assert.ok(radar.continuity_cards.length > 0, 'Packaged Decision Radar returned no Continuity cards');
+  assert.ok(continuity.issues.length > 0, 'Packaged Continuity returned no deterministic issue fixture');
+  record(
+    'fixture',
+    `seeded traceable Graph/Radar/Continuity journey in project ${projectId} (scenes ${opening.id}, ${crossing.id})`,
+  );
+  return { opening, crossing, radar, continuity };
+}
+
+async function decisionCard(surface, sourceLabel) {
+  const card = surface.locator('[data-decision-card-id]').filter({ hasText: sourceLabel }).first();
+  await waitVisible(card, `${sourceLabel} Decision Radar card`);
+  const id = await card.getAttribute('data-decision-card-id');
+  assert.ok(id, `${sourceLabel} Decision Radar card has no stable identity`);
+  return { card, id };
+}
+
+async function exerciseIntelligenceShell(session) {
+  const { page } = session;
+  const { projectId } = await waitProReady(session);
+  const seeded = await seedIntelligenceJourney(session, projectId);
+
+  const manuscript = await selectPanel(page, 'Manuscript', 'manuscript', 'Manuscript Editor');
+  const openingHost = await waitVisible(
+    manuscript.locator(`[data-scene-id="${seeded.opening.id}"]`),
+    'seeded manuscript scene',
+  );
+  const staticProse = openingHost.getByRole('button', {
+    name: `Activate prose editor for ${seeded.opening.title}`,
+    exact: true,
+  });
+  if (await staticProse.count() > 0 && await staticProse.isVisible()) await staticProse.click();
+  const prose = await waitVisible(openingHost.locator('[data-prose]'), 'live seeded prose editor');
+  const barrierText = `${seeded.opening.content}\n\nPackaged shell save barrier ${Date.now()}.`;
+  await prose.fill(barrierText);
+
+  let radarSurface = await selectPanel(page, 'Decision Radar', 'decision-radar', 'Decision Radar');
+  const savedOpening = await packagedCoreJson(
+    session,
+    `/api/projects/${projectId}/scenes/${seeded.opening.id}`,
+  );
+  assert.equal(
+    savedOpening.content,
+    barrierText,
+    'Decision Radar navigation crossed the workspace before the pending manuscript edit was saved',
+  );
+  await waitVisible(radarSurface.getByText('GRAPH ONLINE', { exact: true }), 'Decision Radar Graph availability');
+  await waitVisible(radarSurface.getByText('CONTINUITY ONLINE', { exact: true }), 'Decision Radar Continuity availability');
+
+  const graphUi = await decisionCard(radarSurface, 'KNOWLEDGE GRAPH');
+  const graphCard = seeded.radar.knowledge_graph_cards.find((candidate) => candidate.id === graphUi.id);
+  assert.ok(graphCard?.graph_focus_key, `Displayed graph card ${graphUi.id} is not traceable to an exact graph node`);
+  await graphUi.card.getByRole('button', { name: 'OPEN GRAPH EVIDENCE', exact: true }).click();
+  const graphSurface = await waitVisible(
+    page.locator('section[data-panel-id="graph"]'),
+    'Knowledge Graph production workspace surface',
+  );
+  const graphCanvas = await waitVisible(
+    graphSurface.locator('[data-knowledge-graph-canvas="true"]'),
+    'focused Knowledge Graph canvas',
+  );
+  await waitFor(async () => (
+    await graphCanvas.getAttribute('data-focus-key') === graphCard.graph_focus_key
+      && await graphCanvas.getAttribute('data-view-mode') === graphCard.graph_view_mode
+      && await graphCanvas.getAttribute('data-evidence-scope') === (
+        graphCard.graph_include_inferred ? 'inferred_and_confirmed' : 'confirmed_only'
+      )
+  ), 'exact Decision Radar Knowledge Graph deep link');
+  await waitVisible(
+    graphSurface.locator('section[aria-label^="Selected graph node "]'),
+    'focused Knowledge Graph inspector',
+  );
+  await waitFor(async () => page.evaluate((expectedKey) => {
+    const active = document.activeElement;
+    return active instanceof HTMLElement
+      && active.dataset.graphNodeKey === expectedKey
+      && active.closest('section[data-panel-id="graph"]') != null;
+  }, graphCard.graph_focus_key), 'keyboard focus on exact Knowledge Graph evidence node');
+  record('journey', `Decision Radar focused canonical graph evidence ${graphCard.graph_focus_key}`);
+
+  const aiSurface = await activateBillyDock(page);
+  const billyInput = await waitVisible(
+    page.getByRole('textbox', { name: 'Message Billy', exact: true }),
+    'Billy draft input',
+  );
+  const preservedDraft = 'Keep this existing Billy draft while reviewing Continuity.';
+  await billyInput.fill(preservedDraft);
+  const logosTab = await waitVisible(aiSurface.getByTitle('Logos', { exact: true }), 'Logos companion tab');
+  await logosTab.click();
+  await waitFor(
+    async () => await logosTab.getAttribute('aria-pressed') === 'true',
+    'Logos companion selection before Continuity handoff',
+  );
+  await waitVisible(aiSurface.locator('[data-screen-label="Logos"]'), 'Logos companion panel');
+
+  radarSurface = await selectPanel(page, 'Decision Radar', 'decision-radar', 'Decision Radar');
+  const continuityUi = await decisionCard(radarSurface, 'SEMANTIC CONTINUITY');
+  const continuityCard = seeded.radar.continuity_cards.find(
+    (candidate) => candidate.id === continuityUi.id,
+  );
+  assert.ok(
+    continuityCard?.related_target_key,
+    `Displayed Continuity card ${continuityUi.id} is not traceable to an exact issue`,
+  );
+  const issue = seeded.continuity.issues.find(
+    (candidate) => candidate.id === continuityCard.related_target_key,
+  );
+  assert.ok(issue, `Decision Radar Continuity issue ${continuityCard.related_target_key} is absent from the authoritative report`);
+  await continuityUi.card.getByRole('button', { name: 'OPEN CONTINUITY ISSUE', exact: true }).click();
+  const continuitySurface = await waitVisible(
+    page.locator('section[data-panel-id="continuity"]'),
+    'Continuity production workspace surface',
+  );
+  const issueCard = await waitVisible(
+    continuitySurface.locator(`[data-continuity-issue-id="${issue.id}"]`),
+    'exact Continuity issue deep link',
+  );
+  await waitFor(
+    async () => issueCard.evaluate((element) => document.activeElement === element),
+    'Continuity issue focus after authoritative refresh',
+  );
+
+  const repairSceneId = issue.related_scene_ids[0] ?? null;
+  const repairLabel = repairSceneId == null
+    ? 'ASK BILLY TO PLAN REPAIR'
+    : `REPAIR SC.${repairSceneId}`;
+  await issueCard.getByRole('button', { name: repairLabel, exact: true }).click();
+  const repairAiSurface = await waitVisible(
+    page.locator('section[data-panel-id="ai-companions"]'),
+    'Billy production workspace surface after Continuity handoff',
+  );
+  const repairedBillyTab = await waitVisible(
+    repairAiSurface.getByTitle('Billy', { exact: true }),
+    'Billy companion tab after Continuity handoff',
+  );
+  await waitFor(
+    async () => await repairedBillyTab.getAttribute('aria-pressed') === 'true',
+    'Continuity handoff reselected Billy in the production companion dock',
+  );
+  await waitVisible(
+    page.getByText('CONTINUITY REPAIR WAITING · existing Billy draft preserved', { exact: true }),
+    'Billy existing-draft preservation decision',
+  );
+  await waitFor(async () => page.evaluate(() => {
+    const active = document.activeElement;
+    return active instanceof HTMLElement
+      && active.closest('section[data-panel-id="ai-companions"]') != null
+      && active.closest('[data-scene-id]') == null;
+  }), 'keyboard focus transferred from the hidden Manuscript to Billy');
+  assert.equal(await billyInput.inputValue(), preservedDraft, 'Continuity handoff overwrote an existing Billy draft');
+  await page.getByRole('button', { name: 'REPLACE DRAFT', exact: true }).click();
+  await waitFor(
+    async () => (await billyInput.inputValue()).includes(issue.title),
+    'explicitly staged Continuity repair brief',
+  );
+  await waitVisible(
+    page.locator('section[data-panel-id="ai-companions"] [role="status"]')
+      .filter({ hasText: issue.id })
+      .filter({ hasText: 'brief staged, not sent' }),
+    'unsent Continuity repair status',
+  );
+  const unchangedOpening = await packagedCoreJson(
+    session,
+    `/api/projects/${projectId}/scenes/${seeded.opening.id}`,
+  );
+  assert.equal(
+    unchangedOpening.content,
+    barrierText,
+    'Staging a Continuity repair changed manuscript prose before Controlled Apply',
+  );
+  assert.equal(
+    repairSceneId,
+    seeded.opening.id,
+    'The deterministic Continuity fixture did not target the edited opening scene',
+  );
+
+  const stagedBrief = await billyInput.inputValue();
+  const expectedReply = 'Ada stepped into the archive, dust hanging in the dawn light. Milo did not look up from the cabinet. "You\'re late," he said, and she heard the accusation folded under the words.';
+  const assistantRequestPromise = page.waitForRequest((request) => (
+    request.method() === 'POST'
+      && new URL(request.url()).pathname === `/api/projects/${projectId}/assistant/chat`
+  ), { timeout: UI_TIMEOUT_MS });
+  await repairAiSurface.getByRole('button', { name: 'SEND', exact: true }).click();
+  const assistantRequest = await assistantRequestPromise;
+  assert.deepEqual(
+    assistantRequest.postDataJSON(),
+    {
+      message: stagedBrief,
+      history: [],
+      active_scene_id: seeded.opening.id,
+    },
+    'Billy repair request lost its exact scene-bound, selection-free payload',
+  );
+  await waitVisible(
+    repairAiSurface.getByText(expectedReply, { exact: true }),
+    'deterministic packaged Billy repair reply',
+  );
+  await repairAiSurface.getByRole('button', { name: '↧ REPLACE', exact: true }).click();
+  const applyDialog = await waitVisible(
+    page.getByRole('dialog', { name: 'CONTROLLED APPLY', exact: true }),
+    'Controlled Apply review for the Billy repair',
+  );
+  const applyReviewText = await applyDialog.textContent();
+  assert.ok(
+    applyReviewText?.includes(`REWRITE · ${seeded.opening.title.toUpperCase()}`),
+    'Controlled Apply did not identify the exact repair scene',
+  );
+  assert.ok(
+    applyReviewText?.includes('Packaged shell save barrier'),
+    'Controlled Apply did not show the current manuscript prose',
+  );
+  assert.ok(
+    applyReviewText?.includes(expectedReply),
+    'Controlled Apply did not show Billy’s proposed prose',
+  );
+  const beforeApply = await packagedCoreJson(
+    session,
+    `/api/projects/${projectId}/scenes/${seeded.opening.id}`,
+  );
+  assert.equal(
+    beforeApply.content,
+    barrierText,
+    'Opening the Controlled Apply review mutated manuscript prose',
+  );
+  assert.ok(beforeApply.revision, 'Controlled Apply target has no revision guard');
+  const applyRequestPromise = page.waitForRequest((request) => (
+    request.method() === 'PATCH'
+      && new URL(request.url()).pathname === `/api/projects/${projectId}/scenes/${seeded.opening.id}`
+  ), { timeout: UI_TIMEOUT_MS });
+  await applyDialog.getByRole('button', { name: '✓ APPLY', exact: true }).click();
+  const applyRequest = await applyRequestPromise;
+  assert.deepEqual(
+    applyRequest.postDataJSON(),
+    {
+      content: expectedReply,
+      expected_revision: beforeApply.revision,
+    },
+    'Controlled Apply did not send the exact revision-bound scene mutation',
+  );
+  await applyDialog.waitFor({ state: 'hidden', timeout: UI_TIMEOUT_MS });
+  await waitFor(async () => {
+    const applied = await packagedCoreJson(
+      session,
+      `/api/projects/${projectId}/scenes/${seeded.opening.id}`,
+    );
+    return applied.content === expectedReply;
+  }, 'confirmed Controlled Apply scene mutation');
+
+  const reviewSurface = await selectPanel(page, 'Continuity', 'continuity', 'Continuity');
+  const reviewIssue = await waitVisible(
+    reviewSurface.locator(`[data-continuity-issue-id="${issue.id}"]`),
+    'Continuity issue before transactional review',
+  );
+  await reviewIssue.getByRole('button', { name: 'RESOLVE', exact: true }).click();
+  const reviewDialog = await waitVisible(
+    page.getByRole('dialog', { name: 'REVIEW CONTINUITY', exact: true }),
+    'Continuity review confirmation',
+  );
+  await reviewDialog.getByRole('button', { name: 'CONFIRM DECISION', exact: true }).click();
+  await reviewDialog.waitFor({ state: 'hidden', timeout: UI_TIMEOUT_MS });
+  await waitFor(
+    async () => (await reviewIssue.textContent())?.includes('RESOLVED') ?? false,
+    'resolved Continuity review state',
+  );
+  const reviewedContinuity = await packagedCoreJson(
+    session,
+    `/api/projects/${projectId}/continuity`,
+  );
+  const reviewedIssue = reviewedContinuity.issues.find((candidate) => candidate.id === issue.id);
+  assert.equal(reviewedIssue?.status, 'resolved', 'Continuity confirmation did not persist its review decision');
+  const reviewedRadar = await packagedCoreJson(
+    session,
+    `/api/projects/${projectId}/decision-radar`,
+  );
+  assert.equal(
+    reviewedRadar.continuity_cards.some((candidate) => candidate.id === continuityCard.id),
+    false,
+    'Resolved Continuity issue remained actionable in Decision Radar',
+  );
+  assert.deepEqual(session.pageErrors, [], 'Renderer errors occurred during the Graph/Radar/Continuity shell journey');
+  record('journey', 'real shell completed Radar → Graph, Continuity → Billy → Controlled Apply, and confirmed durable review paths');
+  return {
+    projectId,
+    openingSceneId: seeded.opening.id,
+    savedOpeningContent: expectedReply,
+    graphCardId: graphCard.id,
+    continuityCardId: continuityCard.id,
+    continuityIssueId: issue.id,
+    continuityIssueStatus: 'resolved',
+  };
+}
+
 async function numericInlineBounds(locator) {
   return locator.evaluate((element) => ({
     left: Number.parseFloat(element.style.left),
@@ -1252,6 +1629,33 @@ async function verifyPersistedWorkspace(session, expected) {
   record('journey', 'pointer-authored project layout survived graceful packaged relaunch');
 }
 
+async function verifyPersistedIntelligence(session, expected) {
+  const { projectId } = await waitProReady(session);
+  assert.equal(projectId, expected.projectId, 'Packaged relaunch resumed the wrong intelligence project');
+  const [scene, radar, continuity] = await Promise.all([
+    packagedCoreJson(session, `/api/projects/${projectId}/scenes/${expected.openingSceneId}`),
+    packagedCoreJson(session, `/api/projects/${projectId}/decision-radar`),
+    packagedCoreJson(session, `/api/projects/${projectId}/continuity`),
+  ]);
+  assert.equal(scene.content, expected.savedOpeningContent, 'Confirmed Controlled Apply mutation did not survive relaunch');
+  assert.ok(
+    radar.knowledge_graph_cards.some((card) => card.id === expected.graphCardId),
+    'Traceable Knowledge Graph card did not survive packaged relaunch',
+  );
+  assert.equal(
+    radar.continuity_cards.some((card) => card.id === expected.continuityCardId),
+    false,
+    'Resolved Continuity decision became actionable again after packaged relaunch',
+  );
+  const issue = continuity.issues.find((candidate) => candidate.id === expected.continuityIssueId);
+  assert.equal(
+    issue?.status,
+    expected.continuityIssueStatus,
+    'Durable Continuity review state did not survive packaged relaunch',
+  );
+  record('journey', 'Graph evidence, Continuity review state, and the confirmed Controlled Apply mutation survived packaged relaunch');
+}
+
 async function readSavedLayout(session, expected) {
   const layoutPath = path.join(session.runtime.userData, 'layouts', `${expected.projectId}.json`);
   await waitFor(async () => {
@@ -1438,10 +1842,21 @@ async function main() {
       root: productRoot,
       label: 'pro-pointer-1',
     });
+    const intelligenceExpected = await exerciseIntelligenceShell(first);
+    await captureScreenshot(first, 'graph-radar-continuity');
     const canvasExpected = await exerciseCanvasPlot(first);
     await captureScreenshot(first, 'canvas-plot');
     const workspaceExpected = await exercisePointerWorkspace(first);
-    const expected = { ...workspaceExpected, canvas: canvasExpected };
+    assert.equal(
+      workspaceExpected.projectId,
+      intelligenceExpected.projectId,
+      'Packaged shell switched projects during the intelligence journey',
+    );
+    const expected = {
+      ...workspaceExpected,
+      canvas: canvasExpected,
+      intelligence: intelligenceExpected,
+    };
     await captureScreenshot(first, 'pointer-layout');
     await closeSession(first);
     await readSavedLayout(first, expected);
@@ -1452,6 +1867,7 @@ async function main() {
       root: productRoot,
       label: 'pro-pointer-2',
     });
+    await verifyPersistedIntelligence(second, expected.intelligence);
     await verifyPersistedCanvasPlot(second, expected.canvas);
     await verifyPersistedWorkspace(second, expected);
     await captureScreenshot(second, 'restored-layout');

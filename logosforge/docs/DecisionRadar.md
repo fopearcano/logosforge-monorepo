@@ -12,7 +12,13 @@ are no hallucinated cards.
 - `severity` — `blocking` / `warning` / `suggestion` / `opportunity` / `info`
 - `confidence` — `confirmed` / `likely` / `possible` / `unknown`
 - `title`, `explanation`, `suggested_action`
-- `related_section` (+ optional target type/id), `created_from`
+- `related_section` (+ optional target type/id/key), `created_from`
+- optional canonical Graph navigation (`graph_focus_key`, `graph_view_mode`,
+  `graph_include_inferred`, `graph_depth`)
+- `evidence_total` plus up to five structured evidence rows. Each row can carry
+  its own section and typed id/key destination. Graph evidence preserves exact
+  node/edge identities; Continuity evidence preserves canonical issue keys and
+  only project-owned scene ids.
 
 ## Ranking
 
@@ -42,25 +48,38 @@ Deterministic; reads only; no mutation; no LLM. AI interpretation of the radar i
 a separate, manual `Explain Dashboard` action. Card "dismiss" is a UI-only state
 (deferred) — never deletes data.
 
-## Deferred
+## UI
 
-Radar UI with filters + per-card actions (open section / send to Assistant /
-create from suggestion); persistent dismiss state.
+The Pro Dashboard merges the stable core, Knowledge Graph, and Semantic
+Continuity feeds, severity-ranks once, and keeps a single ten-card display cap.
+Canonical cards have explicit origin badges, expandable bounded evidence, and
+exact deep links. Graph rows focus their canonical nodes; Continuity rows open
+their canonical issue or project-owned manuscript scene. Legacy graph isolation
+advice is suppressed when the canonical graph reports the same class of issue.
+Persistent dismiss and custom filters remain deferred.
 
 ## Knowledge Graph cards (Phase 10P)
 
 The Narrative Knowledge Graph contributes a dedicated, deterministic card feed
 via `knowledge_graph.build_graph_decision_cards` (isolated PSYKE/elements, scenes
 without PSYKE links, undefined note terms, many inferred edges to review, a theme
-not tied to scenes, a risk touching a central node). It is surfaced through the
-`Generate Decision Cards from Graph` Logos action and kept separate from the core
-10N radar so this radar's capped/fixed-id contract is unchanged. See
-docs/NarrativeKnowledgeGraph.md.
+not tied to scenes, a risk touching a central node). HTTP exposes that feed as
+`knowledge_graph_cards` alongside an explicit availability flag; it remains
+separate from the core 10N radar so that feed's capped/fixed-id contract is
+unchanged. The Pro Dashboard performs the bounded merge described above. The
+same cards remain available through the `Generate Decision Cards from Graph`
+Logos action. See docs/NarrativeKnowledgeGraph.md.
 
 ## Continuity cards (Phase 10Q)
 
 The Semantic Continuity Engine contributes a dedicated, deterministic card feed
 (`continuity.build_continuity_decision_cards`, category `continuity`) ranked by
-severity and traceable to specific issues, surfaced via the `Continuity Decision
-Cards` Logos action. Kept separate from the core 10N radar so its capped/fixed-id
-contract is unchanged. See docs/SemanticContinuityEngine.md.
+severity and traceable to specific issues. HTTP exposes at most eight cards in
+`continuity_cards` with an independent availability flag, one canonical issue
+key per card, the authoritative evidence total, and up to five issue/detail/
+project-owned scene facts. The Pro Dashboard merges them without changing the
+core 10N feed. **Open Continuity Issue** focuses the exact issue after the
+authoritative report loads; scene facts open the exact Manuscript scene. A stale
+or resolved key is reported and consumed rather than matched approximately. The
+`Continuity Decision Cards` Logos action remains available. See
+docs/SemanticContinuityEngine.md.

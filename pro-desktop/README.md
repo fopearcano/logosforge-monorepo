@@ -75,6 +75,16 @@ shielded from concurrent UI actions. Shared mounted-state guards reopen correctl
 during React Strict Mode's effect probe. Voice capture releases every media track,
 audio node and `AudioContext` after stop/cancel and after partial setup failures.
 
+The production workspace remains non-interactive until its current Core has
+published an authoritative project. Same-Core project refreshes are
+latest-request-wins, writing-mode changes remain owned by the Core generation
+that started them, and one-shot navigation targets are routed only to their
+owning mounted panel. Decision Radar deep links therefore move keyboard focus to
+the exact authoritative Graph node or Continuity issue instead of letting a
+hidden surface consume or steal the handoff. Continuity repair also reselects
+Billy, preserves an existing draft behind an explicit choice, and rereads the
+exact repair Scene before sending so its Controlled Apply snapshot is current.
+
 The desktop host records the last active project in its stable Electron user-data
 directory and reopens it through the normal project handoff lifecycle on the next
 launch. Corrupt, obsolete, or missing session state falls back to the first project
@@ -108,7 +118,11 @@ AI panels use the same generation discipline: Billy chat generations, Logos
 catalog/run/proactive scans, Quantum/Counterpart results, Grammar checks and the
 Adaptive strip reject stale responses. PATCH requests to one resource are
 serialized by the HTTP adapter, while the core writes global AI settings through
-an atomic, locked settings snapshot.
+an atomic, locked settings snapshot. Core validator profile v3 also rejects empty
+direct output and unmistakable cross-mode Dialogue formatting before display,
+cache, or apply; a direct-writing Chat request without a target returns a short
+clarification instead. The deterministic Writer QA release gate covers 69
+section/mode/action/target/response scenarios and currently reports zero findings.
 
 Long-running Extraction jobs are resumable across panel remounts and explicitly
 cancellable; a late cancelled result is discarded instead of becoming
@@ -196,20 +210,27 @@ no token or changing package-extraction path belongs in Codex configuration.
 Writes remain disabled unless the MCP client explicitly sets
 `LOGOSFORGE_MCP_ALLOW_WRITES=1`.
 
-Gateway version 1.6 exposes 45 named tools. In addition to paged/filterable
+Gateway version 1.9.0 exposes 46 named tools. In addition to paged/filterable
 comment-thread reads and revision-bound Reply/Resolve/Reopen proposals, it can
 read the canonical Timeline, Canvas Plot, and bounded Narrative Knowledge Graph
-and propose strict revision-bound commands for all three transactional
-surfaces. Knowledge Graph tools also page through the complete hidden-edge
-restore queue. The core rechecks board, graph-review, and comment revisions
-atomically with apply, rejecting intervening changes. Canvas node deletion
+plus the deterministic Semantic Continuity report, and propose strict guarded
+commands for all four transactional surfaces. Knowledge Graph tools also page
+through the complete hidden-edge restore queue. A Continuity proposal can Defer,
+Dismiss, or Resolve one open issue and must bind both the report revision and the
+exact finding fingerprint. It changes review status only; manuscript repair
+remains a separate Billy → Controlled Apply flow. The core rechecks board,
+graph-review, Continuity review/finding, and comment revisions atomically with
+apply, rejecting intervening changes. Canvas node deletion
 removes incident Canvas links but preserves linked manuscript scenes. Timeline
 lane deletion preserves events as Unassigned and event removal preserves the
-manuscript scene. Timeline, Canvas Plot, and Knowledge Graph proposals use their
-opaque proposal id for a durable core receipt, so an ambiguous apply can recover
-the exact committed outcome across an MCP companion restart without duplicating
-the command. Other proposal families keep their terminal
-indeterminate-response rule.
+manuscript scene. Timeline, Canvas Plot, Knowledge Graph, and Continuity
+proposals use their opaque proposal id for a durable core receipt, so an
+ambiguous apply can recover the exact committed outcome across an MCP companion
+restart without duplicating the command. A proven family-specific receipt miss
+permits exactly one resend of that identical proposal/key; later ambiguous
+outcomes are receipt-only. Unknown proposal recovery probes all four receipt
+families and fails closed if more than one matches. Other proposal families keep
+their terminal indeterminate-response rule.
 Canvas reads use bounded node-body previews by default and require an explicit
 `include_bodies` opt-in for complete card text. All project text is
 user-authored data, never agent instructions.
@@ -219,11 +240,25 @@ remain in the Pro UI and are not MCP tools.
 The required packaged-Windows CI gate builds the core and MCP sidecars from a
 clean checkout, verifies that the native companion is present in the Electron
 package, then exercises authenticated reads, applied Timeline, Canvas Plot, and
-Knowledge Graph commands with rejected stale siblings; durable receipt recovery
-for all three surfaces from a fresh MCP process; Canvas and graph-review
+Knowledge Graph commands plus an applied fingerprint-bound Continuity status
+decision, with rejected stale siblings; durable receipt recovery for all four
+surfaces from a fresh MCP process; Canvas, graph-review, and Continuity-status
 persistence across that restart; a revision-guarded comment reply and
 resolution; stale-write rejection; and single-use proposal replay protection.
-The optional Codex subprocess used by the smoke remains read-only.
+The frozen-companion smoke separately verifies all 46 discovered tools and that
+an exact Continuity proposal is non-mutating. The optional Codex subprocess used
+by the packaged smoke remains read-only.
+
+The packaged workspace acceptance exercises the production renderer rather than
+the preview harness. It crosses the manuscript save barrier, follows Radar into
+exact Graph and Continuity evidence, switches from Logos back to Billy, sends a
+deterministic offline repair request, confirms its revision-bound Controlled
+Apply Scene update, resolves the Continuity finding, authors Canvas content with
+real pointer input, mutates the dock layout, closes through the save handshake,
+and verifies all durable state after relaunch. Windows, Linux under Xvfb, and the
+Intel macOS 12 runner invoke this same script; a local Windows packaged run is
+green, while the current macOS/Linux source state still requires its remote CI
+run before release.
 
 See [`../logosforge/docs/MCP_GATEWAY.md`](../logosforge/docs/MCP_GATEWAY.md) for
 Codex configuration and the proposal/review/apply safety model.

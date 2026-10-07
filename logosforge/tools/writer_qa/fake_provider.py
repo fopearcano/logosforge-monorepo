@@ -71,8 +71,16 @@ _VALID_NOTE_SUMMARY = (
     "Summary: the heist hinges on the archive's blind spot. Open questions: who "
     "tipped them off; where the ledger went."
 )
-# A wrong-mode response: prose returned where screenplay/panel is expected.
-_WRONG_MODE = _VALID_NOVEL
+# Clearly wrong-mode responses. Novel and Series legitimately accept broad prose
+# shapes, so their fixtures use unmistakable script/panel structures instead of
+# pretending that ordinary novel prose is invalid in every mode.
+_WRONG_MODE_BY_MODE = {
+    "novel": _VALID_SCREENPLAY,
+    "screenplay": _VALID_NOVEL,
+    "graphic_novel": _VALID_NOVEL,
+    "stage_script": _VALID_NOVEL,
+    "series": _VALID_GN_PANEL,
+}
 
 RESPONSES: dict[str, str] = {
     "valid_screenplay_dialogue": _VALID_SCREENPLAY,
@@ -85,9 +93,12 @@ RESPONSES: dict[str, str] = {
     "valid_note_summary": _VALID_NOTE_SUMMARY,
     "invalid_planning_markdown": _INVALID_PLANNING,
     "invalid_context_dump": _INVALID_CONTEXT_DUMP,
-    "invalid_wrong_mode": _WRONG_MODE,
     "invalid_meta_reasoning": _INVALID_META,
     "invalid_empty": "",
+    **{
+        f"invalid_wrong_mode_{mode}": response
+        for mode, response in _WRONG_MODE_BY_MODE.items()
+    },
 }
 
 PROFILES = tuple(RESPONSES) + ("provider_error",)

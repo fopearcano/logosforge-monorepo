@@ -135,23 +135,21 @@ python tools/writer_qa/run_writer_qa.py --suite manuscript
 Exit code is non-zero when BLOCKER findings exceed `--max-blocker` (default 0),
 so it can gate CI. `--max-high N` optionally also gates on HIGH.
 
-## Current findings (first run, 69 scenarios)
+## Current findings (69-scenario release gate)
 
-The harness immediately surfaced real validator gaps to fix next (it does **not**
-fix them — this task only builds the harness):
+The first run found 5 BLOCKER wrong-mode apply paths, 5 HIGH empty-output apply
+paths, and 1 MEDIUM missing-target Chat route. They were closed on 2026-10-07:
 
-- **BLOCKER ×5 — wrong-mode output is applyable.** A prose response in a
-  Screenplay/Graphic-Novel/Stage/Series/(novel-as-screenplay) slot passes the
-  marker validator (no forbidden markers) and is apply-eligible. Fix area:
-  `assistant_contract.validate` (add mode-format checking, e.g. reuse
-  `tools/writer_qa/validators.mode_format_ok`).
-- **HIGH ×5 — empty output is applyable.** An empty response validates as
-  "valid" and is apply-eligible. Fix area: `assistant_contract.validate`
-  (reject empty/whitespace direct content).
-- **MEDIUM ×1 — Chat with no target does not clarify.** A Chat "continue the
-  scene" with no target routes to direct content instead of asking a short
-  clarification. Fix area: `assistant_contract.route` (extend
-  `needs_clarification` to Chat write intents without a target).
+- Validator profile v3 rejects empty/whitespace direct output before display,
+  apply, or caching and recommends the existing strict retry.
+- Explicit Dialogue actions reject unmistakable cross-mode formats while keeping
+  Novel and Series validation deliberately conservative and multilingual.
+- Direct-writing Chat requests without a target return the existing concise
+  clarification contract instead of generating applyable content.
+
+The deterministic suite now reports **69 passed scenarios, 0 bugs, 0 BLOCKER**.
+The harness remains a headless contract gate, not a substitute for native GUI,
+rendering, fullscreen, provider-quality, or target-platform acceptance.
 
 ## Relationship to Alpha
 

@@ -380,6 +380,7 @@ from logosforge.models import (
     KnowledgeGraphCommandReceipt,
     KnowledgeGraphSnapshot,
     ContinuityIssue,
+    ContinuityCommandReceipt,
     ContinuityCheckRun,
 )
 
@@ -511,6 +512,35 @@ class KnowledgeGraphEdgeNotFound(LookupError):
 
 class KnowledgeGraphReviewStateCorrupt(RuntimeError):
     """Persisted graph review rows violate canonical uniqueness."""
+
+
+class ContinuityRevisionConflict(RuntimeError):
+    """Raised when an issue-review command targets older review state."""
+
+    def __init__(self, expected: str, current: str) -> None:
+        super().__init__("continuity review revision does not match")
+        self.expected = expected
+        self.current = current
+
+
+class ContinuityCommandError(ValueError):
+    """A Continuity issue-review command is malformed or unsupported."""
+
+
+class ContinuityIdempotencyKeyConflict(RuntimeError):
+    """An Idempotency-Key was committed for another Continuity command."""
+
+
+class ContinuityProjectNotFound(LookupError):
+    """The path-scoped Project disappeared before the transaction began."""
+
+
+class ContinuityIssueNotFound(LookupError):
+    """The requested computed issue is absent from the current report."""
+
+
+class ContinuityReviewStateCorrupt(RuntimeError):
+    """Persisted Continuity review rows violate canonical uniqueness."""
 
 
 @dataclass(frozen=True)
@@ -688,9 +718,49 @@ class KnowledgeGraphReviewSnapshot:
     revision: str
 
 
+@dataclass(frozen=True)
+class ContinuityReviewSnapshot:
+    """One coherent persisted Continuity-review read detached from SQLite."""
+
+    project: Project
+    issues: tuple[ContinuityIssue, ...]
+    revision: str
+
+
+@dataclass(frozen=True)
+class ContinuityCommandResult:
+    """Committed issue status plus exactly-once recovery metadata."""
+
+    revision: str
+    changed: bool
+    issue_key: str
+    previous_status: str
+    status: str
+    replayed: bool = False
+    applied_revision: str = ""
+
+
+@dataclass(frozen=True)
+class ContinuityCommandReceiptData:
+    """Decoded durable Continuity receipt safe for the typed API."""
+
+    project_id: int
+    request_digest: str
+    kind: str
+    expected_revision: str
+    applied_revision: str
+    issue_key: str
+    expected_issue_fingerprint: str
+    previous_status: str
+    status: str
+    original_changed: bool
+    created_at: datetime
+
+
 _TIMELINE_RECEIPT_SCHEMA_VERSION = 1
 _CANVAS_PLOT_RECEIPT_SCHEMA_VERSION = 1
 _KNOWLEDGE_GRAPH_RECEIPT_SCHEMA_VERSION = 1
+_CONTINUITY_RECEIPT_SCHEMA_VERSION = 2
 _TIMELINE_COMMAND_KINDS = frozenset({
     "create_lane",
     "update_lane",
@@ -715,6 +785,11 @@ _KNOWLEDGE_GRAPH_COMMAND_KINDS = frozenset({
     "hide_edge",
     "unhide_edge",
 })
+_CONTINUITY_COMMAND_STATUSES = {
+    "defer_issue": "deferred",
+    "dismiss_issue": "dismissed",
+    "resolve_issue": "resolved",
+}
 _TIMELINE_IDEMPOTENCY_KEY_RE = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$"
 )
@@ -724,6 +799,10 @@ _CANVAS_PLOT_IDEMPOTENCY_KEY_RE = re.compile(
 _KNOWLEDGE_GRAPH_IDEMPOTENCY_KEY_RE = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$"
 )
+_CONTINUITY_IDEMPOTENCY_KEY_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$"
+)
+_CONTINUITY_ISSUE_KEY_RE = re.compile(r"^[0-9a-f]{16}$")
 _LOWER_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -1263,6 +1342,138 @@ def _decode_knowledge_graph_command_receipt(
     )
 
 
+def _continuity_idempotency_key_hash(value: str) -> str:
+    """Validate and irreversibly identify one Continuity retry capability."""
+    if not isinstance(value, str):
+        raise ContinuityCommandError("Idempotency-Key must be a string")
+    if (
+        value != value.strip()
+        or _CONTINUITY_IDEMPOTENCY_KEY_RE.fullmatch(value) is None
+    ):
+        raise ContinuityCommandError(
+            "Idempotency-Key must contain 16-128 safe ASCII characters"
+        )
+    return hashlib.sha256(value.encode("ascii")).hexdigest()
+
+
+def _continuity_command_request_digest(
+    project_id: int,
+    kind: str,
+    expected_revision: str,
+    issue_key: str,
+    expected_issue_fingerprint: str,
+) -> str:
+    encoded = json.dumps(
+        {
+            "scope": "continuity-command-v1",
+            "project_id": int(project_id),
+            "kind": kind,
+            "expected_revision": expected_revision,
+            "issue_key": issue_key,
+            "expected_issue_fingerprint": expected_issue_fingerprint,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _continuity_receipt_result_json(
+    *,
+    kind: str,
+    expected_revision: str,
+    applied_revision: str,
+    issue_key: str,
+    expected_issue_fingerprint: str,
+    previous_status: str,
+    status: str,
+    original_changed: bool,
+) -> str:
+    return json.dumps(
+        {
+            "schema_version": _CONTINUITY_RECEIPT_SCHEMA_VERSION,
+            "kind": kind,
+            "expected_revision": expected_revision,
+            "applied_revision": applied_revision,
+            "issue_key": issue_key,
+            "expected_issue_fingerprint": expected_issue_fingerprint,
+            "previous_status": previous_status,
+            "status": status,
+            "original_changed": original_changed,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _decode_continuity_command_receipt(
+    row: ContinuityCommandReceipt,
+) -> ContinuityCommandReceiptData:
+    """Decode a Continuity receipt fail-closed; corrupt proof cannot replay."""
+    try:
+        payload = json.loads(row.result_json)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise RuntimeError("Continuity command receipt is corrupt") from exc
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema_version") != _CONTINUITY_RECEIPT_SCHEMA_VERSION
+        or isinstance(payload.get("schema_version"), bool)
+    ):
+        raise RuntimeError("Continuity command receipt has an unsupported schema")
+
+    kind = payload.get("kind")
+    expected_revision = payload.get("expected_revision")
+    applied_revision = payload.get("applied_revision")
+    issue_key = payload.get("issue_key")
+    expected_issue_fingerprint = payload.get("expected_issue_fingerprint")
+    previous_status = payload.get("previous_status")
+    status = payload.get("status")
+    original_changed = payload.get("original_changed")
+    expected_status = _CONTINUITY_COMMAND_STATUSES.get(kind)
+    if (
+        not isinstance(kind, str)
+        or expected_status is None
+        or not isinstance(expected_revision, str)
+        or _LOWER_SHA256_RE.fullmatch(expected_revision) is None
+        or not isinstance(applied_revision, str)
+        or _LOWER_SHA256_RE.fullmatch(applied_revision) is None
+        or not isinstance(issue_key, str)
+        or _CONTINUITY_ISSUE_KEY_RE.fullmatch(issue_key) is None
+        or not isinstance(expected_issue_fingerprint, str)
+        or _LOWER_SHA256_RE.fullmatch(expected_issue_fingerprint) is None
+        or previous_status != "open"
+        or status != expected_status
+        or original_changed is not True
+        or applied_revision == expected_revision
+        or _LOWER_SHA256_RE.fullmatch(row.idempotency_key_hash or "") is None
+        or _LOWER_SHA256_RE.fullmatch(row.request_digest or "") is None
+    ):
+        raise RuntimeError("Continuity command receipt has invalid result data")
+    canonical_request_digest = _continuity_command_request_digest(
+        int(row.project_id), kind, expected_revision, issue_key,
+        expected_issue_fingerprint,
+    )
+    if not hmac.compare_digest(row.request_digest, canonical_request_digest):
+        raise RuntimeError(
+            "Continuity command receipt does not match its request digest"
+        )
+    return ContinuityCommandReceiptData(
+        project_id=int(row.project_id),
+        request_digest=row.request_digest,
+        kind=kind,
+        expected_revision=expected_revision,
+        applied_revision=applied_revision,
+        issue_key=issue_key,
+        expected_issue_fingerprint=expected_issue_fingerprint,
+        previous_status=previous_status,
+        status=status,
+        original_changed=True,
+        created_at=row.created_at,
+    )
+
+
 @dataclass(frozen=True)
 class PlotBlockUpdateResult:
     """One committed Plot block mutation and its invalidation metadata."""
@@ -1313,6 +1524,8 @@ class Database:
         self._canvas_plot_write_locks: dict[int, threading.RLock] = {}
         self._knowledge_graph_locks_guard = threading.RLock()
         self._knowledge_graph_write_locks: dict[int, threading.RLock] = {}
+        self._continuity_locks_guard = threading.RLock()
+        self._continuity_write_locks: dict[int, threading.RLock] = {}
         self._structure_locks_guard = threading.RLock()
         self._structure_write_locks: dict[int, threading.RLock] = {}
         # ``check_same_thread=False`` lets FastAPI's threadpool use pooled
@@ -1416,6 +1629,17 @@ class Database:
         with self._knowledge_graph_locks_guard:
             lock = self._knowledge_graph_write_locks.setdefault(
                 key, threading.RLock(),
+            )
+        with lock:
+            yield
+
+    @contextmanager
+    def continuity_write_lock(self, project_id: int):
+        """Serialize one project's Continuity review commands in-process."""
+        project_id = int(project_id)
+        with self._continuity_locks_guard:
+            lock = self._continuity_write_locks.setdefault(
+                project_id, threading.RLock()
             )
         with lock:
             yield
@@ -9881,28 +10105,397 @@ class Database:
     # Only user issue *status* (dismiss/resolve/defer) + check runs persist; the
     # issues themselves are recomputed each run and merged with these by key.
 
+    def _continuity_review_snapshot_in_session(
+        self,
+        session: Session,
+        project_id: int,
+        *,
+        validate_unique: bool = True,
+    ) -> ContinuityReviewSnapshot | None:
+        """Read the complete persisted Continuity review layer atomically."""
+        from logosforge.continuity.revision import continuity_review_revision
+
+        project = session.get(Project, project_id)
+        if project is None:
+            return None
+        issues = tuple(session.exec(
+            select(ContinuityIssue)
+            .where(ContinuityIssue.project_id == project_id)
+            .order_by(ContinuityIssue.id)
+        ).all())
+        if validate_unique:
+            issue_keys = [row.issue_key for row in issues]
+            if len(issue_keys) != len(set(issue_keys)):
+                raise ContinuityReviewStateCorrupt(
+                    "Continuity review state violates logical uniqueness"
+                )
+        return ContinuityReviewSnapshot(
+            project=project,
+            issues=issues,
+            revision=continuity_review_revision(
+                issues,
+                project_id=project_id,
+                project_created_at=project.created_at,
+            ),
+        )
+
+    def read_continuity_review_snapshot(
+        self,
+        project_id: int,
+    ) -> ContinuityReviewSnapshot | None:
+        """Return one coherent, detached persisted Continuity review snapshot."""
+        with Session(self._engine, expire_on_commit=False) as session:
+            session.connection().exec_driver_sql("BEGIN")
+            try:
+                snapshot = self._continuity_review_snapshot_in_session(
+                    session, project_id,
+                )
+                if snapshot is not None:
+                    session.expunge_all()
+            finally:
+                session.rollback()
+        return snapshot
+
+    def get_continuity_command_receipt(
+        self,
+        project_id: int,
+        idempotency_key: str,
+    ) -> ContinuityCommandReceiptData | None:
+        """Resolve a completed Continuity command within its project scope."""
+        key_hash = _continuity_idempotency_key_hash(idempotency_key)
+        with Session(self._engine, expire_on_commit=False) as session:
+            session.connection().exec_driver_sql("BEGIN")
+            try:
+                if session.get(Project, project_id) is None:
+                    return None
+                row = session.get(
+                    ContinuityCommandReceipt,
+                    (int(project_id), key_hash),
+                )
+                if row is None:
+                    return None
+                receipt = _decode_continuity_command_receipt(row)
+            finally:
+                session.rollback()
+        return receipt
+
+    def replay_continuity_command(
+        self,
+        project_id: int,
+        *,
+        kind: str,
+        expected_revision: str,
+        issue_key: str,
+        expected_issue_fingerprint: str,
+        idempotency_key: str,
+    ) -> ContinuityCommandResult | None:
+        """Resolve an exact committed retry before rebuilding live findings."""
+        status = _CONTINUITY_COMMAND_STATUSES.get(kind)
+        if status is None:
+            raise ContinuityCommandError(
+                f"Unsupported Continuity command: {kind!r}"
+            )
+        if (
+            not isinstance(expected_revision, str)
+            or _LOWER_SHA256_RE.fullmatch(expected_revision) is None
+        ):
+            raise ContinuityCommandError(
+                "expected_revision must be a lowercase SHA-256 digest"
+            )
+        if (
+            not isinstance(issue_key, str)
+            or _CONTINUITY_ISSUE_KEY_RE.fullmatch(issue_key) is None
+        ):
+            raise ContinuityCommandError(
+                "issue_key must be a 16-character lowercase hexadecimal key"
+            )
+        if (
+            not isinstance(expected_issue_fingerprint, str)
+            or _LOWER_SHA256_RE.fullmatch(expected_issue_fingerprint) is None
+        ):
+            raise ContinuityCommandError(
+                "expected_issue_fingerprint must be a lowercase SHA-256 digest"
+            )
+        key_hash = _continuity_idempotency_key_hash(idempotency_key)
+        request_digest = _continuity_command_request_digest(
+            project_id, kind, expected_revision, issue_key,
+            expected_issue_fingerprint,
+        )
+        with Session(self._engine, expire_on_commit=False) as session:
+            session.connection().exec_driver_sql("BEGIN")
+            try:
+                if session.get(Project, project_id) is None:
+                    return None
+                row = session.get(
+                    ContinuityCommandReceipt,
+                    (int(project_id), key_hash),
+                )
+                if row is None:
+                    return None
+                receipt = _decode_continuity_command_receipt(row)
+                if not hmac.compare_digest(receipt.request_digest, request_digest):
+                    raise ContinuityIdempotencyKeyConflict(
+                        "Idempotency-Key was already used for a different "
+                        "Continuity command"
+                    )
+                current = self._continuity_review_snapshot_in_session(
+                    session, project_id, validate_unique=False,
+                )
+                assert current is not None
+                return ContinuityCommandResult(
+                    revision=current.revision,
+                    changed=False,
+                    issue_key=receipt.issue_key,
+                    previous_status=receipt.previous_status,
+                    status=receipt.status,
+                    replayed=True,
+                    applied_revision=receipt.applied_revision,
+                )
+            finally:
+                session.rollback()
+
+    def execute_continuity_command(
+        self,
+        project_id: int,
+        *,
+        kind: str,
+        expected_revision: str,
+        issue_key: str,
+        expected_issue_fingerprint: str,
+        idempotency_key: str,
+        issue=None,
+    ) -> ContinuityCommandResult:
+        """Atomically review one computed issue and store its durable receipt."""
+        from logosforge.models.models import _now
+
+        status = _CONTINUITY_COMMAND_STATUSES.get(kind)
+        if status is None:
+            raise ContinuityCommandError(
+                f"Unsupported Continuity command: {kind!r}"
+            )
+        if (
+            not isinstance(expected_revision, str)
+            or _LOWER_SHA256_RE.fullmatch(expected_revision) is None
+        ):
+            raise ContinuityCommandError(
+                "expected_revision must be a lowercase SHA-256 digest"
+            )
+        if (
+            not isinstance(issue_key, str)
+            or _CONTINUITY_ISSUE_KEY_RE.fullmatch(issue_key) is None
+        ):
+            raise ContinuityCommandError(
+                "issue_key must be a 16-character lowercase hexadecimal key"
+            )
+        if (
+            not isinstance(expected_issue_fingerprint, str)
+            or _LOWER_SHA256_RE.fullmatch(expected_issue_fingerprint) is None
+        ):
+            raise ContinuityCommandError(
+                "expected_issue_fingerprint must be a lowercase SHA-256 digest"
+            )
+        key_hash = _continuity_idempotency_key_hash(idempotency_key)
+        request_digest = _continuity_command_request_digest(
+            project_id, kind, expected_revision, issue_key,
+            expected_issue_fingerprint,
+        )
+
+        with self.continuity_write_lock(project_id):
+            with Session(self._engine, expire_on_commit=False) as session:
+                session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+                try:
+                    if session.get(Project, project_id) is None:
+                        raise ContinuityProjectNotFound(project_id)
+                    receipt_row = session.get(
+                        ContinuityCommandReceipt,
+                        (int(project_id), key_hash),
+                    )
+                    if receipt_row is not None:
+                        receipt = _decode_continuity_command_receipt(receipt_row)
+                        if not hmac.compare_digest(
+                            receipt.request_digest, request_digest,
+                        ):
+                            raise ContinuityIdempotencyKeyConflict(
+                                "Idempotency-Key was already used for a "
+                                "different Continuity command"
+                            )
+                        current = self._continuity_review_snapshot_in_session(
+                            session, project_id, validate_unique=False,
+                        )
+                        assert current is not None
+                        session.expunge_all()
+                        session.rollback()
+                        return ContinuityCommandResult(
+                            revision=current.revision,
+                            changed=False,
+                            issue_key=receipt.issue_key,
+                            previous_status=receipt.previous_status,
+                            status=receipt.status,
+                            replayed=True,
+                            applied_revision=receipt.applied_revision,
+                        )
+
+                    current = self._continuity_review_snapshot_in_session(
+                        session, project_id,
+                    )
+                    assert current is not None
+                    if expected_revision != current.revision:
+                        raise ContinuityRevisionConflict(
+                            expected_revision, current.revision,
+                        )
+                    if (
+                        issue is None
+                        or str(getattr(issue, "issue_key", "")) != issue_key
+                        or str(getattr(issue, "status", "open")) != "open"
+                    ):
+                        raise ContinuityIssueNotFound(issue_key)
+                    if not hmac.compare_digest(
+                        str(getattr(issue, "review_fingerprint", "")),
+                        expected_issue_fingerprint,
+                    ):
+                        raise ContinuityRevisionConflict(
+                            expected_issue_fingerprint,
+                            str(getattr(issue, "review_fingerprint", "")),
+                        )
+
+                    try:
+                        evidence_json = json.dumps(
+                            list(getattr(issue, "evidence", []) or []),
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                            allow_nan=False,
+                        )
+                        related_node_ids_json = json.dumps(
+                            list(getattr(issue, "related_node_ids", []) or []),
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                            allow_nan=False,
+                        )
+                        related_scene_ids_json = json.dumps(
+                            list(getattr(issue, "related_scene_ids", []) or []),
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                            allow_nan=False,
+                        )
+                    except (TypeError, ValueError) as exc:
+                        raise ContinuityCommandError(
+                            "Continuity issue evidence cannot be persisted"
+                        ) from exc
+
+                    matches = [
+                        row for row in current.issues
+                        if row.issue_key == issue_key
+                    ]
+                    if len(matches) > 1:
+                        raise ContinuityReviewStateCorrupt(
+                            "Continuity review state violates logical uniqueness"
+                        )
+                    persisted = matches[0] if matches else None
+                    if persisted is not None and persisted.status != "open":
+                        raise ContinuityIssueNotFound(issue_key)
+                    values = {
+                        "issue_type": str(getattr(issue, "issue_type", "") or "")[:128],
+                        "dimension": str(getattr(issue, "dimension", "") or "")[:128],
+                        "severity": str(getattr(issue, "severity", "") or "")[:32],
+                        "confidence": str(getattr(issue, "confidence", "") or "")[:32],
+                        "title": str(getattr(issue, "title", "") or "")[:1000],
+                        "explanation": str(getattr(issue, "explanation", "") or "")[:4000],
+                        "evidence_json": evidence_json,
+                        "related_node_ids_json": related_node_ids_json,
+                        "related_scene_ids_json": related_scene_ids_json,
+                        "suggested_action": str(
+                            getattr(issue, "suggested_action", "") or ""
+                        )[:4000],
+                        "status": status,
+                    }
+                    if persisted is None:
+                        persisted = ContinuityIssue(
+                            project_id=project_id,
+                            issue_key=issue_key,
+                            **values,
+                        )
+                        session.add(persisted)
+                    else:
+                        for field, value in values.items():
+                            setattr(persisted, field, value)
+                        persisted.updated_at = _now()
+                    session.flush()
+                    updated = self._continuity_review_snapshot_in_session(
+                        session, project_id,
+                    )
+                    assert updated is not None
+                    if updated.revision == current.revision:
+                        raise RuntimeError(
+                            "Continuity mutation did not advance its revision"
+                        )
+                    session.add(ContinuityCommandReceipt(
+                        project_id=project_id,
+                        idempotency_key_hash=key_hash,
+                        request_digest=request_digest,
+                        result_json=_continuity_receipt_result_json(
+                            kind=kind,
+                            expected_revision=expected_revision,
+                            applied_revision=updated.revision,
+                            issue_key=issue_key,
+                            expected_issue_fingerprint=expected_issue_fingerprint,
+                            previous_status="open",
+                            status=status,
+                            original_changed=True,
+                        ),
+                    ))
+                    session.commit()
+                    session.expunge_all()
+                    return ContinuityCommandResult(
+                        revision=updated.revision,
+                        changed=True,
+                        issue_key=issue_key,
+                        previous_status="open",
+                        status=status,
+                        applied_revision=updated.revision,
+                    )
+                except Exception:
+                    session.rollback()
+                    raise
+
     def upsert_continuity_issue(self, project_id: int, issue_key: str, **fields,
                                 ) -> ContinuityIssue:
         from logosforge.models.models import _now
         fields.pop("project_id", None)
         fields.pop("issue_key", None)
-        with Session(self._engine) as session:
-            stmt = select(ContinuityIssue).where(
-                ContinuityIssue.project_id == project_id,
-                ContinuityIssue.issue_key == issue_key)
-            issue = session.exec(stmt).first()
-            if issue is None:
-                issue = ContinuityIssue(project_id=project_id, issue_key=issue_key,
-                                        **fields)
-            else:
-                for k, v in fields.items():
-                    if hasattr(issue, k):
-                        setattr(issue, k, v)
-            issue.updated_at = _now()
-            session.add(issue)
-            session.commit()
-            session.refresh(issue)
-            return issue
+        with self.continuity_write_lock(project_id):
+            with Session(self._engine, expire_on_commit=False) as session:
+                session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+                try:
+                    matches = list(session.exec(select(ContinuityIssue).where(
+                        ContinuityIssue.project_id == project_id,
+                        ContinuityIssue.issue_key == issue_key,
+                    )).all())
+                    if len(matches) > 1:
+                        raise ContinuityReviewStateCorrupt(
+                            "Continuity review state violates logical uniqueness"
+                        )
+                    issue = matches[0] if matches else None
+                    if issue is None:
+                        issue = ContinuityIssue(
+                            project_id=project_id,
+                            issue_key=issue_key,
+                            **fields,
+                        )
+                    else:
+                        for k, v in fields.items():
+                            if hasattr(issue, k):
+                                setattr(issue, k, v)
+                    issue.updated_at = _now()
+                    session.add(issue)
+                    session.commit()
+                    session.refresh(issue)
+                    return issue
+                except Exception:
+                    session.rollback()
+                    raise
 
     def get_continuity_issues(self, project_id: int, *, status: str | None = None,
                               ) -> list[ContinuityIssue]:

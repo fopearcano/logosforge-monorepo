@@ -62,7 +62,7 @@ export function useApplyToScene(): {
       if (projectIdRef.current !== expected.projectId) {
         throw new Error("The active project changed after this proposal was opened. Reopen it in the intended project.");
       }
-      await flushPendingProjectSaves();
+      await flushPendingProjectSaves({ commitActiveField: true });
       const current = (await api.listScenes(expected.projectId)).find((scene) => scene.id === expected.id);
       if (!current) throw new Error("The target scene no longer exists.");
       assertApplyTargetUnchanged(expected, projectIdRef.current, current.content ?? "");

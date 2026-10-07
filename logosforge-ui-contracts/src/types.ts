@@ -1475,6 +1475,8 @@ export interface NarrativeDashboardDTO {
 export interface ContinuityIssueDTO {
   /** stable issue_key. */
   id: string;
+  /** Hash of the exact derived finding shown for explicit review. */
+  review_fingerprint: string;
   issue_type: string;
   dimension: string;
   /** info | suggestion | warning | blocking */
@@ -1489,12 +1491,59 @@ export interface ContinuityIssueDTO {
   status: string;
 }
 export interface ContinuityReportDTO {
+  project_id: number;
+  /** Content-addressed revision of the complete persisted review layer. */
+  review_revision: string;
   writing_mode: string;
   issues: ContinuityIssueDTO[];
   blocking_count: number;
   warning_count: number;
   /** dimensions that are unavailable / deferred for this writing mode. */
   unavailable: string[];
+}
+export interface ContinuityDeferIssueCommandDTO {
+  kind: "defer_issue";
+  expected_revision: string;
+  issue_id: string;
+  expected_issue_fingerprint: string;
+}
+export interface ContinuityDismissIssueCommandDTO {
+  kind: "dismiss_issue";
+  expected_revision: string;
+  issue_id: string;
+  expected_issue_fingerprint: string;
+}
+export interface ContinuityResolveIssueCommandDTO {
+  kind: "resolve_issue";
+  expected_revision: string;
+  issue_id: string;
+  expected_issue_fingerprint: string;
+}
+export type ContinuityCommandDTO =
+  | ContinuityDeferIssueCommandDTO
+  | ContinuityDismissIssueCommandDTO
+  | ContinuityResolveIssueCommandDTO;
+export interface ContinuityCommandResultDTO {
+  continuity: ContinuityReportDTO;
+  changed: boolean;
+  affected_issue_id: string;
+  previous_status: "open";
+  status: "deferred" | "dismissed" | "resolved";
+  replayed: boolean;
+  applied_revision: string;
+}
+export interface ContinuityCommandReceiptDTO {
+  project_id: number;
+  request_digest: string;
+  command_kind: ContinuityCommandDTO["kind"];
+  expected_revision: string;
+  applied_revision: string;
+  original_changed: boolean;
+  original_affected_issue_id: string;
+  expected_issue_fingerprint: string;
+  previous_status: "open";
+  status: "deferred" | "dismissed" | "resolved";
+  committed_at: string;
 }
 export interface PacingInsightDTO {
   text: string;
@@ -1571,6 +1620,25 @@ export interface WorkflowRunDTO {
 }
 
 // ── Decision radar (project intelligence) + Quantum outliner (generative) ────
+export interface DecisionEvidenceDTO {
+  /** Deterministic evidence kind, such as node, edge, term, continuity_issue, scene, or continuity_detail. */
+  kind: string;
+  label: string;
+  detail: string;
+  /** Canonical public Knowledge Graph node key used for exact focus. */
+  graph_focus_key: string;
+  source_key: string;
+  target_key: string;
+  edge_type: string;
+  confidence: string;
+  source_system: string;
+  provenance: string;
+  /** Generic exact destination for non-graph evidence. */
+  related_section: string;
+  related_target_type: string;
+  related_target_id: number | null;
+  related_target_key: string;
+}
 export interface DecisionCardDTO {
   id: string;
   /** structure | psyke | continuity | rewrite | apply | export | production | graph | notes | writing_mode */
@@ -1585,13 +1653,29 @@ export interface DecisionCardDTO {
   related_section: string;
   related_target_type: string;
   related_target_id: number | null;
+  /** Stable string destination identity, such as a continuity issue key. */
+  related_target_key: string;
   created_from: string;
+  /** Canonical public Knowledge Graph node key; blank for non-graph cards. */
+  graph_focus_key: string;
+  /** Projection and evidence scope in which graph_focus_key is valid. */
+  graph_view_mode: KnowledgeGraphViewMode | null;
+  graph_include_inferred: boolean;
+  graph_depth: 1 | 2;
+  /** Bounded evidence preview. */
+  evidence: DecisionEvidenceDTO[];
+  /** Authoritative evidence count before the preview cap. */
+  evidence_total: number;
 }
 export interface DecisionRadarDTO {
   project_id: number;
   generated_light: boolean;
   summary_line: string;
   radar: DecisionCardDTO[];
+  knowledge_graph_available: boolean;
+  knowledge_graph_cards: DecisionCardDTO[];
+  continuity_available: boolean;
+  continuity_cards: DecisionCardDTO[];
 }
 export interface QuantumResultDTO {
   kind: string;

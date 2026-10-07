@@ -485,6 +485,163 @@ const psykeCommandExecution = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+const decisionCard = (overrides: Record<string, unknown> = {}) => ({
+  id: "missing_description",
+  category: "structure",
+  severity: "suggestion",
+  confidence: "confirmed",
+  title: "Project has no description.",
+  explanation: "",
+  suggested_action: "Add a description.",
+  related_section: "Projects",
+  related_target_type: "",
+  related_target_id: null,
+  related_target_key: "",
+  created_from: "deterministic",
+  graph_focus_key: "",
+  graph_view_mode: null,
+  graph_include_inferred: true,
+  graph_depth: 1,
+  evidence: [],
+  evidence_total: 0,
+  ...overrides,
+});
+
+const graphDecisionCard = (overrides: Record<string, unknown> = {}) => decisionCard({
+  id: "kg_isolated_theme:psyke:6",
+  category: "psyke",
+  severity: "opportunity",
+  confidence: "likely",
+  title: "Theme is isolated.",
+  created_from: "knowledge_graph",
+  graph_focus_key: "theme:psyke:6",
+  graph_view_mode: "project_map",
+  graph_include_inferred: true,
+  evidence: [{
+    kind: "node",
+    label: "Static",
+    detail: "theme source psyke:6.",
+    graph_focus_key: "theme:psyke:6",
+    source_key: "",
+    target_key: "",
+    edge_type: "",
+    confidence: "confirmed",
+    source_system: "psyke",
+    provenance: "psyke:6",
+    related_section: "",
+    related_target_type: "",
+    related_target_id: null,
+    related_target_key: "",
+  }],
+  evidence_total: 1,
+  ...overrides,
+});
+
+const continuityDecisionCard = (overrides: Record<string, unknown> = {}) => decisionCard({
+  id: "continuity_0123456789abcdef",
+  category: "continuity",
+  severity: "warning",
+  confidence: "likely",
+  title: "Location jump without transition.",
+  related_section: "Continuity",
+  related_target_type: "continuity_issue",
+  related_target_key: "0123456789abcdef",
+  created_from: "semantic_continuity",
+  evidence: [{
+    kind: "continuity_issue",
+    label: "Location jump without transition.",
+    detail: "location jump · spatial",
+    graph_focus_key: "",
+    source_key: "",
+    target_key: "",
+    edge_type: "",
+    confidence: "likely",
+    source_system: "semantic_continuity",
+    provenance: "continuity:location_jump",
+    related_section: "Continuity",
+    related_target_type: "continuity_issue",
+    related_target_id: null,
+    related_target_key: "0123456789abcdef",
+  }],
+  evidence_total: 1,
+  ...overrides,
+});
+
+const decisionRadar = (overrides: Record<string, unknown> = {}) => ({
+  project_id: 1,
+  generated_light: false,
+  summary_line: "Radar",
+  radar: [decisionCard()],
+  knowledge_graph_available: true,
+  knowledge_graph_cards: [graphDecisionCard()],
+  continuity_available: true,
+  continuity_cards: [continuityDecisionCard()],
+  ...overrides,
+});
+
+const continuityIssue = (overrides: Record<string, unknown> = {}) => ({
+  id: "0123456789abcdef",
+  review_fingerprint: "f".repeat(64),
+  issue_type: "continuity_gap",
+  dimension: "plot",
+  severity: "blocking",
+  confidence: "confirmed",
+  title: "A setup points to a missing payoff.",
+  explanation: "The linked payoff no longer exists.",
+  suggested_action: "Repair the setup/payoff link.",
+  related_scene_ids: [2],
+  status: "open",
+  ...overrides,
+});
+
+const continuityReport = (overrides: Record<string, unknown> = {}) => ({
+  project_id: 1,
+  review_revision: "a".repeat(64),
+  writing_mode: "novel",
+  issues: [continuityIssue()],
+  blocking_count: 1,
+  warning_count: 0,
+  unavailable: [],
+  ...overrides,
+});
+
+const continuityCommand = {
+  kind: "resolve_issue" as const,
+  expected_revision: "a".repeat(64),
+  issue_id: "0123456789abcdef",
+  expected_issue_fingerprint: "f".repeat(64),
+};
+
+const continuityCommandResult = (overrides: Record<string, unknown> = {}) => ({
+  continuity: continuityReport({
+    review_revision: "b".repeat(64),
+    issues: [continuityIssue({ status: "resolved" })],
+    blocking_count: 0,
+  }),
+  changed: true,
+  affected_issue_id: continuityCommand.issue_id,
+  previous_status: "open",
+  status: "resolved",
+  replayed: false,
+  applied_revision: "b".repeat(64),
+  ...overrides,
+});
+
+const continuityCommandReceipt = (overrides: Record<string, unknown> = {}) => ({
+  project_id: 1,
+  request_digest: "c".repeat(64),
+  command_kind: "resolve_issue",
+  expected_revision: continuityCommand.expected_revision,
+  applied_revision: "b".repeat(64),
+  original_changed: true,
+  original_affected_issue_id: continuityCommand.issue_id,
+  expected_issue_fingerprint: continuityCommand.expected_issue_fingerprint,
+  previous_status: "open",
+  status: "resolved",
+  committed_at: "2026-10-07T12:00:00Z",
+  ...overrides,
+});
+
 const originalFetch = globalThis.fetch;
 let lastRequestUrl = "";
 const client = createHttpApiClient("", "", {
@@ -1260,6 +1417,185 @@ try {
     "POST",
     "/api/projects/1/canvas-plot/commands",
     "$.applied_revision",
+  );
+
+  await expectValid(
+    "Continuity reports bind the canonical project and review revision",
+    () => client.getContinuity(1),
+    continuityReport(),
+    (value) => value.project_id === 1 && value.review_revision === "a".repeat(64),
+  );
+  await expectInvalid(
+    "Continuity reports reject a response for another project",
+    () => client.getContinuity(1),
+    json(continuityReport({ project_id: 2 })),
+    "GET",
+    "/api/projects/1/continuity",
+    "$.project_id",
+  );
+  await expectInvalid(
+    "Continuity reports reject non-canonical issue keys",
+    () => client.getContinuity(1),
+    json(continuityReport({ issues: [continuityIssue({ id: "short" })] })),
+    "GET",
+    "/api/projects/1/continuity",
+    "$.issues[0].id",
+  );
+  await expectInvalid(
+    "Continuity reports reject counts that include reviewed issues",
+    () => client.getContinuity(1),
+    json(continuityReport({
+      issues: [continuityIssue({ status: "deferred" })],
+      blocking_count: 1,
+    })),
+    "GET",
+    "/api/projects/1/continuity",
+    "$.blocking_count",
+  );
+  await expectValid(
+    "Continuity command results bind the exact issue and fresh revision",
+    () => client.executeContinuityCommand(1, continuityCommand, "continuity-test-key-0001"),
+    continuityCommandResult(),
+    (value) => value.status === "resolved" && value.continuity.review_revision === value.applied_revision,
+  );
+  await expectInvalid(
+    "fresh Continuity command results require a new applied revision",
+    () => client.executeContinuityCommand(1, continuityCommand, "continuity-test-key-0001"),
+    json(continuityCommandResult({
+      applied_revision: continuityCommand.expected_revision,
+    })),
+    "POST",
+    "/api/projects/1/continuity/commands",
+    "$.applied_revision",
+  );
+  await expectInvalid(
+    "Continuity command results reject a different affected issue",
+    () => client.executeContinuityCommand(1, continuityCommand, "continuity-test-key-0001"),
+    json(continuityCommandResult({ affected_issue_id: "fedcba9876543210" })),
+    "POST",
+    "/api/projects/1/continuity/commands",
+    "$.affected_issue_id",
+  );
+  await expectValid(
+    "Continuity receipts bind the exact reviewed command",
+    () => client.getContinuityCommandReceipt(1, "continuity-test-key-0001", continuityCommand),
+    continuityCommandReceipt(),
+    (value) => value.original_affected_issue_id === continuityCommand.issue_id,
+  );
+  await expectInvalid(
+    "Continuity receipts reject a mismatched command kind",
+    () => client.getContinuityCommandReceipt(1, "continuity-test-key-0001", continuityCommand),
+    json(continuityCommandReceipt({ command_kind: "dismiss_issue", status: "dismissed" })),
+    "GET",
+    "/api/projects/1/continuity/command-receipt",
+    "$.command_kind",
+  );
+
+  await expectValid(
+    "Decision Radar accepts bounded traceable Graph and Continuity evidence",
+    () => client.getDecisionRadar(1),
+    decisionRadar(),
+    (value) => value.knowledge_graph_cards[0]?.graph_focus_key === "theme:psyke:6"
+      && value.continuity_cards[0]?.related_target_key === "0123456789abcdef",
+  );
+  await expectInvalid(
+    "Decision Radar rejects a response for another project",
+    () => client.getDecisionRadar(1),
+    json(decisionRadar({ project_id: 2 })),
+    "GET",
+    "/api/projects/1/decision-radar",
+    "$.project_id",
+  );
+  await expectInvalid(
+    "Decision Radar rejects an unscoped graph deep link",
+    () => client.getDecisionRadar(1),
+    json(decisionRadar({
+      knowledge_graph_cards: [graphDecisionCard({ graph_view_mode: null })],
+    })),
+    "GET",
+    "/api/projects/1/decision-radar",
+    "$.knowledge_graph_cards[0].graph_view_mode",
+  );
+  await expectInvalid(
+    "Decision Radar rejects graph cards when graph availability is false",
+    () => client.getDecisionRadar(1),
+    json(decisionRadar({ knowledge_graph_available: false })),
+    "GET",
+    "/api/projects/1/decision-radar",
+    "$.knowledge_graph_cards",
+  );
+  await expectInvalid(
+    "Decision Radar rejects an understated evidence total",
+    () => client.getDecisionRadar(1),
+    json(decisionRadar({
+      knowledge_graph_cards: [graphDecisionCard({ evidence_total: 0 })],
+    })),
+    "GET",
+    "/api/projects/1/decision-radar",
+    "$.knowledge_graph_cards[0].evidence_total",
+  );
+  await expectInvalid(
+    "Decision Radar rejects continuity cards when continuity is unavailable",
+    () => client.getDecisionRadar(1),
+    json(decisionRadar({ continuity_available: false })),
+    "GET",
+    "/api/projects/1/decision-radar",
+    "$.continuity_cards",
+  );
+  await expectInvalid(
+    "Decision Radar rejects continuity cards without a canonical issue key",
+    () => client.getDecisionRadar(1),
+    json(decisionRadar({
+      continuity_cards: [continuityDecisionCard({ related_target_key: "not-an-issue" })],
+    })),
+    "GET",
+    "/api/projects/1/decision-radar",
+    "$.continuity_cards[0]",
+  );
+  await expectInvalid(
+    "Decision Radar rejects continuity cards carrying graph navigation",
+    () => client.getDecisionRadar(1),
+    json(decisionRadar({
+      continuity_cards: [continuityDecisionCard({
+        graph_focus_key: "scene:scene:1",
+        graph_view_mode: "project_map",
+      })],
+    })),
+    "GET",
+    "/api/projects/1/decision-radar",
+    "$.continuity_cards[0]",
+  );
+  await expectInvalid(
+    "Decision Radar rejects invalid continuity scene destinations",
+    () => client.getDecisionRadar(1),
+    json(decisionRadar({
+      continuity_cards: [continuityDecisionCard({
+        evidence: [{
+          ...(continuityDecisionCard().evidence as Array<Record<string, unknown>>)[0],
+          related_target_type: "scene",
+          related_target_id: 0,
+          related_target_key: "",
+        }],
+      })],
+    })),
+    "GET",
+    "/api/projects/1/decision-radar",
+    "$.continuity_cards[0].evidence[0]",
+  );
+  await expectInvalid(
+    "Decision Radar rejects continuity evidence carrying graph navigation",
+    () => client.getDecisionRadar(1),
+    json(decisionRadar({
+      continuity_cards: [continuityDecisionCard({
+        evidence: [{
+          ...(continuityDecisionCard().evidence as Array<Record<string, unknown>>)[0],
+          graph_focus_key: "scene:scene:1",
+        }],
+      })],
+    })),
+    "GET",
+    "/api/projects/1/decision-radar",
+    "$.continuity_cards[0]",
   );
 
   await expectValid(

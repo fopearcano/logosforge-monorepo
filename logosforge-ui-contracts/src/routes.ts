@@ -83,6 +83,8 @@ export const ROUTES = {
   // Derived, read-only intelligence
   dashboard: (p: number) => `/api/projects/${p}/dashboard`,
   continuity: (p: number) => `/api/projects/${p}/continuity`,
+  continuityCommands: (p: number) => `/api/projects/${p}/continuity/commands`,
+  continuityCommandReceipt: (p: number) => `/api/projects/${p}/continuity/command-receipt`,
   pacing: (p: number) => `/api/projects/${p}/pacing`,
   balance: (p: number) => `/api/projects/${p}/balance`,
   storyHealth: (p: number) => `/api/projects/${p}/health`,

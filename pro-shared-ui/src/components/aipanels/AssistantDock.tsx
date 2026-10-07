@@ -1,10 +1,15 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ChatMessageDTO } from "@logosforge/ui-contracts";
 import { PanelShell, Corners, type PanelProps } from "../shell/PanelShell";
-import { useStudio } from "../../adapters/StudioProvider";
+import {
+  useContinuityRepairTarget,
+  useStudio,
+  type ContinuityRepairTarget,
+} from "../../adapters/StudioProvider";
 import { useSelection } from "../../adapters/selection";
 import { useApplyToScene, ApplyDiffModal, type SceneTarget } from "./applyToScene";
 import { createLatestRequestGate } from "../../hooks/latestRequest";
+import { useScenes } from "../../hooks";
 
 const applyBtn: CSSProperties = { fontSize: 8, letterSpacing: ".06em", color: "var(--accent)", background: "transparent", border: "1px solid var(--line-cy,#2b6f8f)", padding: "3px 8px", cursor: "pointer" };
 
@@ -27,18 +32,31 @@ const SUGGESTIONS = [
   "Who is my protagonist and what do they want?",
 ];
 
+interface AssistantDockMessage extends ChatMessageDTO {
+  /** Immutable apply target captured when this assistant reply was requested. */
+  applyTarget?: SceneTarget | null;
+}
+
 export function AssistantDock(props: PanelProps) {
   const { api, projectId } = useStudio();
   const { selection } = useSelection();
   const { target, apply } = useApplyToScene();
+  const scenes = useScenes();
+  const { target: continuityRepair, clear: clearContinuityRepair } = useContinuityRepairTarget();
   const requests = useRef(createLatestRequestGate()).current;
   useEffect(() => { requests.open(); return () => requests.close(); }, [requests]);
   const pendingRef = useRef(false);
-  const [messages, setMessages] = useState<ChatMessageDTO[]>([]);
+  const [messages, setMessages] = useState<AssistantDockMessage[]>([]);
   const [input, setInput] = useState("");
   const [pending, setPending] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [pendingApply, setPendingApply] = useState<{ proposed: string; badge: string; target: SceneTarget } | null>(null);
+  const [repairSceneId, setRepairSceneId] = useState<number | null>(null);
+  const [repairIssueId, setRepairIssueId] = useState("");
+  const [waitingRepair, setWaitingRepair] = useState<ContinuityRepairTarget | null>(null);
+  const handledRepairHandoff = useRef("");
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const replaceDraftRef = useRef<HTMLButtonElement | null>(null);
   // "Go Irrational" — per-message surreal creative provocations (needs an active scene).
   const [irrational, setIrrational] = useState(false);
   const logRef = useRef<HTMLDivElement | null>(null);
@@ -47,7 +65,63 @@ export function AssistantDock(props: PanelProps) {
     requests.invalidate("chat");
     pendingRef.current = false;
     setMessages([]); setPending(false); setErr(null); setPendingApply(null);
+    setRepairSceneId(null); setRepairIssueId("");
+    setWaitingRepair(null);
   }, [api, projectId, requests]);
+
+  const stageContinuityRepair = useCallback((repair: ContinuityRepairTarget) => {
+    setInput(repair.draft);
+    setRepairSceneId(repair.sceneId);
+    setRepairIssueId(repair.issueId);
+    setWaitingRepair(null);
+    setErr(null);
+  }, []);
+
+  useEffect(() => {
+    if (!continuityRepair) return;
+    if (handledRepairHandoff.current === continuityRepair.handoffId) return;
+    handledRepairHandoff.current = continuityRepair.handoffId;
+    if (continuityRepair.ownerProjectId !== projectId) {
+      setErr("The Continuity repair brief belongs to another project and was not opened.");
+      clearContinuityRepair();
+      return;
+    }
+    if (input.trim()) {
+      // An unsent user draft is authored content. Preserve it until the user
+      // explicitly chooses whether the incoming repair brief may replace it.
+      setWaitingRepair({ ...continuityRepair });
+      clearContinuityRepair();
+      return;
+    }
+    stageContinuityRepair(continuityRepair);
+    clearContinuityRepair();
+  }, [clearContinuityRepair, continuityRepair, input, projectId, stageContinuityRepair]);
+
+  useEffect(() => {
+    if (waitingRepair) replaceDraftRef.current?.focus({ preventScroll: true });
+  }, [waitingRepair]);
+
+  useEffect(() => {
+    if (repairIssueId && !waitingRepair) inputRef.current?.focus({ preventScroll: true });
+  }, [repairIssueId, waitingRepair]);
+
+  const repairTarget = useMemo<SceneTarget | null>(() => {
+    if (projectId == null || repairSceneId == null) return null;
+    const scene = scenes.data?.find((candidate) => candidate.id === repairSceneId);
+    return scene ? {
+      projectId,
+      id: scene.id,
+      title: scene.title || `Scene ${scene.id}`,
+      content: scene.content ?? "",
+    } : null;
+  }, [projectId, repairSceneId, scenes.data]);
+  const repairMode = Boolean(repairIssueId);
+  // Planning-only Continuity handoffs stay targetless even if another panel has
+  // a selected scene. A prose mutation requires the explicit repair Scene.
+  const applyTarget = repairMode ? repairTarget : target;
+  const repairSceneRequired = repairMode && repairSceneId != null;
+  const repairSceneBlocked = repairSceneRequired && repairTarget == null;
+  const repairSceneLoading = repairSceneBlocked && scenes.loading;
 
   useEffect(() => {
     // scroll to the newest message
@@ -59,23 +133,56 @@ export function AssistantDock(props: PanelProps) {
     async (text: string) => {
       const message = text.trim();
       if (!message || pendingRef.current || projectId == null) return;
+      if (repairSceneBlocked) {
+        setErr(
+          repairSceneLoading
+            ? `SC.${repairSceneId} is still loading. Billy has not been sent the repair brief.`
+            : `SC.${repairSceneId} is no longer available. Choose another repair target before sending.`,
+        );
+        return;
+      }
       const token = requests.begin("chat");
       pendingRef.current = true;
       setErr(null);
-      const history = messages;
-      setMessages((m) => [...m, { role: "user", content: message }]);
-      setInput("");
+      const history: ChatMessageDTO[] = messages.map(({ role, content }) => ({ role, content }));
       setPending(true);
       try {
+        let responseApplyTarget = applyTarget ? { ...applyTarget } : null;
+        if (repairMode && repairSceneId != null) {
+          // The repair handoff can arrive immediately after a save-barrier
+          // navigation. Refresh the exact Scene before sending so the reply's
+          // Controlled Apply snapshot cannot be built from an older hook cache.
+          const currentScenes = await api.listScenes(projectId);
+          if (!requests.isCurrent(token)) return;
+          const currentScene = currentScenes.find((candidate) => candidate.id === repairSceneId);
+          if (!currentScene) {
+            throw new Error(`SC.${repairSceneId} is no longer available. Billy has not been sent the repair brief.`);
+          }
+          responseApplyTarget = {
+            projectId,
+            id: currentScene.id,
+            title: currentScene.title || `Scene ${currentScene.id}`,
+            content: currentScene.content ?? "",
+          };
+        }
+        setMessages((m) => [...m, { role: "user", content: message }]);
+        setInput("");
+        const activeSceneId = repairMode ? repairSceneId : selection.sceneId;
         const res = await api.assistantChat(projectId, {
           message,
           history,
           // section-aware: whatever you've selected in the current section
-          selected_text: selection.text || undefined,
-          active_scene_id: selection.sceneId ?? undefined,
+          selected_text: repairMode ? undefined : selection.text || undefined,
+          ...(activeSceneId == null ? {} : { active_scene_id: activeSceneId }),
           irrational: irrational || undefined,
         });
-        if (requests.isCurrent(token)) setMessages((m) => [...m, { role: "assistant", content: res.reply }]);
+        if (requests.isCurrent(token)) {
+          setMessages((m) => [...m, {
+            role: "assistant",
+            content: res.reply,
+            applyTarget: responseApplyTarget,
+          }]);
+        }
       } catch (e) {
         if (requests.isCurrent(token)) setErr(e instanceof Error ? e.message : String(e));
       } finally {
@@ -85,13 +192,14 @@ export function AssistantDock(props: PanelProps) {
         }
       }
     },
-    [api, projectId, messages, selection, irrational, requests],
+    [api, projectId, messages, selection, irrational, repairMode, repairSceneId, repairSceneBlocked, repairSceneLoading, applyTarget, requests],
   );
 
   const newChat = () => {
     requests.invalidate("chat");
     pendingRef.current = false;
     setMessages([]); setPending(false); setErr(null); setPendingApply(null);
+    setRepairSceneId(null); setRepairIssueId("");
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -129,8 +237,9 @@ export function AssistantDock(props: PanelProps) {
               </div>
             </div>
           )}
-          {messages.map((m, i) =>
-            m.role === "user" ? (
+          {messages.map((m, i) => {
+            const messageApplyTarget = m.role === "assistant" ? m.applyTarget ?? null : null;
+            return m.role === "user" ? (
               <div key={i} style={{ display: "flex", justifyContent: "flex-end" }}>
                 <div style={{ maxWidth: "80%", background: "rgba(76,194,255,.08)", border: "1px solid var(--line-cy)", padding: "10px 12px", fontSize: 12.5, color: "var(--txt)", lineHeight: 1.55, whiteSpace: "pre-wrap" }}>{m.content}</div>
               </div>
@@ -141,16 +250,16 @@ export function AssistantDock(props: PanelProps) {
                   <span style={{ fontSize: 8, letterSpacing: ".14em", color: "var(--txt3)" }}>BILLY</span>
                 </div>
                 <div style={{ background: "var(--tint)", border: "1px solid var(--line2)", padding: 13, fontSize: 12.5, color: "var(--txt)", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{m.content}</div>
-                {target && m.content.trim() && (
+                {messageApplyTarget && m.content.trim() && (
                   <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
-                    <span style={{ fontSize: 7.5, letterSpacing: ".1em", color: "var(--txt3)" }}>→ {target.title}</span>
-                    <button type="button" style={applyBtn} title={`Rewrite ${target.title} with this (diff + confirm)`} onClick={() => setPendingApply({ proposed: m.content, badge: "REWRITE", target: { ...target } })}>↧ REPLACE</button>
-                    <button type="button" style={applyBtn} title={`Append this to ${target.title} (diff + confirm)`} onClick={() => setPendingApply({ proposed: (target.content ? target.content + "\n\n" : "") + m.content, badge: "APPEND", target: { ...target } })}>＋ APPEND</button>
+                    <span style={{ fontSize: 7.5, letterSpacing: ".1em", color: "var(--txt3)" }}>→ {messageApplyTarget.title}</span>
+                    <button type="button" style={applyBtn} title={`Rewrite ${messageApplyTarget.title} with this (diff + confirm)`} onClick={() => setPendingApply({ proposed: m.content, badge: "REWRITE", target: { ...messageApplyTarget } })}>↧ REPLACE</button>
+                    <button type="button" style={applyBtn} title={`Append this to ${messageApplyTarget.title} (diff + confirm)`} onClick={() => setPendingApply({ proposed: (messageApplyTarget.content ? messageApplyTarget.content + "\n\n" : "") + m.content, badge: "APPEND", target: { ...messageApplyTarget } })}>＋ APPEND</button>
                   </div>
                 )}
               </div>
-            ),
-          )}
+            );
+          })}
           {pending && (
             <div style={{ display: "flex", alignItems: "center", gap: 7, color: "var(--txt3)", fontSize: 10 }}>
               <span style={{ width: 18, height: 18, display: "grid", placeItems: "center", border: "1px solid var(--accent)", color: "var(--accent)", fontSize: 9 }}>◇</span>
@@ -166,6 +275,30 @@ export function AssistantDock(props: PanelProps) {
 
         {/* input */}
         <div style={{ flex: "none", borderTop: "1px solid var(--line2)", padding: "11px 14px" }}>
+          {waitingRepair && (
+            <div role="status" style={{ marginBottom: 7, border: "1px solid var(--gold,#d6a84b)", background: "rgba(214,168,75,.08)", color: "var(--gold,#d6a84b)", padding: "7px 9px", fontSize: 8, lineHeight: 1.4 }}>
+              <div>CONTINUITY REPAIR WAITING · existing Billy draft preserved</div>
+              <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                <button ref={replaceDraftRef} type="button" onClick={() => stageContinuityRepair(waitingRepair)} style={{ ...applyBtn, color: "var(--gold,#d6a84b)", borderColor: "var(--gold,#d6a84b)" }}>REPLACE DRAFT</button>
+                <button type="button" onClick={() => setWaitingRepair(null)} style={applyBtn}>KEEP DRAFT</button>
+              </div>
+            </div>
+          )}
+          {repairIssueId && (
+            <div role="status" style={{ marginBottom: 7, border: "1px solid var(--line-cy)", background: "var(--tint)", color: "var(--cyan)", padding: "6px 9px", fontSize: 8, lineHeight: 1.4 }}>
+              CONTINUITY REPAIR · {repairIssueId}{repairSceneId == null ? " · choose a target with Billy" : ` · SC.${repairSceneId}`} · brief staged, not sent
+            </div>
+          )}
+          {repairSceneBlocked && (
+            <div role={repairSceneLoading ? "status" : "alert"} style={{ marginBottom: 7, border: `1px solid ${repairSceneLoading ? "var(--line-cy)" : "var(--blocking)"}`, background: "var(--tint)", color: repairSceneLoading ? "var(--cyan)" : "var(--blocking)", padding: "6px 9px", fontSize: 8, lineHeight: 1.4 }}>
+              {repairSceneLoading
+                ? `Loading SC.${repairSceneId} before Billy can receive this scene-bound repair…`
+                : `SC.${repairSceneId} is unavailable. The repair brief is preserved, but Billy cannot send or offer Controlled Apply for a missing scene.`}
+              {!repairSceneLoading && (
+                <button type="button" onClick={() => scenes.refetch()} style={{ ...applyBtn, marginLeft: 7 }}>RETRY SCENE</button>
+              )}
+            </div>
+          )}
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
             <button type="button"
               onClick={() => setIrrational((v) => !v)}
@@ -180,6 +313,7 @@ export function AssistantDock(props: PanelProps) {
           <div style={{ display: "flex", alignItems: "flex-end", gap: 10, padding: "10px 12px", border: "1px solid var(--line-cy)", background: "var(--raised)" }}>
             <span style={{ color: "var(--accent)", fontSize: 14, paddingTop: 6 }}>❯</span>
             <textarea
+              ref={inputRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={onKeyDown}
@@ -189,7 +323,7 @@ export function AssistantDock(props: PanelProps) {
               aria-label="Message Billy"
               style={{ flex: 1, resize: "none", background: "transparent", border: "none", outline: "none", color: "var(--txt)", fontFamily: "inherit", fontSize: 13.5, lineHeight: 1.55, minHeight: 46, maxHeight: 180 }}
             />
-            <button type="button" onClick={() => void send(input)} disabled={pending || projectId == null || !input.trim()} style={{ fontSize: 11, color: "var(--on-accent)", background: "var(--accent)", border: "none", padding: "8px 15px", fontWeight: 600, letterSpacing: ".06em", cursor: pending || !input.trim() ? "default" : "pointer", opacity: pending || projectId == null || !input.trim() ? 0.4 : 1 }}>SEND</button>
+            <button type="button" onClick={() => void send(input)} disabled={pending || projectId == null || repairSceneBlocked || !input.trim()} style={{ fontSize: 11, color: "var(--on-accent)", background: "var(--accent)", border: "none", padding: "8px 15px", fontWeight: 600, letterSpacing: ".06em", cursor: pending || repairSceneBlocked || !input.trim() ? "default" : "pointer", opacity: pending || projectId == null || repairSceneBlocked || !input.trim() ? 0.4 : 1 }}>SEND</button>
           </div>
         </div>
 

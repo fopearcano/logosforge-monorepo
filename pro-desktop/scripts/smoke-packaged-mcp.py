@@ -61,14 +61,34 @@ def _seed_comment(base_url: str, token: str) -> tuple[int, int, str]:
         token,
         "POST",
         f"/api/projects/{project_id}/scenes",
-        {"title": "Opening", "content": "Packaged comment anchor"},
+        {
+            "title": "Opening",
+            "content": "Packaged comment anchor",
+        },
     )
-    _api_json(
+    crossing = _api_json(
         base_url,
         token,
         "POST",
         f"/api/projects/{project_id}/scenes",
-        {"title": "Crossing", "content": "A second scene for graph review."},
+        {
+            "title": "Crossing",
+            "content": "A second scene for graph and continuity review.",
+        },
+    )
+    _api_json(
+        base_url,
+        token,
+        "PATCH",
+        f"/api/projects/{project_id}/scenes/{int(scene['id'])}",
+        {"location": "Kitchen"},
+    )
+    _api_json(
+        base_url,
+        token,
+        "PATCH",
+        f"/api/projects/{project_id}/scenes/{int(crossing['id'])}",
+        {"location": "Castle"},
     )
     comment = _api_json(
         base_url,
@@ -207,7 +227,7 @@ async def _exercise_installed_mcp(
     project_id: int,
     comment_id: int,
     comment_revision: str,
-) -> tuple[str, str, str, str, str, dict, str, str, dict]:
+) -> tuple[str, str, str, str, str, dict, str, str, dict, str, str, dict, str]:
     params = mcp.StdioServerParameters(
         command=str(command),
         args=command_args,
@@ -222,8 +242,8 @@ async def _exercise_installed_mcp(
         if initialized.serverInfo.name != "logosforge":
             raise RuntimeError(f"unexpected MCP server: {initialized.serverInfo.name!r}")
         listed = await session.list_tools()
-        if len(listed.tools) != 45:
-            raise RuntimeError(f"expected 45 MCP tools, received {len(listed.tools)}")
+        if len(listed.tools) != 46:
+            raise RuntimeError(f"expected 46 MCP tools, received {len(listed.tools)}")
         tool_names = {tool.name for tool in listed.tools}
         expected_tools = {
             "logosforge_get_timeline",
@@ -233,6 +253,8 @@ async def _exercise_installed_mcp(
             "logosforge_get_knowledge_graph",
             "logosforge_get_knowledge_graph_hidden_edges",
             "logosforge_propose_knowledge_graph_command",
+            "logosforge_get_story_diagnostics",
+            "logosforge_propose_continuity_command",
             "logosforge_search",
             "logosforge_list_comments",
             "logosforge_propose_comment_reply",
@@ -637,6 +659,144 @@ async def _exercise_installed_mcp(
         if after_stale_graph != applied_graph_snapshot:
             raise RuntimeError("stale Knowledge Graph apply changed the reviewed map")
 
+        continuity_before = _structured(
+            await session.call_tool(
+                "logosforge_get_story_diagnostics", {"report": "continuity"},
+            ),
+            "installed MCP Continuity read",
+        )
+        continuity_revision = continuity_before.get("review_revision")
+        continuity_issues = continuity_before.get("issues")
+        if (
+            not isinstance(continuity_revision, str)
+            or len(continuity_revision) != 64
+            or any(char not in "0123456789abcdef" for char in continuity_revision)
+            or continuity_before.get("project_id") != project_id
+            or not isinstance(continuity_issues, list)
+        ):
+            raise RuntimeError("installed MCP Continuity read returned an invalid report")
+        continuity_issue = next(
+            (
+                issue for issue in continuity_issues
+                if isinstance(issue, dict)
+                and issue.get("status") == "open"
+                and isinstance(issue.get("id"), str)
+                and len(issue["id"]) == 16
+                and isinstance(issue.get("review_fingerprint"), str)
+                and len(issue["review_fingerprint"]) == 64
+            ),
+            None,
+        )
+        if continuity_issue is None:
+            raise RuntimeError("installed MCP Continuity returned no reviewable issue")
+        continuity_issue_id = continuity_issue["id"]
+        continuity_fingerprint = continuity_issue["review_fingerprint"]
+        continuity_command = {
+            "kind": "resolve_issue",
+            "expected_revision": continuity_revision,
+            "issue_id": continuity_issue_id,
+            "expected_issue_fingerprint": continuity_fingerprint,
+        }
+        stale_continuity_command = {
+            **continuity_command,
+            "kind": "defer_issue",
+        }
+        continuity_proposal = _structured(
+            await session.call_tool(
+                "logosforge_propose_continuity_command",
+                {"command": continuity_command},
+            ),
+            "installed MCP Continuity proposal",
+        )
+        stale_continuity_sibling = _structured(
+            await session.call_tool(
+                "logosforge_propose_continuity_command",
+                {"command": stale_continuity_command},
+            ),
+            "installed MCP stale Continuity sibling proposal",
+        )
+        if continuity_proposal.get("request") != {
+            "method": "POST",
+            "path": f"/api/projects/{project_id}/continuity/commands",
+            "body": continuity_command,
+        }:
+            raise RuntimeError(
+                "installed MCP Continuity proposal did not store the exact command"
+            )
+        if continuity_before != _structured(
+            await session.call_tool(
+                "logosforge_get_story_diagnostics", {"report": "continuity"},
+            ),
+            "installed MCP post-proposal Continuity read",
+        ):
+            raise RuntimeError("Continuity proposal creation mutated project data")
+
+        applied_continuity = _structured(
+            await session.call_tool(
+                "logosforge_apply_proposal",
+                {"proposal_id": continuity_proposal["proposal_id"]},
+            ),
+            "installed MCP Continuity apply",
+        )
+        applied_continuity_result = applied_continuity.get("result")
+        applied_continuity_report = (
+            applied_continuity_result.get("continuity")
+            if isinstance(applied_continuity_result, dict)
+            else None
+        )
+        applied_continuity_revision = (
+            applied_continuity_result.get("applied_revision")
+            if isinstance(applied_continuity_result, dict)
+            else None
+        )
+        reviewed_continuity_issue = next(
+            (
+                issue for issue in applied_continuity_report.get("issues", [])
+                if isinstance(issue, dict) and issue.get("id") == continuity_issue_id
+            ),
+            None,
+        ) if isinstance(applied_continuity_report, dict) else None
+        if (
+            applied_continuity.get("state") != "applied"
+            or not isinstance(applied_continuity_result, dict)
+            or not isinstance(applied_continuity_report, dict)
+            or not isinstance(applied_continuity_revision, str)
+            or len(applied_continuity_revision) != 64
+            or applied_continuity_revision == continuity_revision
+            or applied_continuity_revision
+            != applied_continuity_report.get("review_revision")
+            or applied_continuity_result.get("replayed") is not False
+            or applied_continuity_result.get("changed") is not True
+            or applied_continuity_result.get("affected_issue_id")
+            != continuity_issue_id
+            or applied_continuity_result.get("previous_status") != "open"
+            or applied_continuity_result.get("status") != "resolved"
+            or not isinstance(reviewed_continuity_issue, dict)
+            or reviewed_continuity_issue.get("status") != "resolved"
+        ):
+            raise RuntimeError(
+                "Continuity apply returned an invalid fresh command receipt"
+            )
+
+        stale_continuity_result = await session.call_tool(
+            "logosforge_apply_proposal",
+            {"proposal_id": stale_continuity_sibling["proposal_id"]},
+        )
+        _expected_tool_error(
+            stale_continuity_result,
+            "installed MCP stale Continuity sibling apply",
+            "HTTP 409",
+            "Continuity review state changed",
+        )
+        after_stale_continuity = _structured(
+            await session.call_tool(
+                "logosforge_get_story_diagnostics", {"report": "continuity"},
+            ),
+            "installed MCP post-stale Continuity read",
+        )
+        if after_stale_continuity != applied_continuity_report:
+            raise RuntimeError("stale Continuity apply changed the reviewed report")
+
         search = _structured(
             await session.call_tool(
                 "logosforge_search", {"query": "Inspect this packaged thread."},
@@ -830,6 +990,11 @@ async def _exercise_installed_mcp(
             raise RuntimeError(
                 "installed MCP Knowledge Graph proposal returned no proposal ID"
             )
+        continuity_proposal_id = continuity_proposal.get("proposal_id")
+        if not isinstance(continuity_proposal_id, str) or not continuity_proposal_id:
+            raise RuntimeError(
+                "installed MCP Continuity proposal returned no proposal ID"
+            )
         return (
             resolved_revision,
             timeline_proposal_id,
@@ -840,6 +1005,10 @@ async def _exercise_installed_mcp(
             graph_proposal_id,
             applied_graph_revision,
             applied_graph_snapshot,
+            continuity_proposal_id,
+            applied_continuity_revision,
+            applied_continuity_report,
+            continuity_issue_id,
         )
 
 
@@ -856,8 +1025,12 @@ async def _recover_installed_command_receipts(
     graph_proposal_id: str,
     applied_graph_revision: str,
     expected_knowledge_graph: dict,
+    continuity_proposal_id: str,
+    applied_continuity_revision: str,
+    expected_continuity: dict,
+    continuity_issue_id: str,
 ) -> None:
-    """Recover Timeline, Canvas, and Knowledge Graph receipts after restart."""
+    """Recover all four durable command-family receipts after restart."""
     params = mcp.StdioServerParameters(
         command=str(command),
         args=command_args,
@@ -1078,6 +1251,76 @@ async def _recover_installed_command_receipts(
         ):
             raise RuntimeError(
                 "restarted MCP Knowledge Graph receipt was not a non-mutating replay"
+            )
+
+        restarted_continuity = _structured(
+            await session.call_tool(
+                "logosforge_get_story_diagnostics", {"report": "continuity"},
+            ),
+            "restarted MCP Continuity persistence read",
+        )
+        if restarted_continuity != expected_continuity:
+            raise RuntimeError(
+                "restarted MCP did not read the persisted Continuity review"
+            )
+        expected_issue = next(
+            (
+                issue for issue in expected_continuity.get("issues", [])
+                if isinstance(issue, dict) and issue.get("id") == continuity_issue_id
+            ),
+            None,
+        )
+        if (
+            not isinstance(expected_issue, dict)
+            or expected_issue.get("status") != "resolved"
+        ):
+            raise RuntimeError(
+                "packaged Continuity did not retain the reviewed issue status"
+            )
+        recovered_continuity = _structured(
+            await session.call_tool(
+                "logosforge_get_proposal",
+                {"proposal_id": continuity_proposal_id},
+            ),
+            "restarted MCP durable Continuity receipt recovery",
+        )
+        recovered_continuity_receipt = recovered_continuity.get("receipt")
+        if (
+            recovered_continuity.get("state") != "applied"
+            or recovered_continuity.get("recovered_from_core") is not True
+            or recovered_continuity.get("request") is not None
+            or not isinstance(recovered_continuity_receipt, dict)
+            or recovered_continuity_receipt.get("project_id") != project_id
+            or recovered_continuity_receipt.get("command_kind") != "resolve_issue"
+            or recovered_continuity_receipt.get("applied_revision")
+            != applied_continuity_revision
+            or recovered_continuity_receipt.get("original_changed") is not True
+            or recovered_continuity_receipt.get("original_affected_issue_id")
+            != continuity_issue_id
+            or recovered_continuity_receipt.get("expected_issue_fingerprint")
+            != expected_issue.get("review_fingerprint")
+            or recovered_continuity_receipt.get("previous_status") != "open"
+            or recovered_continuity_receipt.get("status") != "resolved"
+        ):
+            raise RuntimeError(
+                "restarted MCP returned the wrong Continuity receipt"
+            )
+        recovered_continuity_result = recovered_continuity.get("result")
+        if (
+            not isinstance(recovered_continuity_result, dict)
+            or recovered_continuity_result.get("replayed") is not True
+            or recovered_continuity_result.get("applied_revision")
+            != applied_continuity_revision
+            or recovered_continuity_result.get("changed") is not False
+            or recovered_continuity_result.get("affected_issue_id")
+            != continuity_issue_id
+            or recovered_continuity_result.get("previous_status") != "open"
+            or recovered_continuity_result.get("status") != "resolved"
+            or recovered_continuity_result.get("continuity")
+            != restarted_continuity
+        ):
+            raise RuntimeError(
+                "restarted MCP Continuity receipt was not a non-mutating replay"
             )
 
 
@@ -1348,6 +1591,10 @@ def _smoke_app(app: Path, timeout: int, codex_command: str | None = None) -> Non
                     graph_proposal_id,
                     applied_graph_revision,
                     applied_knowledge_graph,
+                    continuity_proposal_id,
+                    applied_continuity_revision,
+                    applied_continuity,
+                    continuity_issue_id,
                 ) = asyncio.run(
                     asyncio.wait_for(
                         _exercise_installed_mcp(
@@ -1376,6 +1623,10 @@ def _smoke_app(app: Path, timeout: int, codex_command: str | None = None) -> Non
                             graph_proposal_id,
                             applied_graph_revision,
                             applied_knowledge_graph,
+                            continuity_proposal_id,
+                            applied_continuity_revision,
+                            applied_continuity,
+                            continuity_issue_id,
                         ),
                         timeout=20,
                     )
@@ -1398,10 +1649,10 @@ def _smoke_app(app: Path, timeout: int, codex_command: str | None = None) -> Non
             if process is not None:
                 _stop_process_tree(process, app_pid, core_pid)
         print(
-            "Packaged Pro published a verified descriptor, advertised 45 MCP tools "
+            "Packaged Pro published a verified descriptor, advertised 46 MCP tools "
             "including canonical project search plus revisioned Timeline, Canvas "
-            "Plot, and Knowledge Graph orchestration; applied all three transactional "
-            "surfaces plus reply and resolution proposals; recovered their durable "
+            "Plot, Knowledge Graph, and Semantic Continuity orchestration; applied all "
+            "four transactional surfaces plus reply and resolution proposals; recovered their durable "
             "receipts after a companion restart; and rejected stale and replayed "
             "applies."
         )

@@ -129,6 +129,8 @@ class KnowledgeGraph:
                 continue
             if not include_inferred and e.is_inferred:
                 continue
+            if e.source not in self.nodes or e.target not in self.nodes:
+                continue
             out.append(e)
         return out
 
@@ -152,13 +154,13 @@ class KnowledgeGraph:
 
     @property
     def edge_count(self) -> int:
-        return len([e for e in self.edges if not e.is_hidden])
+        return len(self.visible_edges())
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "project_id": self.project_id, "writing_mode": self.writing_mode,
             "nodes": [n.to_dict() for n in self.nodes.values()],
-            "edges": [e.to_dict() for e in self.edges if not e.is_hidden],
+            "edges": [e.to_dict() for e in self.visible_edges()],
             "warnings": list(self.warnings),
             "unavailable": list(self.unavailable),
         }

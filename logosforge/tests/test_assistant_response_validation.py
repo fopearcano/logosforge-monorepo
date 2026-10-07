@@ -42,6 +42,8 @@ GOOD_NOVEL = ("Ada stepped into the archive. The dust hung in the dawn light, "
               "and Milo did not look up. \"You're late,\" he said.")
 GOOD_OUTLINE = "## Act I\n- Scene 1: arrival\n- Scene 2: the gap\n- Scene 3: turn"
 GOOD_SUGGESTIONS = "- Sharpen Milo's subtext\n- Cut the on-the-nose line\n- Add a beat"
+GOOD_GRAPHIC_NOVEL = "Panel 1\nVisual: Ada enters.\nDialogue: ADA: We begin."
+GOOD_STAGE = "ADA. We begin.\n(She opens the archive.)"
 
 
 def _direct(mode):
@@ -86,6 +88,25 @@ def test_valid_screenplay_passes():
 
 def test_valid_novel_passes():
     assert validate(GOOD_NOVEL, _direct("novel")).status == "valid"
+
+
+def test_empty_direct_output_is_invalid():
+    res = validate("  \n", _direct("novel"))
+    assert res.status == "invalid"
+    assert res.apply_allowed is False and res.cache_allowed is False
+
+
+def test_obvious_wrong_mode_dialogue_is_invalid():
+    assert validate(GOOD_NOVEL, _direct("screenplay")).status == "invalid"
+    assert validate(GOOD_NOVEL, _direct("graphic_novel")).status == "invalid"
+    assert validate(GOOD_NOVEL, _direct("stage_script")).status == "invalid"
+    assert validate(GOOD_SCREENPLAY, _direct("novel")).status == "invalid"
+    assert validate(GOOD_GRAPHIC_NOVEL, _direct("series")).status == "invalid"
+
+
+def test_mode_correct_dialogue_shapes_still_pass():
+    assert validate(GOOD_GRAPHIC_NOVEL, _direct("graphic_novel")).status == "valid"
+    assert validate(GOOD_STAGE, _direct("stage_script")).status == "valid"
 
 
 # 40. Valid outline structure passes (markdown/lists are fine in Outline).

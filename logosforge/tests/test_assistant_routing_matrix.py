@@ -68,6 +68,15 @@ def test_missing_target_triggers_clarification():
     assert c.apply_allowed is False
 
 
+def test_chat_direct_writing_without_target_also_clarifies():
+    c = route(entry_point="chat", section="Chat", writing_mode="novel",
+              action="ask", user_instruction="continue the scene",
+              has_target=False)
+    assert c.needs_clarification is True
+    assert c.output_kind == CLARIFICATION
+    assert c.apply_allowed is False
+
+
 # 12-13. Action (not mode/modifier) drives output kind; Dialogue stays direct.
 def test_action_drives_output_not_modifier():
     # No "assistant_mode" parameter exists on route -> mode can't hijack action.

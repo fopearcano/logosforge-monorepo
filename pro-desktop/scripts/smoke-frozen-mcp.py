@@ -66,14 +66,34 @@ def _seed_comment(base_url: str, token: str) -> tuple[int, int, str]:
         token,
         "POST",
         f"/api/projects/{project_id}/scenes",
-        {"title": "Opening", "content": "Frozen comment anchor"},
+        {
+            "title": "Opening",
+            "content": "Frozen comment anchor",
+        },
     )
-    _api_json(
+    crossing = _api_json(
         base_url,
         token,
         "POST",
         f"/api/projects/{project_id}/scenes",
-        {"title": "Crossing", "content": "A second scene for graph review."},
+        {
+            "title": "Crossing",
+            "content": "A second scene for graph and continuity review.",
+        },
+    )
+    _api_json(
+        base_url,
+        token,
+        "PATCH",
+        f"/api/projects/{project_id}/scenes/{int(scene['id'])}",
+        {"location": "Kitchen"},
+    )
+    _api_json(
+        base_url,
+        token,
+        "PATCH",
+        f"/api/projects/{project_id}/scenes/{int(crossing['id'])}",
+        {"location": "Castle"},
     )
     comment = _api_json(
         base_url,
@@ -139,8 +159,8 @@ async def _exercise_mcp(
         if initialized.serverInfo.name != "logosforge":
             raise RuntimeError(f"unexpected MCP server: {initialized.serverInfo.name!r}")
         listed = await session.list_tools()
-        if len(listed.tools) != 45:
-            raise RuntimeError(f"expected 45 MCP tools, received {len(listed.tools)}")
+        if len(listed.tools) != 46:
+            raise RuntimeError(f"expected 46 MCP tools, received {len(listed.tools)}")
         tool_names = {tool.name for tool in listed.tools}
         expected_tools = {
             "logosforge_get_timeline",
@@ -150,6 +170,8 @@ async def _exercise_mcp(
             "logosforge_get_knowledge_graph",
             "logosforge_get_knowledge_graph_hidden_edges",
             "logosforge_propose_knowledge_graph_command",
+            "logosforge_get_story_diagnostics",
+            "logosforge_propose_continuity_command",
             "logosforge_search",
             "logosforge_list_comments",
             "logosforge_propose_comment_reply",
@@ -316,6 +338,64 @@ async def _exercise_mcp(
         )
         if graph_after != graph_before:
             raise RuntimeError("creating a Knowledge Graph proposal mutated project data")
+        continuity_before = _structured(
+            await session.call_tool(
+                "logosforge_get_story_diagnostics", {"report": "continuity"},
+            ),
+            "MCP Continuity read",
+        )
+        continuity_revision = continuity_before.get("review_revision")
+        continuity_issues = continuity_before.get("issues")
+        if (
+            not isinstance(continuity_revision, str)
+            or len(continuity_revision) != 64
+            or continuity_before.get("project_id") != project_id
+            or not isinstance(continuity_issues, list)
+        ):
+            raise RuntimeError("MCP Continuity read returned an invalid report")
+        continuity_issue = next(
+            (
+                issue for issue in continuity_issues
+                if isinstance(issue, dict)
+                and issue.get("status") == "open"
+                and isinstance(issue.get("id"), str)
+                and len(issue["id"]) == 16
+                and isinstance(issue.get("review_fingerprint"), str)
+                and len(issue["review_fingerprint"]) == 64
+            ),
+            None,
+        )
+        if continuity_issue is None:
+            raise RuntimeError("MCP Continuity read returned no reviewable issue")
+        continuity_command = {
+            "kind": "defer_issue",
+            "expected_revision": continuity_revision,
+            "issue_id": continuity_issue["id"],
+            "expected_issue_fingerprint": continuity_issue["review_fingerprint"],
+        }
+        continuity_proposal = _structured(
+            await session.call_tool(
+                "logosforge_propose_continuity_command",
+                {"command": continuity_command},
+            ),
+            "MCP Continuity proposal",
+        )
+        if continuity_proposal.get("state") != "pending":
+            raise RuntimeError("MCP Continuity proposal was not left pending")
+        if continuity_proposal.get("request") != {
+            "method": "POST",
+            "path": f"/api/projects/{project_id}/continuity/commands",
+            "body": continuity_command,
+        }:
+            raise RuntimeError("MCP Continuity proposal did not store the exact command")
+        continuity_after = _structured(
+            await session.call_tool(
+                "logosforge_get_story_diagnostics", {"report": "continuity"},
+            ),
+            "MCP post-proposal Continuity read",
+        )
+        if continuity_after != continuity_before:
+            raise RuntimeError("creating a Continuity proposal mutated project data")
         search = _structured(
             await session.call_tool(
                 "logosforge_search", {"query": "Inspect this packaged thread."},
@@ -469,9 +549,9 @@ def smoke(executable: Path, mcp_executable: Path | None = None) -> None:
                     process.kill()
                     process.wait(timeout=10)
         print(
-            "Frozen LogosForge MCP initialized, advertised 45 tools, read and "
+            "Frozen LogosForge MCP initialized, advertised 46 tools, read and "
             "proposed against the revisioned Timeline, Canvas Plot, and Knowledge "
-            "Graph without mutation, searched and read a seeded thread, and "
+            "Graph plus Semantic Continuity without mutation, searched and read a seeded thread, and "
             "created both comment proposal types."
         )
 

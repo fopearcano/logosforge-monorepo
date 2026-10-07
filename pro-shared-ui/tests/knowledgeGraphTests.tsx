@@ -11,7 +11,7 @@ import type {
 } from "@logosforge/ui-contracts";
 import type { ApiClient } from "../src/adapters/api";
 import { useSelection } from "../src/adapters/selection";
-import { StudioProvider } from "../src/adapters/StudioProvider";
+import { StudioProvider, type NavTarget } from "../src/adapters/StudioProvider";
 import { ApiRequestError, ApiRequestTimeoutError, createHttpApiClient } from "../src/adapters/httpApiClient";
 import {
   validateKnowledgeGraphCommandReceiptDTOForRequest,
@@ -804,8 +804,8 @@ function SelectionProbe() {
   return <output data-section={selection.section ?? ""} data-node={selection.nodeId ?? ""} data-scene={selection.sceneId ?? ""}>{selection.text}</output>;
 }
 
-function panelTree(projectId: number, api: ApiClient = panelApi) {
-  return <StudioProvider services={{ api, platform }} projectId={projectId}><KnowledgeGraph /><SelectionProbe /></StudioProvider>;
+function panelTree(projectId: number, api: ApiClient = panelApi, nav?: NavTarget) {
+  return <StudioProvider services={{ api, platform }} projectId={projectId} nav={nav}><KnowledgeGraph /><SelectionProbe /></StudioProvider>;
 }
 
 async function flush() {
@@ -904,6 +904,142 @@ const switchedSelection = panelRenderer.root.findAllByType("output").at(-1)!;
 check(switchedSelection.props["data-node"] === "", "project switching must clear graph selection context");
 act(() => panelRenderer.unmount());
 check(listeners.size === 0, "unmount must release Knowledge Graph live-event subscriptions");
+
+const deepLinkRequests: KnowledgeGraphQueryDTO[] = [];
+const deepLinkApi = {
+  getKnowledgeGraph: async (projectId: number, query: KnowledgeGraphQueryDTO) => {
+    deepLinkRequests.push({ ...query });
+    return graphFixture(projectId, query);
+  },
+  subscribe: () => () => {},
+} as unknown as ApiClient;
+let deepLinkClears = 0;
+const deepLinkFocuses: Array<{ key: string; preventScroll: boolean }> = [];
+const deepLinkNodeMocks: Array<{
+  dataset: { graphNodeKey: string };
+  focus: (options?: FocusOptions) => void;
+}> = ["scene:scene:2", "character:psyke:3"].map((graphNodeKey) => ({
+  dataset: { graphNodeKey },
+  focus: (options?: FocusOptions) => {
+    deepLinkFocuses.push({ key: graphNodeKey, preventScroll: options?.preventScroll === true });
+  },
+}));
+await act(async () => {
+  panelRenderer = create(panelTree(7, deepLinkApi), {
+    createNodeMock: (element) => {
+      if (element.props["data-screen-label"] === "Knowledge Graph") {
+        return {
+          querySelectorAll: (selector: string) => selector === "[data-graph-node-key]"
+            ? deepLinkNodeMocks
+            : [],
+        };
+      }
+      return {};
+    },
+  });
+  await flush();
+});
+check(deepLinkFocuses.length === 0, "the ordinary graph load must not move focus without an external target");
+act(() => panelRenderer.root.findByProps({ "aria-label": "Minimum edge confidence" }).props.onChange({ currentTarget: { value: "likely" } }));
+act(() => panelRenderer.root.findByProps({ "aria-label": "Edge source system" }).props.onChange({ currentTarget: { value: "manuscript" } }));
+act(() => panelRenderer.root.findByProps({ "aria-label": "Hide Character nodes" }).props.onClick());
+await act(async () => {
+  panelRenderer.update(panelTree(7, deepLinkApi, {
+    knowledgeGraphTarget: {
+      focusKey: "character:psyke:3",
+      viewMode: "project_map",
+      includeInferred: true,
+      depth: 2,
+    },
+    clearKnowledgeGraphTarget: (focusKey) => {
+      if (focusKey === "character:psyke:3") deepLinkClears += 1;
+    },
+  }));
+  await flush();
+});
+check(
+  deepLinkRequests.at(-1)?.focus_key === "character:psyke:3"
+    && deepLinkRequests.at(-1)?.view_mode === "project_map"
+    && deepLinkRequests.at(-1)?.include_inferred === true
+    && deepLinkRequests.at(-1)?.depth === 2,
+  "external graph navigation must request the exact canonical key, projection, evidence scope, and depth",
+);
+check(
+  panelRenderer.root.findByProps({ "data-knowledge-graph-canvas": "true" }).props["data-focus-key"] === "character:psyke:3"
+    && panelRenderer.root.findByProps({ "aria-label": "Minimum edge confidence" }).props.value === "unknown"
+    && panelRenderer.root.findByProps({ "aria-label": "Edge source system" }).props.value === "all"
+    && panelRenderer.root.findAllByType("output").at(-1)!.props["data-node"] === "character:psyke:3",
+  "an external graph target must clear hiding filters and select/publish its authoritative returned node",
+);
+check(
+  deepLinkFocuses.length === 1
+    && deepLinkFocuses[0]?.key === "character:psyke:3"
+    && deepLinkFocuses[0]?.preventScroll === true,
+  "an authoritative external graph target must move keyboard focus to its exact returned node without scrolling the hidden source panel",
+);
+check(deepLinkClears === 1, "a graph deep link must be consumed exactly once after authoritative data arrives");
+act(() => panelRenderer.unmount());
+
+const sameQueryRefresh = deferred<KnowledgeGraphReadDTO>();
+let holdSameQueryRefresh = false;
+let sameQueryClears = 0;
+let sameQueryReads = 0;
+const sameQueryApi = {
+  getKnowledgeGraph: async (projectId: number, query: KnowledgeGraphQueryDTO) => {
+    sameQueryReads += 1;
+    if (holdSameQueryRefresh) return sameQueryRefresh.promise;
+    return graphFixture(projectId, query);
+  },
+  invalidatePendingReads: () => {},
+  subscribe: () => () => {},
+} as unknown as ApiClient;
+await act(async () => {
+  panelRenderer = create(panelTree(7, sameQueryApi));
+  await flush();
+});
+act(() => panelRenderer.root.findByProps({
+  "data-graph-node-key": "character:psyke:3",
+}).props.onClick());
+act(() => panelRenderer.root.findAllByProps({
+  "aria-label": "Focus graph on Marlow",
+})[0]!.props.onClick());
+await act(async () => { await flush(); });
+check(
+  panelRenderer.root.findByProps({
+    "data-knowledge-graph-canvas": "true",
+  }).props["data-focus-key"] === "character:psyke:3",
+  "the race fixture must begin with the same focused query already cached",
+);
+holdSameQueryRefresh = true;
+await act(async () => {
+  panelRenderer.update(panelTree(7, sameQueryApi, {
+    knowledgeGraphTarget: {
+      focusKey: "character:psyke:3",
+      viewMode: "project_map",
+      includeInferred: true,
+      depth: 1,
+    },
+    clearKnowledgeGraphTarget: () => { sameQueryClears += 1; },
+  }));
+  await Promise.resolve();
+});
+check(
+  sameQueryReads >= 3 && sameQueryClears === 0,
+  "a same-query target must not consume the cached pre-barrier graph",
+);
+holdSameQueryRefresh = false;
+sameQueryRefresh.resolve(graphFixture(7, {
+  focus_key: "character:psyke:3",
+  view_mode: "project_map",
+  include_inferred: true,
+  depth: 1,
+}));
+await act(async () => { await flush(); });
+check(
+  sameQueryClears === 1,
+  "a same-query target must be consumed only after its post-barrier read succeeds",
+);
+act(() => panelRenderer.unmount());
 
 const modeRequests: Array<KnowledgeGraphQueryDTO> = [];
 const modeApi = {

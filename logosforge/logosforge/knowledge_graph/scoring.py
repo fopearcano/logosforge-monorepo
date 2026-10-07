@@ -55,15 +55,23 @@ def high_centrality_nodes(graph: KnowledgeGraph, *, top: int = 10,
                           ) -> list[tuple[KGNode, int]]:
     scored = [(n, graph.degree(n.key)) for n in graph.nodes.values()
               if n.node_type != P.NT_PROJECT]
-    scored.sort(key=lambda t: t[1], reverse=True)
+    scored.sort(key=lambda item: (-item[1], item[0].key))
     return [(n, d) for n, d in scored[:top] if d > 0]
 
 
 def weak_link_edges(graph: KnowledgeGraph, *, cap: int = 50) -> list[KGEdge]:
     """Inferred (possible/likely, not user-confirmed) edges that may need
     confirmation."""
-    out = [e for e in graph.visible_edges() if e.is_inferred]
-    out.sort(key=lambda e: P.confidence_rank(e.confidence), reverse=True)
+    out = [
+        edge for edge in graph.visible_edges()
+        if edge.is_inferred
+        and graph.get_node(edge.source) is not None
+        and graph.get_node(edge.target) is not None
+    ]
+    out.sort(key=lambda edge: (
+        -P.confidence_rank(edge.confidence),
+        edge.dedupe_key,
+    ))
     return out[:cap]
 
 

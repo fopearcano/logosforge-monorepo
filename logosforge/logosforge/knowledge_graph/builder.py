@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from logosforge.db import KnowledgeGraphProjectNotFound
 from logosforge.knowledge_graph import provenance as P
 from logosforge.knowledge_graph.extractor_notes import extract_notes
 from logosforge.knowledge_graph.extractor_psyke import extract_psyke
@@ -28,7 +29,6 @@ from logosforge.knowledge_graph.scoring import (
     high_centrality_nodes,
     orphan_nodes,
 )
-from logosforge.db import KnowledgeGraphProjectNotFound
 from logosforge.writing_modes import get_project_writing_mode_by_id
 
 
@@ -36,6 +36,8 @@ from logosforge.writing_modes import get_project_writing_mode_by_id
 class KnowledgeGraphResult:
     graph: KnowledgeGraph
     undefined_terms: list[str] = field(default_factory=list)
+    undefined_term_total: int = 0
+    undefined_term_sources: dict[str, list[str]] = field(default_factory=dict)
     orphans: list = field(default_factory=list)   # list[KGNode]
     central: list = field(default_factory=list)    # list[(KGNode, degree)]
 
@@ -66,7 +68,13 @@ def build_knowledge_graph(db, project_id: int, *, options: dict | None = None,
     # Order matters only for node-existence; extractors are individually safe.
     extract_structure(db, project_id, graph)
     extract_psyke(db, project_id, graph)
-    undefined = extract_notes(db, project_id, graph)
+    undefined_term_sources: dict[str, set[str]] = {}
+    undefined = extract_notes(
+        db,
+        project_id,
+        graph,
+        undefined_term_sources=undefined_term_sources,
+    )
     if options.get("include_revision", True):
         extract_revision(db, project_id, graph)
     if options.get("include_rewrite", True):
@@ -82,8 +90,17 @@ def build_knowledge_graph(db, project_id: int, *, options: dict | None = None,
 
     orphans = orphan_nodes(graph)
     central = high_centrality_nodes(graph)
-    return KnowledgeGraphResult(graph=graph, undefined_terms=undefined,
-                                orphans=orphans, central=central)
+    return KnowledgeGraphResult(
+        graph=graph,
+        undefined_terms=undefined,
+        undefined_term_total=len(undefined_term_sources),
+        undefined_term_sources={
+            term: sorted(undefined_term_sources.get(term, set()))
+            for term in undefined
+        },
+        orphans=orphans,
+        central=central,
+    )
 
 
 def _merge_persisted_edges(db, project_id: int, graph: KnowledgeGraph) -> None:

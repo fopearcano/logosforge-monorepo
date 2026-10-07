@@ -12,6 +12,8 @@ import {
   type WorkspaceLayout,
   type WorkspacePanelDefinition,
   type StudioNavigationOptions,
+  type KnowledgeGraphNavigationTarget,
+  type ContinuityRepairTarget,
   STUDIO_AI_COMPANIONS_PANEL_ID,
   STUDIO_PANELS,
   STUDIO_WORKSPACE_PANEL_IDS,
@@ -173,11 +175,15 @@ export function App() {
   const [projectSwitching, setProjectSwitching] = useState(false);
   const [closePending, setClosePending] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [projectReady, setProjectReady] = useState(false);
   const [bootstrapAttempt, setBootstrapAttempt] = useState(0);
   const [pendingScene, setPendingScene] = useState<number | null>(null);
   const [pendingPsykeEntry, setPendingPsykeEntry] = useState<number | null>(null);
   const [pendingNote, setPendingNote] = useState<number | null>(null);
   const [pendingComment, setPendingComment] = useState<number | null>(null);
+  const [pendingKnowledgeGraph, setPendingKnowledgeGraph] = useState<KnowledgeGraphNavigationTarget | null>(null);
+  const [pendingContinuityIssue, setPendingContinuityIssue] = useState<string | null>(null);
+  const [pendingContinuityRepair, setPendingContinuityRepair] = useState<ContinuityRepairTarget | null>(null);
   const [handoffError, setHandoffError] = useState<string | null>(null);
   const { fault: runtimeFault, dismiss: dismissRuntimeFault } = useRuntimeFaultReporter();
   // Project handoffs, mode changes, and workspace mutations share one queue.
@@ -186,7 +192,9 @@ export function App() {
   const operationQueue = useRef<Promise<void>>(Promise.resolve());
   const closingRef = useRef(false);
   const projectSwitchingRef = useRef(false);
+  const projectReadyRef = useRef(false);
   const projectSwitchSequenceRef = useRef(0);
+  const refreshProjectsSequenceRef = useRef(0);
   const projectIdRef = useRef(projectId);
   const bootstrapRunRef = useRef<BootstrapRun | null>(null);
   const bootstrapBusyOwnerRef = useRef<BootstrapRun | null>(null);
@@ -284,7 +292,7 @@ export function App() {
     mutate: (current: WorkspaceLayout) => WorkspaceLayout,
     failurePrefix: string,
   ): Promise<boolean> => {
-    if (closingRef.current) return Promise.resolve(false);
+    if (closingRef.current || !projectReadyRef.current) return Promise.resolve(false);
     const targetProjectId = projectIdRef.current;
     const task = operationQueue.current.then(async () => {
       try {
@@ -325,10 +333,24 @@ export function App() {
     return task.then((selected) => {
       if (!selected) return false;
       // A newer successful navigation supersedes every older one-shot target.
-      setPendingScene(opts?.sceneId ?? null);
-      setPendingPsykeEntry(opts?.psykeEntryId ?? null);
-      setPendingNote(opts?.noteId ?? null);
-      setPendingComment(opts?.commentId ?? null);
+      // Publish a target only to its owning surface: all opened panels stay
+      // mounted, so leaking an AI repair's Scene id to Manuscript can otherwise
+      // scroll and steal focus after Billy becomes active.
+      setPendingScene(panelId === 'manuscript' ? opts?.sceneId ?? null : null);
+      setPendingPsykeEntry(panelId === 'psyke' ? opts?.psykeEntryId ?? null : null);
+      setPendingNote(panelId === 'notes' ? opts?.noteId ?? null : null);
+      setPendingComment(panelId === 'comments' ? opts?.commentId ?? null : null);
+      setPendingKnowledgeGraph(panelId === 'graph' && opts?.graphFocusKey ? {
+        focusKey: opts.graphFocusKey,
+        viewMode: opts.graphViewMode ?? 'project_map',
+        includeInferred: opts.graphIncludeInferred ?? true,
+        depth: opts.graphDepth ?? 1,
+      } : null);
+      setPendingContinuityIssue(panelId === 'continuity' ? opts?.continuityIssueKey ?? null : null);
+      setPendingContinuityRepair(panelId === AI_PANEL_ID ? opts?.continuityRepair ?? null : null);
+      if (panelId === AI_PANEL_ID && opts?.aiTool && AI_TOOL_KEYS.includes(opts.aiTool)) {
+        setAiTab(opts.aiTool);
+      }
       return true;
     });
   }, [runWorkspaceMutation]);
@@ -336,7 +358,7 @@ export function App() {
   // Cross-panel navigation: any panel can switch panels / open a scene, but no
   // panel unmounts a dirty editor until its save barrier succeeds.
   const navigate = useCallback((panel: string, opts?: StudioNavigationOptions) => {
-    void selectPanel(panel, opts);
+    return selectPanel(panel, opts);
   }, [selectPanel]);
 
   // Open an AI companion (used by the dock and the palette). Bring the dock into
@@ -431,6 +453,7 @@ export function App() {
   // (when the palette isn't the one consuming the keystroke).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (!projectReadyRef.current) return;
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'c') {
         e.preventDefault();
         void selectPanel('Comments');
@@ -457,6 +480,10 @@ export function App() {
       if (nextGeneration !== previousGeneration) {
         const invalidatedRun = bootstrapRunRef.current;
         releaseBootstrapRun(invalidatedRun);
+        projectReadyRef.current = false;
+        setProjectReady(false);
+        setModeBusy(false);
+        setPaletteOpen(false);
       }
       setStatus(next);
     };
@@ -512,7 +539,7 @@ export function App() {
   // The manager may move away from the default port when an orphaned process
   // occupies it. Always derive the API endpoint from the latest status event;
   // a one-time coreBaseUrl() read would become stale during that fallback.
-  const baseUrl = status.baseUrl || null;
+  const baseUrl = status.state === 'connected' && status.baseUrl ? status.baseUrl : null;
   const api = useMemo<ApiClient | null>(
     () => (baseUrl != null ? createHttpApiClient(baseUrl, status.authToken ?? '') : null),
     [baseUrl, status.authToken],
@@ -527,7 +554,7 @@ export function App() {
   useEffect(() => (api ? apiDisposer.acquire(api) : undefined), [api, apiDisposer]);
 
   const selectProject = useCallback((id: number): Promise<boolean> => {
-    if (closingRef.current) return Promise.resolve(false);
+    if (closingRef.current || !projectReadyRef.current) return Promise.resolve(false);
     const ownerApi = api;
     const ownerCoreGeneration = apiCoreGeneration;
     const isCurrentCore = () => coreGenerationTrackerRef.current.isCurrent(ownerCoreGeneration)
@@ -579,6 +606,9 @@ export function App() {
       setPendingPsykeEntry(null);
       setPendingNote(null);
       setPendingComment(null);
+      setPendingKnowledgeGraph(null);
+      setPendingContinuityIssue(null);
+      setPendingContinuityRepair(null);
       setHandoffError(null);
       return true;
     });
@@ -600,18 +630,38 @@ export function App() {
 
   const refreshProjects = useCallback(async (): Promise<ProjectDTO[]> => {
     if (!api) return [];
-    const ps = await api.listProjects();
+    const ownerApi = api;
+    const ownerCoreGeneration = apiCoreGeneration;
+    const refreshSequence = refreshProjectsSequenceRef.current + 1;
+    refreshProjectsSequenceRef.current = refreshSequence;
+    const isCurrentRefresh = () => coreGenerationTrackerRef.current.isCurrent(ownerCoreGeneration)
+      && coreStatusRef.current.state === 'connected'
+      && refreshProjectsSequenceRef.current === refreshSequence;
+    let ps: ProjectDTO[];
+    try {
+      ps = await ownerApi.listProjects();
+    } catch (error) {
+      // An older request must not overwrite a newer result with a late error.
+      if (!isCurrentRefresh()) return [];
+      throw error;
+    }
+    if (!isCurrentRefresh()) return [];
     setProjects(ps);
     const active = ps.find((project) => project.id === projectIdRef.current);
     if (active) setMode(projectWritingMode(active));
     return ps;
-  }, [api]);
+  }, [api, apiCoreGeneration]);
 
   const changeProjectMode = useCallback((nextMode: WritingMode): Promise<boolean> => {
     if (closingRef.current || projectSwitchingRef.current) return Promise.resolve(false);
+    const ownerApi = api;
+    if (!ownerApi) return Promise.resolve(false);
+    const ownerCoreGeneration = apiCoreGeneration;
+    const isCurrentCore = () => coreGenerationTrackerRef.current.isCurrent(ownerCoreGeneration)
+      && coreStatusRef.current.state === 'connected';
     const targetProjectId = projectIdRef.current;
     const task = operationQueue.current.then(async () => {
-      if (!api) return false;
+      if (!isCurrentCore()) return false;
       if (projectIdRef.current !== targetProjectId) return false;
       const activeId = targetProjectId;
       if (activeId == null) {
@@ -622,10 +672,11 @@ export function App() {
       let updated: ProjectDTO | null = null;
       try {
         await flushPendingProjectSaves({ commitActiveField: true });
-        if (projectIdRef.current !== activeId) return false;
+        if (!isCurrentCore() || projectIdRef.current !== activeId) return false;
         const committed = await trackProjectWrite(
-          api.updateProject(activeId, { narrative_engine: nextMode }),
+          ownerApi.updateProject(activeId, { narrative_engine: nextMode }),
         );
+        if (!isCurrentCore() || projectIdRef.current !== activeId) return false;
         updated = committed;
         setProjects((current) => current.map((project) =>
           project.id === committed.id ? committed : project,
@@ -635,9 +686,11 @@ export function App() {
         // update is already committed at this point, so retain the returned
         // project locally even when this final drain needs user attention.
         await flushPendingProjectSaves({ commitActiveField: true });
+        if (!isCurrentCore() || projectIdRef.current !== activeId) return false;
         setHandoffError(null);
         return true;
       } catch (error) {
+        if (!isCurrentCore()) return false;
         if (updated) {
           setHandoffError(
             `Writing mode changed, but pending workspace changes still need to be saved. ${
@@ -651,12 +704,12 @@ export function App() {
         );
         return false;
       } finally {
-        setModeBusy(false);
+        if (isCurrentCore()) setModeBusy(false);
       }
     });
     operationQueue.current = task.then(() => undefined, () => undefined);
     return task;
-  }, [api]);
+  }, [api, apiCoreGeneration]);
 
   useEffect(() => {
     const clearRetry = () => {
@@ -682,7 +735,7 @@ export function App() {
       releaseBootstrapRun(bootstrapRunRef.current);
       clearRetry();
     }
-    if (projects.length > 0 || projectId != null) {
+    if (projectReady) {
       releaseBootstrapRun(bootstrapRunRef.current);
       clearRetry();
       return;
@@ -729,13 +782,21 @@ export function App() {
           ? nextProjects.map((candidate) => candidate.id === opened.id ? opened : candidate)
           : [...nextProjects, opened];
         setProjects(nextProjects);
-        if (projectId == null) {
-          workspaceHydratedProjectRef.current = undefined;
-          setProjectId(opened.id);
-          projectIdRef.current = opened.id;
-          setMode(projectWritingMode(opened));
-          void persistLastActiveProjectId(opened.id);
-        }
+        workspaceHydratedProjectRef.current = undefined;
+        resetProjectSaveStatus();
+        setProjectId(opened.id);
+        projectIdRef.current = opened.id;
+        setMode(projectWritingMode(opened));
+        setPendingScene(null);
+        setPendingPsykeEntry(null);
+        setPendingNote(null);
+        setPendingComment(null);
+        setPendingKnowledgeGraph(null);
+        setPendingContinuityIssue(null);
+        setPendingContinuityRepair(null);
+        projectReadyRef.current = true;
+        setProjectReady(true);
+        void persistLastActiveProjectId(opened.id);
         setHandoffError(null);
       } catch (error) {
         if (!isCurrent()) return;
@@ -764,13 +825,14 @@ export function App() {
     busy,
     projects.length,
     projectId,
+    projectReady,
     mode,
     bootstrapAttempt,
     releaseBootstrapRun,
   ]);
 
   const newProject = useCallback(async () => {
-    if (!api || busy || projectSwitchingRef.current || closingRef.current) return;
+    if (!api || !projectReadyRef.current || busy || projectSwitchingRef.current || closingRef.current) return;
     setBusy(true);
     try {
       const created = await prepareProjectHandoff(() =>
@@ -948,7 +1010,7 @@ export function App() {
     {
       id: 'new-project', kind: 'Project', label: 'New project',
       keywords: ['create project', 'file'], shortcut: 'Primary+N',
-      enabled: () => !busy && !projectSwitchingRef.current && !closingRef.current,
+      enabled: () => projectReadyRef.current && !busy && !projectSwitchingRef.current && !closingRef.current,
       run: newProject,
     },
     ...visiblePanels.map((panel) => ({
@@ -958,7 +1020,7 @@ export function App() {
       aliases: [`nav:${panel.label}`, `go-${panel.label}`],
       keywords: ['panel', 'workspace', panel.id],
       showInOmnibox: false,
-      enabled: () => workspaceHydrated && !projectSwitchingRef.current && !closingRef.current,
+      enabled: () => projectReadyRef.current && workspaceHydrated && !projectSwitchingRef.current && !closingRef.current,
       run: () => selectPanel(panel.id),
     })),
     ...AI_TOOL_KEYS.map((key) => ({
@@ -967,21 +1029,28 @@ export function App() {
       label: key,
       aliases: [`ai-${key}`],
       keywords: ['assistant', 'companion'],
+      enabled: () => projectReadyRef.current && !projectSwitchingRef.current && !closingRef.current,
       run: () => openAi(key),
     })),
     {
       id: 'focus', kind: 'View',
       label: workspaceLayout.preset === 'focus' ? 'Exit focus mode' : 'Enter focus mode',
       aliases: ['workspace.focus'], keywords: ['cockpit', 'distraction free'],
-      shortcut: 'Primary+Shift+F', run: toggleFocus,
+      shortcut: 'Primary+Shift+F',
+      enabled: () => projectReadyRef.current && !projectSwitchingRef.current && !closingRef.current,
+      run: toggleFocus,
     },
     {
       id: 'ai-dock', kind: 'View', label: 'Toggle AI dock',
-      aliases: ['workspace.ai-dock'], shortcut: 'Primary+J', run: toggleAiDock,
+      aliases: ['workspace.ai-dock'], shortcut: 'Primary+J',
+      enabled: () => projectReadyRef.current && !projectSwitchingRef.current && !closingRef.current,
+      run: toggleAiDock,
     },
     {
       id: 'reset-workspace', kind: 'View', label: 'Reset workspace layout',
-      aliases: ['workspace.reset'], keywords: ['restore docks'], run: restoreDefaultWorkspace,
+      aliases: ['workspace.reset'], keywords: ['restore docks'],
+      enabled: () => projectReadyRef.current && !projectSwitchingRef.current && !closingRef.current,
+      run: restoreDefaultWorkspace,
     },
     ...(['dark', 'light', 'warm'] as const).map((theme) => ({
       id: `theme:${theme}`,
@@ -998,7 +1067,7 @@ export function App() {
     if (!desktop?.onMenuCommand) return;
     return desktop.onMenuCommand((cmd) => {
       if (cmd === 'palette') {
-        setPaletteOpen(true);
+        if (projectReadyRef.current) setPaletteOpen(true);
         return;
       }
       void commandRegistry.execute(cmd).catch((error) => setHandoffError(
@@ -1017,7 +1086,7 @@ export function App() {
       </div>
     );
   }
-  if (!api) {
+  if (!api || status.state !== 'connected') {
     return (
       <div className="boot">
         Connecting to the logosforge core…
@@ -1025,11 +1094,11 @@ export function App() {
       </div>
     );
   }
-  if (busy && projects.length === 0 && projectId == null) {
+  if (!projectReady) {
     return (
       <div className="boot">
         Preparing your project…
-        <span className="detail">Checking the local library and creating a blank project only when needed.</span>
+        <span className="detail">{handoffError ?? 'Checking the local library and creating a blank project only when needed.'}</span>
       </div>
     );
   }
@@ -1128,6 +1197,12 @@ export function App() {
           clearNoteTarget: (noteId) => setPendingNote((current) => noteId == null || current === noteId ? null : current),
           commentTargetId: pendingComment,
           clearCommentTarget: (commentId) => setPendingComment((current) => commentId == null || current === commentId ? null : current),
+          knowledgeGraphTarget: pendingKnowledgeGraph,
+          clearKnowledgeGraphTarget: (focusKey) => setPendingKnowledgeGraph((current) => focusKey == null || current?.focusKey === focusKey ? null : current),
+          continuityTargetIssueKey: pendingContinuityIssue,
+          clearContinuityTarget: (issueKey) => setPendingContinuityIssue((current) => issueKey == null || current === issueKey ? null : current),
+          continuityRepairTarget: pendingContinuityRepair,
+          clearContinuityRepairTarget: (handoffId) => setPendingContinuityRepair((current) => handoffId == null || current?.handoffId === handoffId ? null : current),
           selectProject,
           refreshProjects: () => {
             void refreshProjects().catch((error) => setHandoffError(

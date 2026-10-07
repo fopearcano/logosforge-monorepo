@@ -23,8 +23,14 @@ _STOP = {"The", "This", "That", "These", "Those", "When", "Where", "What",
          "He", "It", "We", "You", "I"}
 
 
-def extract_notes(db, project_id: int, graph) -> list[str]:
-    """Returns the list of detected undefined terms (for radar/queries)."""
+def extract_notes(
+    db,
+    project_id: int,
+    graph,
+    *,
+    undefined_term_sources: dict[str, set[str]] | None = None,
+) -> list[str]:
+    """Return undefined terms and optionally record their exact note nodes."""
     try:
         notes = db.get_all_notes(project_id)
     except Exception:
@@ -117,9 +123,11 @@ def extract_notes(db, project_id: int, graph) -> list[str]:
             if term.lower() in known_terms or term.lower() in scene_titles:
                 continue
             undefined.add(term)
+            if undefined_term_sources is not None:
+                undefined_term_sources.setdefault(term, set()).add(nkey)
 
     undefined_list = sorted(undefined)[:25]
     if undefined_list:
         graph.warnings.append(
-            f"{len(undefined_list)} note term(s) not defined in PSYKE.")
+            f"{len(undefined)} note term(s) not defined in PSYKE.")
     return undefined_list

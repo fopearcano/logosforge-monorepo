@@ -15,6 +15,50 @@ _SEV_RANK = {SEV_BLOCKING: 0, SEV_WARNING: 1, SEV_SUGGESTION: 2,
              SEV_OPPORTUNITY: 3, SEV_INFO: 4}
 
 
+@dataclass(frozen=True)
+class DecisionEvidence:
+    """One bounded, inspectable fact supporting a decision card.
+
+    Graph-derived cards use canonical node/edge identities instead of asking a
+    client to reverse-engineer evidence from prose.  The fields stay generic so
+    other deterministic analyzers can adopt the same contract later without
+    coupling Project Intelligence to the Knowledge Graph implementation.
+    """
+
+    kind: str
+    label: str
+    detail: str = ""
+    graph_focus_key: str = ""
+    source_key: str = ""
+    target_key: str = ""
+    edge_type: str = ""
+    confidence: str = ""
+    source_system: str = ""
+    provenance: str = ""
+    related_section: str = ""
+    related_target_type: str = ""
+    related_target_id: int | None = None
+    related_target_key: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "kind": self.kind,
+            "label": self.label,
+            "detail": self.detail,
+            "graph_focus_key": self.graph_focus_key,
+            "source_key": self.source_key,
+            "target_key": self.target_key,
+            "edge_type": self.edge_type,
+            "confidence": self.confidence,
+            "source_system": self.source_system,
+            "provenance": self.provenance,
+            "related_section": self.related_section,
+            "related_target_type": self.related_target_type,
+            "related_target_id": self.related_target_id,
+            "related_target_key": self.related_target_key,
+        }
+
+
 @dataclass
 class DecisionCard:
     id: str
@@ -27,7 +71,14 @@ class DecisionCard:
     related_section: str = ""
     related_target_type: str = ""
     related_target_id: int | None = None
+    related_target_key: str = ""
     created_from: str = "deterministic"
+    graph_focus_key: str = ""
+    graph_view_mode: str = ""
+    graph_include_inferred: bool = True
+    graph_depth: int = 1
+    evidence: list[DecisionEvidence] = field(default_factory=list)
+    evidence_total: int = 0
 
     @property
     def rank(self) -> int:
@@ -48,7 +99,14 @@ class DecisionCard:
             "related_section": section,
             "related_target_type": self.related_target_type or ("section" if section else ""),
             "related_target_id": self.related_target_id,
+            "related_target_key": self.related_target_key,
             "created_from": self.created_from,
+            "graph_focus_key": self.graph_focus_key,
+            "graph_view_mode": self.graph_view_mode,
+            "graph_include_inferred": self.graph_include_inferred,
+            "graph_depth": self.graph_depth,
+            "evidence": [item.to_dict() for item in self.evidence],
+            "evidence_total": max(self.evidence_total, len(self.evidence)),
         }
 
 

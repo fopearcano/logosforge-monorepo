@@ -102,12 +102,16 @@ GET  /api/health → { status, service, mode, version, api_version, core_version
 `core_version` is the Logosforge build (e.g. `0.9.0-alpha`). Clients (Electron
 desktop and Web/PWA) read these to verify they're talking to a compatible
 backend. `version` mirrors `api_version` for backward compatibility.
-The current additive HTTP contract version is **1.9.0**. It adds canonical
-Knowledge Graph Story Gravity availability/values and validated manuscript-order
-edge metadata. This version is deliberately independent from the local MCP
-server contract; MCP gateway 1.8.0 maps the Knowledge Graph HTTP review boundary
-into the same three focused tools and returns the additive graph fields from its
-read/apply surfaces.
+The current additive HTTP contract version is **1.12.0**. It adds a transactional
+Semantic Continuity review contract with revision-guarded defer, dismiss, and
+resolve commands plus durable, project-scoped idempotency receipts. Version
+1.11.0 added a separate, bounded Semantic Continuity Decision Radar feed with
+canonical issue keys,
+structured issue/scene evidence, and an explicit availability state. HTTP 1.10.0
+introduced the equivalent Knowledge Graph feed and graph deep-link scope; the
+stable Project Intelligence feed remains unchanged. The HTTP version remains
+deliberately independent from the local MCP server contract; MCP gateway 1.9.0
+exposes 46 focused tools, including transactional Continuity review proposals.
 
 ### Packaged-desktop live context
 ```
@@ -300,7 +304,7 @@ changed command publishes `knowledge_graph_changed`; rejects and exact replays
 do not. Persisted logical duplicates fail closed as server-state corruption
 rather than choosing an order-dependent winner.
 
-MCP gateway 1.8.0 exposes the primary read, hidden-edge page, and guarded command
+MCP gateway 1.9.0 exposes the primary read, hidden-edge page, and guarded command
 proposal as `logosforge_get_knowledge_graph`,
 `logosforge_get_knowledge_graph_hidden_edges`, and
 `logosforge_propose_knowledge_graph_command`. The read accepts the same optional
@@ -315,6 +319,84 @@ directional identity before storing a non-mutating proposal. Confirm/Hide reject
 that page-only argument. Apply uses the proposal id as `Idempotency-Key`, and
 ambiguous delivery follows the same durable receipt/restart recovery discipline
 as Timeline and Canvas Plot.
+
+### Decision Radar (bounded read-only feeds)
+```
+GET /api/projects/{project_id}/decision-radar
+```
+
+The response keeps the stable, at-most-ten `radar` feed and exposes Knowledge
+Graph and Semantic Continuity cards separately as `knowledge_graph_cards` and
+`continuity_cards`, each capped at eight with its own availability flag. The
+server builds each advisory feed independently: one analyzer can be unavailable
+without hiding the base radar or the other analyzer. Graph cards carry canonical
+projection/focus data; Continuity cards carry a canonical 16-character issue key.
+Both use `evidence_total` plus at most five structured evidence rows. Continuity
+scene destinations are emitted only after exact ownership is verified against
+the project in the path. The endpoint is read-only.
+
+### Semantic Continuity (derived read + transactional status review)
+```
+GET  /api/projects/{project_id}/continuity
+POST /api/projects/{project_id}/continuity/commands
+GET  /api/projects/{project_id}/continuity/command-receipt
+```
+
+The primary GET returns the deterministic report, including a 64-character
+`review_revision`, canonical 16-character issue ids, and a 64-character
+`review_fingerprint` on every issue. The persisted review revision guards the
+complete project-scoped review layer. The per-issue fingerprint binds the exact
+derived finding shown to the reviewer: its identity, type, dimension, severity,
+confidence, wording, suggested action, evidence, related scenes, and related
+nodes. The stable issue id may intentionally survive changes to those details;
+the fingerprint prevents an earlier approval from being reused after such a
+change.
+
+The command POST accepts one unwrapped discriminated request:
+
+```json
+{
+  "kind": "defer_issue | dismiss_issue | resolve_issue",
+  "expected_revision": "<64 lowercase hex characters>",
+  "issue_id": "<16 lowercase hex characters>",
+  "expected_issue_fingerprint": "<64 lowercase hex characters>"
+}
+```
+
+Only a currently open issue from the current derived report is eligible. Core
+rechecks the persisted review revision, exact issue fingerprint, issue status,
+and project ownership inside the same `BEGIN IMMEDIATE` transaction that changes
+the status and commits its durable receipt. The resulting status is respectively
+`deferred`, `dismissed`, or `resolved`; these are review-metadata transitions
+only. They do not modify manuscript, PSYKE, outline, graph, or other story data,
+and they do not run an LLM. A fresh changed command alone publishes
+`continuity_changed`.
+
+Every POST requires a 16–128-character safe-ASCII `Idempotency-Key`. Reusing the
+key for a different request returns `409 idempotency_key_conflict`. A stale
+revision or changed fingerprint returns `409 continuity_conflict`; stale,
+foreign, non-open, and unknown issue identities share the same generic 404. An
+exact retry resolves from the receipt before current-finding preflight and returns
+the current coherent report with `replayed: true`, `changed: false`, and the
+original `applied_revision`, affected issue, previous status, and resulting
+status. The current report revision may therefore be newer than the original
+applied revision.
+
+Receipt GET uses the same header and returns the canonical request digest,
+command kind, expected/applied revisions, original affected issue, exact finding
+fingerprint, `open` previous status, resulting status, original changed flag, and
+commit time. It is project-scoped and responds with `Cache-Control: no-store` and
+`Vary: Authorization, Idempotency-Key`; a genuine miss is
+`404 continuity_receipt_not_found`. Receipts last for the project lifetime and
+are deleted with it. Failed commands leave no receipt, and corrupt or internally
+inconsistent review/receipt state fails closed rather than choosing a result.
+
+MCP gateway 1.9.0 exposes the same report through
+`logosforge_get_story_diagnostics` with `report: "continuity"` and prepares one
+strict status command through `logosforge_propose_continuity_command`. Proposal
+creation is read-only. Apply uses the opaque proposal id as the idempotency key,
+supports durable restart recovery, and never turns a status command into a prose
+repair.
 
 ### Scenes / manuscript
 ```

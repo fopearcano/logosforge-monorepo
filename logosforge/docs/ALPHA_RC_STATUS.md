@@ -590,10 +590,12 @@ Level 3 GUI computer-use) is recommended for final human-like acceptance. Test
 projects only; no real provider keys; no cloud/GitHub. See
 `docs/WRITER_QA_AGENT_PLAN.md`.
 
-**First-run findings (to fix before release):** 5 BLOCKER — wrong-mode Assistant
-output is applyable; 5 HIGH — empty output is applyable; 1 MEDIUM — Chat does not
-clarify on a missing target. Alpha release confirmation is **blocked** until the
-Writer QA suite reports **0 BLOCKER**.
+**Resolved gate (2026-10-07):** all 69 deterministic scenarios now pass with
+0 bugs and **0 BLOCKER** findings. Validator profile v3 rejects empty direct
+output and unmistakable wrong-format dialogue before apply/cache, while direct
+Chat writing requests without a target ask for clarification. The original
+5 BLOCKER / 5 HIGH / 1 MEDIUM findings are closed; the headless run does not
+replace native GUI/render/fullscreen acceptance.
 
 
 ## Local Writer QA agent mode (2026-06-20)

@@ -8,7 +8,7 @@ import type {
   KnowledgeGraphViewMode,
 } from "@logosforge/ui-contracts";
 import { useSelection } from "../../adapters/selection";
-import { useStudio } from "../../adapters/StudioProvider";
+import { useKnowledgeGraphTarget, useStudio } from "../../adapters/StudioProvider";
 import { ApiRequestError, ApiRequestTimeoutError } from "../../adapters/httpApiClient";
 import { flushPendingProjectSaves } from "../../adapters/projectSaveCoordinator";
 import { useKnowledgeGraph, useKnowledgeGraphHiddenEdges, useMountedRef } from "../../hooks";
@@ -248,6 +248,7 @@ function actionEffect(action: KnowledgeGraphEdgeAction): string {
 
 export function KnowledgeGraph(props: PanelProps) {
   const { api, projectId } = useStudio();
+  const { target: externalTarget, clear: clearExternalTarget } = useKnowledgeGraphTarget();
   const { setSelection } = useSelection();
   const markerPrefix = `knowledge-graph-${useId().replaceAll(":", "")}`;
   const mounted = useMountedRef();
@@ -257,8 +258,11 @@ export function KnowledgeGraph(props: PanelProps) {
   apiRef.current = api;
   const requestRef = useRef<object | null>(null);
   const reviewRef = useRef<EdgeReviewProposal | null>(null);
+  const consumedExternalTargetRef = useRef("");
+  const externalTargetRequestRef = useRef<{ token: string; requestId: number } | null>(null);
   const reviewDialogRef = useRef<HTMLElement | null>(null);
   const reviewTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
   const [focusKey, setFocusKey] = useState<string | null>(null);
   const [depth, setDepth] = useState(1);
   const [viewMode, setViewMode] = useState<KnowledgeGraphViewMode>("project_map");
@@ -305,11 +309,37 @@ export function KnowledgeGraph(props: PanelProps) {
     setHiddenReviewOffset(0);
     setCommandSnapshot(null);
     requestRef.current = null;
+    externalTargetRequestRef.current = null;
     replaceReview(null);
     setBusy("");
     setMutationError("");
     setMutationStatus("");
   }, [api, projectId, replaceReview]);
+
+  useEffect(() => {
+    if (!externalTarget) {
+      consumedExternalTargetRef.current = "";
+      externalTargetRequestRef.current = null;
+      return;
+    }
+    // A deep link is an exact evidence request.  Reset every manual filter that
+    // could hide its canonical node, then request the projection/scope captured
+    // by the originating Decision Radar card.
+    setFocusKey(externalTarget.focusKey);
+    setDepth(externalTarget.depth);
+    setViewMode(externalTarget.viewMode);
+    setIncludeInferred(externalTarget.includeInferred);
+    setHiddenNodeTypes(new Set());
+    setConfidenceMin("unknown");
+    setSourceSystem("all");
+    setSelectedKey(null);
+    setConnectionsExpanded(false);
+    setOrphansExpanded(false);
+    setWeakLinksExpanded(false);
+    setHiddenEdgesExpanded(false);
+    setMutationError("");
+    setMutationStatus("");
+  }, [externalTarget]);
 
   const query = useMemo<NormalizedKnowledgeGraphQuery>(() => ({
     focus_key: focusKey,
@@ -320,7 +350,13 @@ export function KnowledgeGraph(props: PanelProps) {
   }), [depth, focusKey, includeInferred, viewMode]);
   const queryRef = useRef(query);
   queryRef.current = query;
-  const { data, loading, error, refetch } = useKnowledgeGraph(query);
+  const {
+    data,
+    loading,
+    error,
+    refetch,
+    lastSuccessfulRequest,
+  } = useKnowledgeGraph(query);
   const hiddenReviewResource = useKnowledgeGraphHiddenEdges(
     hiddenReviewOffset,
     HIDDEN_EDGE_PAGE_LIMIT,
@@ -360,6 +396,64 @@ export function KnowledgeGraph(props: PanelProps) {
     : matchesActiveQuery(data)
       ? data
       : undefined;
+
+  useEffect(() => {
+    if (!externalTarget) return;
+    const targetToken = [
+      String(projectId ?? ""),
+      externalTarget.focusKey,
+      externalTarget.viewMode,
+      String(externalTarget.includeInferred),
+      String(externalTarget.depth),
+    ].join("\u0000");
+    if (consumedExternalTargetRef.current === targetToken) return;
+    const queryMatchesTarget = (
+      focusKey === externalTarget.focusKey
+      && viewMode === externalTarget.viewMode
+      && includeInferred === externalTarget.includeInferred
+      && depth === externalTarget.depth
+    );
+    if (!queryMatchesTarget) return;
+    if (externalTargetRequestRef.current?.token !== targetToken) {
+      // Even an identical already-mounted query may predate the host's pending-
+      // save barrier. Force a new generation and prevent a command result from
+      // shadowing that post-barrier authoritative read.
+      setCommandSnapshot(null);
+      externalTargetRequestRef.current = {
+        token: targetToken,
+        requestId: refetch(),
+      };
+      return;
+    }
+    if (lastSuccessfulRequest < externalTargetRequestRef.current.requestId) return;
+    if (!matchesActiveQuery(data) || data?.focus_key !== externalTarget.focusKey) return;
+    const node = data.nodes.find((candidate) => candidate.key === externalTarget.focusKey);
+    if (!node) return;
+    consumedExternalTargetRef.current = targetToken;
+    setSelectedKey(node.key);
+    setSelection({
+      sceneId: node.node_type === "scene" && /^\d+$/.test(node.source_id ?? "") ? Number(node.source_id) : null,
+      text: [node.label, node.summary].filter(Boolean).join(" — "),
+      section: "Knowledge Graph",
+      nodeId: node.key,
+    });
+    const nodeButton = [...(panelRef.current?.querySelectorAll<HTMLElement>("[data-graph-node-key]") ?? [])]
+      .find((candidate) => candidate.dataset.graphNodeKey === node.key);
+    nodeButton?.focus({ preventScroll: true });
+    clearExternalTarget();
+  }, [
+    clearExternalTarget,
+    data,
+    depth,
+    externalTarget,
+    focusKey,
+    includeInferred,
+    lastSuccessfulRequest,
+    projectId,
+    refetch,
+    setSelection,
+    viewMode,
+  ]);
   const view = useMemo(() => graph ? buildKnowledgeGraphView(graph, {
     hiddenNodeTypes,
     confidenceMin,
@@ -735,7 +829,7 @@ export function KnowledgeGraph(props: PanelProps) {
 
   return (
     <PanelShell {...props}>
-      <div data-screen-label="Knowledge Graph" style={panelBox}>
+      <div ref={panelRef} data-screen-label="Knowledge Graph" style={panelBox}>
         <div style={{ position: "absolute", top: -1, left: -1, width: 14, height: 14, borderTop: "1px solid var(--crimson)", borderLeft: "1px solid var(--crimson)", zIndex: 9 }} />
         <div style={{ position: "absolute", top: 3, left: 3, width: 5, height: 5, background: "var(--crimson)", zIndex: 9 }} />
 
@@ -958,8 +1052,21 @@ export function KnowledgeGraph(props: PanelProps) {
             ) : error ? (
               <Message role="alert">
                 <div>
-                  <div>Couldn&apos;t load the {GRAPH_VIEW_META[viewMode].shortLabel} view — {error}</div>
+                  <div>{externalTarget ? "Graph evidence changed or is no longer available" : `Couldn&apos;t load the ${GRAPH_VIEW_META[viewMode].shortLabel} view`} — {error}</div>
                   <button type="button" onClick={refetch} style={{ ...activeControl, marginTop: 10 }}>RETRY LOAD</button>
+                  {externalTarget && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        clearExternalTarget();
+                        setFocusKey(null);
+                        setViewMode("project_map");
+                        setIncludeInferred(true);
+                        setDepth(1);
+                      }}
+                      style={{ ...activeControl, marginTop: 10, marginLeft: 8 }}
+                    >RETURN TO FULL PROJECT MAP</button>
+                  )}
                 </div>
               </Message>
             ) : !graph ? (

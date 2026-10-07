@@ -54,6 +54,8 @@ import {
   type WorkspaceLayout,
   type WorkspacePanelDefinition,
   type StudioNavigationOptions,
+  type KnowledgeGraphNavigationTarget,
+  type ContinuityRepairTarget,
 } from "../src";
 import {
   createPreviewLayoutPlatform,
@@ -145,6 +147,9 @@ export function IntegratedWorkspaceHarness({
   const [pendingPsykeEntry, setPendingPsykeEntry] = useState<number | null>(null);
   const [pendingNote, setPendingNote] = useState<number | null>(null);
   const [pendingComment, setPendingComment] = useState<number | null>(null);
+  const [pendingKnowledgeGraph, setPendingKnowledgeGraph] = useState<KnowledgeGraphNavigationTarget | null>(null);
+  const [pendingContinuityIssue, setPendingContinuityIssue] = useState<string | null>(null);
+  const [pendingContinuityRepair, setPendingContinuityRepair] = useState<ContinuityRepairTarget | null>(null);
   const projectIdRef = useRef(projectId);
   const projectSwitchingRef = useRef(false);
   const bootstrappedRef = useRef(false);
@@ -359,10 +364,18 @@ export function IntegratedWorkspaceHarness({
     }, "Panel navigation stopped; the current workspace remains open.");
     return selected.then((didSelect) => {
       if (!didSelect) return false;
-      setPendingScene(options?.sceneId ?? null);
-      setPendingPsykeEntry(options?.psykeEntryId ?? null);
-      setPendingNote(options?.noteId ?? null);
-      setPendingComment(options?.commentId ?? null);
+      setPendingScene(panelId === "manuscript" ? options?.sceneId ?? null : null);
+      setPendingPsykeEntry(panelId === "psyke" ? options?.psykeEntryId ?? null : null);
+      setPendingNote(panelId === "notes" ? options?.noteId ?? null : null);
+      setPendingComment(panelId === "comments" ? options?.commentId ?? null : null);
+      setPendingKnowledgeGraph(panelId === "graph" && options?.graphFocusKey ? {
+        focusKey: options.graphFocusKey,
+        viewMode: options.graphViewMode ?? "project_map",
+        includeInferred: options.graphIncludeInferred ?? true,
+        depth: options.graphDepth ?? 1,
+      } : null);
+      setPendingContinuityIssue(panelId === "continuity" ? options?.continuityIssueKey ?? null : null);
+      setPendingContinuityRepair(panelId === STUDIO_AI_COMPANIONS_PANEL_ID ? options?.continuityRepair ?? null : null);
       return true;
     });
   }, [runWorkspaceMutation]);
@@ -395,6 +408,9 @@ export function IntegratedWorkspaceHarness({
         setPendingPsykeEntry(null);
         setPendingNote(null);
         setPendingComment(null);
+        setPendingKnowledgeGraph(null);
+        setPendingContinuityIssue(null);
+        setPendingContinuityRepair(null);
         setError(null);
         return true;
       } catch (switchError) {
@@ -673,7 +689,7 @@ export function IntegratedWorkspaceHarness({
         writingMode={mode}
         projectId={projectId}
         nav={{
-          navigate: (panel, options) => { void selectPanel(panel, options); },
+          navigate: selectPanel,
           manuscriptTargetSceneId: pendingScene,
           clearManuscriptTarget: (sceneId) => setPendingScene((current) => sceneId == null || current === sceneId ? null : current),
           psykeTargetEntryId: pendingPsykeEntry,
@@ -682,6 +698,12 @@ export function IntegratedWorkspaceHarness({
           clearNoteTarget: (noteId) => setPendingNote((current) => noteId == null || current === noteId ? null : current),
           commentTargetId: pendingComment,
           clearCommentTarget: (commentId) => setPendingComment((current) => commentId == null || current === commentId ? null : current),
+          knowledgeGraphTarget: pendingKnowledgeGraph,
+          clearKnowledgeGraphTarget: (focusKey) => setPendingKnowledgeGraph((current) => focusKey == null || current?.focusKey === focusKey ? null : current),
+          continuityTargetIssueKey: pendingContinuityIssue,
+          clearContinuityTarget: (issueKey) => setPendingContinuityIssue((current) => issueKey == null || current === issueKey ? null : current),
+          continuityRepairTarget: pendingContinuityRepair,
+          clearContinuityRepairTarget: (handoffId) => setPendingContinuityRepair((current) => handoffId == null || current?.handoffId === handoffId ? null : current),
           selectProject,
           refreshProjects: () => { void refreshProjects(); },
         }}

@@ -5,6 +5,9 @@ import type {
   ConnectorActionDTO,
   ConnectorResultDTO,
   DeleteResultDTO,
+  DecisionCardDTO,
+  DecisionEvidenceDTO,
+  DecisionRadarDTO,
   ExtractionJobDTO,
   ExtractionResultDTO,
   InlineCommentDTO,
@@ -47,6 +50,11 @@ import type {
   CanvasPlotLinkDTO,
   CanvasPlotNodeDTO,
   CanvasPlotSnapshotDTO,
+  ContinuityCommandDTO,
+  ContinuityCommandReceiptDTO,
+  ContinuityCommandResultDTO,
+  ContinuityIssueDTO,
+  ContinuityReportDTO,
   KnowledgeGraphEdgeDTO,
   KnowledgeGraphEdgeIdentityDTO,
   KnowledgeGraphNodeDTO,
@@ -182,6 +190,242 @@ function project(value: unknown, path: string): ProjectDTO {
   stringValue(requireField(dto, "default_writing_format", path), fieldPath(path, "default_writing_format"));
   stringValue(requireField(dto, "format_mode", path), fieldPath(path, "format_mode"));
   return value as ProjectDTO;
+}
+
+const DECISION_SEVERITIES = new Set(["blocking", "warning", "suggestion", "opportunity", "info"]);
+const DECISION_CONFIDENCES = new Set(["confirmed", "likely", "possible", "unknown"]);
+
+function boundedDecisionString(
+  value: unknown,
+  path: string,
+  maxLength: number,
+  nonEmpty = false,
+): string {
+  const result = stringValue(value, path);
+  if (result.length > maxLength || (nonEmpty && !result.trim())) {
+    fail(path, `${nonEmpty ? "a non-empty " : "a "}string of at most ${maxLength} characters`, result);
+  }
+  return result;
+}
+
+function decisionEvidence(value: unknown, path: string): DecisionEvidenceDTO {
+  const dto = record(value, path);
+  boundedDecisionString(requireField(dto, "kind", path), fieldPath(path, "kind"), 32, true);
+  boundedDecisionString(requireField(dto, "label", path), fieldPath(path, "label"), 512, true);
+  boundedDecisionString(requireField(dto, "detail", path), fieldPath(path, "detail"), 1000);
+  for (const key of ["graph_focus_key", "source_key", "target_key"] as const) {
+    boundedDecisionString(requireField(dto, key, path), fieldPath(path, key), 512);
+  }
+  boundedDecisionString(requireField(dto, "edge_type", path), fieldPath(path, "edge_type"), 128);
+  const confidence = boundedDecisionString(
+    requireField(dto, "confidence", path),
+    fieldPath(path, "confidence"),
+    32,
+  );
+  if (confidence && !DECISION_CONFIDENCES.has(confidence)) {
+    fail(fieldPath(path, "confidence"), "blank, confirmed, likely, possible, or unknown", confidence);
+  }
+  boundedDecisionString(requireField(dto, "source_system", path), fieldPath(path, "source_system"), 128);
+  boundedDecisionString(requireField(dto, "provenance", path), fieldPath(path, "provenance"), 512);
+  boundedDecisionString(requireField(dto, "related_section", path), fieldPath(path, "related_section"), 128);
+  const relatedTargetType = boundedDecisionString(
+    requireField(dto, "related_target_type", path),
+    fieldPath(path, "related_target_type"),
+    128,
+  );
+  const relatedTargetId = nullable(
+    requireField(dto, "related_target_id", path),
+    fieldPath(path, "related_target_id"),
+    integerValue,
+  );
+  const relatedTargetKey = boundedDecisionString(
+    requireField(dto, "related_target_key", path),
+    fieldPath(path, "related_target_key"),
+    512,
+  );
+  if (relatedTargetType === "scene" && (
+    relatedTargetId === null || relatedTargetId <= 0 || relatedTargetKey
+  )) {
+    fail(path, "scene evidence with only a positive related_target_id", value);
+  }
+  if (relatedTargetType === "continuity_issue" && (
+    relatedTargetId !== null || !/^[0-9a-f]{16}$/.test(relatedTargetKey)
+  )) {
+    fail(path, "continuity issue evidence with a canonical issue key", value);
+  }
+  if (!relatedTargetType && (relatedTargetId !== null || relatedTargetKey)) {
+    fail(path, "related_target_type when an evidence target is set", value);
+  }
+  return value as DecisionEvidenceDTO;
+}
+
+function decisionCard(value: unknown, path: string): DecisionCardDTO {
+  const dto = record(value, path);
+  for (const key of ["id", "category", "title"] as const) {
+    boundedDecisionString(requireField(dto, key, path), fieldPath(path, key), 512, true);
+  }
+  const severity = boundedDecisionString(
+    requireField(dto, "severity", path),
+    fieldPath(path, "severity"),
+    32,
+    true,
+  );
+  if (!DECISION_SEVERITIES.has(severity)) {
+    fail(fieldPath(path, "severity"), "blocking, warning, suggestion, opportunity, or info", severity);
+  }
+  const confidence = boundedDecisionString(
+    requireField(dto, "confidence", path),
+    fieldPath(path, "confidence"),
+    32,
+    true,
+  );
+  if (!DECISION_CONFIDENCES.has(confidence)) {
+    fail(fieldPath(path, "confidence"), "confirmed, likely, possible, or unknown", confidence);
+  }
+  boundedDecisionString(requireField(dto, "explanation", path), fieldPath(path, "explanation"), 4000);
+  boundedDecisionString(requireField(dto, "suggested_action", path), fieldPath(path, "suggested_action"), 1000);
+  boundedDecisionString(requireField(dto, "related_section", path), fieldPath(path, "related_section"), 128);
+  const relatedTargetType = boundedDecisionString(
+    requireField(dto, "related_target_type", path),
+    fieldPath(path, "related_target_type"),
+    128,
+  );
+  const relatedTargetId = nullable(
+    requireField(dto, "related_target_id", path),
+    fieldPath(path, "related_target_id"),
+    integerValue,
+  );
+  const relatedTargetKey = boundedDecisionString(
+    requireField(dto, "related_target_key", path),
+    fieldPath(path, "related_target_key"),
+    512,
+  );
+  const createdFrom = boundedDecisionString(
+    requireField(dto, "created_from", path),
+    fieldPath(path, "created_from"),
+    64,
+    true,
+  );
+  const graphFocusKey = boundedDecisionString(
+    requireField(dto, "graph_focus_key", path),
+    fieldPath(path, "graph_focus_key"),
+    512,
+  );
+  const graphViewMode = nullable(
+    requireField(dto, "graph_view_mode", path),
+    fieldPath(path, "graph_view_mode"),
+    knowledgeGraphViewMode,
+  );
+  if (Boolean(graphFocusKey) !== (graphViewMode !== null)) {
+    fail(fieldPath(path, "graph_view_mode"), "set exactly when graph_focus_key is set", graphViewMode);
+  }
+  booleanValue(requireField(dto, "graph_include_inferred", path), fieldPath(path, "graph_include_inferred"));
+  const graphDepth = integerValue(requireField(dto, "graph_depth", path), fieldPath(path, "graph_depth"));
+  if (graphDepth !== 1 && graphDepth !== 2) {
+    fail(fieldPath(path, "graph_depth"), "1 or 2", graphDepth);
+  }
+  const evidence = arrayOf(
+    requireField(dto, "evidence", path),
+    fieldPath(path, "evidence"),
+    decisionEvidence,
+  );
+  if (evidence.length > 5) fail(fieldPath(path, "evidence"), "an array with at most 5 items", evidence);
+  const evidenceTotal = integerValue(
+    requireField(dto, "evidence_total", path),
+    fieldPath(path, "evidence_total"),
+  );
+  if (evidenceTotal < evidence.length) {
+    fail(fieldPath(path, "evidence_total"), `at least the returned evidence length (${evidence.length})`, evidenceTotal);
+  }
+  if (createdFrom === "knowledge_graph" && (!graphFocusKey || evidence.length === 0)) {
+    fail(path, "a graph focus and evidence for knowledge_graph cards", value);
+  }
+  if (createdFrom === "semantic_continuity") {
+    const evidenceValid = evidence.length > 0 && evidence.every((item) => (
+      !item.graph_focus_key
+      && !item.source_key
+      && !item.target_key
+      && !item.edge_type
+      && (item.related_target_type === "continuity_issue" || item.related_target_type === "scene")
+      && (item.related_target_type !== "continuity_issue" || item.related_target_key === relatedTargetKey)
+    ));
+    const hasIssueAnchor = evidence.some((item) => (
+      item.related_target_type === "continuity_issue"
+      && item.related_target_key === relatedTargetKey
+    ));
+    if (
+      relatedTargetType !== "continuity_issue"
+      || relatedTargetId !== null
+      || !/^[0-9a-f]{16}$/.test(relatedTargetKey)
+      || Boolean(graphFocusKey)
+      || graphViewMode !== null
+      || !evidenceValid
+      || !hasIssueAnchor
+    ) {
+      fail(path, "one canonical issue target and unmixed issue/scene evidence for semantic_continuity cards", value);
+    }
+  }
+  return value as DecisionCardDTO;
+}
+
+export function validateDecisionRadarDTOForRequest(
+  value: unknown,
+  projectId: number,
+): DecisionRadarDTO {
+  const dto = record(value, "$");
+  const responseProjectId = integerValue(requireField(dto, "project_id", "$"), "$.project_id");
+  if (responseProjectId !== projectId) {
+    fail("$.project_id", `the requested project id ${projectId}`, responseProjectId);
+  }
+  booleanValue(requireField(dto, "generated_light", "$"), "$.generated_light");
+  stringValue(requireField(dto, "summary_line", "$"), "$.summary_line");
+  const radar = arrayOf(requireField(dto, "radar", "$"), "$.radar", decisionCard);
+  if (radar.length > 10) fail("$.radar", "an array with at most 10 items", radar);
+  const graphAvailable = booleanValue(
+    requireField(dto, "knowledge_graph_available", "$"),
+    "$.knowledge_graph_available",
+  );
+  const graphCards = arrayOf(
+    requireField(dto, "knowledge_graph_cards", "$"),
+    "$.knowledge_graph_cards",
+    decisionCard,
+  );
+  if (graphCards.length > 8) {
+    fail("$.knowledge_graph_cards", "an array with at most 8 items", graphCards);
+  }
+  if (!graphAvailable && graphCards.length > 0) {
+    fail("$.knowledge_graph_cards", "empty when the Knowledge Graph is unavailable", graphCards);
+  }
+  graphCards.forEach((card, index) => {
+    if (card.created_from !== "knowledge_graph") {
+      fail(`$.knowledge_graph_cards[${index}].created_from`, "knowledge_graph", card.created_from);
+    }
+  });
+  const continuityAvailable = booleanValue(
+    requireField(dto, "continuity_available", "$"),
+    "$.continuity_available",
+  );
+  const continuityCards = arrayOf(
+    requireField(dto, "continuity_cards", "$"),
+    "$.continuity_cards",
+    decisionCard,
+  );
+  if (continuityCards.length > 8) {
+    fail("$.continuity_cards", "an array with at most 8 items", continuityCards);
+  }
+  if (!continuityAvailable && continuityCards.length > 0) {
+    fail("$.continuity_cards", "empty when Semantic Continuity is unavailable", continuityCards);
+  }
+  continuityCards.forEach((card, index) => {
+    if (card.created_from !== "semantic_continuity") {
+      fail(
+        `$.continuity_cards[${index}].created_from`,
+        "semantic_continuity",
+        card.created_from,
+      );
+    }
+  });
+  return value as DecisionRadarDTO;
 }
 
 function projectActionResult(value: unknown, path: string): ProjectActionResultDTO {
@@ -930,6 +1174,173 @@ export function validateCanvasPlotCommandResultDTOForRequest(
     }
   }
   return result;
+}
+
+function continuityIssue(value: unknown, path: string): ContinuityIssueDTO {
+  const dto = record(value, path);
+  const id = stringValue(requireField(dto, "id", path), fieldPath(path, "id"));
+  if (!/^[0-9a-f]{16}$/.test(id)) {
+    fail(fieldPath(path, "id"), "a 16-character lowercase hexadecimal issue key", id);
+  }
+  const reviewFingerprint = stringValue(
+    requireField(dto, "review_fingerprint", path),
+    fieldPath(path, "review_fingerprint"),
+  );
+  if (!/^[0-9a-f]{64}$/.test(reviewFingerprint)) {
+    fail(fieldPath(path, "review_fingerprint"), "a 64-character lowercase hexadecimal fingerprint", reviewFingerprint);
+  }
+  for (const key of ["issue_type", "dimension", "title", "explanation", "suggested_action"] as const) {
+    stringValue(requireField(dto, key, path), fieldPath(path, key));
+  }
+  const severity = stringValue(requireField(dto, "severity", path), fieldPath(path, "severity"));
+  if (!["info", "suggestion", "warning", "blocking"].includes(severity)) {
+    fail(fieldPath(path, "severity"), "a supported Continuity severity", severity);
+  }
+  const confidence = stringValue(requireField(dto, "confidence", path), fieldPath(path, "confidence"));
+  if (!["confirmed", "likely", "possible", "unknown"].includes(confidence)) {
+    fail(fieldPath(path, "confidence"), "a supported Continuity confidence", confidence);
+  }
+  const status = stringValue(requireField(dto, "status", path), fieldPath(path, "status"));
+  if (!["open", "deferred", "dismissed", "resolved"].includes(status)) {
+    fail(fieldPath(path, "status"), "a supported Continuity review status", status);
+  }
+  const sceneIds = integerArray(
+    requireField(dto, "related_scene_ids", path),
+    fieldPath(path, "related_scene_ids"),
+  );
+  sceneIds.forEach((sceneId, index) => {
+    if (sceneId <= 0) fail(`${fieldPath(path, "related_scene_ids")}[${index}]`, "a positive Scene id", sceneId);
+  });
+  if (new Set(sceneIds).size !== sceneIds.length) {
+    fail(fieldPath(path, "related_scene_ids"), "unique Scene ids", sceneIds);
+  }
+  return value as ContinuityIssueDTO;
+}
+
+function continuityReport(value: unknown, path: string): ContinuityReportDTO {
+  const dto = record(value, path);
+  const projectId = integerValue(requireField(dto, "project_id", path), fieldPath(path, "project_id"));
+  if (projectId <= 0) fail(fieldPath(path, "project_id"), "a positive Project id", projectId);
+  const revision = stringValue(
+    requireField(dto, "review_revision", path),
+    fieldPath(path, "review_revision"),
+  );
+  if (!/^[0-9a-f]{64}$/.test(revision)) {
+    fail(fieldPath(path, "review_revision"), "a 64-character lowercase hexadecimal revision", revision);
+  }
+  stringValue(requireField(dto, "writing_mode", path), fieldPath(path, "writing_mode"));
+  const issues = arrayOf(
+    requireField(dto, "issues", path),
+    fieldPath(path, "issues"),
+    continuityIssue,
+  );
+  if (issues.length > 120) fail(fieldPath(path, "issues"), "at most 120 issues", issues);
+  const keys = issues.map((issue) => issue.id);
+  if (new Set(keys).size !== keys.length) fail(fieldPath(path, "issues"), "unique issue ids", issues);
+  const blockingCount = integerValue(
+    requireField(dto, "blocking_count", path),
+    fieldPath(path, "blocking_count"),
+  );
+  const warningCount = integerValue(
+    requireField(dto, "warning_count", path),
+    fieldPath(path, "warning_count"),
+  );
+  const expectedBlocking = issues.filter((issue) => issue.status === "open" && issue.severity === "blocking").length;
+  const expectedWarning = issues.filter((issue) => issue.status === "open" && issue.severity === "warning").length;
+  if (blockingCount !== expectedBlocking) {
+    fail(fieldPath(path, "blocking_count"), `the open blocking issue count (${expectedBlocking})`, blockingCount);
+  }
+  if (warningCount !== expectedWarning) {
+    fail(fieldPath(path, "warning_count"), `the open warning issue count (${expectedWarning})`, warningCount);
+  }
+  stringArray(requireField(dto, "unavailable", path), fieldPath(path, "unavailable"));
+  return value as ContinuityReportDTO;
+}
+
+export function validateContinuityReportDTOForRequest(
+  value: unknown,
+  projectId: number,
+): ContinuityReportDTO {
+  const report = continuityReport(value, "$");
+  if (report.project_id !== projectId) {
+    fail("$.project_id", `the requested project id ${projectId}`, report.project_id);
+  }
+  return report;
+}
+
+function continuityStatusForCommand(kind: ContinuityCommandDTO["kind"]): "deferred" | "dismissed" | "resolved" {
+  if (kind === "defer_issue") return "deferred";
+  if (kind === "dismiss_issue") return "dismissed";
+  return "resolved";
+}
+
+export function validateContinuityCommandResultDTOForRequest(
+  value: unknown,
+  projectId: number,
+  command: ContinuityCommandDTO,
+): ContinuityCommandResultDTO {
+  const dto = record(value, "$");
+  const continuity = continuityReport(requireField(dto, "continuity", "$"), "$.continuity");
+  const changed = booleanValue(requireField(dto, "changed", "$"), "$.changed");
+  const replayed = booleanValue(requireField(dto, "replayed", "$"), "$.replayed");
+  const affectedIssueId = stringValue(requireField(dto, "affected_issue_id", "$"), "$.affected_issue_id");
+  const previousStatus = stringValue(requireField(dto, "previous_status", "$"), "$.previous_status");
+  const status = stringValue(requireField(dto, "status", "$"), "$.status");
+  const appliedRevision = stringValue(requireField(dto, "applied_revision", "$"), "$.applied_revision");
+  if (continuity.project_id !== projectId) fail("$.continuity.project_id", `the requested project id ${projectId}`, continuity.project_id);
+  if (affectedIssueId !== command.issue_id) fail("$.affected_issue_id", "the issue targeted by the submitted command", affectedIssueId);
+  if (previousStatus !== "open") fail("$.previous_status", '"open"', previousStatus);
+  const expectedStatus = continuityStatusForCommand(command.kind);
+  if (status !== expectedStatus) fail("$.status", `the command result status ${expectedStatus}`, status);
+  if (!/^[0-9a-f]{64}$/.test(appliedRevision)) fail("$.applied_revision", "a 64-character lowercase hexadecimal revision", appliedRevision);
+  if (replayed && changed) fail("$.changed", "false for an idempotent replay", changed);
+  if (!replayed && !changed) fail("$.changed", "true for a freshly accepted Continuity command", changed);
+  if (!replayed && appliedRevision === command.expected_revision) fail("$.applied_revision", "a new revision for a fresh command", appliedRevision);
+  if (!replayed && continuity.review_revision !== appliedRevision) {
+    fail("$.continuity.review_revision", "the freshly applied revision", continuity.review_revision);
+  }
+  return value as ContinuityCommandResultDTO;
+}
+
+export function validateContinuityCommandReceiptDTOForRequest(
+  value: unknown,
+  projectId: number,
+  command: ContinuityCommandDTO,
+): ContinuityCommandReceiptDTO {
+  const dto = record(value, "$");
+  const returnedProjectId = integerValue(requireField(dto, "project_id", "$"), "$.project_id");
+  const requestDigest = stringValue(requireField(dto, "request_digest", "$"), "$.request_digest");
+  const commandKind = stringValue(requireField(dto, "command_kind", "$"), "$.command_kind");
+  const expectedRevision = stringValue(requireField(dto, "expected_revision", "$"), "$.expected_revision");
+  const appliedRevision = stringValue(requireField(dto, "applied_revision", "$"), "$.applied_revision");
+  const originalChanged = booleanValue(requireField(dto, "original_changed", "$"), "$.original_changed");
+  const affectedIssueId = stringValue(requireField(dto, "original_affected_issue_id", "$"), "$.original_affected_issue_id");
+  const expectedIssueFingerprint = stringValue(
+    requireField(dto, "expected_issue_fingerprint", "$"),
+    "$.expected_issue_fingerprint",
+  );
+  const previousStatus = stringValue(requireField(dto, "previous_status", "$"), "$.previous_status");
+  const status = stringValue(requireField(dto, "status", "$"), "$.status");
+  const committedAt = stringValue(requireField(dto, "committed_at", "$"), "$.committed_at");
+  if (returnedProjectId !== projectId) fail("$.project_id", `the requested project id ${projectId}`, returnedProjectId);
+  if (!/^[0-9a-f]{64}$/.test(requestDigest)) fail("$.request_digest", "a 64-character lowercase hexadecimal digest", requestDigest);
+  if (commandKind !== command.kind) fail("$.command_kind", `the submitted command kind ${command.kind}`, commandKind);
+  if (expectedRevision !== command.expected_revision) fail("$.expected_revision", "the submitted expected revision", expectedRevision);
+  if (!/^[0-9a-f]{64}$/.test(appliedRevision)) fail("$.applied_revision", "a 64-character lowercase hexadecimal revision", appliedRevision);
+  if (!originalChanged) fail("$.original_changed", "true for a committed Continuity command", originalChanged);
+  if (affectedIssueId !== command.issue_id) fail("$.original_affected_issue_id", "the issue targeted by the submitted command", affectedIssueId);
+  if (expectedIssueFingerprint !== command.expected_issue_fingerprint) {
+    fail("$.expected_issue_fingerprint", "the reviewed issue fingerprint submitted with the command", expectedIssueFingerprint);
+  }
+  if (!/^[0-9a-f]{64}$/.test(expectedIssueFingerprint)) {
+    fail("$.expected_issue_fingerprint", "a 64-character lowercase hexadecimal fingerprint", expectedIssueFingerprint);
+  }
+  if (previousStatus !== "open") fail("$.previous_status", '"open"', previousStatus);
+  const expectedStatus = continuityStatusForCommand(command.kind);
+  if (status !== expectedStatus) fail("$.status", `the command result status ${expectedStatus}`, status);
+  if (appliedRevision === expectedRevision) fail("$.applied_revision", "a new committed revision", appliedRevision);
+  if (!committedAt.trim() || Number.isNaN(Date.parse(committedAt))) fail("$.committed_at", "a non-empty ISO timestamp", committedAt);
+  return value as ContinuityCommandReceiptDTO;
 }
 
 function knowledgeGraphNode(value: unknown, path: string): KnowledgeGraphNodeDTO {

@@ -222,7 +222,7 @@ import hashlib  # noqa: E402
 from dataclasses import dataclass, field  # noqa: E402
 
 OUTPUT_CONTRACT_VERSION = "2"
-VALIDATOR_VERSION = "2"
+VALIDATOR_VERSION = "3"
 
 # Output kinds (string constants for simple equality in callers/tests).
 DIRECT_CONTENT = "direct_content"
@@ -346,7 +346,8 @@ def route(*, entry_point: str = "assistant_panel", section: str | None = None,
         fmt = "free"
 
     needs_clar = (kind == DIRECT_CONTENT and not has_target
-                  and sec in _WRITING_SECTIONS)
+                  and (sec in _WRITING_SECTIONS
+                       or sec in {"chat", "assistant", "logos"}))
     apply_allowed = kind == DIRECT_CONTENT and not needs_clar
 
     return AssistantTaskContract(
@@ -412,6 +413,63 @@ _DIRECT_FORBIDDEN = _LEAK_MARKERS + (
 _SECRET_RX = re.compile(r"\bsk-[A-Za-z0-9]{8,}\b|\.(wav|mp3|m4a|flac|ogg)\b"
                         r"|\b(api[_-]?key|password|bearer|token)\b\s*[:=]",
                         re.IGNORECASE)
+_SCREENPLAY_SLUG = re.compile(r"(?im)^\s*(?:INT\.|EXT\.|INT\./EXT\.|I/E\.)")
+_GRAPHIC_NOVEL_FIELD = re.compile(
+    r"(?im)^\s*(?:panel(?:\s+\d+)?|visual|caption|dialogue|sfx|notes)\s*:"
+)
+
+
+def _upper_cue_count(body: str) -> int:
+    """Count short, letter-bearing all-caps lines without assuming ASCII."""
+    count = 0
+    for raw_line in body.splitlines():
+        line = raw_line.strip().rstrip(":")
+        letters = "".join(char for char in line if char.isalpha())
+        if letters and letters.isupper() and len(line) <= 40:
+            count += 1
+    return count
+
+
+def _has_stage_cue(body: str) -> bool:
+    for raw_line in body.splitlines():
+        prefix, separator, remainder = raw_line.strip().partition(".")
+        letters = "".join(char for char in prefix if char.isalpha())
+        if (separator and remainder.strip() and letters and letters.isupper()
+                and len(prefix) <= 40):
+            return True
+    return False
+
+
+def _direct_mode_issues(body: str, contract: AssistantTaskContract) -> list[str]:
+    """Reject only unmistakable mode mismatches for direct dialogue output.
+
+    General prose shape is deliberately not guessed: Novel and Series can use
+    many legitimate styles and languages. The stricter positive-format checks
+    apply only to the explicit Dialogue action whose output contract requires a
+    screenplay cue, Graphic Novel field, or stage-script cue/direction.
+    """
+    if contract.action != "dialogue":
+        return []
+
+    mode = contract.writing_mode
+    upper_cues = _upper_cue_count(body)
+    has_screenplay_slug = bool(_SCREENPLAY_SLUG.search(body))
+    has_graphic_novel_field = bool(_GRAPHIC_NOVEL_FIELD.search(body))
+    has_stage_cue = _has_stage_cue(body)
+
+    if mode == "screenplay" and not (has_screenplay_slug or upper_cues):
+        return ["dialogue lacks screenplay cue or scene-heading formatting"]
+    if mode == "graphic_novel" and not has_graphic_novel_field:
+        return ["dialogue lacks Graphic Novel panel-field formatting"]
+    if mode == "stage_script" and not (upper_cues or has_stage_cue or "(" in body):
+        return ["dialogue lacks stage-script cue or direction formatting"]
+    if mode == "novel" and (has_graphic_novel_field
+                            or has_screenplay_slug
+                            or upper_cues >= 2):
+        return ["dialogue uses script formatting instead of novel prose"]
+    if mode == "series" and has_graphic_novel_field:
+        return ["dialogue uses Graphic Novel panel formatting"]
+    return []
 
 
 @dataclass
@@ -436,6 +494,14 @@ def validate(text: str, contract: AssistantTaskContract
     low = body.lower()
     reasons: list[str] = []
 
+    if not body.strip():
+        is_direct = contract.validator_profile in _DIRECT_PROFILES
+        return AssistantValidationResult(
+            status="invalid", reasons=["response is empty"],
+            apply_allowed=False, copy_allowed=False, cache_allowed=False,
+            diagnostic_only=False, retry_recommended=is_direct,
+            retry_profile=contract.validator_profile if is_direct else "")
+
     # Secrets / raw audio — never valid anywhere; never displayed/applied.
     if _SECRET_RX.search(body):
         return AssistantValidationResult(
@@ -456,6 +522,7 @@ def validate(text: str, contract: AssistantTaskContract
             reasons.append("contains markdown headings")
         if len(_LIST_LINE.findall(body)) >= 3:
             reasons.append("contains a planning bullet/numbered list")
+        reasons.extend(_direct_mode_issues(body, contract))
 
     if reasons:
         is_direct = profile in _DIRECT_PROFILES

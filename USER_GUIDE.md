@@ -389,6 +389,46 @@ specialty view means no matching recorded evidence, not that the manuscript is
 connected or risk-free. The complete hidden-edge review queue remains available
 from every view.
 
+The Dashboard's **Decision Radar** also surfaces deterministic Knowledge Graph
+decisions. A graph-backed card is marked **KNOWLEDGE GRAPH**, shows how many
+facts support it, and can expand those facts to reveal confidence, source system,
+provenance, and explanation. **OPEN GRAPH EVIDENCE** opens the exact saved graph
+projection and neighborhood; an individual evidence row can focus its own node.
+The Graph clears manual hiding filters for that handoff and selects the returned
+canonical node. If the underlying evidence changed since the card was loaded,
+the panel reports that the target is stale and offers a return to the full
+Project Map. These cards remain advisory and never mutate story data.
+
+Semantic Continuity decisions appear in the same Radar with a **SEMANTIC
+CONTINUITY** badge. Expand a card to inspect its bounded evidence, choose **OPEN
+CONTINUITY ISSUE** to focus the exact issue in Continuity, or open a scene fact
+to jump to that exact Manuscript scene. The handoff waits for pending project
+saves. If a recomputed report no longer contains the issue, Continuity says it
+was resolved or became stale and does not guess a replacement. These cards are
+also advisory; they do not dismiss, resolve, or rewrite anything automatically.
+
+In the Continuity panel, **Defer**, **Dismiss**, and **Resolve** are explicit
+review decisions. Choosing one first reloads the current report and opens a
+confirmation dialog for that exact finding. Confirmation records only its review
+status; it does not edit the Manuscript or run AI. Pro binds the decision to both
+the current review revision and a fingerprint of the issue details and evidence,
+so it refuses an approval if the finding changed while you were reviewing it.
+If delivery becomes uncertain, Pro checks the durable receipt before doing
+anything else. Only a proven missing receipt permits one retry of the exact same
+decision; after a second uncertain result, the dialog offers receipt checks only.
+
+**Repair with Billy** is a separate workflow. It opens Billy with a bounded repair
+brief staged in the composer but does not send it. When the issue identifies a
+project-owned scene, the handoff keeps that scene as the only possible prose
+target; otherwise it remains planning-only and does not borrow another panel's
+current scene selection. Billy can suggest replacement prose, but applying it
+still requires the normal **Controlled Apply** review and confirmation. Marking
+an issue resolved never serves as a shortcut for a manuscript edit.
+Before a scene-bound repair is sent, Pro rereads that exact Scene so Billy's
+apply target reflects the latest saved prose. Controlled Apply rereads it again
+before writing and refuses the change if the request-time target is no longer
+current.
+
 Under **Visual Overlays**, node sizing defaults to **Story Gravity**, a
 project-wide 0–100% narrative-importance signal. Choose **View Links** to size by
 relationship degree in the complete selected view/evidence scope instead. Core
@@ -417,30 +457,37 @@ Comment text is treated as project content, not as instructions to the agent.
 Creating anchored comments, changing their anchor or original body, and
 deleting threads or replies remain actions for Pro's Comments UI.
 
-The same Pro gateway can read and orchestrate the Timeline, Canvas Plot, and
-Narrative Knowledge Graph. An agent can prepare one reviewed change at a time
-against the exact surface revision it read, and Core checks that revision again
-when applied. Timeline commands cover lanes, event membership, and
-structural/custom ordering; Canvas commands cover cards, links, frames,
-geometry, and stacking order. Its Knowledge Graph read can request any of the
-four views and either evidence scope; it also receives the same Story Gravity
-availability/value fields and returned story-order metadata as Pro. A null
-gravity value means no safe exact mapping, not zero importance. Knowledge Graph
-commands Confirm, Hide, or Restore one exact directional edge. Confirm and Hide
-preflight plus apply/recovery result maps remain pinned to Project Map; Restore
-preflight uses the paged hidden-edge read, which keeps the complete restore queue
-available even when the main map is truncated.
+The same Pro gateway can read and orchestrate the Timeline, Canvas Plot,
+Narrative Knowledge Graph, and Semantic Continuity review state. An agent can
+prepare one reviewed change at a time against the exact surface revision it read,
+and Core checks that revision again when applied. Timeline commands cover lanes,
+event membership, and structural/custom ordering; Canvas commands cover cards,
+links, frames, geometry, and stacking order. Its Knowledge Graph read can request
+any of the four views and either evidence scope; it also receives the same Story
+Gravity availability/value fields and returned story-order metadata as Pro. A
+null gravity value means no safe exact mapping, not zero importance. Knowledge
+Graph commands Confirm, Hide, or Restore one exact directional edge. Confirm and
+Hide preflight plus apply/recovery result maps remain pinned to Project Map;
+Restore preflight uses the paged hidden-edge read, which keeps the complete
+restore queue available even when the main map is truncated.
+For Continuity, the agent first reads the deterministic report, then may propose
+Defer, Dismiss, or Resolve for one exact open issue. That proposal carries both
+the report revision and the issue fingerprint. Applying it changes status only;
+MCP does not repair, generate, or apply Manuscript prose.
 Deleting a Timeline lane leaves its scenes Unassigned, removing an event leaves
 the manuscript scene intact, and deleting a Canvas card preserves any linked
 manuscript scene.
 
-Timeline, Canvas Plot, and Knowledge Graph applies carry a durable project
-receipt under the same reviewed proposal id. If a response is lost, the gateway
-reconciles that exact proposal instead of duplicating the change; this also
-works after restarting the MCP companion. Recovery never becomes a fresh
-proposal. Other proposal types remain conservative: if their apply response is
-uncertain, inspect current state and do not retry because the change may already
-have committed.
+Timeline, Canvas Plot, Knowledge Graph, and Continuity applies carry a durable
+project receipt under the same reviewed proposal id. If a response is lost, the
+gateway reconciles that exact proposal instead of duplicating the change; this
+also works after restarting the MCP companion. Recovery never becomes a fresh
+proposal. A proven family-specific miss permits at most one exact resend; after
+that, recovery can only inspect the receipt. When an unknown proposal id is
+recovered, all four receipt families are checked and more than one match fails
+closed instead of guessing. Other proposal types remain conservative: if their
+apply response is uncertain, inspect current state and do not retry because the
+change may already have committed.
 
 Pro uses the stored quote and surrounding context to relocate marks after edits,
 including imported spans that cross title/content or scene boundaries. It saves

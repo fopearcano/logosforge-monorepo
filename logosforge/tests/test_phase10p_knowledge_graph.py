@@ -29,9 +29,10 @@ from logosforge.knowledge_graph import (
     query_knowledge_graph,
 )
 from logosforge.knowledge_graph import provenance as P
+from logosforge.knowledge_graph.builder import KnowledgeGraphResult
 from logosforge.knowledge_graph.extractor_revision import extract_revision
 from logosforge.knowledge_graph.extractor_structure import extract_structure
-from logosforge.knowledge_graph.models import KnowledgeGraph
+from logosforge.knowledge_graph.models import KGEdge, KGNode, KnowledgeGraph
 
 
 @pytest.fixture(autouse=True)
@@ -421,6 +422,34 @@ def test_revision_extraction_is_newest_first_globally_bounded_and_deterministic(
     assert len(bounded_metadata["suggested_action"]) == 512
 
 
+def test_revision_extraction_skips_missing_project_targets():
+    class FakeDb:
+        def get_revision_impact_reports(self, _project_id):
+            return [SimpleNamespace(
+                id=1,
+                title="Dangling report",
+                summary="",
+                impact_level="high",
+                confidence=P.CONF_CONFIRMED,
+                scene_id=999,
+            )]
+
+        def get_revision_impact_items(self, _report_id, *, limit=None):
+            return [SimpleNamespace(
+                id=1,
+                target_type="scene",
+                target_id=999,
+                confidence=P.CONF_POSSIBLE,
+                explanation="Foreign or deleted scene",
+            )]
+
+    graph = KnowledgeGraph(project_id=7)
+    extract_revision(FakeDb(), 7, graph)
+
+    assert len(graph.nodes_of_type(P.NT_REVISION_IMPACT)) == 1
+    assert graph.edges == []
+
+
 # ===========================================================================
 # Queries
 # ===========================================================================
@@ -497,7 +526,7 @@ def test_convert_edge_to_psyke_relation():
     a = db.create_psyke_entry(pid, "Alice", "character")
     b = db.create_psyke_entry(pid, "Bob", "character")
     db.create_scene(pid, "S", content="Alice and Bob talk.")
-    g = build_knowledge_graph(db, pid).graph
+    build_knowledge_graph(db, pid)
     # an appears_in edge is scene<->psyke; build a synthetic psyke<->psyke edge
     from logosforge.knowledge_graph.models import KGEdge
     edge = KGEdge(source=node_key(P.NT_CHARACTER, "psyke", a.id),
@@ -528,16 +557,265 @@ def test_graph_decision_cards():
     ids = {c.id for c in cards}
     assert any(i.startswith("kg_isolated") for i in ids)  # Lonely Idol orphan
     assert "kg_undefined_terms" in ids
+    assert all(c.created_from == "knowledge_graph" for c in cards)
+    assert all(c.graph_focus_key and c.graph_view_mode for c in cards)
+    assert all(c.evidence and c.evidence_total >= len(c.evidence) for c in cards)
+    undefined = next(c for c in cards if c.id == "kg_undefined_terms")
+    assert undefined.evidence[0].kind == "term"
+    assert undefined.evidence[0].graph_focus_key.startswith("note:note:")
+
+
+def test_graph_decision_cards_reject_a_foreign_precomputed_result():
+    db, pid, *_ = _project()
+    result = build_knowledge_graph(db, pid)
+    foreign_pid = db.create_project(
+        "Foreign graph",
+        narrative_engine="novel",
+    ).id
+
+    with pytest.raises(ValueError, match="does not belong"):
+        build_graph_decision_cards(db, foreign_pid, result=result)
 
 
 def test_decision_cards_no_hallucination_on_clean_project():
     db = Database()
     pid = db.create_project("Clean", narrative_engine="novel").id
-    a = db.create_psyke_entry(pid, "Alice", "character")
+    db.create_psyke_entry(pid, "Alice", "character")
     db.create_scene(pid, "S", content="Alice acts.", chapter="Ch1")
     cards = build_graph_decision_cards(db, pid)
     # no orphan/undefined cards for a clean tiny project
     assert all(not c.id.startswith("kg_isolated") for c in cards)
+
+
+def test_decision_cards_do_not_duplicate_an_orphan_theme():
+    db = Database()
+    pid = db.create_project("Theme", narrative_engine="novel").id
+    theme = db.create_psyke_entry(pid, "Isolation", "theme")
+
+    cards = build_graph_decision_cards(db, pid)
+    theme_key = f"theme:psyke:{theme.id}"
+    matching = [card for card in cards if theme_key in card.id]
+
+    assert len(matching) == 1
+    assert matching[0].id.startswith("kg_isolated_")
+
+
+def test_decision_cards_filter_orphans_before_the_card_cap():
+    graph = KnowledgeGraph(project_id=7)
+    capped_notes = []
+    for index in range(55):
+        note = KGNode(
+            key=f"note:note:{index}",
+            node_type=P.NT_NOTE,
+            source_type="note",
+            source_id=str(index),
+            label=f"Note {index}",
+        )
+        graph.add_node(note)
+        capped_notes.append(note)
+    relic = KGNode(
+        key="object:psyke:99",
+        node_type=P.NT_OBJECT,
+        source_type="psyke",
+        source_id="99",
+        label="Relic",
+    )
+    graph.add_node(relic)
+    result = KnowledgeGraphResult(graph=graph, orphans=capped_notes[:50])
+
+    cards = build_graph_decision_cards(None, 7, result=result)
+
+    assert any(card.id == "kg_isolated_object:psyke:99" for card in cards)
+
+
+def test_decision_cards_filter_central_story_nodes_before_the_card_cap():
+    graph = KnowledgeGraph(project_id=7)
+    support_nodes = []
+    for index in range(10):
+        node_type = P.NT_REVISION_IMPACT if index == 0 else P.NT_WORKFLOW_RUN
+        node = KGNode(
+            key=f"{node_type}:system:{index}",
+            node_type=node_type,
+            source_type="system",
+            source_id=str(index),
+            label=f"System {index}",
+        )
+        graph.add_node(node)
+        support_nodes.append(node)
+    for left_index, left in enumerate(support_nodes):
+        for right in support_nodes[left_index + 1:]:
+            graph.add_edge(KGEdge(
+                source=left.key,
+                target=right.key,
+                edge_type=P.ET_RELATES_TO,
+                confidence=P.CONF_CONFIRMED,
+            ))
+    character = KGNode(
+        key="character:psyke:42",
+        node_type=P.NT_CHARACTER,
+        source_type="psyke",
+        source_id="42",
+        label="Mara",
+    )
+    graph.add_node(character)
+    graph.add_edge(KGEdge(
+        source=support_nodes[0].key,
+        target=character.key,
+        edge_type=P.ET_RISKS,
+        confidence=P.CONF_CONFIRMED,
+        explanation="The revision can change Mara's established state.",
+    ))
+    result = KnowledgeGraphResult(
+        graph=graph,
+        central=[(node, graph.degree(node.key)) for node in support_nodes],
+    )
+
+    cards = build_graph_decision_cards(None, 7, result=result)
+
+    assert any(card.id == "kg_risk_central" for card in cards)
+
+
+def test_decision_cards_report_the_full_undefined_term_count():
+    db = Database()
+    pid = db.create_project("Terms", narrative_engine="novel").id
+    terms = [
+        f"NameA{chr(97 + index // 26)}{chr(97 + index % 26)}"
+        for index in range(30)
+    ]
+    db.create_note(pid, "Glossary", ". ".join(terms))
+
+    result = build_knowledge_graph(db, pid)
+    card = next(
+        item
+        for item in build_graph_decision_cards(db, pid, result=result)
+        if item.id == "kg_undefined_terms"
+    )
+
+    assert len(result.undefined_terms) == 25
+    assert result.undefined_term_total == 30
+    assert card.title == "30 note term(s) not in PSYKE."
+    assert card.evidence_total == 30
+    assert len(card.evidence) == 5
+
+
+def test_decision_cards_never_publish_dangling_edge_endpoints():
+    graph = KnowledgeGraph(project_id=7)
+    character = KGNode(
+        key="character:psyke:1",
+        node_type=P.NT_CHARACTER,
+        source_type="psyke",
+        source_id="1",
+        label="Mara",
+    )
+    support = KGNode(
+        key="theme:psyke:2",
+        node_type=P.NT_THEME,
+        source_type="psyke",
+        source_id="2",
+        label="Duty",
+    )
+    graph.add_node(character)
+    graph.add_node(support)
+    graph.add_edge(KGEdge(
+        source=character.key,
+        target=support.key,
+        edge_type=P.ET_RELATES_TO,
+        confidence=P.CONF_CONFIRMED,
+    ))
+    graph.add_edge(KGEdge(
+        source="revision_impact:revision:foreign",
+        target=character.key,
+        edge_type=P.ET_RISKS,
+        confidence=P.CONF_POSSIBLE,
+    ))
+
+    cards = build_graph_decision_cards(
+        None,
+        7,
+        result=KnowledgeGraphResult(graph=graph),
+    )
+
+    assert all(card.id != "kg_risk_central" for card in cards)
+    assert all(
+        graph.get_node(item.source_key) is not None
+        and graph.get_node(item.target_key) is not None
+        for card in cards
+        for item in card.evidence
+        if item.kind == "edge"
+    )
+
+
+def test_decision_cards_are_stable_across_equivalent_insertion_orders():
+    def result(reverse: bool) -> KnowledgeGraphResult:
+        graph = KnowledgeGraph(project_id=7)
+        nodes = [
+            KGNode(
+                key="theme:psyke:a",
+                node_type=P.NT_THEME,
+                source_type="psyke",
+                source_id="a",
+                label="Alpha",
+            ),
+            KGNode(
+                key="theme:psyke:b",
+                node_type=P.NT_THEME,
+                source_type="psyke",
+                source_id="b",
+                label="Beta",
+            ),
+            KGNode(
+                key="revision_impact:revision:a",
+                node_type=P.NT_REVISION_IMPACT,
+                source_type="revision",
+                source_id="a",
+                label="Revision A",
+            ),
+            KGNode(
+                key="revision_impact:revision:b",
+                node_type=P.NT_REVISION_IMPACT,
+                source_type="revision",
+                source_id="b",
+                label="Revision B",
+            ),
+        ]
+        edges = [
+            KGEdge(
+                source="theme:psyke:a",
+                target="theme:psyke:b",
+                edge_type=P.ET_RELATES_TO,
+                confidence=P.CONF_CONFIRMED,
+            ),
+            KGEdge(
+                source="revision_impact:revision:a",
+                target="theme:psyke:a",
+                edge_type=P.ET_RISKS,
+                confidence=P.CONF_CONFIRMED,
+                explanation="Risk A",
+            ),
+            KGEdge(
+                source="revision_impact:revision:b",
+                target="theme:psyke:b",
+                edge_type=P.ET_RISKS,
+                confidence=P.CONF_CONFIRMED,
+                explanation="Risk B",
+            ),
+        ]
+        for node in reversed(nodes) if reverse else nodes:
+            graph.add_node(node)
+        for edge in reversed(edges) if reverse else edges:
+            graph.add_edge(edge)
+        return KnowledgeGraphResult(graph=graph)
+
+    forward = [
+        card.to_dict()
+        for card in build_graph_decision_cards(None, 7, result=result(False))
+    ]
+    reversed_order = [
+        card.to_dict()
+        for card in build_graph_decision_cards(None, 7, result=result(True))
+    ]
+
+    assert forward == reversed_order
 
 
 # ===========================================================================

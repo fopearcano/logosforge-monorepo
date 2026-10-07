@@ -14,7 +14,9 @@ from logosforge.continuity import issue_detector as ID
 from logosforge.continuity import models as M
 from logosforge.continuity import transition_detector as TD
 from logosforge.continuity.facts import extract_facts
+from logosforge.continuity.revision import continuity_review_revision
 from logosforge.continuity.state_tracker import build_states
+from logosforge.db import ContinuityProjectNotFound
 from logosforge.writing_modes import get_project_writing_mode_by_id, normalize_mode
 
 _MAX_ISSUES = 120
@@ -46,20 +48,77 @@ def build_continuity_report(db, project_id: int, *, scope: str = "project",
     if mode in ("graphic_novel", "stage_script", "series"):
         report.unavailable.append(f"{mode}_continuity")
 
-    issues = _merge_status(db, project_id, issues)[:_MAX_ISSUES]
-    issues.sort(key=lambda i: i.rank)
-    report.issues = issues
+    if hasattr(db, "read_continuity_review_snapshot"):
+        snapshot = db.read_continuity_review_snapshot(project_id)
+        if snapshot is None:
+            raise ContinuityProjectNotFound(project_id)
+        rows = snapshot.issues
+        report.review_revision = snapshot.revision
+    else:
+        # Small test doubles predate the transactional review layer.  Preserve
+        # their read-only behavior while still emitting a valid revision.
+        try:
+            rows = tuple(db.get_continuity_issues(project_id))
+        except Exception:
+            rows = ()
+        report.review_revision = continuity_review_revision(
+            rows, project_id=project_id,
+        )
+    issues = _merge_status_rows(rows, issues)
+    # The bounded report must never let inactive historical statuses crowd out
+    # live decisions. Keep all open findings first, then retain deterministic
+    # severity/key ordering within both groups.
+    issues.sort(key=lambda issue: (
+        issue.status != "open",
+        issue.rank,
+        issue.issue_key,
+        str(issue.confidence),
+        str(issue.explanation),
+        str(issue.suggested_action),
+    ))
+    # Multiple structured tokens can describe the same canonical issue (for
+    # example a repeated dangling setup/payoff id).  Status persistence and UI
+    # identity both key on issue_key, so publish each identity exactly once
+    # before applying the report cap.
+    unique_issues: list[M.ContinuityIssueData] = []
+    seen_issue_keys: set[str] = set()
+    for issue in issues:
+        issue_key = issue.issue_key
+        if issue_key in seen_issue_keys:
+            continue
+        seen_issue_keys.add(issue_key)
+        unique_issues.append(issue)
+    report.issues = unique_issues[:_MAX_ISSUES]
     return report
 
 
 def _merge_status(db, project_id: int, issues: list) -> list:
-    """Apply persisted user status (dismissed/resolved/deferred) by issue_key."""
+    """Backward-compatible helper used by legacy core callers and tests."""
     try:
-        rows = {r.issue_key: r for r in db.get_continuity_issues(project_id)}
+        rows = tuple(db.get_continuity_issues(project_id))
     except Exception:
-        rows = {}
+        rows = ()
+    return _merge_status_rows(rows, issues)
+
+
+def _merge_status_rows(persisted_rows, issues: list) -> list:
+    """Apply persisted user status (dismissed/resolved/deferred) by issue_key."""
+    rows = {r.issue_key: r for r in persisted_rows}
+    legacy_identities: dict[str, set[str]] = {}
+    for issue in issues:
+        legacy_key = issue.legacy_issue_key
+        legacy_identities.setdefault(legacy_key, set()).add(issue.issue_key)
     for issue in issues:
         row = rows.get(issue.issue_key)
+        if (
+            row is None
+            and issue.legacy_issue_key != issue.issue_key
+            and len(legacy_identities.get(issue.legacy_issue_key, set())) == 1
+        ):
+            # Node-aware keys fixed collisions between equal-titled entities.
+            # Honor an older status only when it maps to exactly one live issue;
+            # an ambiguous legacy row must never dismiss multiple entities.
+            row = rows.get(issue.legacy_issue_key)
         if row is not None and row.status != "open":
             issue.status = row.status
     return issues

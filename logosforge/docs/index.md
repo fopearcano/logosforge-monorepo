@@ -26,12 +26,15 @@ Version **0.9.0-alpha**. Start with the README, then the User Guide.
 - **[Graph](Graph.md)** · **[Plugins](plugins.md)** · **[API](API.md)** (desktop/localhost in alpha)
 - Assistant context: **[context_assistant](context_assistant.md)**
 
-## Intelligence services (services now; UI deferred to beta)
+## Intelligence services
 
 - **[Narrative Knowledge Graph](NarrativeKnowledgeGraph.md)**
 - **[Semantic Continuity Engine](SemanticContinuityEngine.md)** · **[Continuity Checks](ContinuityChecks.md)**
 - **[Project Intelligence](ProjectIntelligence.md)** · **[Decision Radar](DecisionRadar.md)** · **[Dashboard](Dashboard.md)**
 - **[Guided Workflows](GuidedWorkflows.md)** · **[Project Operating System](ProjectOperatingSystem.md)**
+
+Pro includes canonical Knowledge Graph, Continuity, and Decision Radar panels.
+Remaining gaps are tracked in [Known Limitations](KNOWN_LIMITATIONS_ALPHA.md).
 
 ## Safe-change & revision tooling
 

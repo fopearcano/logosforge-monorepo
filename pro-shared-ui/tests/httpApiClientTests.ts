@@ -422,6 +422,106 @@ try {
     throw new Error('Canvas Plot command response was not validated');
   }
 
+  let releaseContinuityCommand!: (response: Response) => void;
+  globalThis.fetch = (input: RequestInfo | URL, init: RequestInit = {}) => {
+    requests.push({ input: String(input), init });
+    return new Promise<Response>((resolve) => { releaseContinuityCommand = resolve; });
+  };
+  const continuityCommandBody = {
+    kind: 'resolve_issue' as const,
+    expected_revision: 'a'.repeat(64),
+    issue_id: '0123456789abcdef',
+    expected_issue_fingerprint: 'f'.repeat(64),
+  };
+  const continuityKey = 'continuity-http-key-0001';
+  const pendingContinuityCommand = browser.executeContinuityCommand(
+    7,
+    continuityCommandBody,
+    continuityKey,
+  );
+  for (let i = 0; i < 6; i++) await Promise.resolve();
+  const continuityCommandRequest = requests.at(-1);
+  const continuityHeaders = new Headers(continuityCommandRequest?.init.headers);
+  if (continuityCommandRequest?.input !== '/api/projects/7/continuity/commands'
+      || continuityCommandRequest.init.method !== 'POST'
+      || continuityHeaders.get('Idempotency-Key') !== continuityKey
+      || String(continuityCommandRequest.init.body) !== JSON.stringify(continuityCommandBody)) {
+    throw new Error('Continuity command did not preserve its route, body, and Idempotency-Key');
+  }
+  let continuityBarrierDone = false;
+  const continuityBarrier = flushPendingProjectSaves().then(() => { continuityBarrierDone = true; });
+  for (let i = 0; i < 6; i++) await Promise.resolve();
+  if (continuityBarrierDone) throw new Error('Continuity command escaped the persistence barrier');
+  const reviewedContinuity = {
+    project_id: 7,
+    review_revision: 'b'.repeat(64),
+    writing_mode: 'novel',
+    issues: [{
+      id: continuityCommandBody.issue_id,
+      review_fingerprint: continuityCommandBody.expected_issue_fingerprint,
+      issue_type: 'continuity_gap',
+      dimension: 'plot',
+      severity: 'blocking',
+      confidence: 'confirmed',
+      title: 'Missing payoff',
+      explanation: 'The payoff scene is absent.',
+      suggested_action: 'Restore the payoff.',
+      related_scene_ids: [11],
+      status: 'resolved',
+    }],
+    blocking_count: 0,
+    warning_count: 0,
+    unavailable: [],
+  };
+  releaseContinuityCommand(new Response(JSON.stringify({
+    continuity: reviewedContinuity,
+    changed: true,
+    affected_issue_id: continuityCommandBody.issue_id,
+    previous_status: 'open',
+    status: 'resolved',
+    replayed: false,
+    applied_revision: 'b'.repeat(64),
+  }), { status: 200, headers: { 'content-type': 'application/json' } }));
+  const continuityCommandResult = await pendingContinuityCommand;
+  await continuityBarrier;
+  if (!continuityCommandResult.changed
+      || continuityCommandResult.replayed
+      || continuityCommandResult.continuity.project_id !== 7
+      || continuityCommandResult.applied_revision !== 'b'.repeat(64)) {
+    throw new Error('Continuity command response was not request-bound and validated');
+  }
+
+  globalThis.fetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    requests.push({ input: String(input), init });
+    return new Response(JSON.stringify({
+      project_id: 7,
+      request_digest: 'c'.repeat(64),
+      command_kind: continuityCommandBody.kind,
+      expected_revision: continuityCommandBody.expected_revision,
+      applied_revision: 'b'.repeat(64),
+      original_changed: true,
+      original_affected_issue_id: continuityCommandBody.issue_id,
+      expected_issue_fingerprint: continuityCommandBody.expected_issue_fingerprint,
+      previous_status: 'open',
+      status: 'resolved',
+      committed_at: '2026-10-07T12:00:00Z',
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  const continuityReceipt = await browser.getContinuityCommandReceipt(
+    7,
+    continuityKey,
+    continuityCommandBody,
+  );
+  const receiptRequest = requests.at(-1);
+  const receiptHeaders = new Headers(receiptRequest?.init.headers);
+  if (receiptRequest?.input !== '/api/projects/7/continuity/command-receipt'
+      || receiptRequest.init.method !== undefined
+      || receiptHeaders.get('Idempotency-Key') !== continuityKey
+      || receiptHeaders.get('Cache-Control') !== 'no-store'
+      || continuityReceipt.original_affected_issue_id !== continuityCommandBody.issue_id) {
+    throw new Error('Continuity receipt recovery did not use the exact no-store capability request');
+  }
+
   let releaseRead!: (response: Response) => void;
   globalThis.fetch = () => new Promise<Response>((resolve) => { releaseRead = resolve; });
   const pendingRead = browser.health();
@@ -471,7 +571,7 @@ try {
   await Promise.all([failedPatch, recoveredPatch]);
   if (failureCalls !== 2) throw new Error('PATCH queue stopped after a rejected request');
 
-  console.log('HTTP API client tests: 25 passed, 0 failed');
+  console.log('HTTP API client tests: 29 passed, 0 failed');
 } finally {
   globalThis.fetch = originalFetch;
 }

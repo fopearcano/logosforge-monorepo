@@ -1,12 +1,15 @@
-"""Read-only narrative intelligence routes — continuity, pacing, balance, health.
+"""Narrative intelligence routes — continuity, pacing, balance, health.
 
-Each exposes an existing core analysis engine over the API; all are pure reads
-(nothing is written to the database).
+Most endpoints are derived reads.  Continuity review decisions use a separate,
+revision-guarded command boundary with durable exactly-once receipts.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Header, Response
+from fastapi.responses import JSONResponse
 
 from logosforge import (
     character_balance,
@@ -20,13 +23,64 @@ from logosforge import (
     structural_intelligence,
 )
 from logosforge.api import schemas, serializers
-from logosforge.api.deps import get_db, get_project
+from logosforge.api.deps import get_broker, get_db, get_project
+from logosforge.api.errors import ApiError, bad_request, conflict, not_found
+from logosforge.api.events import ApiEventBroker
 from logosforge.continuity import collector as continuity_collector
-from logosforge.db import Database
+from logosforge.continuity.recommendations import build_continuity_decision_cards
+from logosforge.db import (
+    ContinuityCommandError,
+    ContinuityIdempotencyKeyConflict,
+    ContinuityIssueNotFound,
+    ContinuityProjectNotFound,
+    ContinuityReviewStateCorrupt,
+    ContinuityRevisionConflict,
+    Database,
+)
 from logosforge.guided_workflows import engine as workflow_engine
+from logosforge.knowledge_graph.builder import build_knowledge_graph
+from logosforge.knowledge_graph.decision_cards import build_graph_decision_cards
 from logosforge.project_intelligence import build_project_intelligence_report
 
 router = APIRouter(tags=["intelligence"])
+
+_CONTINUITY_RECEIPT_RESPONSE_HEADERS = {
+    "Cache-Control": "no-store",
+    "Vary": "Authorization, Idempotency-Key",
+}
+_CORRUPT_CONTINUITY_STATE_MESSAGE = (
+    "Semantic Continuity review state is inconsistent. "
+    "Repair it before continuing issue review."
+)
+
+
+def _continuity_state_corrupt_error() -> ApiError:
+    return ApiError(
+        500,
+        _CORRUPT_CONTINUITY_STATE_MESSAGE,
+        code="continuity_review_state_corrupt",
+    )
+
+
+def _build_continuity_or_500(db: Database, project_id: int):
+    try:
+        return continuity_collector.build_continuity_report(db, project_id)
+    except ContinuityProjectNotFound as exc:
+        raise not_found(f"Project {project_id} not found") from exc
+    except ContinuityReviewStateCorrupt as exc:
+        raise _continuity_state_corrupt_error() from exc
+
+
+def _continuity_receipt_error(
+    status_code: int,
+    code: str,
+    message: str,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": {"code": code, "message": message}},
+        headers=_CONTINUITY_RECEIPT_RESPONSE_HEADERS,
+    )
 
 
 @router.get(
@@ -35,8 +89,137 @@ router = APIRouter(tags=["intelligence"])
 )
 def get_continuity(project=Depends(get_project), db: Database = Depends(get_db)):
     """Continuity issues (contradictions, drift, gaps) by dimension + counts."""
-    report = continuity_collector.build_continuity_report(db, project.id)
+    report = _build_continuity_or_500(db, project.id)
     return serializers.continuity_report_to_dto(report)
+
+
+@router.post(
+    "/projects/{project_id}/continuity/commands",
+    response_model=schemas.ContinuityCommandResultDTO,
+)
+def execute_continuity_command(
+    body: schemas.ContinuityCommandDTO,
+    project=Depends(get_project),
+    db: Database = Depends(get_db),
+    broker: ApiEventBroker = Depends(get_broker),
+    idempotency_key: Annotated[
+        str | None,
+        Header(alias="Idempotency-Key"),
+    ] = None,
+):
+    """Atomically defer, dismiss, or resolve one current Continuity issue."""
+    if idempotency_key is None:
+        raise bad_request("Idempotency-Key is required")
+    command = body.root
+    payload = command.model_dump()
+    kind = payload.pop("kind")
+    issue_key = payload.pop("issue_id")
+    try:
+        result = db.replay_continuity_command(
+            project.id,
+            kind=kind,
+            issue_key=issue_key,
+            idempotency_key=idempotency_key,
+            **payload,
+        )
+        if result is None:
+            report = _build_continuity_or_500(db, project.id)
+            issue = next((
+                candidate for candidate in report.issues
+                if candidate.issue_key == issue_key
+                and candidate.status == "open"
+            ), None)
+            result = db.execute_continuity_command(
+                project.id,
+                kind=kind,
+                issue_key=issue_key,
+                idempotency_key=idempotency_key,
+                issue=issue,
+                **payload,
+            )
+    except ContinuityIdempotencyKeyConflict as exc:
+        raise conflict(
+            "This Idempotency-Key was already used for a different Continuity command.",
+            code="idempotency_key_conflict",
+        ) from exc
+    except ContinuityRevisionConflict as exc:
+        raise conflict(
+            "Continuity review state changed after it was loaded. Reload and retry.",
+            code="continuity_conflict",
+        ) from exc
+    except ContinuityProjectNotFound as exc:
+        raise not_found(f"Project {project.id} not found") from exc
+    except ContinuityIssueNotFound as exc:
+        # Stale and foreign issue identities are deliberately indistinguishable.
+        raise not_found("Continuity issue not found") from exc
+    except ContinuityCommandError as exc:
+        raise bad_request(str(exc)) from exc
+    except ContinuityReviewStateCorrupt as exc:
+        raise _continuity_state_corrupt_error() from exc
+
+    if result.changed and not result.replayed:
+        broker.publish(
+            "continuity_changed",
+            project_id=project.id,
+            issue_id=result.issue_key,
+            status=result.status,
+        )
+    current = _build_continuity_or_500(db, project.id)
+    return schemas.ContinuityCommandResultDTO(
+        continuity=serializers.continuity_report_to_dto(current),
+        changed=result.changed,
+        affected_issue_id=result.issue_key,
+        previous_status=result.previous_status,
+        status=result.status,
+        replayed=result.replayed,
+        applied_revision=result.applied_revision,
+    )
+
+
+@router.get(
+    "/projects/{project_id}/continuity/command-receipt",
+    response_model=schemas.ContinuityCommandReceiptDTO,
+)
+def get_continuity_command_receipt(
+    response: Response,
+    project=Depends(get_project),
+    db: Database = Depends(get_db),
+    idempotency_key: Annotated[
+        str | None,
+        Header(alias="Idempotency-Key"),
+    ] = None,
+):
+    """Resolve one committed Continuity command by its retry capability."""
+    if idempotency_key is None:
+        return _continuity_receipt_error(
+            400, "bad_request", "Idempotency-Key is required",
+        )
+    try:
+        receipt = db.get_continuity_command_receipt(
+            project.id, idempotency_key,
+        )
+    except ContinuityCommandError as exc:
+        return _continuity_receipt_error(400, "bad_request", str(exc))
+    if receipt is None:
+        return _continuity_receipt_error(
+            404,
+            "continuity_receipt_not_found",
+            "No committed Continuity command exists for this Idempotency-Key.",
+        )
+    response.headers.update(_CONTINUITY_RECEIPT_RESPONSE_HEADERS)
+    return schemas.ContinuityCommandReceiptDTO(
+        project_id=receipt.project_id,
+        request_digest=receipt.request_digest,
+        command_kind=receipt.kind,
+        expected_revision=receipt.expected_revision,
+        applied_revision=receipt.applied_revision,
+        original_changed=receipt.original_changed,
+        original_affected_issue_id=receipt.issue_key,
+        expected_issue_fingerprint=receipt.expected_issue_fingerprint,
+        previous_status=receipt.previous_status,
+        status=receipt.status,
+        committed_at=receipt.created_at,
+    )
 
 
 @router.get(
@@ -99,9 +282,43 @@ def get_workflows(project=Depends(get_project), db: Database = Depends(get_db)):
     response_model=schemas.DecisionRadarDTO,
 )
 def get_decision_radar(project=Depends(get_project), db: Database = Depends(get_db)):
-    """Ranked decision cards (blocking→info) from the project intelligence report."""
+    """Project decisions plus isolated Graph and Continuity evidence feeds."""
     report = build_project_intelligence_report(db, project.id)
-    return serializers.decision_radar_to_dto(report)
+    graph_available = True
+    try:
+        graph_result = build_knowledge_graph(db, project.id)
+        graph_cards = build_graph_decision_cards(
+            db,
+            project.id,
+            result=graph_result,
+        )
+    except Exception:  # noqa: BLE001 - advisory graph failures must not hide base radar
+        # Graph diagnostics are advisory.  A corrupt/unavailable graph review
+        # layer must be visible as unavailable, but must not take down the
+        # established Project Intelligence radar.
+        graph_available = False
+        graph_cards = []
+    continuity_available = True
+    try:
+        continuity_report = continuity_collector.build_continuity_report(
+            db,
+            project.id,
+        )
+        continuity_cards = build_continuity_decision_cards(
+            db,
+            project.id,
+            report=continuity_report,
+        )
+    except Exception:  # noqa: BLE001 - advisory failures must not hide base radar
+        continuity_available = False
+        continuity_cards = []
+    return serializers.decision_radar_to_dto(
+        report,
+        knowledge_graph_available=graph_available,
+        knowledge_graph_cards=graph_cards,
+        continuity_available=continuity_available,
+        continuity_cards=continuity_cards,
+    )
 
 
 @router.get(
