@@ -157,6 +157,43 @@ def _comment_from_page(page: dict, comment_id: int, label: str) -> dict:
     return matches[0]
 
 
+def _assert_timeline_phase_7c(snapshot: dict, label: str) -> None:
+    """Verify the additive read-only Timeline analysis without trusting color."""
+    events = snapshot.get("events")
+    story_flow = snapshot.get("story_flow")
+    mode_projection = snapshot.get("mode_projection")
+    if not isinstance(events, list) or not isinstance(story_flow, dict):
+        raise RuntimeError(f"{label} returned no coherent story-flow analysis")
+    points = story_flow.get("points")
+    warnings = story_flow.get("warnings")
+    if not isinstance(points, list) or not isinstance(warnings, list):
+        raise RuntimeError(f"{label} returned an invalid story-flow shape")
+    if [point.get("scene_id") for point in points] != [
+        event.get("id") for event in events
+    ]:
+        raise RuntimeError(f"{label} story-flow points are not aligned to Timeline events")
+    if [point.get("order_index") for point in points] != list(
+        range(1, len(events) + 1)
+    ):
+        raise RuntimeError(f"{label} story-flow order does not match Timeline order")
+    for point in points:
+        if (
+            type(point.get("tension_value")) is not int
+            or not 0 <= point["tension_value"] <= 10
+            or point.get("tension_source")
+            not in {"manual", "beat", "conflict", "content", "default"}
+            or point.get("scene_type")
+            not in {"dialogue", "action", "exposition", "mixed"}
+        ):
+            raise RuntimeError(f"{label} returned an invalid story-flow point")
+    if (
+        not isinstance(mode_projection, dict)
+        or mode_projection.get("kind")
+        not in {"novel", "screenplay", "graphic_novel", "stage_script", "series"}
+    ):
+        raise RuntimeError(f"{label} returned no valid mode projection")
+
+
 def _validate_descriptor(
     descriptor: dict, expected_port: int,
 ) -> tuple[str, str, str, int, int]:
@@ -286,6 +323,7 @@ async def _exercise_installed_mcp(
             await session.call_tool("logosforge_get_timeline", {}),
             "installed MCP Timeline read",
         )
+        _assert_timeline_phase_7c(timeline_before, "installed MCP Timeline read")
         timeline_revision = timeline_before.get("revision")
         if not isinstance(timeline_revision, str) or len(timeline_revision) != 64:
             raise RuntimeError("installed MCP Timeline read returned no valid revision")
@@ -370,6 +408,9 @@ async def _exercise_installed_mcp(
             "Packaged MCP lane",
         ]:
             raise RuntimeError("Timeline apply did not create exactly the reviewed lane")
+        _assert_timeline_phase_7c(
+            applied_snapshot, "installed MCP Timeline command result",
+        )
 
         stale_timeline_result = await session.call_tool(
             "logosforge_apply_proposal",
@@ -441,6 +482,10 @@ async def _exercise_installed_mcp(
                     },
                     f"installed MCP place {title} on Timeline",
                 )
+            )
+            _assert_timeline_phase_7c(
+                relationship_snapshot,
+                f"installed MCP Timeline projection after placing {title}",
             )
             if (
                 placement_result.get("affected_scene_ids") != []

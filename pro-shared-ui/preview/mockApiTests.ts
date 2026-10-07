@@ -45,7 +45,7 @@ check(typeof api.getContinuityCommandReceipt === "function", "preview mock must 
 
 const health = await api.health();
 check(
-  health.status === "ok" && health.version === "1.14.0" && health.api_version === "1.14.0",
+  health.status === "ok" && health.version === "1.15.0" && health.api_version === "1.15.0",
   "preview health must satisfy the core contract",
 );
 const projectMap = await api.getKnowledgeGraph(1, { limit: 160, include_inferred: true });
@@ -392,6 +392,59 @@ check(
     && initialTimeline.events.length === 6
     && initialTimeline.off_timeline.map((scene) => scene.id).join(",") === "3",
   "preview Timeline snapshot must expose opt-in events, real lanes, and off-Timeline scenes",
+);
+check(
+  initialTimeline.story_flow.points.map((point) => point.scene_id).join(",")
+      === initialTimeline.events.map((event) => event.id).join(",")
+    && initialTimeline.story_flow.points.every((point, index) => (
+      point.order_index === initialTimeline.events[index]?.order_index
+      && Number.isInteger(point.tension_value)
+      && point.tension_value >= 0
+      && point.tension_value <= 10
+    ))
+    && initialTimeline.story_flow.warnings[0]?.scene_ids.join(",")
+      === initialTimeline.events.slice(0, 4).map((event) => event.id).join(","),
+  "preview Timeline story flow must align 1:1 with active events and expose contiguous warnings",
+);
+check(
+  initialTimeline.mode_projection.kind === "screenplay"
+    && initialTimeline.mode_projection.scenes.map((scene) => scene.scene_id).join(",")
+      === initialTimeline.events.map((event) => event.id).join(",")
+    && initialTimeline.mode_projection.scenes.every((scene) => scene.visual_beat_count >= 0),
+  "preview Timeline must derive the active project's discriminated screenplay projection",
+);
+const modeApi = createMockApiClient();
+check(
+  (await modeApi.getTimeline(2)).mode_projection.kind === "novel"
+    && (await modeApi.getTimeline(3)).mode_projection.kind === "series",
+  "preview Timeline mode projection must follow Novel and Series project engines",
+);
+const graphicNovelProject = await modeApi.createProject({
+  title: "Graphic projection",
+  narrative_engine: "graphic_novel",
+});
+const stageProject = await modeApi.createProject({
+  title: "Stage projection",
+  narrative_engine: "stage_script",
+});
+const stageScene = await modeApi.createScene(stageProject.id, {
+  title: "Stage opening",
+  act: "Act I",
+  chapter: "Scene One",
+});
+const emptyStageTimeline = await modeApi.getTimeline(stageProject.id);
+const placedStage = await modeApi.executeTimelineCommand(stageProject.id, {
+  kind: "place_event",
+  expected_revision: emptyStageTimeline.revision,
+  scene_id: stageScene.id,
+  lane_id: null,
+}, "timeline-preview-stage-mode-01");
+check(
+  (await modeApi.getTimeline(graphicNovelProject.id)).mode_projection.kind === "graphic_novel"
+    && placedStage.timeline.mode_projection.kind === "stage_script"
+    && placedStage.timeline.mode_projection.scenes[0]?.scene_id === stageScene.id
+    && placedStage.timeline.story_flow.points[0]?.scene_id === stageScene.id,
+  "preview Timeline must expose Graphic Novel and event-aligned Stage Script projections",
 );
 
 const relationshipApi = createMockApiClient();
@@ -798,7 +851,12 @@ check(
   placedTimelineEvent.timeline.order_mode === "custom"
     && placedTimelineEvent.timeline.events[0]?.id === 3
     && placedTimelineEvent.timeline.events[0]?.lane_id === memoryLane.id
-    && placedTimelineEvent.timeline.off_timeline.length === 0,
+    && placedTimelineEvent.timeline.off_timeline.length === 0
+    && placedTimelineEvent.timeline.story_flow.points.map((point) => point.scene_id).join(",")
+      === placedTimelineEvent.timeline.events.map((event) => event.id).join(",")
+    && placedTimelineEvent.timeline.mode_projection.kind === "screenplay"
+    && placedTimelineEvent.timeline.mode_projection.scenes.map((scene) => scene.scene_id).join(",")
+      === placedTimelineEvent.timeline.events.map((event) => event.id).join(","),
   "preview Timeline placement must atomically add, assign, and custom-order an existing Scene",
 );
 const structureOrderAfterTimelineMove = (await timelineApi.getStoryStructure(1)).acts
@@ -816,7 +874,10 @@ const removedTimelineEvent = await timelineApi.executeTimelineCommand(1, {
 check(
   !removedTimelineEvent.timeline.events.some((event) => event.id === 3)
     && removedTimelineEvent.timeline.off_timeline.some((scene) => scene.id === 3)
-    && (await timelineApi.listScenes(1)).some((scene) => scene.id === 3),
+    && (await timelineApi.listScenes(1)).some((scene) => scene.id === 3)
+    && removedTimelineEvent.timeline.story_flow.points.every((point, index) => (
+      point.scene_id === removedTimelineEvent.timeline.events[index]?.id
+    )),
   "preview Timeline removal must keep the underlying Scene and return it off-Timeline",
 );
 const mainLane = removedTimelineEvent.timeline.lanes.find((lane) => lane.name === "MAIN · Marlow")!;

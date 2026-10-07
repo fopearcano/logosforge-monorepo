@@ -9,12 +9,20 @@ The **shared language** between the LogosForge Python core and every frontend
   export types/formats).
 - **`routes.ts`** — the `/api` route map.
 
-The current mirrored HTTP contract is **1.14.0**. It promotes the Timeline's
-scene-to-scene and scene-to-structure relationships into the coherent
-revisioned snapshot, adds six transactional relationship commands, and carries
-their affected/created row identities through durable idempotency receipts.
-Scene links retain their stored orientation while preserving the legacy rule
-of one link per unordered scene pair.
+The current mirrored HTTP contract is **1.15.0**. The coherent Timeline
+snapshot now includes a story-flow curve aligned 1:1 with its active events,
+contiguous pacing warnings, and a required narrative-mode projection for
+Novel, Screenplay, Graphic Novel, Stage Script, or Series projects. The
+transactional command and durable receipt vocabulary remains unchanged from
+1.14.0.
+
+`TimelineSnapshotDTO.story_flow.points` has exactly the same scene ids and
+one-based order as `events`; warning spans name contiguous point ranges.
+`mode_projection` is a required `kind`-discriminated union. Screenplay and
+Stage Script scene rows align with active events, Graphic Novel page turns
+reference returned pages, and Series scene/episode/arc references remain
+project-scoped. Consumers should switch exhaustively on `kind` rather than
+inferring the narrative mode from optional fields.
 
 No logic, no React, no platform code. Every UI package depends on this so all
 frontends speak the same shapes; the core is the source of truth and these stay

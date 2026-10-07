@@ -6,9 +6,8 @@ from logosforge.story_flow import (
     PacingWarning,
     SceneTension,
     SceneType,
-    _BEAT_TENSION,
-    _SCENE_TYPE_ICONS,
     analyze_flow,
+    analyze_scene_sequence,
     classify_scene_type,
     compute_tension,
     detect_pacing_warnings,
@@ -255,6 +254,19 @@ def test_analyze_flow_empty_project():
     assert flow.tensions == {}
     assert flow.scene_types == {}
     assert flow.pacing_warnings == []
+
+
+def test_analyze_scene_sequence_preserves_order_and_subset():
+    db, proj = _make_project()
+    first = db.create_scene(proj.id, "First", tags="tension:1")
+    excluded = db.create_scene(proj.id, "Excluded", tags="tension:10")
+    second = db.create_scene(proj.id, "Second", tags="tension:4")
+
+    flow = analyze_scene_sequence([second, first])
+
+    assert list(flow.tensions) == [second.id, first.id]
+    assert list(flow.scene_types) == [second.id, first.id]
+    assert excluded.id not in flow.tensions
 
 
 # -- Grid integration: flow toggle -------------------------------------------

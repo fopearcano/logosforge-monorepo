@@ -32,6 +32,10 @@ import {
   timelineIntentCanRetry,
   type TimelineCommandIntent,
 } from "./timelineTransactions";
+import {
+  TimelineModeProjection,
+  TimelineStoryFlow,
+} from "./TimelineModeProjection";
 
 const panelBox: CSSProperties = {
   position: "relative",
@@ -207,6 +211,7 @@ export function TimelinePanel(props: PanelProps) {
   const [confirmRemoveId, setConfirmRemoveId] = useState<number | null>(null);
   const [selectedEventId, setSelectedEventId] = useState<number | null>(null);
   const [showAllLinks, setShowAllLinks] = useState(false);
+  const [showFlow, setShowFlow] = useState(true);
   const [pendingSourceId, setPendingSourceId] = useState<number | null>(null);
   const [linkDraft, setLinkDraft] = useState<LinkDraft>(EMPTY_LINK_DRAFT);
   const [editingLinkId, setEditingLinkId] = useState<number | null>(null);
@@ -265,6 +270,7 @@ export function TimelinePanel(props: PanelProps) {
     setConfirmRemoveId(null);
     setSelectedEventId(null);
     setShowAllLinks(false);
+    setShowFlow(true);
     setPendingSourceId(null);
     setLinkDraft(EMPTY_LINK_DRAFT);
     setEditingLinkId(null);
@@ -621,6 +627,7 @@ export function TimelinePanel(props: PanelProps) {
     const selected = selectedEventId === event.id;
     const pendingSource = pendingSourceId === event.id;
     const structureLinks = timeline?.structure_links.filter((link) => link.source_scene_id === event.id) ?? [];
+    const flowPoint = timeline?.story_flow.points.find((point) => point.scene_id === event.id);
     return (
       <Card key={event.id} left={xOf(event)} border={selected || pendingSource ? "var(--amber)" : color} background={background}>
         <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
@@ -645,8 +652,17 @@ export function TimelinePanel(props: PanelProps) {
             style={{ ...control, padding: "1px 4px", color: "var(--crimson)", borderColor: "var(--crimson)", cursor: disabled ? "default" : "pointer" }}
           >{removing ? "OK" : "×"}</button>
         </div>
-        <div style={{ fontSize: 6.5, color: "var(--txt3)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginTop: 3 }}>
-          {[event.act, event.chapter].filter(Boolean).join(" · ") || "Unassigned structure"}
+        <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 3, minWidth: 0 }}>
+          <span style={{ flex: 1, minWidth: 0, fontSize: 6.5, color: "var(--txt3)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {[event.act, event.chapter].filter(Boolean).join(" · ") || "Unassigned structure"}
+          </span>
+          {showFlow && flowPoint && (
+            <span
+              aria-label={`Scene type for ${event.title || "Untitled"}: ${flowPoint.scene_type}`}
+              title={`Scene type: ${flowPoint.scene_type}; dialogue ${Math.round(flowPoint.dialogue_ratio * 100)}%; action ${Math.round(flowPoint.action_ratio * 100)}%`}
+              style={{ flex: "none", border: "1px solid var(--line2)", color: "var(--cyan)", padding: "1px 3px", fontSize: 5.8, letterSpacing: ".05em" }}
+            >TYPE · {flowPoint.scene_type.toUpperCase()}</span>
+          )}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 5 }}>
           <button type="button" disabled={disabled || index <= 0} aria-label={`Move ${event.title || "event"} earlier`} onClick={() => {
@@ -946,6 +962,15 @@ export function TimelinePanel(props: PanelProps) {
               style={{ ...activeControl, color: timeline.order_mode === "custom" ? "var(--amber)" : "var(--txt2)", cursor: disabled ? "default" : "pointer" }}
             >ORDER · {timeline.order_mode.toUpperCase()}</button>
           )}
+          {timeline && (
+            <button
+              type="button"
+              aria-label="Toggle Timeline story flow"
+              aria-pressed={showFlow}
+              onClick={() => setShowFlow((current) => !current)}
+              style={{ ...activeControl, color: showFlow ? "var(--cyan)" : "var(--txt3)" }}
+            >FLOW · {showFlow ? "ON" : "OFF"}</button>
+          )}
           <div style={{ flex: 1 }} />
           {timeline && timeline.off_timeline.length > 0 && (
             <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
@@ -994,14 +1019,27 @@ export function TimelinePanel(props: PanelProps) {
             )
             : !timeline
               ? message("Timeline unavailable")
-              : lanes.length === 0 && events.length === 0
-                ? message("No Timeline yet — create a plot lane or add an existing scene")
-                : (
-                  <div style={{ flex: 1, overflow: "auto" }}>
-                    <div style={{ position: "relative", width: boardWidth, minWidth: boardWidth }}>
-                      <div style={{ height: 20, display: "flex", alignItems: "center", borderBottom: "1px solid var(--line2)", backgroundImage: `repeating-linear-gradient(90deg,transparent 0 ${STEP - 1}px,rgba(245,177,51,.35) ${STEP - 1}px ${STEP}px)`, backgroundPosition: `${LABEL_W}px 0`, paddingLeft: 14 }}>
-                        <span style={{ fontSize: 7, letterSpacing: ".16em", color: "var(--txt3)" }}>STORY TIME → · MANUSCRIPT ORDER IS NEVER CHANGED HERE</span>
-                      </div>
+              : (
+                <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+                  <TimelineModeProjection projection={timeline.mode_projection} />
+                  {lanes.length === 0 && events.length === 0
+                    ? message("No Timeline yet — create a plot lane or add an existing scene")
+                    : (
+                    <div style={{ flex: 1, overflow: "auto" }}>
+                    <div style={{ width: boardWidth, minWidth: boardWidth }}>
+                      {showFlow && (
+                        <TimelineStoryFlow
+                          flow={timeline.story_flow}
+                          events={events}
+                          labelWidth={LABEL_W}
+                          step={STEP}
+                          cardWidth={CARD_W}
+                        />
+                      )}
+                      <div style={{ position: "relative" }}>
+                        <div style={{ height: 20, display: "flex", alignItems: "center", borderBottom: "1px solid var(--line2)", backgroundImage: `repeating-linear-gradient(90deg,transparent 0 ${STEP - 1}px,rgba(245,177,51,.35) ${STEP - 1}px ${STEP}px)`, backgroundPosition: `${LABEL_W}px 0`, paddingLeft: 14 }}>
+                          <span style={{ fontSize: 7, letterSpacing: ".16em", color: "var(--txt3)" }}>STORY TIME → · MANUSCRIPT ORDER IS NEVER CHANGED HERE</span>
+                        </div>
                       {lanes.map((lane, laneIndex) => {
                         const palette = laneColor(lane, laneIndex);
                         const laneEvents = events.filter((event) => event.lane_id === lane.id);
@@ -1087,9 +1125,12 @@ export function TimelinePanel(props: PanelProps) {
                           })}
                         </svg>
                       )}
+                      </div>
                     </div>
                   </div>
-                )}
+                    )}
+                </div>
+              )}
       </div>
     </PanelShell>
   );

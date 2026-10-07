@@ -210,7 +210,7 @@ no token or changing package-extraction path belongs in Codex configuration.
 Writes remain disabled unless the MCP client explicitly sets
 `LOGOSFORGE_MCP_ALLOW_WRITES=1`.
 
-Gateway version 1.10.0 keeps the surface at 46 named tools. In addition to
+Gateway version 1.11.0 keeps the surface at 46 named tools. In addition to
 paged/filterable comment-thread reads and revision-bound Reply/Resolve/Reopen proposals, it can
 read the canonical Timeline, Canvas Plot, and bounded Narrative Knowledge Graph
 plus the deterministic Semantic Continuity report, and propose strict guarded
@@ -229,9 +229,22 @@ commands. Scene links display their stored source→target orientation but remai
 unique per unordered scene pair; dangling structure targets are explicit and
 repairable. New link creation requires current Timeline events, while dormant
 legacy rows remain readable, editable, and deletable. Timeline receipt payload
-v2 records relationship outcomes and retains v1 decoding. Timeline, Canvas
-Plot, Knowledge Graph, and Continuity
-proposals use their opaque proposal id for a durable core receipt, so an
+v2 records relationship outcomes and retains v1 decoding.
+
+HTTP 1.15.0 adds Phase 7C read-only `story_flow` and discriminated
+`mode_projection` data to that same Timeline snapshot. Pro renders an accessible
+numeric/semantic ribbon behind a **FLOW** toggle, a **Story Pulse** summary,
+contiguous warning spans, per-event scene-type labels, and a read-only **MODE
+LENS** for Novel, Screenplay, Graphic Novel, Stage Script, or Series. Flow points
+map one-to-one to effective Timeline events/order and exclude off-Timeline
+scenes. The analysis uses English keywords and simple markers or a manual
+`tension:N` tag, so it is guidance rather than semantic truth. No schema
+migration, Timeline command/topology revision change, or receipt v2 change was
+introduced. The MCP read carries the same data without adding to the 46-tool
+surface; mode-lens text is project data, never agent instructions.
+
+Timeline, Canvas Plot, Knowledge Graph, and Continuity proposals use their
+opaque proposal id for a durable core receipt, so an
 ambiguous apply can recover the exact committed outcome across an MCP companion
 restart without duplicating the command. A proven family-specific receipt miss
 permits exactly one resend of that identical proposal/key; later ambiguous
@@ -256,11 +269,11 @@ The frozen-companion smoke separately verifies all 46 discovered tools and that
 an exact Continuity proposal is non-mutating. The optional Codex subprocess used
 by the packaged smoke remains read-only.
 
-The HTTP 1.14.0 / MCP 1.10.0 Transactional Timeline Relationships extension and
-its Pro author/edit/delete UI are implemented in the current source. Packaged
-validation of that extension is pending; the packaged acceptance claims above
-apply to the previously exercised surface and are not a release claim for
-Phase 7B.
+The exact Phase 7B `cfd4c7b` AppImage passed the full packaged workspace + MCP
+journey on a clean Ubuntu 22.04 VM. The HTTP 1.15.0 / MCP 1.11.0 Phase 7C source
+and its Pro FLOW / MODE LENS UI are implemented, but Phase 7C packaged
+validation remains pending. Current-source Windows and macOS full journeys also
+remain pending; these statements are not a new published-release claim.
 
 The packaged workspace acceptance exercises the production renderer rather than
 the preview harness. It crosses the manuscript save barrier, follows Radar into
@@ -269,9 +282,10 @@ deterministic offline repair request, confirms its revision-bound Controlled
 Apply Scene update, resolves the Continuity finding, authors Canvas content with
 real pointer input, mutates the dock layout, closes through the save handshake,
 and verifies all durable state after relaunch. Windows, Linux under Xvfb, and the
-Intel macOS 12 runner invoke this same script; a local Windows packaged run is
-green, while the current macOS/Linux source state still requires its remote CI
-run before release.
+Intel macOS 12 runner invoke this same script. The exact Phase 7B `cfd4c7b`
+AppImage passed it together with the packaged MCP journey on a clean Ubuntu
+22.04 VM; the current-source Windows and macOS journeys and all Phase 7C
+packaged validation remain pending.
 
 See [`../logosforge/docs/MCP_GATEWAY.md`](../logosforge/docs/MCP_GATEWAY.md) for
 Codex configuration and the proposal/review/apply safety model.
@@ -291,9 +305,9 @@ Codex configuration and the proposal/review/apply safety model.
   a per-process authenticated core and stores the SQLite database in the app's stable
   user-data directory. The same packages install a stable,
   descriptor-authenticated MCP companion for local Codex orchestration.
-- **Phase 7B source status:** Transactional Timeline Relationships are
-  implemented locally under HTTP 1.14.0 and MCP 1.10.0. The next UI milestone
-  is Phase 7C mode-specific Timeline projections plus the story-flow
-  heat/tension overlay. Durable broker outbox/reconciliation is tracked
-  separately before LAN, multi-user, or background-delivery support.
+- **Phase 7C source status:** HTTP 1.15.0 and MCP 1.11.0 expose the read-only
+  Timeline story-flow and mode projections, and Pro renders FLOW and MODE LENS.
+  Packaged validation is pending. Durable broker outbox/reconciliation is the
+  separate next hardening milestone before LAN, multi-user, or
+  background-delivery support.
 - The renderer uses bundled/local assets and runs under a restrictive CSP.

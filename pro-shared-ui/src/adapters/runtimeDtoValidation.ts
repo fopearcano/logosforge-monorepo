@@ -809,6 +809,571 @@ function timelineOffTimelineScene(value: unknown, path: string): TimelineOffTime
   return value as TimelineOffTimelineSceneDTO;
 }
 
+const TIMELINE_MAX_COLLECTION_LENGTH = 10_000;
+const TIMELINE_MAX_NESTED_COLLECTION_LENGTH = 1_000;
+const TIMELINE_MAX_TEXT_LENGTH = 4_096;
+
+function timelineBoundedString(value: unknown, path: string, maxLength = TIMELINE_MAX_TEXT_LENGTH): string {
+  const result = stringValue(value, path);
+  if (Array.from(result).length > maxLength) {
+    fail(path, `a string of at most ${maxLength} characters`, result);
+  }
+  return result;
+}
+
+function timelineBoundedArray<T>(
+  value: unknown,
+  path: string,
+  validate: (item: unknown, itemPath: string) => T,
+  maxLength = TIMELINE_MAX_COLLECTION_LENGTH,
+): T[] {
+  const result = arrayOf(value, path, validate);
+  if (result.length > maxLength) {
+    fail(path, `an array of at most ${maxLength} items`, result);
+  }
+  return result;
+}
+
+function timelinePositiveInteger(value: unknown, path: string): number {
+  const result = integerValue(value, path);
+  if (result <= 0) fail(path, "a positive safe integer", result);
+  return result;
+}
+
+function timelineNonNegativeInteger(value: unknown, path: string): number {
+  const result = integerValue(value, path);
+  if (result < 0) fail(path, "a non-negative safe integer", result);
+  return result;
+}
+
+function timelineBoundedNumber(value: unknown, path: string, minimum: number, maximum: number): number {
+  const result = numberValue(value, path);
+  if (result < minimum || result > maximum) {
+    fail(path, `a finite number from ${minimum} through ${maximum}`, result);
+  }
+  return result;
+}
+
+function timelineEnum(
+  value: unknown,
+  path: string,
+  allowed: ReadonlySet<string>,
+  description: string,
+): string {
+  const result = timelineBoundedString(value, path, 64);
+  if (!allowed.has(result)) fail(path, description, result);
+  return result;
+}
+
+const TIMELINE_TENSION_SOURCES = new Set(["manual", "beat", "conflict", "content", "default"]);
+const TIMELINE_SCENE_TYPES = new Set(["dialogue", "action", "exposition", "mixed"]);
+const TIMELINE_PACING_WARNING_REASONS = new Set(["monotone_low", "monotone_high", "no_variation"]);
+const TIMELINE_MODE_KINDS = new Set(["novel", "screenplay", "graphic_novel", "stage_script", "series"]);
+
+function timelineStoryFlow(value: unknown, path: string, events: TimelineEventDTO[]): void {
+  const dto = record(value, path);
+  const pointsPath = fieldPath(path, "points");
+  const points = arrayOf(
+    requireField(dto, "points", path),
+    pointsPath,
+    (item, itemPath) => {
+      const point = record(item, itemPath);
+      timelinePositiveInteger(requireField(point, "scene_id", itemPath), fieldPath(itemPath, "scene_id"));
+      timelinePositiveInteger(requireField(point, "order_index", itemPath), fieldPath(itemPath, "order_index"));
+      const tension = integerValue(
+        requireField(point, "tension_value", itemPath),
+        fieldPath(itemPath, "tension_value"),
+      );
+      if (tension < 0 || tension > 10) {
+        fail(fieldPath(itemPath, "tension_value"), "an integer from 0 through 10", tension);
+      }
+      timelineEnum(
+        requireField(point, "tension_source", itemPath),
+        fieldPath(itemPath, "tension_source"),
+        TIMELINE_TENSION_SOURCES,
+        "a supported Timeline tension source",
+      );
+      timelineEnum(
+        requireField(point, "scene_type", itemPath),
+        fieldPath(itemPath, "scene_type"),
+        TIMELINE_SCENE_TYPES,
+        "a supported Timeline scene type",
+      );
+      timelineBoundedNumber(
+        requireField(point, "dialogue_ratio", itemPath),
+        fieldPath(itemPath, "dialogue_ratio"),
+        0,
+        1,
+      );
+      timelineBoundedNumber(
+        requireField(point, "action_ratio", itemPath),
+        fieldPath(itemPath, "action_ratio"),
+        0,
+        1,
+      );
+      return point;
+    },
+  );
+  if (points.length !== events.length) {
+    fail(pointsPath, `exactly ${events.length} points aligned with events`, points);
+  }
+  points.forEach((point, index) => {
+    const event = events[index];
+    const pointPath = `${pointsPath}[${index}]`;
+    if (!event || point.scene_id !== event.id) {
+      fail(fieldPath(pointPath, "scene_id"), "the scene id at the same events position", point.scene_id);
+    }
+    if (point.order_index !== event.order_index) {
+      fail(
+        fieldPath(pointPath, "order_index"),
+        "the order_index at the same events position",
+        point.order_index,
+      );
+    }
+  });
+
+  const pointIds = points.map((point) => point.scene_id as number);
+  const pointIndexById = new Map(pointIds.map((sceneId, index) => [sceneId, index]));
+  const warningsPath = fieldPath(path, "warnings");
+  const warnings = arrayOf(
+    requireField(dto, "warnings", path),
+    warningsPath,
+    (item, itemPath) => {
+      const warning = record(item, itemPath);
+      const startSceneId = timelinePositiveInteger(
+        requireField(warning, "start_scene_id", itemPath),
+        fieldPath(itemPath, "start_scene_id"),
+      );
+      const endSceneId = timelinePositiveInteger(
+        requireField(warning, "end_scene_id", itemPath),
+        fieldPath(itemPath, "end_scene_id"),
+      );
+      const sceneIdsPath = fieldPath(itemPath, "scene_ids");
+      const sceneIds = timelineBoundedArray(
+        requireField(warning, "scene_ids", itemPath),
+        sceneIdsPath,
+        timelinePositiveInteger,
+        Math.max(points.length, 1),
+      );
+      if (sceneIds.length === 0) fail(sceneIdsPath, "a non-empty contiguous point-id array", sceneIds);
+      if (sceneIds[0] !== startSceneId) {
+        fail(fieldPath(itemPath, "start_scene_id"), "the first scene_ids value", startSceneId);
+      }
+      if (sceneIds.at(-1) !== endSceneId) {
+        fail(fieldPath(itemPath, "end_scene_id"), "the last scene_ids value", endSceneId);
+      }
+      const startIndex = pointIndexById.get(startSceneId);
+      if (startIndex === undefined) {
+        fail(fieldPath(itemPath, "start_scene_id"), "a story-flow point scene id", startSceneId);
+      }
+      const expectedIds = pointIds.slice(startIndex, startIndex + sceneIds.length);
+      if (expectedIds.length !== sceneIds.length
+          || expectedIds.some((sceneId, index) => sceneId !== sceneIds[index])) {
+        fail(sceneIdsPath, "a contiguous subset of story-flow point ids in order", sceneIds);
+      }
+      timelineEnum(
+        requireField(warning, "reason", itemPath),
+        fieldPath(itemPath, "reason"),
+        TIMELINE_PACING_WARNING_REASONS,
+        "a supported Timeline pacing-warning reason",
+      );
+      return warning;
+    },
+  );
+  if (warnings.length > events.length) {
+    fail(warningsPath, `at most ${events.length} warnings for returned events`, warnings);
+  }
+}
+
+const TIMELINE_GRAPHIC_NOVEL_DENSITIES = new Set([
+  "silent", "light", "medium", "dense", "explosive", "unset",
+]);
+const TIMELINE_GRAPHIC_NOVEL_RHYTHMS = new Set(["held", "slow", "steady", "fast", "chaotic"]);
+const TIMELINE_GRAPHIC_NOVEL_PACING = new Set([
+  "quiet", "dense", "explosive", "exposition-heavy", "cinematic",
+]);
+const TIMELINE_STAGE_CUE_TYPES = new Set(["light", "sound", "music", "prop", "movement", "other"]);
+const TIMELINE_STAGE_PRESSURES = new Set(["turn", "conflict", "pursuit", "flat"]);
+const TIMELINE_SERIES_ARC_SCOPES = new Set([
+  "series", "season", "episode", "character", "relationship", "mystery",
+]);
+const TIMELINE_SERIES_ARC_STATUSES = new Set(["active", "resolved", "abandoned", "delayed"]);
+
+function timelineModeProjection(
+  value: unknown,
+  path: string,
+  events: TimelineEventDTO[],
+): string {
+  const dto = record(value, path);
+  const kind = timelineEnum(
+    requireField(dto, "kind", path),
+    fieldPath(path, "kind"),
+    TIMELINE_MODE_KINDS,
+    "novel, screenplay, graphic_novel, stage_script, or series",
+  );
+  const eventIds = events.map((event) => event.id);
+  const eventIdSet = new Set(eventIds);
+
+  if (kind === "novel") return kind;
+
+  if (kind === "screenplay") {
+    const scenesPath = fieldPath(path, "scenes");
+    const scenes = arrayOf(
+      requireField(dto, "scenes", path),
+      scenesPath,
+      (item, itemPath) => {
+        const scene = record(item, itemPath);
+        timelinePositiveInteger(requireField(scene, "scene_id", itemPath), fieldPath(itemPath, "scene_id"));
+        for (const key of ["interior_exterior", "cinematic_pacing"] as const) {
+          timelineBoundedString(requireField(scene, key, itemPath), fieldPath(itemPath, key), 256);
+        }
+        for (const key of [
+          "dramatic_turn", "emotional_turn", "objective", "conflict", "turning_point",
+          "emotional_shift",
+        ] as const) {
+          timelineBoundedString(requireField(scene, key, itemPath), fieldPath(itemPath, key));
+        }
+        timelineNonNegativeInteger(
+          requireField(scene, "visual_beat_count", itemPath),
+          fieldPath(itemPath, "visual_beat_count"),
+        );
+        return scene;
+      },
+    );
+    if (scenes.length !== events.length) {
+      fail(scenesPath, `exactly ${events.length} scene projections aligned with events`, scenes);
+    }
+    scenes.forEach((scene, index) => {
+      if (scene.scene_id !== eventIds[index]) {
+        fail(
+          fieldPath(`${scenesPath}[${index}]`, "scene_id"),
+          "the scene id at the same events position",
+          scene.scene_id,
+        );
+      }
+    });
+    return kind;
+  }
+
+  if (kind === "graphic_novel") {
+    const pagesPath = fieldPath(path, "pages");
+    const pageIds = new Set<number>();
+    const pageNumberById = new Map<number, number>();
+    const pageIndexById = new Map<number, number>();
+    timelineBoundedArray(
+      requireField(dto, "pages", path),
+      pagesPath,
+      (item, itemPath) => {
+        const page = record(item, itemPath);
+        const pageId = timelinePositiveInteger(
+          requireField(page, "page_id", itemPath),
+          fieldPath(itemPath, "page_id"),
+        );
+        const pageNumber = timelineNonNegativeInteger(
+          requireField(page, "page_number", itemPath),
+          fieldPath(itemPath, "page_number"),
+        );
+        if (pageIds.has(pageId)) fail(fieldPath(itemPath, "page_id"), "a unique page id", pageId);
+        for (const key of ["sequence_id", "issue_id"] as const) {
+          const id = nullable(requireField(page, key, itemPath), fieldPath(itemPath, key), timelinePositiveInteger);
+          if (id !== null && id <= 0) fail(fieldPath(itemPath, key), "a positive safe integer or null", id);
+        }
+        timelineBoundedString(requireField(page, "issue_title", itemPath), fieldPath(itemPath, "issue_title"), 256);
+        timelineEnum(
+          requireField(page, "density", itemPath),
+          fieldPath(itemPath, "density"),
+          TIMELINE_GRAPHIC_NOVEL_DENSITIES,
+          "a supported graphic-novel density",
+        );
+        timelineEnum(
+          requireField(page, "rhythm", itemPath),
+          fieldPath(itemPath, "rhythm"),
+          TIMELINE_GRAPHIC_NOVEL_RHYTHMS,
+          "a supported graphic-novel rhythm",
+        );
+        timelineBoundedString(requireField(page, "reveal_timing", itemPath), fieldPath(itemPath, "reveal_timing"), 256);
+        booleanValue(requireField(page, "splash_page", itemPath), fieldPath(itemPath, "splash_page"));
+        timelineNonNegativeInteger(requireField(page, "panel_count", itemPath), fieldPath(itemPath, "panel_count"));
+        timelineBoundedNumber(requireField(page, "action_density", itemPath), fieldPath(itemPath, "action_density"), 0, 1);
+        timelineNonNegativeInteger(requireField(page, "text_load", itemPath), fieldPath(itemPath, "text_load"));
+        timelineEnum(
+          requireField(page, "pacing", itemPath),
+          fieldPath(itemPath, "pacing"),
+          TIMELINE_GRAPHIC_NOVEL_PACING,
+          "a supported graphic-novel pacing value",
+        );
+        booleanValue(requireField(page, "is_silence", itemPath), fieldPath(itemPath, "is_silence"));
+        booleanValue(requireField(page, "is_action", itemPath), fieldPath(itemPath, "is_action"));
+        pageIds.add(pageId);
+        pageNumberById.set(pageId, pageNumber);
+        pageIndexById.set(pageId, pageIndexById.size);
+        return page;
+      },
+    );
+    const turnsPath = fieldPath(path, "page_turns");
+    const turnIdentities = new Set<string>();
+    timelineBoundedArray(
+      requireField(dto, "page_turns", path),
+      turnsPath,
+      (item, itemPath) => {
+        const turn = record(item, itemPath);
+        const setupId = timelinePositiveInteger(
+          requireField(turn, "setup_page_id", itemPath),
+          fieldPath(itemPath, "setup_page_id"),
+        );
+        const setupNumber = timelineNonNegativeInteger(
+          requireField(turn, "setup_page_number", itemPath),
+          fieldPath(itemPath, "setup_page_number"),
+        );
+        const revealId = timelinePositiveInteger(
+          requireField(turn, "reveal_page_id", itemPath),
+          fieldPath(itemPath, "reveal_page_id"),
+        );
+        const revealNumber = timelineNonNegativeInteger(
+          requireField(turn, "reveal_page_number", itemPath),
+          fieldPath(itemPath, "reveal_page_number"),
+        );
+        if (pageNumberById.get(setupId) !== setupNumber) {
+          fail(fieldPath(itemPath, "setup_page_id"), "a returned page matching setup_page_number", setupId);
+        }
+        if (pageNumberById.get(revealId) !== revealNumber) {
+          fail(fieldPath(itemPath, "reveal_page_id"), "a returned page matching reveal_page_number", revealId);
+        }
+        if (setupId === revealId) {
+          fail(fieldPath(itemPath, "reveal_page_id"), "a page different from setup_page_id", revealId);
+        }
+        const setupIndex = pageIndexById.get(setupId);
+        if (setupIndex === undefined || pageIndexById.get(revealId) !== setupIndex + 1) {
+          fail(
+            fieldPath(itemPath, "reveal_page_id"),
+            "the immediately following returned page after setup_page_id",
+            revealId,
+          );
+        }
+        const identity = `${setupId}:${revealId}`;
+        if (turnIdentities.has(identity)) fail(itemPath, "a unique page-turn pair", turn);
+        timelineBoundedString(requireField(turn, "reveal_type", itemPath), fieldPath(itemPath, "reveal_type"), 256);
+        turnIdentities.add(identity);
+        return turn;
+      },
+    );
+    return kind;
+  }
+
+  if (kind === "stage_script") {
+    const scenesPath = fieldPath(path, "scenes");
+    const scenes = arrayOf(
+      requireField(dto, "scenes", path),
+      scenesPath,
+      (item, itemPath) => {
+        const scene = record(item, itemPath);
+        timelinePositiveInteger(requireField(scene, "scene_id", itemPath), fieldPath(itemPath, "scene_id"));
+        timelinePositiveInteger(requireField(scene, "order_index", itemPath), fieldPath(itemPath, "order_index"));
+        timelineBoundedString(requireField(scene, "act", itemPath), fieldPath(itemPath, "act"), 256);
+        timelineBoundedString(requireField(scene, "title", itemPath), fieldPath(itemPath, "title"), 256);
+        timelineBoundedArray(
+          requireField(scene, "entrances_exits", itemPath),
+          fieldPath(itemPath, "entrances_exits"),
+          (entryItem, entryPath) => {
+            const entry = record(entryItem, entryPath);
+            timelineBoundedString(requireField(entry, "character", entryPath), fieldPath(entryPath, "character"), 256);
+            timelineEnum(
+              requireField(entry, "type", entryPath),
+              fieldPath(entryPath, "type"),
+              new Set(["entrance", "exit"]),
+              '"entrance" or "exit"',
+            );
+            timelineNonNegativeInteger(requireField(entry, "moment_order", entryPath), fieldPath(entryPath, "moment_order"));
+            timelineBoundedString(requireField(entry, "cue_text", entryPath), fieldPath(entryPath, "cue_text"));
+            return entry;
+          },
+          TIMELINE_MAX_NESTED_COLLECTION_LENGTH,
+        );
+        timelineBoundedArray(
+          requireField(scene, "cues", itemPath),
+          fieldPath(itemPath, "cues"),
+          (cueItem, cuePath) => {
+            const cue = record(cueItem, cuePath);
+            timelineEnum(
+              requireField(cue, "type", cuePath),
+              fieldPath(cuePath, "type"),
+              TIMELINE_STAGE_CUE_TYPES,
+              "a supported stage cue type",
+            );
+            timelineBoundedString(requireField(cue, "text", cuePath), fieldPath(cuePath, "text"));
+            timelineNonNegativeInteger(requireField(cue, "moment_order", cuePath), fieldPath(cuePath, "moment_order"));
+            return cue;
+          },
+          TIMELINE_MAX_NESTED_COLLECTION_LENGTH,
+        );
+        timelineBoundedString(requireField(scene, "offstage_events", itemPath), fieldPath(itemPath, "offstage_events"));
+        booleanValue(requireField(scene, "has_offstage_events", itemPath), fieldPath(itemPath, "has_offstage_events"));
+        timelineBoundedArray(
+          requireField(scene, "props", itemPath),
+          fieldPath(itemPath, "props"),
+          (prop, propPath) => timelineBoundedString(prop, propPath, 256),
+          TIMELINE_MAX_NESTED_COLLECTION_LENGTH,
+        );
+        timelineEnum(
+          requireField(scene, "emotional_pressure", itemPath),
+          fieldPath(itemPath, "emotional_pressure"),
+          TIMELINE_STAGE_PRESSURES,
+          "a supported stage emotional-pressure value",
+        );
+        return scene;
+      },
+    );
+    if (scenes.length !== events.length) {
+      fail(scenesPath, `exactly ${events.length} scene projections aligned with events`, scenes);
+    }
+    scenes.forEach((scene, index) => {
+      const event = events[index];
+      const scenePath = `${scenesPath}[${index}]`;
+      if (!event || scene.scene_id !== event.id) {
+        fail(fieldPath(scenePath, "scene_id"), "the scene id at the same events position", scene.scene_id);
+      }
+      if (scene.order_index !== event.order_index) {
+        fail(fieldPath(scenePath, "order_index"), "the events order_index at the same position", scene.order_index);
+      }
+    });
+    return kind;
+  }
+
+  const episodesPath = fieldPath(path, "episodes");
+  const episodeIds = new Set<number>();
+  const episodeOrderById = new Map<number, number>();
+  const assignedSceneIds = new Set<number>();
+  const episodes = arrayOf(
+    requireField(dto, "episodes", path),
+    episodesPath,
+    (item, itemPath) => {
+      const episode = record(item, itemPath);
+      const episodeId = timelinePositiveInteger(
+        requireField(episode, "episode_id", itemPath),
+        fieldPath(itemPath, "episode_id"),
+      );
+      if (episodeIds.has(episodeId)) {
+        fail(fieldPath(itemPath, "episode_id"), "a unique episode id", episodeId);
+      }
+      const orderIndex = timelinePositiveInteger(
+        requireField(episode, "order_index", itemPath),
+        fieldPath(itemPath, "order_index"),
+      );
+      const expectedOrder = episodeIds.size + 1;
+      if (orderIndex !== expectedOrder) {
+        fail(fieldPath(itemPath, "order_index"), `dense episode position ${expectedOrder}`, orderIndex);
+      }
+      nullable(requireField(episode, "season_id", itemPath), fieldPath(itemPath, "season_id"), timelinePositiveInteger);
+      timelineBoundedString(requireField(episode, "season", itemPath), fieldPath(itemPath, "season"), 256);
+      timelineNonNegativeInteger(requireField(episode, "episode_number", itemPath), fieldPath(itemPath, "episode_number"));
+      timelineBoundedString(requireField(episode, "title", itemPath), fieldPath(itemPath, "title"), 256);
+      timelineBoundedString(requireField(episode, "cliffhanger", itemPath), fieldPath(itemPath, "cliffhanger"));
+      const sceneIds = arrayOf(
+        requireField(episode, "scene_ids", itemPath),
+        fieldPath(itemPath, "scene_ids"),
+        timelinePositiveInteger,
+      );
+      sceneIds.forEach((sceneId, index) => {
+        const sceneIdPath = `${fieldPath(itemPath, "scene_ids")}[${index}]`;
+        if (!eventIdSet.has(sceneId)) fail(sceneIdPath, "an active Timeline event scene id", sceneId);
+        if (assignedSceneIds.has(sceneId)) fail(sceneIdPath, "a scene assigned only once", sceneId);
+        assignedSceneIds.add(sceneId);
+      });
+      const activeArcIds = new Set<number>();
+      timelineBoundedArray(
+        requireField(episode, "active_arcs", itemPath),
+        fieldPath(itemPath, "active_arcs"),
+        (arcItem, arcPath) => {
+          const arc = record(arcItem, arcPath);
+          const arcId = timelinePositiveInteger(requireField(arc, "arc_id", arcPath), fieldPath(arcPath, "arc_id"));
+          if (activeArcIds.has(arcId)) fail(fieldPath(arcPath, "arc_id"), "a unique active arc id", arcId);
+          timelineBoundedString(requireField(arc, "title", arcPath), fieldPath(arcPath, "title"), 256);
+          timelineEnum(requireField(arc, "scope", arcPath), fieldPath(arcPath, "scope"), TIMELINE_SERIES_ARC_SCOPES, "a supported series arc scope");
+          timelineEnum(requireField(arc, "status", arcPath), fieldPath(arcPath, "status"), TIMELINE_SERIES_ARC_STATUSES, "a supported series arc status");
+          activeArcIds.add(arcId);
+          return arc;
+        },
+        TIMELINE_MAX_NESTED_COLLECTION_LENGTH,
+      );
+      for (const key of ["setup_arc_ids", "payoff_arc_ids"] as const) {
+        const ids = timelineBoundedArray(
+          requireField(episode, key, itemPath),
+          fieldPath(itemPath, key),
+          timelinePositiveInteger,
+          TIMELINE_MAX_NESTED_COLLECTION_LENGTH,
+        );
+        const uniqueIds = new Set(ids);
+        if (uniqueIds.size !== ids.length) fail(fieldPath(itemPath, key), "unique positive arc ids", ids);
+      }
+      episodeIds.add(episodeId);
+      episodeOrderById.set(episodeId, orderIndex);
+      return episode;
+    },
+  );
+  const episodeLimit = Math.max(TIMELINE_MAX_COLLECTION_LENGTH, eventIds.length);
+  if (episodes.length > episodeLimit) {
+    fail(episodesPath, `an array of at most ${episodeLimit} event-aware items`, episodes);
+  }
+  const chainsPath = fieldPath(path, "arc_chains");
+  const chainArcIds = new Set<number>();
+  timelineBoundedArray(
+    requireField(dto, "arc_chains", path),
+    chainsPath,
+    (item, itemPath) => {
+      const chain = record(item, itemPath);
+      const arcId = timelinePositiveInteger(requireField(chain, "arc_id", itemPath), fieldPath(itemPath, "arc_id"));
+      if (chainArcIds.has(arcId)) fail(fieldPath(itemPath, "arc_id"), "a unique arc-chain id", arcId);
+      timelineBoundedString(requireField(chain, "title", itemPath), fieldPath(itemPath, "title"), 256);
+      timelineEnum(requireField(chain, "scope", itemPath), fieldPath(itemPath, "scope"), TIMELINE_SERIES_ARC_SCOPES, "a supported series arc scope");
+      const setupId = timelinePositiveInteger(
+        requireField(chain, "setup_episode_id", itemPath),
+        fieldPath(itemPath, "setup_episode_id"),
+      );
+      const payoffId = timelinePositiveInteger(
+        requireField(chain, "payoff_episode_id", itemPath),
+        fieldPath(itemPath, "payoff_episode_id"),
+      );
+      if (!episodeIds.has(setupId)) {
+        fail(fieldPath(itemPath, "setup_episode_id"), "an episode id returned by this projection", setupId);
+      }
+      if (!episodeIds.has(payoffId)) {
+        fail(fieldPath(itemPath, "payoff_episode_id"), "an episode id returned by this projection", payoffId);
+      }
+      for (const [key, episodeId] of [
+        ["setup_order_index", setupId],
+        ["payoff_order_index", payoffId],
+      ] as const) {
+        const orderIndex = timelinePositiveInteger(
+          requireField(chain, key, itemPath),
+          fieldPath(itemPath, key),
+        );
+        if (orderIndex !== episodeOrderById.get(episodeId)) {
+          fail(fieldPath(itemPath, key), "the referenced episode order_index", orderIndex);
+        }
+      }
+      chainArcIds.add(arcId);
+      return chain;
+    },
+  );
+  const unassignedPath = fieldPath(path, "unassigned_scene_ids");
+  const unassigned = arrayOf(
+    requireField(dto, "unassigned_scene_ids", path),
+    unassignedPath,
+    timelinePositiveInteger,
+  );
+  unassigned.forEach((sceneId, index) => {
+    const sceneIdPath = `${unassignedPath}[${index}]`;
+    if (!eventIdSet.has(sceneId)) fail(sceneIdPath, "an active Timeline event scene id", sceneId);
+    if (assignedSceneIds.has(sceneId)) fail(sceneIdPath, "a scene assigned only once", sceneId);
+    assignedSceneIds.add(sceneId);
+  });
+  if (assignedSceneIds.size !== eventIds.length
+      || eventIds.some((sceneId) => !assignedSceneIds.has(sceneId))) {
+    fail(path, "a complete one-time partition of active Timeline event scene ids", value);
+  }
+  return kind;
+}
+
 function timelineSnapshot(value: unknown, path: string): TimelineSnapshotDTO {
   const dto = record(value, path);
   integerValue(requireField(dto, "project_id", path), fieldPath(path, "project_id"));
@@ -979,6 +1544,16 @@ function timelineSnapshot(value: unknown, path: string): TimelineSnapshotDTO {
     structureLinkIds.add(link.id);
     structureLinkIdentities.add(identity);
   });
+  timelineStoryFlow(
+    requireField(dto, "story_flow", path),
+    fieldPath(path, "story_flow"),
+    events,
+  );
+  timelineModeProjection(
+    requireField(dto, "mode_projection", path),
+    fieldPath(path, "mode_projection"),
+    events,
+  );
   return value as TimelineSnapshotDTO;
 }
 

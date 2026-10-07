@@ -22,12 +22,13 @@ alpha. Nothing here is a data-safety risk; it's about scope and polish. See
   per-step reminders, and a multi-project workflow dashboard remain deferred;
   aggregate Graph/Radar/export checks do not auto-complete unless Core can prove
   them in the command transaction. ([GuidedWorkflows.md](GuidedWorkflows.md))
-- **Transactional Timeline Relationships** — HTTP 1.14.0, the Pro
-  author/edit/delete UI, and the existing MCP Timeline tools are implemented
-  locally for persisted scene links and scene-to-Act/Chapter links. Packaged
-  validation is pending. Phase 7C will add mode-specific projections and the
-  story-flow heat/tension overlay; it does not replace the independent Canvas
-  Plot board.
+- **Timeline relationships and Phase 7C lenses** — HTTP 1.15.0, the Pro
+  relationship editor, FLOW ribbon/Story Pulse/warnings, read-only MODE LENS,
+  and the existing 46-tool MCP surface are implemented in current source.
+  Phase 7C packaged validation is pending. The exact Phase 7B `cfd4c7b`
+  AppImage passed the full packaged workspace + MCP journey on clean Ubuntu
+  22.04; current-source Windows and macOS full journeys remain pending. The
+  Timeline still does not replace the independent Canvas Plot board.
 
 ## Experimental / optional
 
@@ -140,12 +141,17 @@ alpha. Nothing here is a data-safety risk; it's about scope and polish. See
 
 - **Plot** blocks and Timeline event membership/lanes are derived from scene
   fields rather than a dated-event/plot-thread domain. Timeline relationship
-  rows are persisted and transactional, but there are still no event dates,
-  mode-specific projections, or rendered story-flow heat/tension overlay.
+  rows are persisted and transactional, but there are still no event dates.
+  Phase 7C mode projections and story-flow are read-only views of existing
+  data; they do not add editable mode topology.
   Scene-to-scene links retain stored source→target orientation but enforce one
   row per unordered scene pair; parallel reverse or multi-type links are not
   supported. Scene-to-structure targets are name-keyed and may become dangling;
   `target_exists` exposes that state for explicit repair or deletion.
+- **Story-flow values are heuristic.** Automatic tension, scene type, and
+  dialogue/action ratios use English keywords, punctuation, and simple counts.
+  A `tension:N` scene tag can provide a manual 0–10 value. The ribbon and pacing
+  warnings are craft aids, not language-independent semantic truth.
 - **Continuity** flags only evidence-backed, deterministic issues; deep-NLP checks
   (voice drift, knowledge leak, object reuse, lore-rule violation) are not done.
 - **Knowledge Graph** centrality is plain degree; undefined-term detection is
@@ -219,16 +225,15 @@ alpha. Nothing here is a data-safety risk; it's about scope and polish. See
 
 1. Record a source-bound full-suite-green baseline, including **0 BLOCKER** Writer
    QA findings, for the exact release candidate.
-2. Pass the unchanged production-shell packaged journey on Linux/Xvfb and the
+2. Pass the current-source production-shell packaged journey on Windows and the
    Intel macOS 12 runner, then complete hands-on acceptance on all three native
-   platforms. The HTTP 1.12.0 candidate passed the full Windows journey and a
-   separate clean-Ubuntu-VM AppImage launch/relaunch smoke; the latter is not a
-   substitute for the full journey and does not validate HTTP 1.13.0 or 1.14.0.
+   platforms. The exact Phase 7B `cfd4c7b` AppImage passed the full packaged
+   workspace + MCP journey on a clean Ubuntu 22.04 VM. Phase 7C packaged
+   validation remains pending on HTTP 1.15.0 / MCP 1.11.0.
 3. Harden and authenticate API LAN/remote transport before any non-desktop
    exposure.
-4. Add Phase 7C mode-specific Timeline projections and the story-flow
-   heat/tension overlay, then evaluate richer dated Plot/Timeline concepts and
-   opt-in semantic continuity checks.
+4. Validate the Phase 7C package, then evaluate richer dated Plot/Timeline
+   concepts and opt-in semantic continuity checks.
 
 ## Live-event delivery boundary
 
@@ -238,8 +243,8 @@ commit rather than through a transactional outbox. A process death in that
 narrow window can omit the live notification; an authoritative refetch or
 reconnect still returns the committed state. Durable broker
 outbox/reconciliation is tracked as a separate hardening milestone before any
-LAN, multi-user, or background-delivery guarantee; it is not part of Phase 7C's
-mode projections and story-flow overlay.
+LAN, multi-user, or background-delivery guarantee. It remains the separate next
+hardening step and is not part of Phase 7C's read-only projections.
 
 ## Not a bug
 

@@ -810,6 +810,228 @@ export interface TimelineOffTimelineSceneDTO {
 
 export type TimelineOrderMode = "structural" | "custom";
 
+export type TimelineStoryFlowTensionSource =
+  | "manual"
+  | "beat"
+  | "conflict"
+  | "content"
+  | "default";
+
+export type TimelineStoryFlowSceneType =
+  | "dialogue"
+  | "action"
+  | "exposition"
+  | "mixed";
+
+/** One derived story-flow sample aligned 1:1 with a returned Timeline event. */
+export interface TimelineStoryFlowPointDTO {
+  scene_id: number;
+  order_index: number;
+  tension_value: number;
+  tension_source: TimelineStoryFlowTensionSource;
+  scene_type: TimelineStoryFlowSceneType;
+  dialogue_ratio: number;
+  action_ratio: number;
+}
+
+export type TimelinePacingWarningReason =
+  | "monotone_low"
+  | "monotone_high"
+  | "no_variation";
+
+/** A contiguous run of story-flow points whose pacing merits review. */
+export interface TimelinePacingWarningDTO {
+  start_scene_id: number;
+  end_scene_id: number;
+  scene_ids: number[];
+  reason: TimelinePacingWarningReason;
+}
+
+export interface TimelineStoryFlowDTO {
+  points: TimelineStoryFlowPointDTO[];
+  warnings: TimelinePacingWarningDTO[];
+}
+
+export interface TimelineNovelModeProjectionDTO {
+  kind: "novel";
+}
+
+export interface TimelineScreenplaySceneProjectionDTO {
+  scene_id: number;
+  interior_exterior: string;
+  cinematic_pacing: string;
+  dramatic_turn: string;
+  emotional_turn: string;
+  objective: string;
+  conflict: string;
+  turning_point: string;
+  emotional_shift: string;
+  visual_beat_count: number;
+}
+
+export interface TimelineScreenplayModeProjectionDTO {
+  kind: "screenplay";
+  scenes: TimelineScreenplaySceneProjectionDTO[];
+}
+
+export type TimelineGraphicNovelDensity =
+  | "silent"
+  | "light"
+  | "medium"
+  | "dense"
+  | "explosive"
+  | "unset";
+
+export type TimelineGraphicNovelRhythm =
+  | "held"
+  | "slow"
+  | "steady"
+  | "fast"
+  | "chaotic";
+
+export type TimelineGraphicNovelPacing =
+  | "quiet"
+  | "dense"
+  | "explosive"
+  | "exposition-heavy"
+  | "cinematic";
+
+export interface TimelineGraphicNovelPageProjectionDTO {
+  page_id: number;
+  page_number: number;
+  sequence_id: number | null;
+  issue_id: number | null;
+  issue_title: string;
+  density: TimelineGraphicNovelDensity;
+  rhythm: TimelineGraphicNovelRhythm;
+  reveal_timing: string;
+  splash_page: boolean;
+  panel_count: number;
+  action_density: number;
+  text_load: number;
+  pacing: TimelineGraphicNovelPacing;
+  is_silence: boolean;
+  is_action: boolean;
+}
+
+export interface TimelineGraphicNovelPageTurnDTO {
+  setup_page_id: number;
+  setup_page_number: number;
+  reveal_page_id: number;
+  reveal_page_number: number;
+  reveal_type: string;
+}
+
+export interface TimelineGraphicNovelModeProjectionDTO {
+  kind: "graphic_novel";
+  pages: TimelineGraphicNovelPageProjectionDTO[];
+  page_turns: TimelineGraphicNovelPageTurnDTO[];
+}
+
+export interface TimelineStageEntranceExitProjectionDTO {
+  character: string;
+  type: "entrance" | "exit";
+  moment_order: number;
+  cue_text: string;
+}
+
+export type TimelineStageCueType =
+  | "light"
+  | "sound"
+  | "music"
+  | "prop"
+  | "movement"
+  | "other";
+
+export interface TimelineStageCueProjectionDTO {
+  type: TimelineStageCueType;
+  text: string;
+  moment_order: number;
+}
+
+export type TimelineStageEmotionalPressure =
+  | "turn"
+  | "conflict"
+  | "pursuit"
+  | "flat";
+
+export interface TimelineStageSceneProjectionDTO {
+  scene_id: number;
+  order_index: number;
+  act: string;
+  title: string;
+  entrances_exits: TimelineStageEntranceExitProjectionDTO[];
+  cues: TimelineStageCueProjectionDTO[];
+  offstage_events: string;
+  has_offstage_events: boolean;
+  props: string[];
+  emotional_pressure: TimelineStageEmotionalPressure;
+}
+
+export interface TimelineStageScriptModeProjectionDTO {
+  kind: "stage_script";
+  scenes: TimelineStageSceneProjectionDTO[];
+}
+
+export type TimelineSeriesArcScope =
+  | "series"
+  | "season"
+  | "episode"
+  | "character"
+  | "relationship"
+  | "mystery";
+
+export type TimelineSeriesArcStatus =
+  | "active"
+  | "resolved"
+  | "abandoned"
+  | "delayed";
+
+export interface TimelineSeriesArcProjectionDTO {
+  arc_id: number;
+  title: string;
+  scope: TimelineSeriesArcScope;
+  status: TimelineSeriesArcStatus;
+}
+
+export interface TimelineSeriesEpisodeProjectionDTO {
+  episode_id: number;
+  order_index: number;
+  season_id: number | null;
+  season: string;
+  episode_number: number;
+  title: string;
+  cliffhanger: string;
+  scene_ids: number[];
+  active_arcs: TimelineSeriesArcProjectionDTO[];
+  setup_arc_ids: number[];
+  payoff_arc_ids: number[];
+}
+
+export interface TimelineSeriesArcChainDTO {
+  arc_id: number;
+  title: string;
+  scope: TimelineSeriesArcScope;
+  setup_episode_id: number;
+  payoff_episode_id: number;
+  setup_order_index: number;
+  payoff_order_index: number;
+}
+
+export interface TimelineSeriesModeProjectionDTO {
+  kind: "series";
+  episodes: TimelineSeriesEpisodeProjectionDTO[];
+  arc_chains: TimelineSeriesArcChainDTO[];
+  unassigned_scene_ids: number[];
+}
+
+export type TimelineModeProjectionDTO =
+  | TimelineNovelModeProjectionDTO
+  | TimelineScreenplayModeProjectionDTO
+  | TimelineGraphicNovelModeProjectionDTO
+  | TimelineStageScriptModeProjectionDTO
+  | TimelineSeriesModeProjectionDTO;
+
 /** Coherent project Timeline projection guarded by one content revision. */
 export interface TimelineSnapshotDTO {
   project_id: number;
@@ -820,6 +1042,8 @@ export interface TimelineSnapshotDTO {
   links: TimelineLinkDTO[];
   structure_links: TimelineStructureLinkDTO[];
   off_timeline: TimelineOffTimelineSceneDTO[];
+  story_flow: TimelineStoryFlowDTO;
+  mode_projection: TimelineModeProjectionDTO;
 }
 
 interface TimelineCommandBase {

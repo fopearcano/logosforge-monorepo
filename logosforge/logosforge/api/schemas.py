@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from itertools import pairwise
 from typing import Annotated, Any, Literal
 
 from pydantic import (
@@ -1290,6 +1291,169 @@ class TimelineOffTimelineSceneDTO(BaseModel):
     chapter: str = ""
 
 
+class TimelineStoryFlowPointDTO(BaseModel):
+    scene_id: int = Field(gt=0)
+    order_index: int = Field(ge=1)
+    tension_value: int = Field(ge=0, le=10)
+    tension_source: Literal["manual", "beat", "conflict", "content", "default"]
+    scene_type: Literal["dialogue", "action", "exposition", "mixed"]
+    dialogue_ratio: float = Field(ge=0.0, le=1.0)
+    action_ratio: float = Field(ge=0.0, le=1.0)
+
+
+class TimelinePacingWarningDTO(BaseModel):
+    start_scene_id: int = Field(gt=0)
+    end_scene_id: int = Field(gt=0)
+    scene_ids: list[Annotated[int, Field(gt=0)]] = Field(
+        min_length=1,
+    )
+    reason: Literal["monotone_low", "monotone_high", "no_variation"]
+
+
+class TimelineStoryFlowDTO(BaseModel):
+    points: list[TimelineStoryFlowPointDTO]
+    warnings: list[TimelinePacingWarningDTO]
+
+
+class TimelineNovelModeProjectionDTO(BaseModel):
+    kind: Literal["novel"]
+
+
+class TimelineScreenplaySceneProjectionDTO(BaseModel):
+    scene_id: int = Field(gt=0)
+    interior_exterior: str = Field(max_length=256)
+    cinematic_pacing: str = Field(max_length=256)
+    dramatic_turn: str = Field(max_length=4096)
+    emotional_turn: str = Field(max_length=4096)
+    objective: str = Field(max_length=4096)
+    conflict: str = Field(max_length=4096)
+    turning_point: str = Field(max_length=4096)
+    emotional_shift: str = Field(max_length=4096)
+    visual_beat_count: int = Field(ge=0)
+
+
+class TimelineScreenplayModeProjectionDTO(BaseModel):
+    kind: Literal["screenplay"]
+    scenes: list[TimelineScreenplaySceneProjectionDTO]
+
+
+class TimelineGraphicNovelPageProjectionDTO(BaseModel):
+    page_id: int = Field(gt=0)
+    page_number: int = Field(ge=0)
+    sequence_id: Annotated[int | None, Field(gt=0)]
+    issue_id: Annotated[int | None, Field(gt=0)]
+    issue_title: str = Field(max_length=256)
+    density: Literal["silent", "light", "medium", "dense", "explosive", "unset"]
+    rhythm: Literal["held", "slow", "steady", "fast", "chaotic"]
+    reveal_timing: str = Field(max_length=256)
+    splash_page: bool
+    panel_count: int = Field(ge=0)
+    action_density: float = Field(ge=0.0, le=1.0)
+    text_load: int = Field(ge=0)
+    pacing: Literal["quiet", "dense", "explosive", "exposition-heavy", "cinematic"]
+    is_silence: bool
+    is_action: bool
+
+
+class TimelineGraphicNovelPageTurnDTO(BaseModel):
+    setup_page_id: int = Field(gt=0)
+    setup_page_number: int = Field(ge=0)
+    reveal_page_id: int = Field(gt=0)
+    reveal_page_number: int = Field(ge=0)
+    reveal_type: str = Field(max_length=256)
+
+
+class TimelineGraphicNovelModeProjectionDTO(BaseModel):
+    kind: Literal["graphic_novel"]
+    pages: list[TimelineGraphicNovelPageProjectionDTO] = Field(max_length=10_000)
+    page_turns: list[TimelineGraphicNovelPageTurnDTO] = Field(max_length=10_000)
+
+
+class TimelineStageEntranceExitProjectionDTO(BaseModel):
+    character: str = Field(max_length=256)
+    type: Literal["entrance", "exit"]
+    moment_order: int = Field(ge=0)
+    cue_text: str = Field(max_length=4096)
+
+
+class TimelineStageCueProjectionDTO(BaseModel):
+    type: Literal["light", "sound", "music", "prop", "movement", "other"]
+    text: str = Field(max_length=4096)
+    moment_order: int = Field(ge=0)
+
+
+class TimelineStageSceneProjectionDTO(BaseModel):
+    scene_id: int = Field(gt=0)
+    order_index: int = Field(ge=1)
+    act: str = Field(max_length=256)
+    title: str = Field(max_length=256)
+    entrances_exits: list[TimelineStageEntranceExitProjectionDTO] = Field(
+        max_length=1_000,
+    )
+    cues: list[TimelineStageCueProjectionDTO] = Field(max_length=1_000)
+    offstage_events: str = Field(max_length=4096)
+    has_offstage_events: bool
+    props: list[Annotated[str, Field(max_length=256)]] = Field(max_length=1_000)
+    emotional_pressure: Literal["turn", "conflict", "pursuit", "flat"]
+
+
+class TimelineStageScriptModeProjectionDTO(BaseModel):
+    kind: Literal["stage_script"]
+    scenes: list[TimelineStageSceneProjectionDTO]
+
+
+class TimelineSeriesArcProjectionDTO(BaseModel):
+    arc_id: int = Field(gt=0)
+    title: str = Field(max_length=256)
+    scope: Literal[
+        "series", "season", "episode", "character", "relationship", "mystery",
+    ]
+    status: Literal["active", "resolved", "abandoned", "delayed"]
+
+
+class TimelineSeriesEpisodeProjectionDTO(BaseModel):
+    episode_id: int = Field(gt=0)
+    order_index: int = Field(ge=1)
+    season_id: Annotated[int | None, Field(gt=0)]
+    season: str = Field(max_length=256)
+    episode_number: int = Field(ge=0)
+    title: str = Field(max_length=256)
+    cliffhanger: str = Field(max_length=4096)
+    scene_ids: list[Annotated[int, Field(gt=0)]]
+    active_arcs: list[TimelineSeriesArcProjectionDTO] = Field(max_length=1_000)
+    setup_arc_ids: list[Annotated[int, Field(gt=0)]] = Field(max_length=1_000)
+    payoff_arc_ids: list[Annotated[int, Field(gt=0)]] = Field(max_length=1_000)
+
+
+class TimelineSeriesArcChainDTO(BaseModel):
+    arc_id: int = Field(gt=0)
+    title: str = Field(max_length=256)
+    scope: Literal[
+        "series", "season", "episode", "character", "relationship", "mystery",
+    ]
+    setup_episode_id: int = Field(gt=0)
+    payoff_episode_id: int = Field(gt=0)
+    setup_order_index: int = Field(ge=1)
+    payoff_order_index: int = Field(ge=1)
+
+
+class TimelineSeriesModeProjectionDTO(BaseModel):
+    kind: Literal["series"]
+    episodes: list[TimelineSeriesEpisodeProjectionDTO]
+    arc_chains: list[TimelineSeriesArcChainDTO] = Field(max_length=10_000)
+    unassigned_scene_ids: list[Annotated[int, Field(gt=0)]]
+
+
+TimelineModeProjectionDTO = Annotated[
+    TimelineNovelModeProjectionDTO
+    | TimelineScreenplayModeProjectionDTO
+    | TimelineGraphicNovelModeProjectionDTO
+    | TimelineStageScriptModeProjectionDTO
+    | TimelineSeriesModeProjectionDTO,
+    Field(discriminator="kind"),
+]
+
+
 class TimelineSnapshotDTO(BaseModel):
     project_id: int
     revision: str = Field(
@@ -1303,6 +1467,116 @@ class TimelineSnapshotDTO(BaseModel):
     links: list[TimelineLinkDTO] = Field(default_factory=list)
     structure_links: list[TimelineStructureLinkDTO] = Field(default_factory=list)
     off_timeline: list[TimelineOffTimelineSceneDTO] = Field(default_factory=list)
+    story_flow: TimelineStoryFlowDTO
+    mode_projection: TimelineModeProjectionDTO
+
+    @model_validator(mode="after")
+    def _validate_projection_alignment(self):
+        event_ids = [event.id for event in self.events]
+        point_ids = [point.scene_id for point in self.story_flow.points]
+        if point_ids != event_ids:
+            raise ValueError(
+                "story_flow points must align one-to-one with Timeline events"
+            )
+        if [point.order_index for point in self.story_flow.points] != list(
+            range(1, len(event_ids) + 1)
+        ):
+            raise ValueError("story_flow order_index values must be contiguous")
+        event_positions = {
+            scene_id: index for index, scene_id in enumerate(event_ids)
+        }
+        if len(self.story_flow.warnings) > len(event_ids):
+            raise ValueError(
+                "story_flow warning count must not exceed Timeline events"
+            )
+        for warning in self.story_flow.warnings:
+            if (
+                len(warning.scene_ids) > len(event_ids)
+                or warning.start_scene_id != warning.scene_ids[0]
+                or warning.end_scene_id != warning.scene_ids[-1]
+                or any(scene_id not in event_positions for scene_id in warning.scene_ids)
+            ):
+                raise ValueError("story_flow warning references invalid events")
+            start = event_positions[warning.start_scene_id]
+            if event_ids[start:start + len(warning.scene_ids)] != warning.scene_ids:
+                raise ValueError("story_flow warning events must be contiguous")
+
+        projection = self.mode_projection
+        if isinstance(projection, TimelineScreenplayModeProjectionDTO):
+            if [scene.scene_id for scene in projection.scenes] != event_ids:
+                raise ValueError(
+                    "screenplay projection must align with Timeline events"
+                )
+        elif isinstance(projection, TimelineStageScriptModeProjectionDTO):
+            if [scene.scene_id for scene in projection.scenes] != event_ids:
+                raise ValueError("stage projection must align with Timeline events")
+            if [scene.order_index for scene in projection.scenes] != list(
+                range(1, len(event_ids) + 1)
+            ):
+                raise ValueError("stage projection order_index values must be contiguous")
+        elif isinstance(projection, TimelineGraphicNovelModeProjectionDTO):
+            page_by_id = {page.page_id: page for page in projection.pages}
+            if len(page_by_id) != len(projection.pages):
+                raise ValueError("graphic-novel projection page ids must be unique")
+            adjacent_pairs = {
+                (left.page_id, right.page_id)
+                for left, right in pairwise(projection.pages)
+            }
+            for turn in projection.page_turns:
+                setup = page_by_id.get(turn.setup_page_id)
+                reveal = page_by_id.get(turn.reveal_page_id)
+                if (
+                    setup is None
+                    or reveal is None
+                    or (turn.setup_page_id, turn.reveal_page_id)
+                    not in adjacent_pairs
+                    or setup.page_number != turn.setup_page_number
+                    or reveal.page_number != turn.reveal_page_number
+                ):
+                    raise ValueError(
+                        "graphic-novel page turns must reference adjacent pages"
+                    )
+        elif isinstance(projection, TimelineSeriesModeProjectionDTO):
+            episode_ids = [episode.episode_id for episode in projection.episodes]
+            if len(episode_ids) > max(10_000, len(event_ids)):
+                raise ValueError(
+                    "series projection episode count exceeds its bounded event-aware limit"
+                )
+            if len(set(episode_ids)) != len(episode_ids):
+                raise ValueError("series projection episode ids must be unique")
+            if [episode.order_index for episode in projection.episodes] != list(
+                range(1, len(episode_ids) + 1)
+            ):
+                raise ValueError("series projection order_index values must be contiguous")
+            projected_scene_ids = [
+                scene_id
+                for episode in projection.episodes
+                for scene_id in episode.scene_ids
+            ] + list(projection.unassigned_scene_ids)
+            if (
+                len(set(projected_scene_ids)) != len(projected_scene_ids)
+                or set(projected_scene_ids) != set(event_ids)
+            ):
+                raise ValueError(
+                    "series projection must partition Timeline event ids"
+                )
+            order_by_episode = {
+                episode.episode_id: episode.order_index
+                for episode in projection.episodes
+            }
+            for chain in projection.arc_chains:
+                if (
+                    chain.setup_episode_id not in order_by_episode
+                    or chain.payoff_episode_id not in order_by_episode
+                    or order_by_episode[chain.setup_episode_id]
+                    != chain.setup_order_index
+                    or order_by_episode[chain.payoff_episode_id]
+                    != chain.payoff_order_index
+                ):
+                    raise ValueError(
+                        "series arc chains must reference projected episodes"
+                    )
+        return self
 
 
 class _TimelineCommandBase(BaseModel):

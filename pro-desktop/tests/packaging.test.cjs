@@ -178,6 +178,14 @@ check('packaged workspace acceptance covers production Timeline relationship CRU
   packagedWorkspaceScript.includes('Packaged UI relationship survived relaunch') &&
   packagedWorkspaceScript.includes('verifyPersistedTimelineRelationships(second, expected.timeline)') &&
   packagedWorkspaceScript.includes('production Timeline relationship and exact identity survived graceful packaged relaunch'));
+check('packaged workspace acceptance covers Timeline story flow and the mode lens without color-only meaning',
+  packagedWorkspaceScript.includes("name: 'Toggle Timeline story flow', exact: true") &&
+  packagedWorkspaceScript.includes('[aria-label="Timeline story flow"]') &&
+  packagedWorkspaceScript.includes('[aria-label="Timeline Story Pulse"]') &&
+  packagedWorkspaceScript.includes('[aria-label="Timeline mode lens"]') &&
+  packagedWorkspaceScript.includes('[data-flow-scene-id]') &&
+  packagedWorkspaceScript.includes('story-flow points are not aligned one-to-one') &&
+  packagedWorkspaceScript.includes('relied on color without numeric tension and scene-type labels'));
 check('packaged workspace acceptance covers the real Graph, Radar, Continuity, and Billy shell journey',
   packagedWorkspaceScript.includes('seedIntelligenceJourney(session, projectId)') &&
   packagedWorkspaceScript.includes("'Workspace navigation crossed the save barrier before the pending manuscript edit was saved'") &&

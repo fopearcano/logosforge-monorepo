@@ -98,6 +98,11 @@ def test_api_client_get_timeline_uses_authoritative_project_endpoint():
         "lanes": [],
         "events": [],
         "off_timeline": [],
+        "story_flow": {
+            "points": [],
+            "warnings": [],
+        },
+        "mode_projection": {"kind": "novel"},
     }
 
     def fake_urlopen(request, timeout=None):
@@ -119,6 +124,8 @@ def test_api_client_get_timeline_uses_authoritative_project_endpoint():
         "timeout": 15.0,
     }
     assert result == timeline
+    assert result["story_flow"] == {"points": [], "warnings": []}
+    assert result["mode_projection"] == {"kind": "novel"}
 
 
 def test_api_client_get_canvas_plot_uses_authoritative_project_endpoint():
@@ -733,6 +740,11 @@ class _FakeApiClient:
                 }],
                 "links": [],
                 "structure_links": [],
+                "story_flow": {
+                    "points": [],
+                    "warnings": [],
+                },
+                "mode_projection": {"kind": "novel"},
             },
             2: {
                 "project_id": 2,
@@ -743,6 +755,11 @@ class _FakeApiClient:
                 "off_timeline": [],
                 "links": [],
                 "structure_links": [],
+                "story_flow": {
+                    "points": [],
+                    "warnings": [],
+                },
+                "mode_projection": {"kind": "novel"},
             },
         }
         self._timeline_revision_sequence = 3
@@ -4271,6 +4288,8 @@ def test_proposal_deep_copies_nested_caller_data():
 def test_mcp_registry_has_unique_focused_tools_and_no_legacy_self_approval():
     from logosforge.librechat import mcp_server as server
 
+    assert "mode-lens" in server.SERVER_INSTRUCTIONS
+    assert "user-authored project data" in server.SERVER_INSTRUCTIONS
     names = [spec.name for spec in server.TOOL_SPECS]
     assert len(names) == len(set(names)) == 46
     assert {
@@ -4304,6 +4323,8 @@ def test_mcp_registry_has_unique_focused_tools_and_no_legacy_self_approval():
     assert timeline_read.read_only is True
     assert timeline_read.destructive is False
     assert timeline_read.idempotent is True
+    assert "story-flow" in timeline_read.description
+    assert "mode-specific" in timeline_read.description
     timeline_proposal = server.HANDLERS[
         "logosforge_propose_timeline_command"
     ]
@@ -4513,7 +4534,7 @@ def test_real_mcp_stdio_initializes_and_advertises_structured_tools():
 
     initialized, listed = asyncio.run(exercise())
     assert initialized.serverInfo.name == "logosforge"
-    assert initialized.serverInfo.version == "1.10.0"
+    assert initialized.serverInfo.version == "1.11.0"
     tools = {tool.name: tool for tool in listed.tools}
     assert len(tools) == 46
     assert {

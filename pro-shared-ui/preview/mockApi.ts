@@ -1181,6 +1181,103 @@ export function createMockApiClient(): ApiClient {
         ...link,
         target_exists: (link.target_type === "act" ? acts : chapters).has(link.target_ref),
       }));
+    const story_flow: TimelineSnapshotDTO["story_flow"] = {
+      points: events.map((event, index) => ({
+        scene_id: event.id,
+        order_index: event.order_index,
+        tension_value: index < 4 ? 2 : Math.min(10, 3 + index),
+        tension_source: index === 0 ? "beat" : "content",
+        scene_type: index % 3 === 0 ? "action" : index % 3 === 1 ? "dialogue" : "mixed",
+        dialogue_ratio: index % 3 === 1 ? 0.8 : index % 3 === 2 ? 0.45 : 0.1,
+        action_ratio: index % 3 === 0 ? 0.8 : index % 3 === 2 ? 0.45 : 0.1,
+      })),
+      warnings: events.length >= 4 ? [{
+        start_scene_id: events[0]!.id,
+        end_scene_id: events[3]!.id,
+        scene_ids: events.slice(0, 4).map((event) => event.id),
+        reason: "monotone_low",
+      }] : [],
+    };
+    const narrativeEngine = projects.find((project) => project.id === projectId)?.narrative_engine;
+    let mode_projection: TimelineSnapshotDTO["mode_projection"];
+    if (narrativeEngine === "screenplay") {
+      mode_projection = {
+        kind: "screenplay",
+        scenes: events.map((event) => {
+          const sceneRow = byId.get(event.id);
+          const content = sceneRow?.content ?? "";
+          const upperContent = content.trimStart().toUpperCase();
+          return {
+            scene_id: event.id,
+            interior_exterior: upperContent.startsWith("INT.")
+              ? "INT"
+              : upperContent.startsWith("EXT.") ? "EXT" : "",
+            cinematic_pacing: event.duration_minutes > 6 ? "measured" : "brisk",
+            dramatic_turn: sceneRow?.beat ?? "",
+            emotional_turn: sceneRow?.outcome ?? "",
+            objective: sceneRow?.goal ?? "",
+            conflict: sceneRow?.conflict ?? "",
+            turning_point: sceneRow?.outcome ?? "",
+            emotional_shift: sceneRow?.synopsis ?? "",
+            visual_beat_count: content.trim() ? content.split(/\n\s*\n/).length : 0,
+          };
+        }),
+      };
+    } else if (narrativeEngine === "graphic_novel") {
+      mode_projection = { kind: "graphic_novel", pages: [], page_turns: [] };
+    } else if (narrativeEngine === "stage_script") {
+      mode_projection = {
+        kind: "stage_script",
+        scenes: events.map((event) => ({
+          scene_id: event.id,
+          order_index: event.order_index,
+          act: event.act,
+          title: event.title,
+          entrances_exits: [],
+          cues: [],
+          offstage_events: "",
+          has_offstage_events: false,
+          props: [],
+          emotional_pressure: "flat",
+        })),
+      };
+    } else if (narrativeEngine === "series") {
+      const projectEpisodes = MOCK_EPISODES
+        .filter((row) => row.project_id === projectId)
+        .sort((left, right) => Number(left.episode_number) - Number(right.episode_number)
+          || Number(left.id) - Number(right.id));
+      const knownEpisodeIds = new Set(projectEpisodes.map((row) => Number(row.id)));
+      mode_projection = {
+        kind: "series",
+        episodes: projectEpisodes.map((row, index) => {
+          const episodeId = Number(row.id);
+          return {
+            episode_id: episodeId,
+            order_index: index + 1,
+            season_id: typeof row.season_id === "number" ? row.season_id : null,
+            season: typeof row.season_id === "number" ? `Season ${row.season_id}` : "",
+            episode_number: Math.max(0, Number(row.episode_number) || 0),
+            title: String(row.title ?? ""),
+            cliffhanger: "",
+            scene_ids: events
+              .filter((event) => episodeFor(projectId, event.id) === episodeId)
+              .map((event) => event.id),
+            active_arcs: [],
+            setup_arc_ids: [],
+            payoff_arc_ids: [],
+          };
+        }),
+        arc_chains: [],
+        unassigned_scene_ids: events
+          .filter((event) => {
+            const episodeId = episodeFor(projectId, event.id);
+            return episodeId === null || !knownEpisodeIds.has(episodeId);
+          })
+          .map((event) => event.id),
+      };
+    } else {
+      mode_projection = { kind: "novel" };
+    }
     const revisionPayload = {
       project_id: projectId,
       narrative_engine: projects.find((project) => project.id === projectId)?.narrative_engine ?? "",
@@ -1228,6 +1325,8 @@ export function createMockApiClient(): ApiClient {
       links,
       structure_links,
       off_timeline,
+      story_flow,
+      mode_projection,
     };
   };
   const executeTimelineCommand = (
@@ -2162,8 +2261,8 @@ export function createMockApiClient(): ApiClient {
         service: "logosforge-api",
         instance_nonce: "preview-mock",
         mode: "preview-mock",
-        version: "1.14.0",
-        api_version: "1.14.0",
+        version: "1.15.0",
+        api_version: "1.15.0",
         core_version: "preview",
       };
     },

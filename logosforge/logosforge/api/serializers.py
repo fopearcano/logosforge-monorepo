@@ -527,6 +527,19 @@ def timeline_snapshot_to_dto(
             if (scene.chapter or "").strip()
         },
     }
+    story_flow_points = []
+    for order_index, scene_id in enumerate(projection.effective_order, start=1):
+        tension = snapshot.story_flow.tensions[scene_id]
+        scene_type = snapshot.story_flow.scene_types[scene_id]
+        story_flow_points.append(schemas.TimelineStoryFlowPointDTO(
+            scene_id=scene_id,
+            order_index=order_index,
+            tension_value=tension.value,
+            tension_source=tension.source,
+            scene_type=scene_type.primary,
+            dialogue_ratio=scene_type.dialogue_ratio,
+            action_ratio=scene_type.action_ratio,
+        ))
     return schemas.TimelineSnapshotDTO(
         project_id=int(snapshot.project.id),
         revision=snapshot.revision,
@@ -560,6 +573,19 @@ def timeline_snapshot_to_dto(
             for link in snapshot.structure_links
         ],
         off_timeline=off_timeline,
+        story_flow=schemas.TimelineStoryFlowDTO(
+            points=story_flow_points,
+            warnings=[
+                schemas.TimelinePacingWarningDTO(
+                    start_scene_id=warning.start_scene_id,
+                    end_scene_id=warning.end_scene_id,
+                    scene_ids=list(warning.scene_ids),
+                    reason=warning.reason,
+                )
+                for warning in snapshot.story_flow.pacing_warnings
+            ],
+        ),
+        mode_projection=snapshot.mode_projection,
     )
 
 

@@ -127,6 +127,24 @@ def _structured(result, label: str) -> dict:
     return structured["result"]
 
 
+def _assert_timeline_phase_7c(snapshot: dict, label: str) -> None:
+    events = snapshot.get("events")
+    story_flow = snapshot.get("story_flow")
+    projection = snapshot.get("mode_projection")
+    if not isinstance(events, list) or not isinstance(story_flow, dict):
+        raise RuntimeError(f"{label} returned no story-flow analysis")
+    points = story_flow.get("points")
+    if (
+        not isinstance(points, list)
+        or not isinstance(story_flow.get("warnings"), list)
+        or [point.get("scene_id") for point in points]
+        != [event.get("id") for event in events]
+    ):
+        raise RuntimeError(f"{label} returned incoherent story-flow data")
+    if not isinstance(projection, dict) or projection.get("kind") != "novel":
+        raise RuntimeError(f"{label} returned the wrong mode projection")
+
+
 async def _exercise_mcp(
     executable: Path,
     descriptor: Path,
@@ -197,6 +215,7 @@ async def _exercise_mcp(
             await session.call_tool("logosforge_get_timeline", {}),
             "MCP Timeline read",
         )
+        _assert_timeline_phase_7c(timeline_before, "MCP Timeline read")
         timeline_revision = timeline_before.get("revision")
         if not isinstance(timeline_revision, str) or len(timeline_revision) != 64:
             raise RuntimeError("MCP Timeline read returned no valid revision")

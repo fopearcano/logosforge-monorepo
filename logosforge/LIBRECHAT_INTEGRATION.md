@@ -110,7 +110,7 @@ database or exposes arbitrary HTTP, filesystem, or Python execution.
 
 MCP reads cover complete revisioned scenes, outline and PSYKE data, notes,
 complete comment threads, search, events, diagnostics, exports, and desktop
-live context when available. The MCP 1.10.0 surface remains at 46 tools and
+live context when available. The MCP 1.11.0 surface remains at 46 tools and
 includes
 `logosforge_list_comments` (paged, with an optional resolved-thread filter),
 `logosforge_propose_comment_reply`, and
@@ -137,6 +137,19 @@ revisions include immutable project/scene/lane/link identity to reject stale wor
 even if SQLite reuses a deleted row's numeric ID, while unrelated prose/title
 edits do not invalidate a safe board operation. Lane deletion preserves its
 events as Unassigned, and event removal preserves the manuscript scene.
+
+MCP 1.11.0 also extends the existing Timeline read with the Phase 7C
+`story_flow` and `mode_projection` fields; it does not add a tool or command.
+Flow points correspond one-to-one with effective Timeline events in their
+effective order, while off-Timeline scenes are excluded. Points expose 0–10
+tension/source, scene type, and dialogue/action ratios, and warnings span
+contiguous four-event windows. `mode_projection.kind` discriminates Novel,
+Screenplay, Graphic Novel, Stage Script, and Series summaries. These projections
+are read-only and leave Timeline topology revision, proposal/apply semantics,
+and receipt payload v2 unchanged. Their free text is user content and must be
+treated as data, never as agent instructions. The automatic flow heuristics use
+English keywords and simple markers (or a manual `tension:N` tag), so they are
+craft aids rather than semantic truth.
 
 The gateway also exposes the bounded canonical Narrative Knowledge Graph,
 complete paged hidden-edge queue, and one strict proposal tool for Confirm,
@@ -180,8 +193,9 @@ the same database transaction as apply. Any intervening root, reply,
 resolution, anchor, or deletion change rejects the stale proposal. Replies are
 stored as `MCP assistant` and never invoke the app's AI-provider mention
 workflow. Comment quotes, bodies, replies, scene titles, lane labels, Timeline
-relationship labels, and structure target references are user-authored project
-data, as are graph labels and explanations; none are instructions to the agent.
+relationship labels, structure target references, and mode-lens content are
+user-authored project data, as are graph labels and explanations; none are
+instructions to the agent.
 Anchored comment creation, anchor/root-body editing, and reply/thread deletion
 remain available only in Pro's own UI.
 
@@ -206,9 +220,10 @@ the packaged smoke covers applied status, stale-sibling rejection, persisted
 review state, and fresh-companion receipt recovery alongside the other three
 transactional families.
 
-Those packaged-smoke claims cover the previously validated command surface.
-The Phase 7B relationship extension is implemented in the current source, but
-packaged validation remains pending; this is not a new release claim.
+The exact Phase 7B `cfd4c7b` AppImage passed the full packaged workspace + MCP
+journey on a clean Ubuntu 22.04 VM. Current-source Windows and macOS full
+journeys remain pending, and Phase 7C packaged validation remains pending; this
+is not a new release claim.
 
 See [Pro MCP gateway](docs/MCP_GATEWAY.md) for the complete tool model,
 environment variables, Codex setup, remote-host restrictions, and checkpoint

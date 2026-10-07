@@ -67,6 +67,20 @@ const snapshot: TimelineSnapshotDTO = {
   off_timeline: [
     { id: 103, title: "Reversal", structural_number: "1.2.1", act: "Act 1", chapter: "Chapter 2" },
   ],
+  story_flow: {
+    points: [
+      {
+        scene_id: 101, order_index: 1, tension_value: 3, tension_source: "content",
+        scene_type: "action", dialogue_ratio: 0.1, action_ratio: 0.8,
+      },
+      {
+        scene_id: 102, order_index: 2, tension_value: 5, tension_source: "beat",
+        scene_type: "dialogue", dialogue_ratio: 0.8, action_ratio: 0.1,
+      },
+    ],
+    warnings: [],
+  },
+  mode_projection: { kind: "novel" },
 };
 
 {

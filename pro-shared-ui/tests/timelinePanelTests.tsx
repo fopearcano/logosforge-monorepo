@@ -5,6 +5,7 @@ import type {
   TimelineCommandDTO,
   TimelineCommandReceiptDTO,
   TimelineCommandResultDTO,
+  TimelineModeProjectionDTO,
   TimelineSnapshotDTO,
 } from "@logosforge/ui-contracts";
 import type { ApiClient } from "../src/adapters/api";
@@ -13,6 +14,7 @@ import type { PlatformAdapter } from "../src/adapters/platform";
 import { StudioProvider } from "../src/adapters/StudioProvider";
 import { useSelection } from "../src/adapters/selection";
 import { TimelinePanel } from "../src/components/spatialcanvas/TimelinePanel";
+import { TimelineModeProjection } from "../src/components/spatialcanvas/TimelineModeProjection";
 
 let assertions = 0;
 function check(value: unknown, message: string): asserts value {
@@ -108,6 +110,95 @@ function snapshot(
       { id: 103, title: "Aftermath", structural_number: "1.1.3", act: "Act I", chapter: "One" },
       { id: 104, title: "Foreshadow", structural_number: "1.1.4", act: "Act I", chapter: "One" },
     ],
+    story_flow: {
+      points: [
+        {
+          scene_id: 101,
+          order_index: 1,
+          tension_value: 2,
+          tension_source: "content",
+          scene_type: "dialogue",
+          dialogue_ratio: 0.75,
+          action_ratio: 0.1,
+        },
+        {
+          scene_id: 102,
+          order_index: 2,
+          tension_value: 3,
+          tension_source: "beat",
+          scene_type: "mixed",
+          dialogue_ratio: 0.4,
+          action_ratio: 0.55,
+        },
+      ],
+      warnings: [{
+        start_scene_id: 101,
+        end_scene_id: 102,
+        scene_ids: [101, 102],
+        reason: "monotone_low",
+      }],
+    },
+    mode_projection: projectId === 8
+      ? { kind: "novel" }
+      : {
+        kind: "screenplay",
+        scenes: [
+          {
+            scene_id: 101,
+            interior_exterior: "EXT",
+            cinematic_pacing: "measured",
+            dramatic_turn: "A boat arrives",
+            emotional_turn: "Hope",
+            objective: "Secure passage",
+            conflict: "The harbor is closed",
+            turning_point: "The gate opens",
+            emotional_shift: "Doubt to resolve",
+            visual_beat_count: 3,
+          },
+          {
+            scene_id: 102,
+            interior_exterior: "INT",
+            cinematic_pacing: "urgent",
+            dramatic_turn: "The promise breaks",
+            emotional_turn: "Fear",
+            objective: "Reach the bridge",
+            conflict: "Pursuit",
+            turning_point: "The bridge lifts",
+            emotional_shift: "Resolve to fear",
+            visual_beat_count: 4,
+          },
+        ],
+      },
+  };
+}
+
+function emptySeriesSnapshot(projectId = 9): TimelineSnapshotDTO {
+  return {
+    ...snapshot("y", "structural", projectId),
+    lanes: [],
+    events: [],
+    links: [],
+    structure_links: [],
+    off_timeline: [],
+    story_flow: { points: [], warnings: [] },
+    mode_projection: {
+      kind: "series",
+      episodes: [{
+        episode_id: 901,
+        order_index: 1,
+        season_id: 90,
+        season: "Season One",
+        episode_number: 1,
+        title: "Pilot",
+        cliffhanger: "The signal returns",
+        scene_ids: [],
+        active_arcs: [],
+        setup_arc_ids: [],
+        payoff_arc_ids: [],
+      }],
+      arc_chains: [],
+      unassigned_scene_ids: [],
+    },
   };
 }
 
@@ -186,6 +277,7 @@ function resultFor(command: TimelineCommandDTO): TimelineCommandResultDTO {
 const api = {
   getTimeline: async (projectId: number) => {
     timelineReads += 1;
+    if (projectId === 9) return emptySeriesSnapshot(projectId);
     if (projectId !== 7) return snapshot("z", "structural", projectId);
     if (pendingResultRefetch) return pendingResultRefetch.promise;
     return structuredClone(serverSnapshot);
@@ -276,6 +368,71 @@ await act(async () => {
 });
 
 check(timelineReads === 1, "the panel must load one coherent Timeline snapshot");
+for (const eventName of ["project_data_changed", "characters_changed", "psyke_changed"] as const) {
+  const readsBeforeEvent = timelineReads;
+  act(() => {
+    listeners.forEach((listener) => listener({
+      id: readsBeforeEvent,
+      event: eventName,
+      project_id: 7,
+      data: {},
+      ts: Date.now(),
+    }));
+  });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 140));
+    await Promise.resolve();
+  });
+  check(
+    timelineReads === readsBeforeEvent + 1,
+    `${eventName} must refresh the mounted mode projection`,
+  );
+}
+const flowToggle = () => renderer.root.findByProps({ "aria-label": "Toggle Timeline story flow" });
+check(flowToggle().props["aria-pressed"] === true, "the Story Flow ribbon must be visible by default");
+check(renderer.root.findByProps({ "aria-label": "Timeline story flow" }), "the Story Flow ribbon must expose a stable accessible region");
+check(
+  renderer.root.findAll((node) => node.props["data-flow-scene-id"] != null).length === serverSnapshot.events.length,
+  "the Story Flow ribbon must render one heat cell per Timeline event",
+);
+const openingFlowCell = renderer.root.findByProps({ "data-flow-scene-id": 101 });
+check(
+  openingFlowCell.props["aria-label"].includes("tension 2.0 out of 10, low")
+    && openingFlowCell.props["aria-label"].includes("dialogue scene"),
+  "flow cells must name both the numeric tension and semantic scene type instead of relying on color",
+);
+check(
+  renderedText(openingFlowCell).includes("2.0") && renderedText(openingFlowCell).includes("LOW") && renderedText(openingFlowCell).includes("DIALOGUE"),
+  "flow cells must visibly repeat their numeric and semantic meaning",
+);
+check(
+  renderedText(renderer.root.findByProps({ "aria-label": "Timeline Story Pulse" })).includes("AVG 2.5/10")
+    && renderedText(renderer.root.findByProps({ "aria-label": "Timeline Story Pulse" })).includes("1 WARNING"),
+  "Story Pulse must summarize curve values and warning count",
+);
+check(
+  renderer.root.findByProps({ "aria-label": "Pacing warning: low tension plateau from Opening to Promise" }),
+  "pacing warning spans must expose a readable reason and affected scene range",
+);
+check(
+  renderedText(renderer.root.findByProps({ "aria-label": "Timeline mode lens" })).includes("MODE LENS · SCREENPLAY")
+    && renderedText(renderer.root.findByProps({ "aria-label": "Timeline mode lens" })).includes("7 visual beats")
+    && renderedText(renderer.root.findByProps({ "aria-label": "Timeline mode lens" })).includes("2 objectives"),
+  "the mode lens must expose compact, meaningful screenplay facets",
+);
+check(
+  renderer.root.findByProps({ "aria-label": "Scene type for Opening: dialogue" }),
+  "event cards must expose a textual scene-type marker",
+);
+act(() => { flowToggle().props.onClick(); });
+check(flowToggle().props["aria-pressed"] === false, "the Flow toggle must hide the ribbon");
+check(renderer.root.findAllByProps({ "aria-label": "Timeline story flow" }).length === 0, "the hidden Flow ribbon must leave no stale visual region");
+check(
+  renderer.root.findAllByProps({ "aria-label": "Scene type for Opening: dialogue" }).length === 0,
+  "the hidden Flow view must also remove per-card scene-type labels",
+);
+act(() => { flowToggle().props.onClick(); });
+check(flowToggle().props["aria-pressed"] === true, "the Flow toggle must restore the ribbon");
 check(renderer.root.findByProps({ "aria-label": "Lane for Opening" }).props.value === "10", "event cards must expose persisted lane membership");
 check(
   renderedText(renderer.root.findByProps({ "aria-label": "Structure relationships for Promise" })).includes("⚠"),
@@ -471,6 +628,12 @@ await act(async () => {
   await Promise.resolve();
 });
 check(orderButton()?.props.disabled === false, "an unresolved delivery owned by another project must not lock the active project's Timeline");
+check(flowToggle().props["aria-pressed"] === true, "switching projects must restore the Flow ribbon's default-visible state");
+check(
+  renderedText(renderer.root.findByProps({ "aria-label": "Timeline mode lens" })).includes("MODE LENS · NOVEL")
+    && renderedText(renderer.root.findByProps({ "aria-label": "Timeline mode lens" })).includes("BASE PROSE LENS"),
+  "project switching must replace the mode lens with the active project's projection",
+);
 await act(async () => {
   renderer.update(tree(7));
   await Promise.resolve();
@@ -500,6 +663,87 @@ check(
 
 act(() => { renderer.unmount(); });
 check(listeners.size === 0, "unmount must release Timeline live-event subscriptions");
+
+let emptyRenderer!: ReactTestRenderer;
+await act(async () => {
+  emptyRenderer = create(tree(9));
+  await Promise.resolve();
+  await Promise.resolve();
+});
+check(
+  renderedText(emptyRenderer.root.findByProps({ "aria-label": "Timeline mode lens" })).includes("MODE LENS · SERIES")
+    && renderedText(emptyRenderer.root).includes("No Timeline yet"),
+  "an empty Timeline must still expose its mode lens and independent mode metadata",
+);
+act(() => { emptyRenderer.unmount(); });
+check(listeners.size === 0, "the empty Timeline must also release its live-event subscription");
+
+function checkModeProjection(projection: TimelineModeProjectionDTO, expected: string, message: string) {
+  let projectionRenderer!: ReactTestRenderer;
+  act(() => { projectionRenderer = create(<TimelineModeProjection projection={projection} />); });
+  check(renderedText(projectionRenderer.root).includes(expected), message);
+  act(() => { projectionRenderer.unmount(); });
+}
+
+checkModeProjection({
+  kind: "graphic_novel",
+  pages: [{
+    page_id: 11,
+    page_number: 1,
+    sequence_id: 2,
+    issue_id: 3,
+    issue_title: "Issue One",
+    density: "explosive",
+    rhythm: "fast",
+    reveal_timing: "page turn",
+    splash_page: true,
+    panel_count: 5,
+    action_density: 0.8,
+    text_load: 22,
+    pacing: "cinematic",
+    is_silence: false,
+    is_action: true,
+  }],
+  page_turns: [{ setup_page_id: 11, setup_page_number: 1, reveal_page_id: 12, reveal_page_number: 2, reveal_type: "character" }],
+}, "1 page-turn reveal", "the graphic-novel lens must summarize page-turn staging");
+
+checkModeProjection({
+  kind: "stage_script",
+  scenes: [{
+    scene_id: 101,
+    order_index: 1,
+    act: "Act I",
+    title: "Opening",
+    entrances_exits: [
+      { character: "Mara", type: "entrance", moment_order: 1, cue_text: "Mara enters" },
+      { character: "Mara", type: "exit", moment_order: 3, cue_text: "Mara exits" },
+    ],
+    cues: [{ type: "light", text: "Blue wash", moment_order: 2 }],
+    offstage_events: "Bell rings",
+    has_offstage_events: true,
+    props: ["Letter"],
+    emotional_pressure: "conflict",
+  }],
+}, "1 entrance · 1 exit · 1 cue", "the stage-script lens must summarize blocking and cues");
+
+checkModeProjection({
+  kind: "series",
+  episodes: [{
+    episode_id: 21,
+    order_index: 1,
+    season_id: 4,
+    season: "Season 1",
+    episode_number: 1,
+    title: "Pilot",
+    cliffhanger: "The door opens",
+    scene_ids: [101, 102],
+    active_arcs: [{ arc_id: 31, title: "Homecoming", scope: "season", status: "active" }],
+    setup_arc_ids: [31],
+    payoff_arc_ids: [],
+  }],
+  arc_chains: [{ arc_id: 31, title: "Homecoming", scope: "season", setup_episode_id: 21, payoff_episode_id: 28, setup_order_index: 1, payoff_order_index: 8 }],
+  unassigned_scene_ids: [103],
+}, "1 cliffhanger · 1 setup · 0 payoffs", "the series lens must summarize episodic hooks and arc motion");
 
 console.log(`${assertions} Timeline panel assertions passed.`);
 

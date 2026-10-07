@@ -32,7 +32,8 @@ systems:
 - **Manuscript** — scene editor with rich per-scene fields; basic grammar/spell.
 - **Outline / Plot / Timeline** — act/chapter/scene structure, plot blocks
   (scene-derived), scene-order timeline, and persisted scene/structure
-  relationships with guarded authoring.
+  relationships with guarded authoring, plus read-only story-flow and
+  mode-specific Timeline projections.
 - **Graph** — four bounded canonical projections, focus neighborhoods, Story
   Gravity/order overlays, and revision-bound Confirm/Hide/Restore review.
 - **PSYKE** — characters/places/objects/lore/themes with relations,
@@ -88,12 +89,15 @@ These are frozen. Change only to fix a confirmed regression, with tests.
 
 ## 4. Experimental / limited systems (Usable with limitations — "B"/"C")
 
-- **Plot / Timeline** — events and lanes remain scene-derived, while persisted
-  scene-to-scene and scene-to-Act/Chapter relationships now participate in the
-  coherent HTTP 1.14.0 snapshot, revision, command, and durable receipt
-  boundary. The Pro author/edit/delete surface is implemented locally; packaged
-  validation is pending. Mode-specific projections and the story-flow
-  heat/tension overlay remain deferred. *(B)*
+- **Plot / Timeline** — events and lanes remain scene-derived. Persisted
+  scene-to-scene and scene-to-Act/Chapter relationships participate in the
+  guarded command and durable receipt boundary, while HTTP 1.15.0 adds
+  read-only story-flow and mode-specific projections to the same coherent
+  snapshot. Pro exposes the FLOW ribbon, Story Pulse, warning spans, scene-type
+  labels, and MODE LENS. Phase 7C packaged validation is pending. The exact
+  Phase 7B `cfd4c7b` AppImage passed the full packaged workspace + MCP journey
+  on a clean Ubuntu 22.04 VM; current-source Windows and macOS full journeys
+  remain pending. *(B)*
 - **Counterpart** — works; thin automated coverage. *(B)*
 - **Connector** — write actions gated OFF by default; only read actions are on
   the default path. *(B)*
@@ -116,8 +120,10 @@ These are frozen. Change only to fix a confirmed regression, with tests.
 
 - Timeline event membership and lanes, and Plot blocks, are derived from scene
   fields rather than a standalone dated-event/plot-thread domain. Persisted
-  Timeline relationships are available, but mode-specific projections and the
-  story-flow heat/tension overlay are not yet exposed.
+  Timeline relationships are available, while the mode-specific projection and
+  story-flow layer are read-only. Flow tension/type classification uses English
+  keywords and punctuation (with an explicit `tension:N` tag override), so its
+  output is directional craft guidance rather than semantic truth.
 - Continuity intentionally omits deep-NLP checks (voice drift, knowledge leak,
   object-destroyed-then-reused, lore-rule violation) to avoid hallucinated
   findings; it flags only evidence-backed, deterministic issues.
@@ -137,9 +143,8 @@ These are frozen. Change only to fix a confirmed regression, with tests.
   the Pro Alpha.
 - Supported **API** `lan` / `remote` transport with required authentication, and
   web/PWA distribution. The React/Electron shared UI itself is implemented.
-- **Phase 7C Plot/Timeline:** mode-specific projections and the story-flow
-  heat/tension overlay over the existing transactional Timeline relationship
-  layer. Richer dated-event/plot-thread concepts remain later work.
+- Richer dated-event/plot-thread concepts and editable mode-projection controls
+  beyond Phase 7C's read-only Timeline lens.
 - A durable broker outbox/reconciliation layer before any supported LAN,
   multi-user, or background-delivery claim. This is transport hardening,
   separate from Phase 7C's user-facing projections.
@@ -193,12 +198,11 @@ Highest priority, lowest tolerance for change:
 
 1. Record a **full-suite-green, source-bound** baseline for the release
    candidate, including a Writer QA run with **0 BLOCKER** findings.
-2. Run the unchanged production-shell packaged journey on hosted Linux/Xvfb and
-   the Intel macOS 12 runner. The current 1.12.0 candidate passed the full
-   Windows journey and a separate clean-Ubuntu-VM AppImage launch/relaunch smoke
-   as an unprivileged user with Chromium sandboxing enabled; that VM smoke is
-   not packaged validation of the newer HTTP 1.13.0 Guided Workflows or HTTP
-   1.14.0 Transactional Timeline Relationships changes.
+2. Run the current-source production-shell packaged journey on Windows and the
+   Intel macOS 12 runner, and run the Phase 7C package on every supported
+   platform. The exact Phase 7B `cfd4c7b` AppImage already passed the full
+   packaged workspace + MCP journey on a clean Ubuntu 22.04 VM; that evidence
+   does not validate the later HTTP 1.15.0 / MCP 1.11.0 Phase 7C changes.
 3. Complete hands-on acceptance of the installer/portable EXE, AppImage, and DMG
    on their supported operating systems before publishing.
 4. Keep desktop/localhost as the Alpha API posture. Before any future LAN/remote
@@ -206,8 +210,8 @@ Highest priority, lowest tolerance for change:
 5. Preserve the existing safety and data round-trip gates: disabled Connector
    writes and Go McKee stay inert, project lifecycle never cross-writes, and
    export/import and restart recovery lose no user data.
-6. Phase 7C mode-specific Timeline projections and story-flow heat/tension,
-   richer later Plot/Timeline concepts, custom workflow templates/reminders,
-   and a multi-project workflow dashboard are Beta feature work, not blockers
-   for Alpha stability. Durable broker outbox/reconciliation is tracked
-   separately before LAN, multi-user, or background delivery is supported.
+6. Phase 7C source work is implemented; its packaged validation remains open.
+   Richer later Plot/Timeline concepts, custom workflow templates/reminders, and
+   a multi-project workflow dashboard are Beta feature work, not blockers for
+   Alpha stability. Durable broker outbox/reconciliation is the separate next
+   hardening step before LAN, multi-user, or background delivery is supported.

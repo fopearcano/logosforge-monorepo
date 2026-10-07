@@ -1040,6 +1040,49 @@ async function exerciseTimelineRelationships(session, expectedProjectId) {
     );
   }
 
+  assert.equal(timeline.mode_projection?.kind, 'novel', 'Timeline returned the wrong packaged mode lens');
+  assert.deepEqual(
+    timeline.story_flow?.points?.map((point) => point.scene_id),
+    timeline.events.map((event) => event.id),
+    'Timeline story-flow points are not aligned one-to-one with packaged events',
+  );
+  assert.deepEqual(
+    timeline.story_flow?.points?.map((point) => point.order_index),
+    timeline.events.map((_, index) => index + 1),
+    'Timeline story-flow points do not preserve packaged event order',
+  );
+  assert.ok(Array.isArray(timeline.story_flow?.warnings), 'Timeline returned no packaged pacing-warning list');
+  const flowToggle = await waitVisible(
+    timelineScreen.getByRole('button', { name: 'Toggle Timeline story flow', exact: true }),
+    'Timeline story-flow toggle',
+  );
+  const flowRibbon = timelineScreen.locator('[aria-label="Timeline story flow"]');
+  await waitVisible(flowRibbon, 'Timeline story-flow ribbon');
+  await waitVisible(
+    timelineScreen.locator('[aria-label="Timeline Story Pulse"]'),
+    'Timeline Story Pulse summary',
+  );
+  const modeLens = await waitVisible(
+    timelineScreen.locator('[aria-label="Timeline mode lens"]'),
+    'Timeline mode lens',
+  );
+  assert.match(String(await modeLens.textContent()), /MODE LENS\s*·\s*NOVEL/, 'Timeline mode lens did not render the project mode');
+  await waitFor(
+    async () => await flowRibbon.locator('[data-flow-scene-id]').count() === timeline.events.length,
+    'one packaged story-flow cell per Timeline event',
+  );
+  const flowLabels = await flowRibbon.locator('[data-flow-scene-id]').evaluateAll(
+    (cells) => cells.map((cell) => cell.getAttribute('aria-label') || ''),
+  );
+  assert.ok(
+    flowLabels.every((label) => /tension \d+(?:\.\d+)? out of 10/.test(label) && /(?:dialogue|action|exposition|mixed) scene/.test(label)),
+    'Timeline story-flow cells relied on color without numeric tension and scene-type labels',
+  );
+  await flowToggle.click();
+  await flowRibbon.waitFor({ state: 'hidden', timeout: UI_TIMEOUT_MS });
+  await flowToggle.click();
+  await waitVisible(flowRibbon, 'restored Timeline story-flow ribbon');
+
   const createSource = await waitVisible(
     timelineScreen.getByRole('button', {
       name: `Start relationship from ${opening.title}`,

@@ -461,6 +461,22 @@ after an uncertain response Pro checks the exact receipt first, permits one
 same-command/same-key resend only after Core proves the receipt is missing, and
 then offers receipt-only recovery.
 
+The Timeline's **FLOW** toggle is a read-only analysis layer over the events
+currently on the board. It shows an accessible numeric and semantic tension
+ribbon (0–10 and Low/Building/High/Peak), a **Story Pulse** summary, contiguous
+pacing-warning spans, and a Dialogue/Action/Exposition/Mixed label on each
+event. Scenes listed under **off timeline** are deliberately excluded, so the
+ribbon and warning order always match the board's effective Structural or
+Custom order. Turn FLOW off to hide the ribbon without changing project data.
+
+The read-only **MODE LENS** summarizes the current project's writing mode:
+Screenplay scene beats, Graphic Novel page rhythm and turns, Stage Script
+entrances/cues/props, Series episodes and arcs, or the neutral Novel lens. It is
+an interpretation of existing project data, not another editable Timeline or a
+replacement for the independent Canvas Plot board. Flow scores and scene types
+use lightweight English-keyword rules; a scene tag such as `tension:7` supplies
+a manual 0–10 override. Treat these signals as craft aids, not semantic truth.
+
 Under **Visual Overlays**, node sizing defaults to **Story Gravity**, a
 project-wide 0–100% narrative-importance signal. Choose **View Links** to size by
 relationship degree in the complete selected view/evidence scope instead. Core
@@ -489,13 +505,16 @@ Comment text is treated as project content, not as instructions to the agent.
 Creating anchored comments, changing their anchor or original body, and
 deleting threads or replies remain actions for Pro's Comments UI.
 
-The same 46-tool Pro gateway (MCP contract 1.10.0) can read and orchestrate the
+The same 46-tool Pro gateway (MCP contract 1.11.0) can read and orchestrate the
 Timeline, Canvas Plot, Narrative Knowledge Graph, and Semantic Continuity
 review state. An agent can prepare one reviewed change at a time against the
 exact surface revision it read, and Core checks that revision again when applied.
 Timeline commands cover lanes,
 event membership, structural/custom ordering, and both Timeline relationship
-families through the existing Timeline read and proposal tools; Canvas commands
+families through the existing Timeline read and proposal tools. The Timeline
+read also carries the Phase 7C `story_flow` and `mode_projection` data, but these
+are read-only and do not add a command. Mode-lens text remains user-authored or
+derived project data, never instructions to the agent. Canvas commands
 cover cards, links, frames, geometry, and stacking order. Its Knowledge Graph
 read can request any of the four views and either evidence scope; it also
 receives the same Story Gravity availability/value fields and returned

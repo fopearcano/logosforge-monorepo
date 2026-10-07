@@ -309,6 +309,7 @@ def _repair_character_psyke_foreign_key(conn) -> None:
 _UNSET: object = object()
 
 from logosforge.comment_revision import comment_revision
+from logosforge.story_flow import FlowAnalysis
 from logosforge.models import (
     ChatMessage,
     ChatSummary,
@@ -648,6 +649,8 @@ class TimelineReadSnapshot:
     settings: dict
     character_names_by_id: dict[int, str]
     character_states_by_scene: dict[int, tuple[tuple[int, str], ...]]
+    story_flow: FlowAnalysis
+    mode_projection: dict
     revision: str
 
 
@@ -3586,7 +3589,14 @@ class Database:
         self, session: Session, project_id: int,
     ) -> TimelineReadSnapshot | None:
         """Build one Timeline snapshot without opening a nested Session."""
-        from logosforge.timeline import parse_project_settings, timeline_revision
+        from logosforge.project_compat import get_project_narrative_engine
+        from logosforge.story_flow import analyze_scene_sequence
+        from logosforge.timeline import (
+            parse_project_settings,
+            project_timeline,
+            timeline_revision,
+        )
+        from logosforge.timeline_projections import build_timeline_mode_projection
 
         project = session.get(Project, project_id)
         if project is None:
@@ -3672,6 +3682,133 @@ class Database:
                         (int(row.character_id), row.state or "")
                     )
         settings = parse_project_settings(project.settings_json)
+        projection = project_timeline(scenes, settings)
+        scene_by_id = {int(scene.id): scene for scene in scenes}
+        event_scenes = tuple(
+            scene_by_id[scene_id] for scene_id in projection.effective_order
+        )
+
+        gn_issues: list[GraphicNovelIssue] = []
+        gn_sequences: list[GraphicNovelSequence] = []
+        gn_pages: list[GraphicNovelPage] = []
+        gn_panels: list[GraphicNovelPanel] = []
+        stage_entrances: list[StageEntranceExit] = []
+        stage_cues: list[StageCue] = []
+        stage_business: list[StageBusiness] = []
+        psyke_names: dict[int, str] = {}
+        seasons: list[Season] = []
+        episodes: list[Episode] = []
+        series_arcs: list[SeriesArc] = []
+
+        engine = get_project_narrative_engine(project)
+        if engine == "graphic_novel":
+            gn_issues = list(session.exec(
+                select(GraphicNovelIssue)
+                .where(GraphicNovelIssue.project_id == project_id)
+                .order_by(GraphicNovelIssue.sort_order, GraphicNovelIssue.id)
+            ).all())
+            gn_sequences = list(session.exec(
+                select(GraphicNovelSequence)
+                .where(GraphicNovelSequence.project_id == project_id)
+                .order_by(GraphicNovelSequence.sort_order, GraphicNovelSequence.id)
+            ).all())
+            gn_pages = list(session.exec(
+                select(GraphicNovelPage)
+                .where(GraphicNovelPage.project_id == project_id)
+                .order_by(
+                    GraphicNovelPage.page_number,
+                    GraphicNovelPage.sort_order,
+                    GraphicNovelPage.id,
+                )
+            ).all())
+            gn_page_ids = [int(page.id) for page in gn_pages]
+            if gn_page_ids:
+                gn_panels = list(session.exec(
+                    select(GraphicNovelPanel)
+                    .where(
+                        GraphicNovelPanel.project_id == project_id,
+                        GraphicNovelPanel.page_id.in_(gn_page_ids),
+                    )
+                    .order_by(
+                        GraphicNovelPanel.page_id,
+                        GraphicNovelPanel.panel_number,
+                        GraphicNovelPanel.sort_order,
+                        GraphicNovelPanel.id,
+                    )
+                ).all())
+        elif engine == "stage_script":
+            event_scene_ids = [int(scene.id) for scene in event_scenes]
+            if event_scene_ids:
+                stage_entrances = list(session.exec(
+                    select(StageEntranceExit)
+                    .where(StageEntranceExit.scene_id.in_(event_scene_ids))
+                    .order_by(
+                        StageEntranceExit.scene_id,
+                        StageEntranceExit.moment_order,
+                        StageEntranceExit.id,
+                    )
+                ).all())
+                stage_cues = list(session.exec(
+                    select(StageCue)
+                    .where(StageCue.scene_id.in_(event_scene_ids))
+                    .order_by(
+                        StageCue.scene_id,
+                        StageCue.moment_order,
+                        StageCue.id,
+                    )
+                ).all())
+                stage_business = list(session.exec(
+                    select(StageBusiness)
+                    .where(StageBusiness.scene_id.in_(event_scene_ids))
+                    .order_by(
+                        StageBusiness.scene_id,
+                        StageBusiness.moment_order,
+                        StageBusiness.id,
+                    )
+                ).all())
+            psyke_entries = session.exec(
+                select(PsykeEntry)
+                .where(PsykeEntry.project_id == project_id)
+                .order_by(PsykeEntry.id)
+            ).all()
+            psyke_names = {
+                int(entry.id): entry.name or "" for entry in psyke_entries
+            }
+        elif engine == "series":
+            seasons = list(session.exec(
+                select(Season)
+                .where(Season.project_id == project_id)
+                .order_by(Season.order_index, Season.id)
+            ).all())
+            episodes = list(session.exec(
+                select(Episode)
+                .where(Episode.project_id == project_id)
+                .order_by(Episode.order_index, Episode.id)
+            ).all())
+            series_arcs = list(session.exec(
+                select(SeriesArc)
+                .where(SeriesArc.project_id == project_id)
+                .order_by(SeriesArc.id)
+            ).all())
+
+        story_flow = analyze_scene_sequence(event_scenes)
+        mode_projection = build_timeline_mode_projection(
+            project,
+            event_scenes,
+            settings,
+            graphic_novel_issues=gn_issues,
+            graphic_novel_sequences=gn_sequences,
+            graphic_novel_pages=gn_pages,
+            graphic_novel_panels=gn_panels,
+            stage_entrances=stage_entrances,
+            stage_cues=stage_cues,
+            stage_business=stage_business,
+            character_names_by_id=character_names,
+            psyke_names_by_id=psyke_names,
+            seasons=seasons,
+            episodes=episodes,
+            series_arcs=series_arcs,
+        )
         return TimelineReadSnapshot(
             project=project,
             scenes=tuple(scenes),
@@ -3684,6 +3821,8 @@ class Database:
                 scene_id: tuple(rows)
                 for scene_id, rows in states_by_scene.items()
             },
+            story_flow=story_flow,
+            mode_projection=mode_projection,
             revision=timeline_revision(
                 project,
                 scenes,

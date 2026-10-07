@@ -102,10 +102,12 @@ GET  /api/health → { status, service, mode, version, api_version, core_version
 `core_version` is the Logosforge build (e.g. `0.9.0-alpha`). Clients (Electron
 desktop and Web/PWA) read these to verify they're talking to a compatible
 backend. `version` mirrors `api_version` for backward compatibility.
-The current additive HTTP contract version is **1.14.0**. It adds persisted
-scene-to-scene and scene-to-structure relationships to the coherent Timeline
-snapshot/revision plus six guarded relationship commands and receipt payload
-v2 (with decoding support for existing v1 receipts). Version 1.13.0 added the
+The current additive HTTP contract version is **1.15.0**. It adds read-only
+`story_flow` and writing-mode-discriminated `mode_projection` fields to the
+coherent Timeline snapshot. Version 1.14.0 added persisted scene-to-scene and
+scene-to-structure relationships to that snapshot/revision plus six guarded
+relationship commands and receipt payload v2 (with decoding support for
+existing v1 receipts). Version 1.13.0 added the
 Guided Workflow Project OS contract: mode-filtered templates, active-run-aware
 recommendations, coherent revisioned run reads, bounded event history, and an
 atomic lifecycle command boundary with durable project-scoped idempotency
@@ -116,9 +118,9 @@ canonical issue keys,
 structured issue/scene evidence, and an explicit availability state. HTTP 1.10.0
 introduced the equivalent Knowledge Graph feed and graph deep-link scope; the
 stable Project Intelligence feed remains unchanged. The HTTP version remains
-deliberately independent from the local MCP server contract; MCP gateway 1.10.0
-keeps the 46-tool surface and extends its existing Timeline read/proposal tools
-with the relationship commands.
+deliberately independent from the local MCP server contract; MCP gateway 1.11.0
+keeps the 46-tool surface and extends its existing Timeline read with the Phase
+7C projections. No new Timeline command or MCP tool was added.
 
 ### Packaged-desktop live context
 ```
@@ -342,7 +344,7 @@ changed command publishes `knowledge_graph_changed`; rejects and exact replays
 do not. Persisted logical duplicates fail closed as server-state corruption
 rather than choosing an order-dependent winner.
 
-MCP gateway 1.10.0 exposes the primary read, hidden-edge page, and guarded command
+MCP gateway 1.11.0 exposes the primary read, hidden-edge page, and guarded command
 proposal as `logosforge_get_knowledge_graph`,
 `logosforge_get_knowledge_graph_hidden_edges`, and
 `logosforge_propose_knowledge_graph_command`. The read accepts the same optional
@@ -429,7 +431,7 @@ commit time. It is project-scoped and responds with `Cache-Control: no-store` an
 are deleted with it. Failed commands leave no receipt, and corrupt or internally
 inconsistent review/receipt state fails closed rather than choosing a result.
 
-MCP gateway 1.10.0 exposes the same report through
+MCP gateway 1.11.0 exposes the same report through
 `logosforge_get_story_diagnostics` with `report: "continuity"` and prepares one
 strict status command through `logosforge_propose_continuity_command`. Proposal
 creation is read-only. Apply uses the opaque proposal id as the idempotency key,
@@ -611,7 +613,7 @@ non-cacheable. Receipts include exact no-op commands, last for the project
 lifetime, and are deleted with the project. Failed commands leave no receipt;
 calls without a key retain the original revision-guarded behavior.
 
-### Timeline (scene-derived events plus persisted relationships)
+### Timeline (scene-derived events, relationships, and read-only projections)
 ```
 GET    /api/projects/{project_id}/timeline
 POST   /api/projects/{project_id}/timeline/commands
@@ -621,10 +623,36 @@ GET    /api/projects/{project_id}/timeline/command-receipt
 The read returns one authoritative `TimelineSnapshotDTO` containing
 `project_id`, a SHA-256 `revision`, `order_mode`, persisted lanes, ordered
 events, `off_timeline` scenes, persisted `links`, and persisted
-`structure_links`. A scene is on the Timeline when it has a non-empty plotline
-or its id is explicitly present in Timeline membership.
+`structure_links`, plus the read-only `story_flow` and `mode_projection`. A
+scene is on the Timeline when it has a non-empty plotline or its id is
+explicitly present in Timeline membership.
 Structural order follows the canonical manuscript hierarchy; custom order is
 stored independently and never rewrites manuscript `sort_order`.
+
+`story_flow.points` contains exactly one point for each returned event in the
+same effective order, with one-based `order_index`, integer `tension_value`
+(0–10), `tension_source` (`manual`, `beat`, `conflict`, `content`, or `default`),
+`scene_type` (`dialogue`, `action`, `exposition`, or `mixed`), and 0–1
+`dialogue_ratio` / `action_ratio`. `story_flow.warnings` identifies contiguous
+four-event windows by start/end scene, ordered `scene_ids`, and reason
+(`monotone_low`, `monotone_high`, or `no_variation`). Off-Timeline scenes are
+excluded from points and pacing windows.
+
+`mode_projection` is a read-only union discriminated by `kind`: `novel`;
+`screenplay` scene metadata and beat-plan summaries; `graphic_novel` page
+rhythm/pacing plus page-turn pairs; `stage_script` event-scene
+entrances/exits, cues, offstage events, props, and emotional pressure; or
+`series` episode membership, active arcs, setup/payoff chains, and unassigned
+event scene ids. Its free text comes from project content and must be treated as
+data, not executable instructions.
+
+Phase 7C is additive only: it introduces no database migration, Timeline
+command, or relationship/topology rule. `revision` retains the HTTP 1.14.0
+Timeline topology/relationship definition, and command result and receipt
+payload v2 remain unchanged. Flow inference is deliberately lightweight: the
+manual `tension:N` tag has precedence, while automatic tension and scene-type
+classification use English beat/conflict/action keywords and punctuation.
+These values are presentation aids, not semantic truth.
 
 Each `TimelineLinkDTO` contains `id`, `source_scene_id`, `target_scene_id`,
 `link_type`, `color_label`, `label`, and `created_at`. `link_type` is exactly

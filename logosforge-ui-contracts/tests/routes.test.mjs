@@ -205,7 +205,10 @@ console.log('Contract route/event tests: 16 passed, 0 failed');
 
 const pythonSchemas = readFileSync('../logosforge/logosforge/api/schemas.py', 'utf8');
 const typescriptSchemas = readFileSync('src/types.ts', 'utf8');
-const pythonDtos = new Set([...pythonSchemas.matchAll(/^class\s+(\w+DTO)\b/gm)].map((match) => match[1]));
+const pythonDtos = new Set([
+  ...[...pythonSchemas.matchAll(/^class\s+(\w+DTO)\b/gm)].map((match) => match[1]),
+  ...[...pythonSchemas.matchAll(/^(\w+DTO)\s*=\s*Annotated\[/gm)].map((match) => match[1]),
+]);
 const typescriptDtos = new Set(
   [...typescriptSchemas.matchAll(/^export\s+(?:interface|type)\s+(\w+DTO)\b/gm)]
     .map((match) => match[1]),
@@ -347,8 +350,8 @@ for (const field of ['run_id', 'expected_revision']) {
 }
 
 const pythonApiApp = readFileSync('../logosforge/logosforge/api/app.py', 'utf8');
-if (!pythonApiApp.includes('API_CONTRACT_VERSION = "1.14.0"')) {
-  throw new Error('Transactional Timeline relationships must ship as HTTP contract 1.14.0');
+if (!pythonApiApp.includes('API_CONTRACT_VERSION = "1.15.0"')) {
+  throw new Error('Timeline story-flow and mode projections must ship as HTTP contract 1.15.0');
 }
 
 console.log('Guided Workflow contract parity tests: routes/event + 16 DTOs mirrored');
@@ -364,7 +367,7 @@ const timelineRelationshipDtoFields = {
   ],
   TimelineSnapshotDTO: [
     'project_id', 'revision', 'order_mode', 'lanes', 'events', 'links',
-    'structure_links', 'off_timeline',
+    'structure_links', 'off_timeline', 'story_flow', 'mode_projection',
   ],
   TimelineCreateLinkCommandDTO: [
     'kind', 'source_scene_id', 'target_scene_id',
@@ -451,6 +454,84 @@ for (const kind of [
 }
 
 console.log('Timeline relationship contract parity tests: 11 DTOs + 6 commands mirrored');
+
+const timelineProjectionDtoFields = {
+  TimelineStoryFlowPointDTO: [
+    'scene_id', 'order_index', 'tension_value', 'tension_source', 'scene_type',
+    'dialogue_ratio', 'action_ratio',
+  ],
+  TimelinePacingWarningDTO: [
+    'start_scene_id', 'end_scene_id', 'scene_ids', 'reason',
+  ],
+  TimelineStoryFlowDTO: ['points', 'warnings'],
+  TimelineNovelModeProjectionDTO: ['kind'],
+  TimelineScreenplaySceneProjectionDTO: [
+    'scene_id', 'interior_exterior', 'cinematic_pacing', 'dramatic_turn',
+    'emotional_turn', 'objective', 'conflict', 'turning_point',
+    'emotional_shift', 'visual_beat_count',
+  ],
+  TimelineScreenplayModeProjectionDTO: ['kind', 'scenes'],
+  TimelineGraphicNovelPageProjectionDTO: [
+    'page_id', 'page_number', 'sequence_id', 'issue_id', 'issue_title',
+    'density', 'rhythm', 'reveal_timing', 'splash_page', 'panel_count',
+    'action_density', 'text_load', 'pacing', 'is_silence', 'is_action',
+  ],
+  TimelineGraphicNovelPageTurnDTO: [
+    'setup_page_id', 'setup_page_number', 'reveal_page_id',
+    'reveal_page_number', 'reveal_type',
+  ],
+  TimelineGraphicNovelModeProjectionDTO: ['kind', 'pages', 'page_turns'],
+  TimelineStageEntranceExitProjectionDTO: [
+    'character', 'type', 'moment_order', 'cue_text',
+  ],
+  TimelineStageCueProjectionDTO: ['type', 'text', 'moment_order'],
+  TimelineStageSceneProjectionDTO: [
+    'scene_id', 'order_index', 'act', 'title', 'entrances_exits', 'cues',
+    'offstage_events', 'has_offstage_events', 'props', 'emotional_pressure',
+  ],
+  TimelineStageScriptModeProjectionDTO: ['kind', 'scenes'],
+  TimelineSeriesArcProjectionDTO: ['arc_id', 'title', 'scope', 'status'],
+  TimelineSeriesEpisodeProjectionDTO: [
+    'episode_id', 'order_index', 'season_id', 'season', 'episode_number',
+    'title', 'cliffhanger', 'scene_ids', 'active_arcs', 'setup_arc_ids',
+    'payoff_arc_ids',
+  ],
+  TimelineSeriesArcChainDTO: [
+    'arc_id', 'title', 'scope', 'setup_episode_id', 'payoff_episode_id',
+    'setup_order_index', 'payoff_order_index',
+  ],
+  TimelineSeriesModeProjectionDTO: [
+    'kind', 'episodes', 'arc_chains', 'unassigned_scene_ids',
+  ],
+};
+for (const [dtoName, fields] of Object.entries(timelineProjectionDtoFields)) {
+  const pythonBody = pythonSchemas.match(new RegExp(
+    `class ${dtoName}\\([^)]*\\):([\\s\\S]*?)\\n\\n(?:class |TimelineModeProjectionDTO)`,
+  ))?.[1] ?? '';
+  const typescriptBody = typescriptSchemas.match(new RegExp(
+    `export interface ${dtoName}[^\\{]*\\{([\\s\\S]*?)\\n\\}`,
+  ))?.[1] ?? '';
+  for (const field of fields) {
+    if (!pythonBody.includes(`${field}:`)) {
+      throw new Error(`Python ${dtoName} is missing ${field}`);
+    }
+    if (!typescriptBody.includes(`${field}:`)) {
+      throw new Error(`TypeScript ${dtoName} is missing ${field}`);
+    }
+  }
+}
+for (const kind of ['novel', 'screenplay', 'graphic_novel', 'stage_script', 'series']) {
+  if (!pythonSchemas.includes(`kind: Literal["${kind}"]`)
+      || !typescriptSchemas.includes(`kind: "${kind}"`)) {
+    throw new Error(`TimelineModeProjectionDTO is missing discriminator ${kind}`);
+  }
+}
+if (!pythonSchemas.includes('Field(discriminator="kind")')
+    || !typescriptSchemas.includes('export type TimelineModeProjectionDTO =')) {
+  throw new Error('TimelineModeProjectionDTO must remain a required discriminated union');
+}
+
+console.log('Timeline Phase 7C contract parity tests: story-flow + 5 mode projections mirrored');
 
 const decisionRadarDtoFields = {
   DecisionEvidenceDTO: [

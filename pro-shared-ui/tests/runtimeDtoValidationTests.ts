@@ -115,19 +115,8 @@ const manuscriptSnapshot = (sceneOverrides: Record<string, unknown> = {}, overri
 const timelineSnapshot = (
   eventOverrides: Record<string, unknown> = {},
   overrides: Record<string, unknown> = {},
-) => ({
-  project_id: 1,
-  revision: "c".repeat(64),
-  order_mode: "structural",
-  lanes: [{
-    id: 4,
-    name: "Main",
-    color_label: "cyan",
-    order_index: 0,
-    collapsed: false,
-    event_count: 1,
-  }],
-  events: [{
+) => {
+  const event = {
     id: 2,
     order_index: 1,
     title: "Scene",
@@ -142,33 +131,60 @@ const timelineSnapshot = (
     duration_minutes: 5,
     character_states: [{ character: "Marlow", state: "alert" }],
     ...eventOverrides,
-  }],
-  links: [{
-    id: 8,
-    source_scene_id: 2,
-    target_scene_id: 3,
-    link_type: "causality",
-    color_label: "amber",
-    label: "causes",
-    created_at: "2026-10-05T09:02:00Z",
-  }],
-  structure_links: [{
-    id: 9,
-    source_scene_id: 2,
-    target_type: "chapter",
-    target_ref: "Chapter One",
-    target_exists: true,
-    created_at: "2026-10-05T09:03:00Z",
-  }],
-  off_timeline: [{
-    id: 3,
-    title: "Later",
-    structural_number: "1.1.2",
-    act: "Act One",
-    chapter: "Chapter One",
-  }],
-  ...overrides,
-});
+  };
+  return {
+    project_id: 1,
+    revision: "c".repeat(64),
+    order_mode: "structural",
+    lanes: [{
+      id: 4,
+      name: "Main",
+      color_label: "cyan",
+      order_index: 0,
+      collapsed: false,
+      event_count: 1,
+    }],
+    events: [event],
+    links: [{
+      id: 8,
+      source_scene_id: 2,
+      target_scene_id: 3,
+      link_type: "causality",
+      color_label: "amber",
+      label: "causes",
+      created_at: "2026-10-05T09:02:00Z",
+    }],
+    structure_links: [{
+      id: 9,
+      source_scene_id: 2,
+      target_type: "chapter",
+      target_ref: "Chapter One",
+      target_exists: true,
+      created_at: "2026-10-05T09:03:00Z",
+    }],
+    off_timeline: [{
+      id: 3,
+      title: "Later",
+      structural_number: "1.1.2",
+      act: "Act One",
+      chapter: "Chapter One",
+    }],
+    story_flow: {
+      points: [{
+        scene_id: event.id,
+        order_index: event.order_index,
+        tension_value: 6,
+        tension_source: "content",
+        scene_type: "mixed",
+        dialogue_ratio: 0.4,
+        action_ratio: 0.3,
+      }],
+      warnings: [],
+    },
+    mode_projection: { kind: "novel" },
+    ...overrides,
+  };
+};
 
 const timelineCommandResult = (overrides: Record<string, unknown> = {}) => {
   const timeline = overrides.timeline ?? timelineSnapshot({}, { revision: "d".repeat(64) });
@@ -1116,6 +1132,496 @@ try {
     () => client.getTimeline(1),
     timelineSnapshot({ duration_minutes: -1 }),
     (value) => value.events[0]?.duration_minutes === -1,
+  );
+  await expectValid(
+    "Timeline story-flow points and contiguous warnings align exactly with active events",
+    () => client.getTimeline(1),
+    timelineSnapshot({}, {
+      story_flow: {
+        points: [{
+          scene_id: 2, order_index: 1, tension_value: 3, tension_source: "beat",
+          scene_type: "action", dialogue_ratio: 0.1, action_ratio: 0.8,
+        }],
+        warnings: [{
+          start_scene_id: 2, end_scene_id: 2, scene_ids: [2], reason: "monotone_low",
+        }],
+      },
+    }),
+    (value) => value.story_flow.warnings[0]?.scene_ids[0] === 2,
+  );
+  const largeTimelineEvents = Array.from({ length: 10_001 }, (_, index) => ({
+    id: index + 1,
+    order_index: index + 1,
+    title: `Scene ${index + 1}`,
+    structural_number: "",
+    act: "",
+    chapter: "",
+    plotline: "",
+    color_label: "",
+    lane_id: null,
+    time_of_day: "",
+    location: "",
+    duration_minutes: 0,
+    character_states: [],
+  }));
+  const largeStoryFlow = {
+    points: largeTimelineEvents.map((event) => ({
+      scene_id: event.id,
+      order_index: event.order_index,
+      tension_value: 2,
+      tension_source: "default",
+      scene_type: "exposition",
+      dialogue_ratio: 0,
+      action_ratio: 0,
+    })),
+    warnings: [],
+  };
+  const largeTimelineBase = {
+    lanes: [],
+    events: largeTimelineEvents,
+    links: [],
+    structure_links: [],
+    off_timeline: [],
+    story_flow: largeStoryFlow,
+  };
+  await expectValid(
+    "Timeline story-flow cardinality follows the canonical event list beyond independent mode caps",
+    () => client.getTimeline(1),
+    timelineSnapshot({}, {
+      ...largeTimelineBase,
+      mode_projection: { kind: "novel" },
+    }),
+    (value) => value.story_flow.points.length === 10_001,
+  );
+  await expectValid(
+    "Timeline screenplay projections follow event cardinality beyond independent mode caps",
+    () => client.getTimeline(1),
+    timelineSnapshot({}, {
+      ...largeTimelineBase,
+      mode_projection: {
+        kind: "screenplay",
+        scenes: largeTimelineEvents.map((event) => ({
+          scene_id: event.id,
+          interior_exterior: "",
+          cinematic_pacing: "",
+          dramatic_turn: "",
+          emotional_turn: "",
+          objective: "",
+          conflict: "",
+          turning_point: "",
+          emotional_shift: "",
+          visual_beat_count: 0,
+        })),
+      },
+    }),
+    (value) => value.mode_projection.kind === "screenplay"
+      && value.mode_projection.scenes.length === 10_001,
+  );
+  await expectValid(
+    "Timeline stage projections follow event cardinality beyond independent mode caps",
+    () => client.getTimeline(1),
+    timelineSnapshot({}, {
+      ...largeTimelineBase,
+      mode_projection: {
+        kind: "stage_script",
+        scenes: largeTimelineEvents.map((event) => ({
+          scene_id: event.id,
+          order_index: event.order_index,
+          act: "",
+          title: event.title,
+          entrances_exits: [],
+          cues: [],
+          offstage_events: "",
+          has_offstage_events: false,
+          props: [],
+          emotional_pressure: "flat",
+        })),
+      },
+    }),
+    (value) => value.mode_projection.kind === "stage_script"
+      && value.mode_projection.scenes.length === 10_001,
+  );
+  await expectValid(
+    "Timeline Series scene partitions follow event cardinality beyond independent mode caps",
+    () => client.getTimeline(1),
+    timelineSnapshot({}, {
+      ...largeTimelineBase,
+      mode_projection: {
+        kind: "series",
+        episodes: [],
+        arc_chains: [],
+        unassigned_scene_ids: largeTimelineEvents.map((event) => event.id),
+      },
+    }),
+    (value) => value.mode_projection.kind === "series"
+      && value.mode_projection.unassigned_scene_ids.length === 10_001,
+  );
+  await expectValid(
+    "Timeline Series keeps episode assignments truthful beyond 10,000 episodes",
+    () => client.getTimeline(1),
+    timelineSnapshot({}, {
+      ...largeTimelineBase,
+      mode_projection: {
+        kind: "series",
+        episodes: largeTimelineEvents.map((event) => ({
+          episode_id: event.id,
+          order_index: event.order_index,
+          season_id: 1,
+          season: "Season One",
+          episode_number: event.order_index,
+          title: `Episode ${event.order_index}`,
+          cliffhanger: "",
+          scene_ids: [event.id],
+          active_arcs: [],
+          setup_arc_ids: [],
+          payoff_arc_ids: [],
+        })),
+        arc_chains: [],
+        unassigned_scene_ids: [],
+      },
+    }),
+    (value) => value.mode_projection.kind === "series"
+      && value.mode_projection.episodes.length === 10_001
+      && value.mode_projection.episodes.at(-1)?.scene_ids[0] === 10_001,
+  );
+  await expectValid(
+    "Timeline screenplay projections require one bounded facet row per active event",
+    () => client.getTimeline(1),
+    timelineSnapshot({}, {
+      mode_projection: {
+        kind: "screenplay",
+        scenes: [{
+          scene_id: 2,
+          interior_exterior: "INT",
+          cinematic_pacing: "urgent",
+          dramatic_turn: "The door opens",
+          emotional_turn: "Resolve",
+          objective: "Escape",
+          conflict: "The lock",
+          turning_point: "The alarm",
+          emotional_shift: "Fear to focus",
+          visual_beat_count: 3,
+        }],
+      },
+    }),
+    (value) => value.mode_projection.kind === "screenplay",
+  );
+  await expectValid(
+    "Timeline graphic-novel projections validate page facets and owned page-turn references",
+    () => client.getTimeline(1),
+    timelineSnapshot({}, {
+      mode_projection: {
+        kind: "graphic_novel",
+        pages: [
+          {
+            page_id: 20, page_number: 0, sequence_id: null, issue_id: 5,
+            issue_title: "Issue One", density: "light", rhythm: "slow",
+            reveal_timing: "page_turn", splash_page: false, panel_count: 3,
+            action_density: 0.5, text_load: 4, pacing: "cinematic",
+            is_silence: true, is_action: false,
+          },
+          {
+            page_id: 21, page_number: 0, sequence_id: 6, issue_id: 5,
+            issue_title: "Issue One", density: "explosive", rhythm: "chaotic",
+            reveal_timing: "", splash_page: true, panel_count: 1,
+            action_density: 1, text_load: 0, pacing: "explosive",
+            is_silence: false, is_action: true,
+          },
+        ],
+        page_turns: [{
+          setup_page_id: 20, setup_page_number: 0,
+          reveal_page_id: 21, reveal_page_number: 0, reveal_type: "page_turn",
+        }],
+      },
+    }),
+    (value) => value.mode_projection.kind === "graphic_novel",
+  );
+  await expectValid(
+    "Timeline stage projections align scenes and validate blocking, cues, props, and pressure",
+    () => client.getTimeline(1),
+    timelineSnapshot({}, {
+      mode_projection: {
+        kind: "stage_script",
+        scenes: [{
+          scene_id: 2, order_index: 1, act: "Act One", title: "Scene",
+          entrances_exits: [{
+            character: "Marlow", type: "entrance", moment_order: 0,
+            cue_text: "Marlow enters",
+          }],
+          cues: [{ type: "light", text: "Blue wash", moment_order: 1 }],
+          offstage_events: "A bell rings", has_offstage_events: true,
+          props: ["Letter"], emotional_pressure: "conflict",
+        }],
+      },
+    }),
+    (value) => value.mode_projection.kind === "stage_script",
+  );
+  await expectValid(
+    "Timeline series projections validate episode assignment and arc-chain references",
+    () => client.getTimeline(1),
+    timelineSnapshot({}, {
+      mode_projection: {
+        kind: "series",
+        episodes: [{
+          episode_id: 30, order_index: 1, season_id: 4, season: "Season One",
+          episode_number: 1, title: "Pilot", cliffhanger: "The door opens",
+          scene_ids: [2],
+          active_arcs: [{
+            arc_id: 40, title: "Homecoming", scope: "season", status: "active",
+          }],
+          setup_arc_ids: [40], payoff_arc_ids: [40],
+        }],
+        arc_chains: [{
+          arc_id: 40, title: "Homecoming", scope: "season",
+          setup_episode_id: 30, payoff_episode_id: 30,
+          setup_order_index: 1, payoff_order_index: 1,
+        }],
+        unassigned_scene_ids: [],
+      },
+    }),
+    (value) => value.mode_projection.kind === "series",
+  );
+  await expectInvalid(
+    "Timeline story-flow points cannot drift from event identity or order",
+    () => client.getTimeline(1),
+    json(timelineSnapshot({}, {
+      story_flow: {
+        points: [{
+          scene_id: 3, order_index: 1, tension_value: 3, tension_source: "content",
+          scene_type: "mixed", dialogue_ratio: 0.5, action_ratio: 0.5,
+        }],
+        warnings: [],
+      },
+    })),
+    "GET",
+    "/api/projects/1/timeline",
+    "$.story_flow.points[0].scene_id",
+  );
+  await expectInvalid(
+    "Timeline pacing warnings must name their exact contiguous point span",
+    () => client.getTimeline(1),
+    json(timelineSnapshot({}, {
+      story_flow: {
+        points: [{
+          scene_id: 2, order_index: 1, tension_value: 3, tension_source: "content",
+          scene_type: "mixed", dialogue_ratio: 0.5, action_ratio: 0.5,
+        }],
+        warnings: [{
+          start_scene_id: 2, end_scene_id: 3, scene_ids: [2], reason: "no_variation",
+        }],
+      },
+    })),
+    "GET",
+    "/api/projects/1/timeline",
+    "$.story_flow.warnings[0].end_scene_id",
+  );
+  await expectInvalid(
+    "Timeline story-flow ratios stay within normalized bounds",
+    () => client.getTimeline(1),
+    json(timelineSnapshot({}, {
+      story_flow: {
+        points: [{
+          scene_id: 2, order_index: 1, tension_value: 3, tension_source: "content",
+          scene_type: "mixed", dialogue_ratio: 1.1, action_ratio: 0,
+        }],
+        warnings: [],
+      },
+    })),
+    "GET",
+    "/api/projects/1/timeline",
+    "$.story_flow.points[0].dialogue_ratio",
+  );
+  await expectInvalid(
+    "Timeline tension values remain integral on the 0-to-10 scale",
+    () => client.getTimeline(1),
+    json(timelineSnapshot({}, {
+      story_flow: {
+        points: [{
+          scene_id: 2, order_index: 1, tension_value: 2.5, tension_source: "content",
+          scene_type: "mixed", dialogue_ratio: 0.5, action_ratio: 0.5,
+        }],
+        warnings: [],
+      },
+    })),
+    "GET",
+    "/api/projects/1/timeline",
+    "$.story_flow.points[0].tension_value",
+  );
+  await expectInvalid(
+    "Timeline mode projection strings obey Core's bounded-label contract",
+    () => client.getTimeline(1),
+    json(timelineSnapshot({}, {
+      mode_projection: {
+        kind: "screenplay",
+        scenes: [{
+          scene_id: 2, interior_exterior: "I".repeat(257), cinematic_pacing: "",
+          dramatic_turn: "", emotional_turn: "", objective: "", conflict: "",
+          turning_point: "", emotional_shift: "", visual_beat_count: 0,
+        }],
+      },
+    })),
+    "GET",
+    "/api/projects/1/timeline",
+    "$.mode_projection.scenes[0].interior_exterior",
+  );
+  await expectValid(
+    "Timeline string bounds count Unicode code points like Core instead of UTF-16 units",
+    () => client.getTimeline(1),
+    timelineSnapshot({}, {
+      mode_projection: {
+        kind: "screenplay",
+        scenes: [{
+          scene_id: 2, interior_exterior: "😀".repeat(256), cinematic_pacing: "",
+          dramatic_turn: "", emotional_turn: "", objective: "", conflict: "",
+          turning_point: "", emotional_shift: "", visual_beat_count: 0,
+        }],
+      },
+    }),
+    (value) => value.mode_projection.kind === "screenplay",
+  );
+  await expectInvalid(
+    "Timeline graphic-novel page turns cannot reference foreign or omitted pages",
+    () => client.getTimeline(1),
+    json(timelineSnapshot({}, {
+      mode_projection: {
+        kind: "graphic_novel",
+        pages: [{
+          page_id: 20, page_number: 1, sequence_id: null, issue_id: null,
+          issue_title: "", density: "unset", rhythm: "steady", reveal_timing: "",
+          splash_page: false, panel_count: 0, action_density: 0, text_load: 0,
+          pacing: "quiet", is_silence: false, is_action: false,
+        }],
+        page_turns: [{
+          setup_page_id: 20, setup_page_number: 1,
+          reveal_page_id: 99, reveal_page_number: 2, reveal_type: "page_turn",
+        }],
+      },
+    })),
+    "GET",
+    "/api/projects/1/timeline",
+    "$.mode_projection.page_turns[0].reveal_page_id",
+  );
+  await expectInvalid(
+    "Timeline graphic-novel page turns must connect adjacent returned pages",
+    () => client.getTimeline(1),
+    json(timelineSnapshot({}, {
+      mode_projection: {
+        kind: "graphic_novel",
+        pages: [20, 21, 22].map((pageId, index) => ({
+          page_id: pageId,
+          page_number: index + 1,
+          sequence_id: null,
+          issue_id: null,
+          issue_title: "",
+          density: "unset",
+          rhythm: "steady",
+          reveal_timing: "",
+          splash_page: false,
+          panel_count: 0,
+          action_density: 0,
+          text_load: 0,
+          pacing: "quiet",
+          is_silence: false,
+          is_action: false,
+        })),
+        page_turns: [{
+          setup_page_id: 20, setup_page_number: 1,
+          reveal_page_id: 22, reveal_page_number: 3, reveal_type: "page_turn",
+        }],
+      },
+    })),
+    "GET",
+    "/api/projects/1/timeline",
+    "$.mode_projection.page_turns[0].reveal_page_id",
+  );
+  await expectInvalid(
+    "Timeline stage projections reject unsupported cue enums",
+    () => client.getTimeline(1),
+    json(timelineSnapshot({}, {
+      mode_projection: {
+        kind: "stage_script",
+        scenes: [{
+          scene_id: 2, order_index: 1, act: "Act One", title: "Scene",
+          entrances_exits: [], cues: [{ type: "laser", text: "Zap", moment_order: 0 }],
+          offstage_events: "", has_offstage_events: false, props: [],
+          emotional_pressure: "flat",
+        }],
+      },
+    })),
+    "GET",
+    "/api/projects/1/timeline",
+    "$.mode_projection.scenes[0].cues[0].type",
+  );
+  await expectInvalid(
+    "Timeline series assignments cannot claim foreign scenes",
+    () => client.getTimeline(1),
+    json(timelineSnapshot({}, {
+      mode_projection: {
+        kind: "series",
+        episodes: [{
+          episode_id: 30, order_index: 1, season_id: null, season: "",
+          episode_number: 1, title: "Pilot", cliffhanger: "", scene_ids: [99],
+          active_arcs: [], setup_arc_ids: [], payoff_arc_ids: [],
+        }],
+        arc_chains: [], unassigned_scene_ids: [2],
+      },
+    })),
+    "GET",
+    "/api/projects/1/timeline",
+    "$.mode_projection.episodes[0].scene_ids[0]",
+  );
+  await expectInvalid(
+    "Timeline series assignments cannot claim off-Timeline scenes",
+    () => client.getTimeline(1),
+    json(timelineSnapshot({}, {
+      mode_projection: {
+        kind: "series",
+        episodes: [{
+          episode_id: 30, order_index: 1, season_id: null, season: "",
+          episode_number: 1, title: "Pilot", cliffhanger: "", scene_ids: [3],
+          active_arcs: [], setup_arc_ids: [], payoff_arc_ids: [],
+        }],
+        arc_chains: [], unassigned_scene_ids: [2],
+      },
+    })),
+    "GET",
+    "/api/projects/1/timeline",
+    "$.mode_projection.episodes[0].scene_ids[0]",
+  );
+  await expectInvalid(
+    "Timeline series assignments must partition every active event exactly once",
+    () => client.getTimeline(1),
+    json(timelineSnapshot({}, {
+      mode_projection: {
+        kind: "series", episodes: [], arc_chains: [], unassigned_scene_ids: [],
+      },
+    })),
+    "GET",
+    "/api/projects/1/timeline",
+    "$.mode_projection",
+  );
+  await expectInvalid(
+    "Timeline Series arc chains require dense order indices for returned endpoints",
+    () => client.getTimeline(1),
+    json(timelineSnapshot({}, {
+      mode_projection: {
+        kind: "series",
+        episodes: [{
+          episode_id: 30, order_index: 1, season_id: null, season: "",
+          episode_number: 1, title: "Pilot", cliffhanger: "", scene_ids: [2],
+          active_arcs: [], setup_arc_ids: [40], payoff_arc_ids: [40],
+        }],
+        arc_chains: [{
+          arc_id: 40, title: "Homecoming", scope: "series",
+          setup_episode_id: 30, payoff_episode_id: 30,
+          setup_order_index: null, payoff_order_index: 1,
+        }],
+        unassigned_scene_ids: [],
+      },
+    })),
+    "GET",
+    "/api/projects/1/timeline",
+    "$.mode_projection.arc_chains[0].setup_order_index",
   );
   await expectInvalid(
     "Timeline links reject reverse duplicates of an existing scene pair",

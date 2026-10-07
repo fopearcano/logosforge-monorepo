@@ -356,6 +356,14 @@ try {
       links: [],
       structure_links: [],
       off_timeline: [],
+      story_flow: {
+        points: [{
+          scene_id: 11, order_index: 1, tension_value: 4, tension_source: 'content',
+          scene_type: 'mixed', dialogue_ratio: 0.4, action_ratio: 0.3,
+        }],
+        warnings: [],
+      },
+      mode_projection: { kind: 'novel' },
     },
     replayed: false,
     applied_revision: 'e'.repeat(64),

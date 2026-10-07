@@ -412,7 +412,10 @@ Scene `"1.2.3"` (novel) or flattened Act.Scene (other modes);
   → conflict-field/word boost → content ratio → default); `classify_scene_type`
   → dialogue/action/exposition/mixed; `detect_pacing_warnings` → monotone-low/
   monotone-high/no-variation over 4-scene windows; `tension_color` (green→red);
-  `scene_type_icon` (💬 ⚡ 📖 ✦).
+  `scene_type_icon` (💬 ⚡ 📖 ✦). Phase 7C applies this to the
+  Timeline's effective event sequence, not off-Timeline scenes. Automatic
+  scoring/classification uses English keywords and simple markers, so it is a
+  craft aid rather than semantic truth.
 - **Quantum / Lambda outline** (`quantum_outliner/`) — `OutlineMode` Classical vs
   **Lambda** (relativistic POV, uncertainty, superposition); `generate_possibilities`
   → a `Wavefunction` of 3–5 distinct `Branch`es (stakes, consequence,
@@ -505,21 +508,29 @@ reorganizing plot never silently rewrites the book.
   unified `PlotFilters` (character / tag / plotline) and a writing-mode chip.
 - **Story-flow analysis** (`story_flow`) is fully computed — `SceneTension`
   (value + source), `SceneType` (+ dialogue/action ratios), `PacingWarning`,
-  `tension_color`, `scene_type_icon` — **but not yet surfaced in any of the four
-  views** (a key Studio opportunity).
+  `tension_color`, `scene_type_icon` — and Phase 7C now surfaces it in the
+  production React Timeline as a read-only, event-order-aligned layer.
 
-- **Studio panels & interactions:** a **Unified Plot Workspace** fusing the four
+- **Phase 7C production surface:** a **FLOW** toggle reveals an accessible
+  numeric/semantic tension ribbon (0–10 plus Low/Building/High/Peak), **Story
+  Pulse** aggregates, contiguous warning spans with reasons, and per-card scene
+  type labels. Points map one-to-one to the board's effective Structural/Custom
+  events; off-Timeline scenes are excluded. A read-only **MODE LENS** consumes a
+  `kind`-discriminated projection for Novel, Screenplay, Graphic Novel, Stage
+  Script, or Series. It summarizes screenplay beats, graphic-page rhythm/turns,
+  stage entrances/cues/props, or series episodes/arcs without editing any of
+  those domains.
+- **Further Studio direction:** a **Unified Plot Workspace** fusing the four
   surfaces into tabs/split-panes over **one selection model** (selecting an event
   highlights it everywhere) — left lane/outline rail, center plot-lane board,
   right inspector. A **cinematic Plot-Lane Board** (glowing lane bands, animated
   **bezier** causal links colored/labeled by `link_type`, the numbered ruler as a
   persistent top HUD, a minimap; drag events between lanes/columns; draw links by
   dragging between cards; Structural↔Custom toggle with a visible "off-Outline"
-  badge; `🔗 Act/Ch` chips + amber dangling warnings inline). A **Tension/Pacing
-  HUD overlay** (render `story_flow` as a tension **heat-ribbon** along the
-  story-time axis, `PacingWarning` stretches as red monotone bands with reasons,
-  `SceneType` icons per card, a floating **Story Pulse** HUD) — the biggest
-  cinematic win, since the data exists and nothing renders it. An **inspector
+  badge; `🔗 Act/Ch` chips + amber dangling warnings inline). The Phase 7C
+  tension ribbon, warnings, type labels, and Story Pulse provide the first
+  production HUD layer; curve rendering, animation, minimap integration, and
+  richer filtering remain future polish. An **inspector
   panel** exposing the *full* Scene surface the cards only hint at (goal/conflict/
   outcome, beat, all screenplay/stage fields, tension source, typed links list,
   structure links, character-state overlays) — eliminating today's `QInputDialog`
@@ -539,19 +550,17 @@ reorganizing plot never silently rewrites the book.
   non-matching cards across every pane, collapsed-lane "spark" summaries, and a
   "follow Outline" pulse when re-syncing Custom→Structural.
 
-**Implementation status (Pro roadmap Phase 7B):** HTTP 1.14.0 now returns scene
-links and structure links in the same coherent Timeline snapshot/revision and
-provides six atomic create/update/delete relationship commands with durable
-receipt payload v2 (plus v1 decoding). The production React panel authors,
-edits, and deletes both families, shows `target_exists=false` as a dangling
-structure warning, and performs exact-command/key receipt-first ambiguity
-recovery. Stored source→target orientation is shown, while
-one-link-per-unordered-scene-pair uniqueness is preserved. New creation requires
-current Timeline events; dormant legacy rows remain readable, repairable, and
-deletable. This is implemented locally with packaged validation pending.
-**Phase 7C** is the mode-specific projections and story-flow heat/tension
-overlay described above. Durable broker outbox work is tracked separately before
-LAN, multi-user, or background delivery.
+**Implementation status (Pro roadmap Phase 7C):** HTTP 1.15.0 adds the read-only
+`story_flow` and discriminated `mode_projection` to the coherent Timeline
+snapshot, and MCP 1.11.0 carries them through the existing read while remaining
+at 46 tools. The Phase 7B relationship editor and its six commands remain as
+documented under HTTP 1.14.0; Phase 7C adds no schema migration and does not
+change Timeline command schemas, topology revision, or receipt payload v2. The
+exact Phase 7B `cfd4c7b` AppImage passed the full packaged workspace + MCP
+journey on a clean Ubuntu 22.04 VM. Current-source Windows/macOS full journeys
+and Phase 7C packaged validation remain pending. Durable broker
+outbox/reconciliation is the separate next hardening milestone before LAN,
+multi-user, or background delivery.
 
 ### 4.4 PSYKE — the story bible
 (`psyke_view`, `psyke_console`, `psyke_highlighter`, `characters_view`,
@@ -1522,9 +1531,10 @@ Alpha) — a scoped, versioned, policy-governed memory-object store. All of it i
   process start/stop); a **bridge** (read context, **propose** writes →
   `ActionProposal`, `apply_confirmed_action(confirmed=True)` still gated by connector
   write settings); the legacy bridge's **13 connector-mapped tools** remain
-  historical context. The current Pro gateway is a separate MCP 1.10.0 surface
+  historical context. The current Pro gateway is a separate MCP 1.11.0 surface
   of **46 focused tools**, including the existing canonical Timeline read and
-  proposal tools extended for Phase 7B relationships.
+  proposal tools extended for Phase 7B relationships and the Phase 7C read-only
+  flow/mode projections. Mode-lens user content is data, not agent instructions.
 - **Cloud-safe storage** (`cloud_storage`) — provider-neutral safe primitives (no
   OAuth/provider APIs); see §4.10.
 - **Existing views**: `PluginsView` (left plugin list `name [loaded/disabled/error]`

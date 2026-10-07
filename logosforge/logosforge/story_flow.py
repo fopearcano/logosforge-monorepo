@@ -7,7 +7,8 @@ presence, and content word analysis (with manual override via tags).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -215,10 +216,12 @@ def detect_pacing_warnings(tensions: list[SceneTension]) -> list[PacingWarning]:
     return deduped
 
 
-def analyze_flow(db: Any, project_id: int) -> FlowAnalysis:
-    """Run full flow analysis for a project."""
-    scenes = db.get_all_scenes(project_id)
+def analyze_scene_sequence(scenes: Sequence[Any]) -> FlowAnalysis:
+    """Analyze exactly the supplied scene sequence, preserving its order.
 
+    Timeline uses this pure entry point so pacing windows are derived from the
+    same opt-in events, in the same effective order, as the returned board.
+    """
     tensions: dict[int, SceneTension] = {}
     scene_types: dict[int, SceneType] = {}
     tension_list: list[SceneTension] = []
@@ -236,6 +239,11 @@ def analyze_flow(db: Any, project_id: int) -> FlowAnalysis:
         scene_types=scene_types,
         pacing_warnings=pacing_warnings,
     )
+
+
+def analyze_flow(db: Any, project_id: int) -> FlowAnalysis:
+    """Run full flow analysis for a project in manuscript order."""
+    return analyze_scene_sequence(db.get_all_scenes(project_id))
 
 
 def tension_color(value: int) -> str:

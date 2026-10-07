@@ -234,7 +234,7 @@ def test_continuity_digest_matches_core_canonical_wire():
 
 def test_continuity_tool_is_versioned_read_only_and_strict(continuity_gateway):
     _db, _client, gateway = continuity_gateway
-    assert SERVER_VERSION == "1.10.0"
+    assert SERVER_VERSION == "1.11.0"
     assert len(TOOL_SPECS) == 46
     assert "logosforge_propose_continuity_command" in HANDLERS
 

@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import type { NoteDTO, InlineCommentDTO, CharacterDTO, SceneDTO, ManuscriptSnapshotDTO, StoryStructureDTO, PsykeEntryDTO, PsykeRelationDTO, PsykeProgressionDTO, OutlineNodeDTO, ProjectDTO, TimelineSnapshotDTO, CanvasPlotSnapshotDTO, PlotBlockDTO, ExportRequestDTO, ExportResponseDTO, NarrativeDashboardDTO, ContinuityReportDTO, PacingInsightDTO, BalanceDataDTO, StoryHealthDTO, StructuralAnalysisDTO, WorkflowTemplateDTO, WorkflowRecommendationDTO, WorkflowRunDTO, WorkflowEventDTO, DecisionRadarDTO, KnowledgeGraphQueryDTO, KnowledgeGraphReadDTO, KnowledgeGraphHiddenEdgePageDTO, GraphGravityDTO, AdaptDTO, ReviewReportDTO, FormatReviewDTO, QuantumResultDTO, AssistantResponseDTO, ExtractionResultDTO, ExtractionApplyRequestDTO, ExtractionApplyReportDTO } from "@logosforge/ui-contracts";
+import type { NoteDTO, InlineCommentDTO, CharacterDTO, SceneDTO, ManuscriptSnapshotDTO, StoryStructureDTO, PsykeEntryDTO, PsykeRelationDTO, PsykeProgressionDTO, OutlineNodeDTO, ProjectDTO, TimelineSnapshotDTO, CanvasPlotSnapshotDTO, PlotBlockDTO, ExportRequestDTO, ExportResponseDTO, NarrativeDashboardDTO, ContinuityReportDTO, PacingInsightDTO, BalanceDataDTO, StoryHealthDTO, StructuralAnalysisDTO, WorkflowTemplateDTO, WorkflowRecommendationDTO, WorkflowRunDTO, WorkflowEventDTO, DecisionRadarDTO, KnowledgeGraphQueryDTO, KnowledgeGraphReadDTO, KnowledgeGraphHiddenEdgePageDTO, GraphGravityDTO, AdaptDTO, ReviewReportDTO, FormatReviewDTO, QuantumResultDTO, AssistantResponseDTO, ExtractionResultDTO, ExtractionApplyRequestDTO, ExtractionApplyReportDTO, EventName } from "@logosforge/ui-contracts";
 import type { ExtractionJobDTO } from "@logosforge/ui-contracts";
 import { useStudio } from "../adapters/StudioProvider";
 import { useResource, type Resource } from "./useResource";
@@ -113,9 +113,22 @@ export function useSettings(): {
 }
 
 /** Revisioned lanes, events, and off-Timeline Scenes for the active project. */
+const TIMELINE_REFRESH_EVENTS: EventName[] = [
+  "timeline_changed",
+  "scenes_changed",
+  "scene_changed",
+  "project_data_changed",
+  "characters_changed",
+  "psyke_changed",
+];
+
 export function useTimeline(): Resource<TimelineSnapshotDTO> {
   const { api, projectId } = useStudio();
-  return useResource(projectId ?? null, () => api.getTimeline(projectId as number), ["timeline_changed", "scenes_changed", "scene_changed"]);
+  return useResource(
+    projectId ?? null,
+    () => api.getTimeline(projectId as number),
+    TIMELINE_REFRESH_EVENTS,
+  );
 }
 
 /** Independent revisioned nodes, links, and frames for the active project. */

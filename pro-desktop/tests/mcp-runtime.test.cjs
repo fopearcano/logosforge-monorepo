@@ -218,6 +218,16 @@ check('packaged smoke applies one Timeline proposal and rejects its stale siblin
   packagedSmoke.includes('installed MCP Timeline apply') &&
   packagedSmoke.includes('installed MCP stale Timeline sibling apply') &&
   packagedSmoke.includes('after_stale_timeline != applied_snapshot'));
+check('packaged MCP smoke validates additive Timeline story flow and mode projections',
+  packagedSmoke.includes('def _assert_timeline_phase_7c(') &&
+  packagedSmoke.includes('story-flow points are not aligned to Timeline events') &&
+  packagedSmoke.includes('story-flow order does not match Timeline order') &&
+  packagedSmoke.includes('returned no valid mode projection') &&
+  packagedSmoke.includes('installed MCP Timeline projection after placing'));
+check('frozen MCP smoke validates the additive Timeline read projection',
+  frozenSmoke.includes('def _assert_timeline_phase_7c(') &&
+  frozenSmoke.includes('returned incoherent story-flow data') &&
+  frozenSmoke.includes('returned the wrong mode projection'));
 check('packaged smoke exercises Timeline relationship and structure-link transactions',
   packagedSmoke.includes('installed MCP Timeline relationship create') &&
   packagedSmoke.includes('installed MCP Timeline relationship update') &&
