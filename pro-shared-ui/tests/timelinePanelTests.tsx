@@ -518,6 +518,14 @@ check(
   renderer.root.findByProps({ "aria-label": "Opening is the relationship source" }),
   "starting a relationship must visibly retain the selected source event",
 );
+check(
+  renderer.root.findByProps({ "aria-label": "Timeline relationship editor" }).props.style.maxHeight === 92,
+  "target-picking mode must keep the relationship editor compact enough for short dock cards to remain reachable",
+);
+check(
+  !renderedText(renderer.root.findByProps({ "aria-label": "Timeline relationship editor" })).includes("EVENT LINKS"),
+  "target-picking mode must defer relationship management rows instead of covering the target board",
+);
 act(() => {
   const event: { currentTarget: { value: string } | null } = { currentTarget: { value: "setup_payoff" } };
   renderer.root.findByProps({ "aria-label": "New relationship type" }).props.onChange(event);

@@ -751,7 +751,7 @@ export function TimelinePanel(props: PanelProps) {
   ));
 
   const relationshipWorkspace = timeline && (selectedEvent || pendingSourceId != null || showAllLinks) ? (
-    <section aria-label="Timeline relationship editor" style={{ flex: "none", maxHeight: 188, overflow: "auto", padding: "7px 14px", borderBottom: "1px solid var(--line2)", background: "var(--base)" }}>
+    <section aria-label="Timeline relationship editor" style={{ flex: "none", minHeight: 0, maxHeight: pendingSourceId != null ? 92 : 188, overflow: "auto", padding: "7px 14px", borderBottom: "1px solid var(--line2)", background: "var(--base)" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
         <strong style={{ fontFamily: "'Chakra Petch'", fontSize: 9, letterSpacing: ".08em", color: "var(--strong)" }}>
           {showAllLinks ? "ALL RELATIONSHIPS" : `RELATIONSHIPS · ${selectedEvent?.title || `SCENE #${pendingSourceId}`}`}
@@ -805,7 +805,7 @@ export function TimelinePanel(props: PanelProps) {
         </div>
       )}
 
-      {(selectedEvent || showAllLinks) && (
+      {pendingSourceId == null && (selectedEvent || showAllLinks) && (
         <div style={{ display: "grid", gridTemplateColumns: "minmax(280px,1fr) minmax(280px,1fr)", gap: 12, marginTop: 7 }}>
           <div>
             <div style={{ fontSize: 7, color: "var(--txt3)", letterSpacing: ".08em" }}>EVENT LINKS · {workspaceLinks.length}</div>
@@ -1029,7 +1029,7 @@ export function TimelinePanel(props: PanelProps) {
                       </>
                     )
                     : (
-                    <div data-timeline-board-scroll="true" style={{ flex: 1, overflow: "auto" }}>
+                    <div data-timeline-board-scroll="true" style={{ flex: 1, minHeight: 0, overflow: "auto", overscrollBehavior: "contain" }}>
                     <div style={{ width: boardWidth, minWidth: boardWidth }}>
                       {showFlow && (
                         <TimelineStoryFlow
