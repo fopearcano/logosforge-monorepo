@@ -767,16 +767,25 @@ export function TimelinePanel(props: PanelProps) {
       {pendingSourceId != null && (
         <div style={{ display: "flex", gap: 5, alignItems: "center", flexWrap: "wrap", marginTop: 6 }}>
           <label style={{ fontSize: 7, color: "var(--txt3)" }}>TYPE{" "}
-            <select aria-label="New relationship type" disabled={disabled} value={linkDraft.linkType} onChange={(event) => setLinkDraft((current) => ({ ...current, linkType: event.currentTarget.value as TimelineLinkType }))} style={control}>
+            <select aria-label="New relationship type" disabled={disabled} value={linkDraft.linkType} onChange={(event) => {
+              const linkType = event.currentTarget.value as TimelineLinkType;
+              setLinkDraft((current) => ({ ...current, linkType }));
+            }} style={control}>
               {TIMELINE_LINK_TYPES.map((type) => <option key={type} value={type}>{type.replaceAll("_", " ")}</option>)}
             </select>
           </label>
           <label style={{ fontSize: 7, color: "var(--txt3)" }}>COLOR{" "}
-            <select aria-label="New relationship color" disabled={disabled} value={linkDraft.colorLabel} onChange={(event) => setLinkDraft((current) => ({ ...current, colorLabel: event.currentTarget.value }))} style={control}>
+            <select aria-label="New relationship color" disabled={disabled} value={linkDraft.colorLabel} onChange={(event) => {
+              const colorLabel = event.currentTarget.value;
+              setLinkDraft((current) => ({ ...current, colorLabel }));
+            }} style={control}>
               {COLORS.filter((item) => item.key).map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
             </select>
           </label>
-          <input aria-label="New relationship label" disabled={disabled} value={linkDraft.label} onChange={(event) => setLinkDraft((current) => ({ ...current, label: event.currentTarget.value }))} placeholder="optional label…" style={{ ...input, width: 170 }} />
+          <input aria-label="New relationship label" disabled={disabled} value={linkDraft.label} onChange={(event) => {
+            const label = event.currentTarget.value;
+            setLinkDraft((current) => ({ ...current, label }));
+          }} placeholder="optional label…" style={{ ...input, width: 170 }} />
         </div>
       )}
 
@@ -797,14 +806,23 @@ export function TimelinePanel(props: PanelProps) {
                 <div key={link.id} style={{ marginTop: 4, padding: 5, border: "1px solid var(--line2)", borderLeft: `3px solid ${relationshipColor(link.color_label)}` }}>
                   {editing ? (
                     <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
-                      <select aria-label={`Type for relationship ${link.id}`} disabled={disabled} value={linkEditDraft.linkType} onChange={(event) => setLinkEditDraft((current) => ({ ...current, linkType: event.currentTarget.value as TimelineLinkType }))} style={control}>
+                      <select aria-label={`Type for relationship ${link.id}`} disabled={disabled} value={linkEditDraft.linkType} onChange={(event) => {
+                        const linkType = event.currentTarget.value as TimelineLinkType;
+                        setLinkEditDraft((current) => ({ ...current, linkType }));
+                      }} style={control}>
                         {TIMELINE_LINK_TYPES.map((type) => <option key={type} value={type}>{type.replaceAll("_", " ")}</option>)}
                       </select>
-                      <select aria-label={`Color for relationship ${link.id}`} disabled={disabled} value={linkEditDraft.colorLabel} onChange={(event) => setLinkEditDraft((current) => ({ ...current, colorLabel: event.currentTarget.value }))} style={control}>
+                      <select aria-label={`Color for relationship ${link.id}`} disabled={disabled} value={linkEditDraft.colorLabel} onChange={(event) => {
+                        const colorLabel = event.currentTarget.value;
+                        setLinkEditDraft((current) => ({ ...current, colorLabel }));
+                      }} style={control}>
                         {linkEditDraft.colorLabel && !COLORS.some((item) => item.key === linkEditDraft.colorLabel) && <option value={linkEditDraft.colorLabel}>{linkEditDraft.colorLabel}</option>}
                         {COLORS.map((item) => <option key={item.key || "auto"} value={item.key}>{item.label}</option>)}
                       </select>
-                      <input aria-label={`Label for relationship ${link.id}`} disabled={disabled} value={linkEditDraft.label} onChange={(event) => setLinkEditDraft((current) => ({ ...current, label: event.currentTarget.value }))} style={{ ...input, width: 120 }} />
+                      <input aria-label={`Label for relationship ${link.id}`} disabled={disabled} value={linkEditDraft.label} onChange={(event) => {
+                        const label = event.currentTarget.value;
+                        setLinkEditDraft((current) => ({ ...current, label }));
+                      }} style={{ ...input, width: 120 }} />
                       <button type="button" disabled={disabled || !linkEditDraft.linkType.trim()} onClick={() => void runIntent({ kind: "update_link", linkId: link.id, ...linkEditDraft })} style={activeControl}>SAVE</button>
                       <button type="button" disabled={Boolean(busy)} onClick={() => setEditingLinkId(null)} style={control}>CANCEL</button>
                     </div>
@@ -841,7 +859,10 @@ export function TimelinePanel(props: PanelProps) {
               }} style={control}>
                 <option value="act">Act</option><option value="chapter">Chapter</option>
               </select>}
-              {selectedEvent && <select aria-label="New structure target" disabled={disabled} value={structureDraft.targetRef} onChange={(event) => setStructureDraft((current) => ({ ...current, targetRef: event.currentTarget.value }))} style={{ ...control, maxWidth: 150 }}>
+              {selectedEvent && <select aria-label="New structure target" disabled={disabled} value={structureDraft.targetRef} onChange={(event) => {
+                const targetRef = event.currentTarget.value;
+                setStructureDraft((current) => ({ ...current, targetRef }));
+              }} style={{ ...control, maxWidth: 150 }}>
                 <option value="">choose {structureDraft.targetType}…</option>
                 {structureOptions(structureDraft.targetType).map((value) => <option key={value} value={value}>{value}</option>)}
               </select>}
@@ -861,7 +882,10 @@ export function TimelinePanel(props: PanelProps) {
                       }} style={control}>
                         <option value="act">Act</option><option value="chapter">Chapter</option>
                       </select>
-                      <select aria-label={`Target for structure relationship ${link.id}`} disabled={disabled} value={structureEditDraft.targetRef} onChange={(event) => setStructureEditDraft((current) => ({ ...current, targetRef: event.currentTarget.value }))} style={control}>
+                      <select aria-label={`Target for structure relationship ${link.id}`} disabled={disabled} value={structureEditDraft.targetRef} onChange={(event) => {
+                        const targetRef = event.currentTarget.value;
+                        setStructureEditDraft((current) => ({ ...current, targetRef }));
+                      }} style={control}>
                         {!structureOptions(structureEditDraft.targetType).includes(structureEditDraft.targetRef) && structureEditDraft.targetRef && <option value={structureEditDraft.targetRef}>{structureEditDraft.targetRef} (missing)</option>}
                         <option value="">choose target…</option>
                         {structureOptions(structureEditDraft.targetType).map((value) => <option key={value} value={value}>{value}</option>)}
@@ -993,7 +1017,10 @@ export function TimelinePanel(props: PanelProps) {
                               <div>
                                 <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                                   <button type="button" disabled={disabled} aria-label={`${lane.collapsed ? "Expand" : "Collapse"} ${lane.name}`} aria-expanded={!lane.collapsed} onClick={() => void runIntent({ kind: "update_lane", laneId: lane.id, collapsed: !lane.collapsed })} style={{ ...control, padding: "1px 4px", color: palette.color }}>{lane.collapsed ? "▸" : "▾"}</button>
-                                  <input aria-label={`Name for lane ${lane.name}`} disabled={disabled} value={name} onChange={(event) => setLaneNames((current) => ({ ...current, [lane.id]: event.currentTarget.value }))} onKeyDown={(event) => {
+                                  <input aria-label={`Name for lane ${lane.name}`} disabled={disabled} value={name} onChange={(event) => {
+                                    const nextName = event.currentTarget.value;
+                                    setLaneNames((current) => ({ ...current, [lane.id]: nextName }));
+                                  }} onKeyDown={(event) => {
                                     if (event.key === "Enter" && name.trim() !== lane.name) void runIntent({ kind: "update_lane", laneId: lane.id, name });
                                   }} style={{ ...input, width: 82, color: palette.color }} />
                                   {name.trim() !== lane.name && <button type="button" disabled={disabled} aria-label={`Save lane name ${name}`} onClick={() => void runIntent({ kind: "update_lane", laneId: lane.id, name })} style={{ ...activeControl, padding: "2px 4px" }}>SAVE</button>}

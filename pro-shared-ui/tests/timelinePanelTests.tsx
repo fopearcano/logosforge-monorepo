@@ -357,7 +357,11 @@ check(
   "starting a relationship must visibly retain the selected source event",
 );
 act(() => {
-  renderer.root.findByProps({ "aria-label": "New relationship type" }).props.onChange({ currentTarget: { value: "setup_payoff" } });
+  const event: { currentTarget: { value: string } | null } = { currentTarget: { value: "setup_payoff" } };
+  renderer.root.findByProps({ "aria-label": "New relationship type" }).props.onChange(event);
+  // React only guarantees currentTarget during the callback. State updaters may
+  // run after it has been cleared, as they do in the packaged renderer.
+  event.currentTarget = null;
   renderer.root.findByProps({ "aria-label": "New relationship label" }).props.onChange({ currentTarget: { value: "Clue returns" } });
 });
 
