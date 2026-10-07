@@ -18,7 +18,7 @@ export interface WhiteboardBlock {
   /** Screenplay element type on a paragraph (Screenplay mode); persists. */
   sp?: string | null;
   /** Inline bold/italic marks (prose modes); persists alongside the plain text. */
-  marks?: InlineMark[];
+  marks?: InlineMark[] | null;
 }
 
 export interface WhiteboardDocument {

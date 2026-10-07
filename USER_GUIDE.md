@@ -219,8 +219,8 @@ For fully offline AI, run a local server (LM Studio or Ollama) and point the Bas
 | **Final Draft** (`.fdx`) | Extracts the screenplay and switches to Screenplay. |
 | **LogosForge** (`.logosforge`) | The app's JSON export (manuscript + outline). |
 
-Whiteboard does **not** currently import or restore `.lfbundle` project bundles.
-Those bundles are the migration/archive format consumed by **LogosForge Pro**;
+Whiteboard intentionally does **not** import or restore `.lfbundle` project bundles.
+They are an export-only migration/archive format consumed by **LogosForge Pro**;
 see [Moving a project to LogosForge Pro](#16-moving-a-project-to-logosforge-pro).
 
 ---
@@ -231,7 +231,7 @@ see [Moving a project to LogosForge Pro](#16-moving-a-project-to-logosforge-pro)
 
 | Format | Contains |
 |---|---|
-| **Export Project** (`.lfbundle`) | A complete portable snapshot — manuscript, Drafter pages, narrative/format settings, outline, comments, and PSYKE — for archiving or importing into LogosForge Pro. Whiteboard cannot import it yet. |
+| **Export Project** (`.lfbundle`) | A complete portable snapshot — manuscript, Drafter pages, narrative/format settings, outline, comments, and PSYKE — for archiving or one-way migration into LogosForge Pro. Whiteboard does not import it by design. |
 | Text / Markdown / Fountain | The manuscript as text. |
 | HTML | A styled, self-contained web page of the manuscript. |
 | JSON | Title, mode, and raw blocks. |
@@ -239,7 +239,7 @@ see [Moving a project to LogosForge Pro](#16-moving-a-project-to-logosforge-pro)
 | Comments | A Markdown report of all comments, grouped open/resolved and labelled with their Drafter page when applicable. |
 | PDF | The print path — a paginated script for screenplays, plain print otherwise. |
 
-For a true "save everything" snapshot, use **Export Project (.lfbundle)** — it's the only single file that captures Drafter pages, document settings, outline, comments, *and* characters alongside the prose. Whiteboard aborts this export if any component cannot be read; it never reports success for a bundle that silently dropped Drafter, PSYKE, or damaged local state. Pro imports Drafter pages as tagged Notes and preserves their structured source blocks in project settings. To restore Whiteboard itself, restore the `~/.logosforge` data folder instead.
+For a true "save everything" snapshot, use **Export Project (.lfbundle)** — it's the only single file that captures Drafter pages, document settings, outline, comments, *and* characters alongside the prose. Whiteboard aborts this export if any component cannot be read; it never reports success for a bundle that silently dropped Drafter, PSYKE, or damaged local state. Drafter remains a Whiteboard-only authoring surface; migration compatibility may preserve draft material as ordinary Pro Notes, but it does not create a Pro Drafter surface or a round trip back to Whiteboard. To restore Whiteboard itself, restore the `~/.logosforge` data folder instead.
 
 ---
 
@@ -329,7 +329,7 @@ Everything you write lives under one folder in your home directory:
 
 (On Windows, `~` is `%USERPROFILE%`.)
 
-**To back up, move, or restore your Whiteboard workspace:** copy the whole `~/.logosforge` folder while Whiteboard is closed. **To archive a single project for migration to Pro:** use **File → Export → Export Project (.lfbundle)**. Whiteboard does not currently import `.lfbundle` files itself.
+**To back up, move, or restore your Whiteboard workspace:** copy the whole `~/.logosforge` folder while Whiteboard is closed. **To archive a single project for migration to Pro:** use **File → Export → Export Project (.lfbundle)**. Whiteboard does not import `.lfbundle` files by design.
 
 For manuscript, Drafter, outline, and comment JSON, Whiteboard keeps the two preceding
 versions beside the current file as `.bak` and `.bak.1`. If the current copy is
@@ -354,10 +354,11 @@ Whiteboard and Pro are separate apps. To graduate a project to Pro:
 1. In Whiteboard: **File → Export → Export Project (.lfbundle)**.
 2. In Pro: import that `.lfbundle`.
 
-Pro converts the manuscript blocks to scenes; imports Drafter pages as tagged
-Notes; imports the document settings, PSYKE entries, relationships, progression
-beats, outline, and outline links; and preserves the exact structured Drafter
-blocks plus other Whiteboard-only settings in the imported project's settings store.
+Pro converts the manuscript blocks to scenes and imports the document settings,
+PSYKE entries, relationships, progression beats, outline, and outline links.
+Drafter remains a Whiteboard-only authoring surface. Existing migration
+compatibility may retain Drafter material as tagged Notes, but this is not a Pro
+Drafter feature or a Whiteboard round-trip contract.
 Progression scene anchors are remapped only when their title uniquely matches an
 imported scene; unresolved anchors keep their progression beat unlinked and are reported.
 Whiteboard Manuscript comment threads are also recreated in Pro when their text span can be

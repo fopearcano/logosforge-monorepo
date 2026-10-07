@@ -17,7 +17,7 @@ A calm, database-backed writing workstation for **novels, screenplays, graphic n
 - **PSYKE — the story bible** — keep **characters, places, objects, lore, and themes** per project. PSYKE is scoped to each document, so two projects never share a cast.
 - **Comments** — on the **Manuscript** tab, highlight text and click **Comment** to leave a threaded note pinned to that passage. Resolve them when handled.
 - **AI — Billy & Logos** — **Billy** is a hovering chat assistant; **Logos** works inline and in context. Point them at your provider (LM Studio, Ollama, OpenAI, Anthropic, OpenRouter) in **Settings ⚙** (top-right).
-- **Export & backup** — **File → Export → Export Project (.lfbundle)** saves an entire project — manuscript, Drafter pages, document settings, outline, comments, and PSYKE — as one file. That's your backup, and the file you hand to LogosForge Pro. Whiteboard aborts rather than writing an incomplete bundle, and keeps two automatic local backup generations for manuscript, Drafter, outline, and comments. Plain Text, Markdown, Fountain, and PDF remain manuscript-only exports.
+- **Export & backup** — **File → Export → Export Project (.lfbundle)** saves an entire project — manuscript, Drafter pages, document settings, outline, comments, and PSYKE — as one portable archive for one-way migration to LogosForge Pro. Whiteboard intentionally does not import it; restore Whiteboard itself from its local data folder. Whiteboard aborts rather than writing an incomplete bundle, and keeps two automatic local backup generations for manuscript, Drafter, outline, and comments. Plain Text, Markdown, Fountain, and PDF remain manuscript-only exports.
 
 ---
 

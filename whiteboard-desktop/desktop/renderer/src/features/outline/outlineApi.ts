@@ -25,6 +25,10 @@ import {
   validateResourceRevisionResponse,
 } from '../../api/resourceRevision';
 import {
+  validateOutlineItemsResponse,
+  type OutlineItemsResponse,
+} from '../../api/runtimeDtoValidation';
+import {
   OUTLINE_COLORS,
   OUTLINE_STATUSES,
   OUTLINE_TYPES,
@@ -37,19 +41,14 @@ import {
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:8777';
 
-interface OutlineItemsResponse {
-  items?: unknown;
-  revision?: unknown;
-}
-
 const asString = (v: unknown, fallback = ''): string => (typeof v === 'string' ? v : fallback);
 
 function parseLink(v: unknown): OutlineLink | null {
   if (!v || typeof v !== 'object') return null;
   const o = v as Record<string, unknown>;
-  if (typeof o.blockIndex !== 'number' || o.blockIndex < 0) return null;
+  if (!Number.isSafeInteger(o.blockIndex) || Number(o.blockIndex) < 0) return null;
   return {
-    blockIndex: o.blockIndex,
+    blockIndex: Number(o.blockIndex),
     quote: typeof o.quote === 'string' ? o.quote : '',
     ...(typeof o.blockId === 'string' && o.blockId.trim() ? { blockId: o.blockId.trim() } : {}),
   };
@@ -78,7 +77,7 @@ function normalize(raw: unknown): OutlineNode | null {
     type,
     title: asString(r.title),
     summary: asString(r.summary),
-    order: typeof r.order === 'number' ? r.order : 0,
+    order: typeof r.order === 'number' && Number.isFinite(r.order) ? r.order : 0,
     collapsed: r.collapsed === true,
     completed: r.completed === true,
     status,
@@ -109,7 +108,7 @@ async function readOutlineItems(
       signal,
     });
     if (!res.ok) throw await responseError(res, 'Could not load the outline');
-    const data = (await res.json()) as OutlineItemsResponse;
+    const data = validateOutlineItemsResponse(await res.json());
     const bodyRevision = validateResourceRevisionResponse(
       'outline',
       incarnation,
@@ -176,7 +175,7 @@ export async function saveOutlineItems(
     signal,
   });
   if (!res.ok) throw await responseError(res, 'Could not save the outline');
-  const data = (await res.json()) as OutlineItemsResponse;
+  const data = validateOutlineItemsResponse(await res.json());
   const nextRevision = validateResourceRevisionResponse(
     'outline',
     identity.incarnation,
@@ -214,7 +213,7 @@ export async function saveOutlineItemsForDocument(
     },
   );
   if (!res.ok) throw await responseError(res, 'Could not save the outline');
-  const data = (await res.json()) as OutlineItemsResponse;
+  const data = validateOutlineItemsResponse(await res.json());
   const nextRevision = validateResourceRevisionResponse(
     'outline',
     incarnation,

@@ -211,16 +211,11 @@ On a clean or isolated test account for each platform:
 5. Exercise a loopback/local AI provider from both Manuscript and Drafter, PDF
    or text export, and `.lfbundle` export. Confirm publication exports remain
    manuscript-only and inspect that the bundle carries `drafter.pages` plus
-   PSYKE `elements`, `relations`, and `progressions`, then import it in
-   LogosForge Pro. Pro recreates Drafter pages as tagged Notes and the entries,
-   restores relationships and ordered progression beats through entry-ID
-   remapping, and restores a progression's scene anchor only when its scene
-   title has one unique match in the imported manuscript. Missing or ambiguous
-   scene matches remain unlinked and are reported by the importer. Pro also
-   recreates comment threads whose Whiteboard block spans map safely to the
-   imported scene title/content, preserving replies and resolution state while
-   explicitly reporting unmappable anchors. Verify them in Pro's Comments
-   panel. Whiteboard does not restore bundles itself.
+   PSYKE `elements`, `relations`, and `progressions`. Whiteboard intentionally
+   does not restore bundles itself, and Pro bridge behavior is not a Whiteboard
+   release gate. Drafter remains a Whiteboard-only authoring surface; any
+   migration-time preservation as ordinary Pro Notes is compatibility behavior,
+   not a shared Drafter feature or a round-trip promise.
 6. Confirm Windows installer and portable builds use isolated expected data,
    and verify the macOS DMG and Linux AppImage on supported systems.
 

@@ -34,6 +34,7 @@ import {
   discardDrafterConflictRecovery,
   restoreDrafterConflict,
 } from '../features/drafter/pendingDrafterRecovery';
+import { validateResourceRevisionEnvelope } from './runtimeDtoValidation';
 import {
   coordinateRecoveryAbandonment,
   reconcilePendingDocumentRecoveries,
@@ -201,7 +202,7 @@ export async function persistPendingDocument(
     body: JSON.stringify(payload),
   });
   if (!response.ok) throw await responseError(response, `Could not save ${kind}`);
-  const data = await response.json() as { revision?: unknown };
+  const data = validateResourceRevisionEnvelope(await response.json());
   const nextRevision = validateResourceRevisionResponse(
     kind,
     incarnation,

@@ -28,8 +28,9 @@ Whiteboard is alpha software. Its current core is **0.9.0-alpha**.
   one.
 - Import from text, Markdown, Fountain, Final Draft, and `.logosforge`; export to
   text, Markdown, Fountain, HTML, JSON, `.logosforge`, comment reports, PDF, and
-  complete `.lfbundle` project snapshots, including Drafter pages. `.lfbundle` import/restoration is
-  currently handled by LogosForge Pro, not Whiteboard.
+  complete `.lfbundle` project snapshots, including Drafter pages. `.lfbundle`
+  is intentionally export-only in Whiteboard: use it for archival or one-way
+  migration to LogosForge Pro, and restore Whiteboard from its local data folder.
 - Windows x64 installer and portable builds, macOS 12+ Intel DMG, and Linux x64
   AppImage release targets.
 

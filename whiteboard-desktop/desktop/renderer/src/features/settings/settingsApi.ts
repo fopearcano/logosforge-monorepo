@@ -2,6 +2,10 @@
 
 import { backendFetch } from '../../api/backendAuth';
 import { responseError } from '../../api/responseError';
+import {
+  validateAiSettingsResponse,
+  validateAiTestResult,
+} from '../../api/runtimeDtoValidation';
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:8777';
 
@@ -68,7 +72,7 @@ export async function getAiSettings(
 ): Promise<AiSettings> {
   const res = await backendFetch(`${baseUrl}/api/settings/ai`, { signal });
   if (!res.ok) throw await responseError(res, 'Couldn’t load AI settings');
-  return (await res.json()) as AiSettings;
+  return validateAiSettingsResponse(await res.json());
 }
 
 export async function saveAiSettings(
@@ -81,7 +85,7 @@ export async function saveAiSettings(
     body: JSON.stringify(patch),
   });
   if (!res.ok) throw await responseError(res, 'Couldn’t save AI settings');
-  return (await res.json()) as AiSettings;
+  return validateAiSettingsResponse(await res.json());
 }
 
 export async function testAiConnection(
@@ -90,5 +94,5 @@ export async function testAiConnection(
 ): Promise<AiTestResult> {
   const res = await backendFetch(`${baseUrl}/api/settings/ai/test`, { method: 'POST', signal });
   if (!res.ok) throw await responseError(res, 'AI connection test failed');
-  return (await res.json()) as AiTestResult;
+  return validateAiTestResult(await res.json());
 }

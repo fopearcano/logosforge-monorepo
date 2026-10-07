@@ -34,7 +34,7 @@ on:
         description: "Existing Whiteboard tag to build and publish"
         type: string
         required: false
-        default: "whiteboard-v0.1.19"
+        default: "whiteboard-v0.1.20"
 
 permissions:
   contents: write
@@ -473,6 +473,49 @@ jobs:
         run: >-
           ./build-venv/Scripts/python.exe whiteboard-desktop/backend/smoke-packaged-mcp.py
           "whiteboard-desktop/desktop/release/win-unpacked/LogosForge Whiteboard.exe"
+
+      - name: Detect standalone packaged Whiteboard lifecycle gate
+        id: lifecycle_gate
+        working-directory: whiteboard-desktop/desktop
+        env:
+          ALLOW_PRE_GATE_SKIP: ${{ github.event_name == 'workflow_dispatch' && steps.release.outputs.publish == 'true' }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if node - <<'NODE'
+          const fs = require('node:fs');
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const ready = typeof pkg.scripts?.['test:packaged:whiteboard'] === 'string'
+            && fs.existsSync('scripts/whiteboard-packaged-acceptance.mjs')
+            && fs.existsSync('scripts/whiteboard-packaged-acceptance-support.mjs');
+          process.exit(ready ? 0 : 1);
+          NODE
+          then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          elif [ "$ALLOW_PRE_GATE_SKIP" = "true" ]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Standalone Whiteboard lifecycle gate skipped::The manually repaired tag ${RELEASE_TAG} predates the packaged lifecycle harness; legacy bridge/package checks still run."
+          else
+            echo "::error::The checked-out source is missing the standalone packaged Whiteboard lifecycle gate."
+            exit 1
+          fi
+
+      - name: Exercise standalone packaged Whiteboard lifecycle
+        if: steps.lifecycle_gate.outputs.available == 'true'
+        working-directory: whiteboard-desktop/desktop
+        env:
+          LOGOSFORGE_WHITEBOARD_PACKAGED_ACCEPTANCE_ROOT: ${{ runner.temp }}/logosforge-whiteboard-release-lifecycle-${{ github.run_id }}-${{ github.run_attempt }}
+        run: npm run test:packaged:whiteboard
+
+      - name: Upload standalone Whiteboard lifecycle diagnostics
+        if: failure() && steps.lifecycle_gate.outputs.available == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (Node 24)
+        with:
+          name: whiteboard-windows-lifecycle-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/logosforge-whiteboard-release-lifecycle-${{ github.run_id }}-${{ github.run_attempt }}/diagnostics
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
 
       # --- 3. Publish ------------------------------------------------------
       - name: Upload build artifacts

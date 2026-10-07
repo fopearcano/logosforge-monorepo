@@ -6,6 +6,10 @@ import {
 } from '../../state/currentDocument';
 import { backendFetch, withDocumentIncarnation } from '../../api/backendAuth';
 import { responseError } from '../../api/responseError';
+import {
+  validateBillyChatResponse,
+  validateLogosInlineResponse,
+} from '../../api/runtimeDtoValidation';
 import { runLittleBoyDocumentRequest } from './littleboyRequestLifecycle';
 import type {
   BillyChatRequest,
@@ -36,7 +40,7 @@ export async function billyChat(
       },
     );
     if (!res.ok) throw await responseError(res, 'Billy could not respond');
-    return (await res.json()) as BillyChatResponse;
+    return validateBillyChatResponse(await res.json());
   });
 }
 
@@ -60,6 +64,6 @@ export async function logosInline(
       },
     );
     if (!res.ok) throw await responseError(res, 'Logos could not respond');
-    return (await res.json()) as LogosInlineResponse;
+    return validateLogosInlineResponse(await res.json());
   });
 }

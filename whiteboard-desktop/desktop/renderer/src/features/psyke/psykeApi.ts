@@ -12,6 +12,12 @@ import {
   withExpectedDocumentIncarnation,
 } from '../../api/backendAuth';
 import { responseError } from '../../api/responseError';
+import {
+  validatePsykeCreateResponse,
+  validatePsykeDeleteAcknowledgement,
+  validatePsykeElementMutationResponse,
+  validatePsykeSearchResponse,
+} from '../../api/runtimeDtoValidation';
 import type {
   PsykeCreatePayload,
   PsykeCreateResponse,
@@ -46,7 +52,7 @@ export async function searchPsykeForDocument(
     signal,
   });
   if (!res.ok) throw await responseError(res, 'Could not search PSYKE');
-  return (await res.json()) as PsykeSearchResponse;
+  return validatePsykeSearchResponse(await res.json());
 }
 
 export async function createPsykeElement(
@@ -77,7 +83,7 @@ export async function createPsykeElementForDocument(
         signal,
       });
       if (!res.ok) throw await responseError(res, 'Could not save the PSYKE element');
-      return (await res.json()) as PsykeCreateResponse;
+      return validatePsykeCreateResponse(await res.json());
     },
     documentId,
   );
@@ -103,7 +109,7 @@ export async function updatePsykeElement(
         },
       );
       if (!res.ok) throw await responseError(res, 'Could not save the PSYKE element');
-      return (await res.json()) as PsykeCreateResponse;
+      return validatePsykeElementMutationResponse(await res.json(), id);
     },
     documentId,
   );
@@ -127,7 +133,7 @@ export async function deletePsykeElement(
         },
       );
       if (!res.ok) throw await responseError(res, 'Could not delete the PSYKE element');
-      return (await res.json()) as PsykeDeleteResponse;
+      return validatePsykeDeleteAcknowledgement(await res.json(), id);
     },
     documentId,
   );

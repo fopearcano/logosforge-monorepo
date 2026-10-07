@@ -75,7 +75,9 @@ jobs:
             whiteboard-desktop/backend/smoke-frozen-mcp.py \
             whiteboard-desktop/backend/smoke-packaged-mcp.py \
             whiteboard-desktop/desktop/package.json \
-            whiteboard-desktop/desktop/scripts/packaged-acceptance.mjs
+            whiteboard-desktop/desktop/scripts/packaged-acceptance.mjs \
+            whiteboard-desktop/desktop/scripts/whiteboard-packaged-acceptance-support.mjs \
+            whiteboard-desktop/desktop/scripts/whiteboard-packaged-acceptance.mjs
           do
             test -e "$path" || { echo "::error::Missing required monorepo path: $path"; exit 1; }
           done
@@ -242,6 +244,12 @@ jobs:
           ./acceptance-venv/Scripts/python.exe whiteboard-desktop/backend/smoke-packaged-mcp.py
           "whiteboard-desktop/desktop/release/win-unpacked/LogosForge Whiteboard.exe"
 
+      - name: Exercise standalone packaged Whiteboard lifecycle
+        working-directory: whiteboard-desktop/desktop
+        env:
+          LOGOSFORGE_WHITEBOARD_PACKAGED_ACCEPTANCE_ROOT: ${{ runner.temp }}/logosforge-whiteboard-lifecycle-${{ github.run_id }}-${{ github.run_attempt }}
+        run: npm run test:packaged:whiteboard
+
       - name: Package unpacked Pro app
         working-directory: pro-desktop
         env:
@@ -296,6 +304,7 @@ jobs:
         with:
           name: packaged-windows-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
+            ${{ runner.temp }}/logosforge-whiteboard-lifecycle-${{ github.run_id }}-${{ github.run_attempt }}/diagnostics
             ${{ runner.temp }}/logosforge-packaged-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
             ${{ runner.temp }}/logosforge-pro-workspace-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: warn

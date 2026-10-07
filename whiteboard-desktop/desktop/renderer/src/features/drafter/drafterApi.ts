@@ -10,41 +10,12 @@ import {
   validateResourceRevisionResponse,
 } from '../../api/resourceRevision';
 import type { DrafterPage, DrafterPagesDocument } from './types';
+import { validateDrafterPagesDocument } from '../../api/runtimeDtoValidation';
 
 const REVISION_RE = /^[a-f0-9]{32}$/;
 
 function endpoint(baseUrl: string, documentId: string): string {
   return `${baseUrl}/api/drafter/pages?doc=${encodeURIComponent(documentId)}`;
-}
-
-function assertDocument(value: unknown): DrafterPagesDocument {
-  if (!value || typeof value !== 'object') throw new Error('The backend returned invalid Drafter pages.');
-  const candidate = value as Record<string, unknown>;
-  if (!Array.isArray(candidate.pages) || typeof candidate.revision !== 'string') {
-    throw new Error('The backend returned invalid Drafter pages.');
-  }
-  if (!REVISION_RE.test(candidate.revision)) {
-    throw new Error('The backend returned an invalid Drafter revision.');
-  }
-  const now = new Date().toISOString();
-  const pages: DrafterPage[] = [];
-  for (const page of candidate.pages) {
-    if (
-      !page || typeof page !== 'object'
-      || typeof (page as DrafterPage).id !== 'string'
-      || typeof (page as DrafterPage).title !== 'string'
-      || !Array.isArray((page as DrafterPage).blocks)
-    ) {
-      throw new Error('The backend returned an invalid Drafter page.');
-    }
-    const typed = page as DrafterPage;
-    pages.push({
-      ...typed,
-      created_at: typeof typed.created_at === 'string' ? typed.created_at : now,
-      updated_at: typeof typed.updated_at === 'string' ? typed.updated_at : now,
-    });
-  }
-  return { pages, revision: candidate.revision };
 }
 
 export async function getDrafterPages(
@@ -60,7 +31,7 @@ export async function getDrafterPages(
       signal,
     });
     if (!response.ok) throw await responseError(response, 'Could not load Drafter pages');
-    const document = assertDocument(await response.json());
+    const document = validateDrafterPagesDocument(await response.json());
     const revision = validateResourceRevisionResponse(
       'drafter',
       incarnation,
@@ -101,7 +72,7 @@ export async function putDrafterPages(
     signal,
   });
   if (!response.ok) throw await responseError(response, 'Could not save Drafter pages');
-  const document = assertDocument(await response.json());
+  const document = validateDrafterPagesDocument(await response.json());
   const nextRevision = validateResourceRevisionResponse(
     'drafter',
     incarnation,

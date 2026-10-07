@@ -16,6 +16,7 @@ export interface PsykeEntry {
 export interface PsykeSearchResponse {
   query: string;
   results: PsykeEntry[];
+  revision: string;
 }
 
 export interface PsykeCreatePayload {
@@ -28,6 +29,7 @@ export interface PsykeCreatePayload {
 export interface PsykeCreateResponse {
   ok: boolean;
   element: PsykeEntry;
+  revision: string;
 }
 
 /** Partial update — only the provided fields change. */
@@ -40,5 +42,5 @@ export interface PsykeUpdatePayload {
 
 export interface PsykeDeleteResponse {
   ok: boolean;
-  deleted: string;
+  deleted: number;
 }

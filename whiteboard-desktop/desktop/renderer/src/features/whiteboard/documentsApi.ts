@@ -13,6 +13,12 @@ import {
   installResourceRevision,
   validateResourceRevisionResponse,
 } from '../../api/resourceRevision';
+import {
+  validateDocumentCreateResponse,
+  validateDocumentDeleteResponse,
+  validateDocumentExistsResponse,
+  validateDocumentListResponse,
+} from '../../api/runtimeDtoValidation';
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:8777';
 const DOCUMENT_REQUEST_TIMEOUT_MS = 10_000;
@@ -50,8 +56,7 @@ export async function listDocuments(
 ): Promise<DocumentSummary[]> {
   const res = await backendFetch(`${baseUrl}/api/documents`, { signal });
   if (!res.ok) throw await responseError(res, 'Could not load the document library');
-  const data = (await res.json()) as { documents?: DocumentSummary[] };
-  return data.documents ?? [];
+  return validateDocumentListResponse(await res.json()).documents;
 }
 
 export async function createDocument(
@@ -64,7 +69,7 @@ export async function createDocument(
     body: JSON.stringify(payload),
   });
   if (!res.ok) throw await responseError(res, 'Could not create the document');
-  const data = (await res.json()) as { document: WhiteboardDocument };
+  const data = validateDocumentCreateResponse(await res.json());
   const revision = validateResourceRevisionResponse(
     'whiteboard',
     data.document.incarnation,
@@ -97,6 +102,10 @@ export async function deleteDocument(
       signal,
     });
     if (!res.ok) throw await responseError(res, 'Could not delete the document');
+    const acknowledgement = validateDocumentDeleteResponse(await res.json());
+    if (acknowledgement.deleted !== id) {
+      throw new Error('The backend acknowledged deletion of a different document.');
+    }
     clearDocumentResourceRevisions(id, incarnation);
   });
 }
@@ -112,10 +121,6 @@ export async function documentExists(
       { headers: withDocumentIncarnation(incarnation), signal },
     );
     if (!res.ok) throw await responseError(res, 'Could not reconcile the document delete');
-    const data = (await res.json()) as { exists?: unknown };
-    if (typeof data.exists !== 'boolean') {
-      throw new Error('The document-existence response was invalid.');
-    }
-    return data.exists;
+    return validateDocumentExistsResponse(await res.json()).exists;
   });
 }

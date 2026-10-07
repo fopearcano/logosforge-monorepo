@@ -5,6 +5,8 @@
  * plain browser via the Vite dev server (no Electron bridge present).
  */
 
+import { validateBackendHealthResponse } from './runtimeDtoValidation';
+
 export type BackendState = 'connecting' | 'connected' | 'error';
 
 export interface BackendStatus {
@@ -109,7 +111,7 @@ const fallback: LogosForgeBridge = {
     try {
       const res = await fetch(DEV_BASE_URL + '/health');
       if (res.ok) {
-        const h = (await res.json()) as Record<string, unknown>;
+        const h = validateBackendHealthResponse(await res.json());
         return {
           state: 'connected',
           baseUrl: DEV_BASE_URL,

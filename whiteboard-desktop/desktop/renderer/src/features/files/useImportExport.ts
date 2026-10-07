@@ -30,6 +30,10 @@ import {
   retainPendingDocumentConflict,
 } from '../../api/pendingDocumentPersistence';
 import { responseError } from '../../api/responseError';
+import {
+  validateProjectBundleForDocument,
+  validateProjectBundleSnapshot,
+} from '../../api/runtimeDtoValidation';
 import type { DrafterPage } from '../drafter/types';
 import { createPsykeElementForDocument } from '../psyke/psykeApi';
 import type { PsykeElementType } from '../psyke/types';
@@ -132,15 +136,9 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 /** Adapt the backend's one-request project snapshot to the format exporters. */
 function exportPayloadFromProjectBundle(content: string): ExportPayload {
-  const root = asRecord(JSON.parse(content));
-  const project = asRecord(root?.project);
-  const manuscript = asRecord(project?.manuscript);
-  if (!project || !manuscript || !Array.isArray(manuscript.blocks)) {
-    throw new Error('The backend returned an invalid project snapshot.');
-  }
-  const rawComments = Array.isArray(project.comments) ? project.comments : [];
-  const drafter = asRecord(project.drafter);
-  const drafterPages = Array.isArray(drafter?.pages) ? drafter.pages : [];
+  const { project } = validateProjectBundleSnapshot(JSON.parse(content));
+  const rawComments = project.comments;
+  const drafterPages = project.drafter.pages;
   const drafterTitles = new Map<string, string>();
   drafterPages.forEach((value) => {
     const page = asRecord(value);
@@ -166,14 +164,13 @@ function exportPayloadFromProjectBundle(content: string): ExportPayload {
       ...(typeof comment.created_at === 'string' ? { createdAt: comment.created_at } : {}),
     }];
   });
-  const psyke = asRecord(project.psyke);
   return {
-    title: typeof project.title === 'string' ? project.title : 'Untitled',
-    mode: typeof project.mode === 'string' ? project.mode : 'novel',
-    blocks: manuscript.blocks as WhiteboardBlock[],
+    title: project.title,
+    mode: project.mode,
+    blocks: project.manuscript.blocks,
     settings: normalizeDocumentSettings(project.settings),
-    outline: Array.isArray(project.outline) ? project.outline as OutlineNode[] : [],
-    psyke: { elements: psyke && Array.isArray(psyke.elements) ? psyke.elements : [] },
+    outline: project.outline as unknown as OutlineNode[],
+    psyke: { elements: project.psyke.elements },
     comments,
   };
 }
@@ -561,16 +558,16 @@ export function useImportExport(opts: Options): ImportExportApi {
             });
             if (!resp.ok) throw await responseError(resp, 'Could not assemble the project bundle');
             const projectContent = await resp.text();
+            const projectSnapshot = validateProjectBundleForDocument(
+              JSON.parse(projectContent),
+              documentId,
+            );
             if (id === 'project-bundle') {
               content = projectContent;
-              let projectTitle = '';
-              try {
-                const bundle = JSON.parse(content) as { project?: { title?: unknown } };
-                if (typeof bundle.project?.title === 'string') projectTitle = bundle.project.title;
-              } catch {
-                /* the native save still receives the backend's original payload */
-              }
-              suggested = suggestedExportName(projectTitle || `project-${documentId}`, 'lfbundle');
+              suggested = suggestedExportName(
+                projectSnapshot.project.title || `project-${documentId}`,
+                'lfbundle',
+              );
             } else {
               const payload = exportPayloadFromProjectBundle(projectContent);
               if (id === 'comments' && (payload.comments?.length ?? 0) === 0) {

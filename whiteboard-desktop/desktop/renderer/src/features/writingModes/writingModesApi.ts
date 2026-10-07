@@ -3,6 +3,7 @@
 import type { WritingModesResponse } from './types';
 import { backendFetch } from '../../api/backendAuth';
 import { responseError } from '../../api/responseError';
+import { validateWritingModesResponse } from '../../api/runtimeDtoValidation';
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:8777';
 
@@ -12,5 +13,5 @@ export async function getWritingModes(
 ): Promise<WritingModesResponse> {
   const res = await backendFetch(`${baseUrl}/api/writing-modes`, { signal });
   if (!res.ok) throw await responseError(res, 'Could not load writing modes');
-  return (await res.json()) as WritingModesResponse;
+  return validateWritingModesResponse(await res.json());
 }

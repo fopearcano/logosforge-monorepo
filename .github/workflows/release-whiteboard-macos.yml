@@ -43,6 +43,8 @@ on:
       - "whiteboard-desktop/desktop/electron-builder.yml"
       - "whiteboard-desktop/desktop/package-lock.json"
       - "whiteboard-desktop/desktop/package.json"
+      - "whiteboard-desktop/desktop/scripts/**"
+      - "whiteboard-desktop/desktop/tests/**"
       - "whiteboard-desktop/scripts/**"
   workflow_dispatch:
     inputs:
@@ -54,7 +56,7 @@ on:
         description: "Existing Whiteboard tag to build and publish"
         type: string
         required: false
-        default: "whiteboard-v0.1.19"
+        default: "whiteboard-v0.1.20"
 
 permissions:
   contents: write
@@ -595,6 +597,37 @@ jobs:
           ./build-venv/bin/python whiteboard-desktop/backend/smoke-packaged-mcp.py
           "whiteboard-desktop/desktop/release/LogosForge Whiteboard-${{ steps.release.outputs.version }}-x64.dmg"
           --timeout 120
+
+      - name: Detect standalone packaged Whiteboard lifecycle gate
+        id: lifecycle_gate
+        working-directory: ${{ steps.checkout.outputs.source_root }}/whiteboard-desktop/desktop
+        env:
+          ALLOW_PRE_GATE_SKIP: ${{ github.event_name == 'workflow_dispatch' && steps.release.outputs.publish == 'true' }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if node - <<'NODE'
+          const fs = require('node:fs');
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const ready = typeof pkg.scripts?.['test:packaged:whiteboard'] === 'string'
+            && fs.existsSync('scripts/whiteboard-packaged-acceptance.mjs')
+            && fs.existsSync('scripts/whiteboard-packaged-acceptance-support.mjs');
+          process.exit(ready ? 0 : 1);
+          NODE
+          then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          elif [ "$ALLOW_PRE_GATE_SKIP" = "true" ]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Standalone Whiteboard lifecycle gate skipped::The manually repaired tag ${RELEASE_TAG} predates the packaged lifecycle harness; legacy bridge/package checks still run."
+          else
+            echo "::error::The checked-out source is missing the standalone packaged Whiteboard lifecycle gate."
+            exit 1
+          fi
+
+      - name: Exercise standalone packaged Whiteboard lifecycle
+        if: steps.lifecycle_gate.outputs.available == 'true'
+        working-directory: ${{ steps.checkout.outputs.source_root }}/whiteboard-desktop/desktop
+        run: npm run test:packaged:whiteboard
 
       - name: Self-test the GitHub prerelease uploader
         working-directory: ${{ steps.checkout.outputs.source_root }}

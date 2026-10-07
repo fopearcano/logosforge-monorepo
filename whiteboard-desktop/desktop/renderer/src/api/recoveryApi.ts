@@ -1,5 +1,6 @@
 import { responseError } from './responseError';
 import { backendFetch } from './backendAuth';
+import { validateRecoveryNoticesResponse } from './runtimeDtoValidation';
 
 export interface RecoveryNotice {
   id: string;
@@ -17,6 +18,5 @@ export async function getRecoveryNotices(
 ): Promise<RecoveryNotice[]> {
   const res = await backendFetch(`${baseUrl}/api/recovery/notices`, { signal });
   if (!res.ok) throw await responseError(res, 'Could not check recovery status');
-  const data = (await res.json()) as { notices?: unknown };
-  return Array.isArray(data.notices) ? (data.notices as RecoveryNotice[]) : [];
+  return validateRecoveryNoticesResponse(await res.json()).notices;
 }

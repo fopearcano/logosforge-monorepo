@@ -16,13 +16,14 @@ import {
   StaleResourceReadError,
   validateResourceRevisionResponse,
 } from '../../api/resourceRevision';
+import { validateWhiteboardDocument } from '../../api/runtimeDtoValidation';
 import type { WhiteboardDocument, WhiteboardUpdate } from './types';
 
 export const DEFAULT_BASE_URL = 'http://127.0.0.1:8777';
 
-async function asJson<T>(res: Response): Promise<T> {
+async function asWhiteboardDocument(res: Response): Promise<WhiteboardDocument> {
   if (!res.ok) throw await responseError(res, 'Request failed');
-  return (await res.json()) as T;
+  return validateWhiteboardDocument(await res.json());
 }
 
 function assertWhiteboardIdentity(
@@ -47,7 +48,7 @@ async function readWhiteboard(
       headers: withExpectedDocumentIncarnation(incarnation),
       signal,
     });
-    const document = await asJson<WhiteboardDocument>(res);
+    const document = await asWhiteboardDocument(res);
     assertWhiteboardIdentity(document, documentId, incarnation);
     const bodyRevision = validateResourceRevisionResponse(
       'whiteboard',
@@ -115,7 +116,7 @@ export async function updateWhiteboard(
     body: JSON.stringify(patch),
     signal,
   });
-  const document = await asJson<WhiteboardDocument>(res);
+  const document = await asWhiteboardDocument(res);
   assertWhiteboardIdentity(document, identity.documentId, identity.incarnation);
   const nextRevision = validateResourceRevisionResponse(
     'whiteboard',
@@ -154,7 +155,7 @@ export async function updateWhiteboardForDocument(
       signal,
     },
   );
-  const document = await asJson<WhiteboardDocument>(res);
+  const document = await asWhiteboardDocument(res);
   assertWhiteboardIdentity(document, documentId, incarnation);
   const nextRevision = validateResourceRevisionResponse(
     'whiteboard',
