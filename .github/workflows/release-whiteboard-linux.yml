@@ -426,6 +426,27 @@ jobs:
             exit 1
           fi
 
+      - name: Prepare the unpacked Chromium sandbox for lifecycle testing
+        if: steps.lifecycle_gate.outputs.available == 'true'
+        working-directory: whiteboard-desktop/desktop
+        run: |
+          set -euo pipefail
+          sandbox="$PWD/release/linux-unpacked/chrome-sandbox"
+          [ -f "$sandbox" ] && [ ! -L "$sandbox" ] || {
+            echo "::error::Packaged Chromium sandbox is missing or unsafe: $sandbox"
+            exit 1
+          }
+          sudo chown root:root "$sandbox"
+          sudo chmod 4755 "$sandbox"
+          [ "$(stat -c '%u:%g' "$sandbox")" = '0:0' ] || {
+            echo "::error::Packaged Chromium sandbox is not owned by root."
+            exit 1
+          }
+          [ "$(stat -c '%a' "$sandbox")" = '4755' ] || {
+            echo "::error::Packaged Chromium sandbox does not have mode 4755."
+            exit 1
+          }
+
       - name: Exercise standalone packaged Whiteboard lifecycle
         if: steps.lifecycle_gate.outputs.available == 'true'
         working-directory: whiteboard-desktop/desktop
