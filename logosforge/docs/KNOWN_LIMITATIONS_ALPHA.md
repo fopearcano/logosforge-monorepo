@@ -24,11 +24,19 @@ alpha. Nothing here is a data-safety risk; it's about scope and polish. See
   them in the command transaction. ([GuidedWorkflows.md](GuidedWorkflows.md))
 - **Timeline relationships and Phase 7C lenses** — HTTP 1.15.0, the Pro
   relationship editor, FLOW ribbon/Story Pulse/warnings, read-only MODE LENS,
-  and the existing 46-tool MCP surface are implemented in current source.
-  Phase 7C packaged validation is pending. The exact Phase 7B `cfd4c7b`
-  AppImage passed the full packaged workspace + MCP journey on clean Ubuntu
-  22.04; current-source Windows and macOS full journeys remain pending. The
-  Timeline still does not replace the independent Canvas Plot board.
+  and the existing 46-tool MCP surface are implemented in current source. The
+  exact `33feac9` source passed the hosted Windows packaged pointer workspace,
+  restart-persistence, frozen-companion, and cross-product journey. The exact
+  Phase 7B `cfd4c7b` AppImage passed the full packaged workspace + MCP journey
+  on clean Ubuntu 22.04; current-source Linux/Xvfb and Intel macOS journeys
+  remain pending. The Timeline still does not replace the independent Canvas
+  Plot board.
+- **Phase 7D live-event recovery** — HTTP 1.16.0 atomically records pending
+  invalidations with changed Timeline, Canvas Plot, Knowledge Graph, Semantic
+  Continuity, and Guided Workflow mutations/receipts. The broker reconciles and
+  acknowledges them after commit and on API-process startup, while Pro refetches
+  on connection recovery, broker replacement, or bounded-ring truncation. Full validation and the
+  packaged gate are still pending; MCP remains 1.11.0 with 46 tools.
 
 ## Experimental / optional
 
@@ -225,26 +233,36 @@ alpha. Nothing here is a data-safety risk; it's about scope and polish. See
 
 1. Record a source-bound full-suite-green baseline, including **0 BLOCKER** Writer
    QA findings, for the exact release candidate.
-2. Pass the current-source production-shell packaged journey on Windows and the
-   Intel macOS 12 runner, then complete hands-on acceptance on all three native
-   platforms. The exact Phase 7B `cfd4c7b` AppImage passed the full packaged
-   workspace + MCP journey on a clean Ubuntu 22.04 VM. Phase 7C packaged
-   validation remains pending on HTTP 1.15.0 / MCP 1.11.0.
+2. Pass the current-source production-shell packaged journey on Linux/Xvfb and
+   the Intel macOS 12 runner, then complete hands-on acceptance on all three
+   native platforms. The exact `33feac9` source passed the hosted Windows
+   packaged journey; the exact Phase 7B `cfd4c7b` AppImage passed the full
+   packaged workspace + MCP journey on a clean Ubuntu 22.04 VM. Phase 7D's
+   later HTTP 1.16.0 outbox changes still need source-bound packaged validation;
+   MCP remains 1.11.0.
 3. Harden and authenticate API LAN/remote transport before any non-desktop
    exposure.
-4. Validate the Phase 7C package, then evaluate richer dated Plot/Timeline
-   concepts and opt-in semantic continuity checks.
+4. Finish Phase 7C Linux/macOS packaged validation, then evaluate richer dated
+   Plot/Timeline concepts and opt-in semantic continuity checks.
 
 ## Live-event delivery boundary
 
-Guided Workflow and Timeline relationship state and command receipts are
-crash-safe, but their live change events are published after the database
-commit rather than through a transactional outbox. A process death in that
-narrow window can omit the live notification; an authoritative refetch or
-reconnect still returns the committed state. Durable broker
-outbox/reconciliation is tracked as a separate hardening milestone before any
-LAN, multi-user, or background-delivery guarantee. It remains the separate next
-hardening step and is not part of Phase 7C's read-only projections.
+Phase 7D protects changed Timeline, Canvas Plot, Knowledge Graph, Semantic
+Continuity, and Guided Workflow commands with pending invalidation rows written
+in the same SQLite transaction as their mutation and receipt. The broker moves
+those committed rows into its bounded live ring and acknowledges them after
+commit and when an API process starts. Token-checked acknowledgement protects
+against SQLite row-id reuse. Poll exposes `broker_instance_id` and a bounded-
+ring reset signal; SSE emits a full `connected` control message plus resumable
+ids for domain events and repeats the control boundary on a live ring gap. Pro
+responds to recovery, broker replacement, cursor regression, or truncation by
+refetching authoritative state.
+
+The implementation is deliberately a one-API-process boundary. It does not
+provide multi-process fan-out or an independent background delivery worker;
+legacy mutation routes still publish best-effort after commit. Consequently it
+does not make LAN, multi-user, or background-delivery guarantees. Full suite
+and packaged validation of the Phase 7D source are still pending.
 
 ## Not a bug
 

@@ -19,6 +19,7 @@ from logosforge.models.models import (
     SERIES_ARC_STATUSES,
     EPISODE_PLOTLINE_TYPES,
     TIMELINE_LINK_TYPES,
+    ApiEventOutbox,
     TimelineCommandReceipt,
     TimelineLane,
     TimelineLink,
@@ -101,6 +102,7 @@ from logosforge.models.models import (
 )
 
 __all__ = [
+    "ApiEventOutbox",
     "Project",
     "Character",
     "Comment",

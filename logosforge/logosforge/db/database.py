@@ -311,6 +311,7 @@ _UNSET: object = object()
 from logosforge.comment_revision import comment_revision
 from logosforge.story_flow import FlowAnalysis
 from logosforge.models import (
+    ApiEventOutbox,
     ChatMessage,
     ChatSummary,
     Character,
@@ -386,6 +387,34 @@ from logosforge.models import (
     ContinuityCommandReceipt,
     ContinuityCheckRun,
 )
+
+
+def _enqueue_api_event(
+    session: Session,
+    project_id: int,
+    event_name: str,
+    **data,
+) -> None:
+    """Stage one compact invalidation in the caller's active transaction."""
+    # Keep a per-row capability inside the serialized envelope. SQLite may
+    # reuse an INTEGER PRIMARY KEY after project deletion; the token lets the
+    # broker distinguish that new row from an older row whose acknowledgement
+    # failed, without requiring a schema migration for this additive table.
+    envelope = {
+        "outbox_token": uuid4().hex,
+        "data": data,
+    }
+    session.add(ApiEventOutbox(
+        project_id=int(project_id),
+        event_name=event_name,
+        data_json=json.dumps(
+            envelope,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ),
+    ))
 
 
 class CommentRevisionConflict(RuntimeError):
@@ -2436,6 +2465,57 @@ class Database:
 
             conn.execute(text(f"PRAGMA user_version = {DB_SCHEMA_VERSION}"))
             conn.commit()
+
+    # -- API event outbox ---------------------------------------------------
+
+    def get_pending_api_events(
+        self,
+        *,
+        limit: int = 1000,
+    ) -> list[ApiEventOutbox]:
+        """Return pending invalidations in commit order, detached from SQLite."""
+        bounded_limit = max(1, min(int(limit), 5000))
+        with Session(self._engine, expire_on_commit=False) as session:
+            rows = list(session.exec(
+                select(ApiEventOutbox)
+                .order_by(ApiEventOutbox.id)
+                .limit(bounded_limit)
+            ).all())
+            session.expunge_all()
+            return rows
+
+    def acknowledge_api_events(
+        self,
+        events: tuple[ApiEventOutbox, ...],
+    ) -> int:
+        """Delete the exact pending row generations copied to the live ring.
+
+        Matching the serialized token-bearing payload as well as the reusable
+        integer key prevents a concurrent delete/recreate from acknowledging a
+        newer row that happens to receive the same SQLite id.
+        """
+        expected_by_id = {
+            int(row.id): row
+            for row in events
+            if row.id is not None
+        }
+        if not expected_by_id:
+            return 0
+        with Session(self._engine) as session:
+            acknowledged = 0
+            for event_id, expected in expected_by_id.items():
+                table = ApiEventOutbox.__table__
+                result = session.execute(
+                    table.delete().where(
+                        table.c.id == event_id,
+                        table.c.project_id == expected.project_id,
+                        table.c.event_name == expected.event_name,
+                        table.c.data_json == expected.data_json,
+                    )
+                )
+                acknowledged += max(int(result.rowcount or 0), 0)
+            session.commit()
+            return acknowledged
 
     # -- Projects ------------------------------------------------------------
 
@@ -4636,6 +4716,24 @@ class Database:
                                 ),
                             ),
                         ))
+                    for affected_scene_id in unique_affected:
+                        _enqueue_api_event(
+                            session,
+                            project_id,
+                            "scene_changed",
+                            scene_id=affected_scene_id,
+                        )
+                    if unique_affected:
+                        _enqueue_api_event(
+                            session,
+                            project_id,
+                            "plot_changed",
+                        )
+                    _enqueue_api_event(
+                        session,
+                        project_id,
+                        "timeline_changed",
+                    )
                     session.commit()
                     session.expunge_all()
                     return TimelineCommandResult(
@@ -7360,6 +7458,14 @@ class Database:
                                 original_created_frame_id=created_frame_id,
                             ),
                         ))
+                    _enqueue_api_event(
+                        session,
+                        project_id,
+                        "canvas_plot_changed",
+                        affected_node_ids=list(unique_node_ids),
+                        affected_link_ids=list(unique_link_ids),
+                        affected_frame_ids=list(unique_frame_ids),
+                    )
                     session.commit()
                     session.expunge_all()
                     return CanvasPlotCommandResult(
@@ -10885,6 +10991,14 @@ class Database:
                                 run_id=int(run.id),
                             ),
                         ))
+                        _enqueue_api_event(
+                            session,
+                            project_id,
+                            "workflow_changed",
+                            run_id=int(run.id),
+                            command_kind=kind,
+                            revision=updated.revision,
+                        )
                         session.commit()
                         session.expunge_all()
                         return WorkflowCommandResult(
@@ -11144,6 +11258,15 @@ class Database:
                             run_id=run_id,
                         ),
                     ))
+                    if changed:
+                        _enqueue_api_event(
+                            session,
+                            project_id,
+                            "workflow_changed",
+                            run_id=run_id,
+                            command_kind=kind,
+                            revision=updated.revision,
+                        )
                     session.commit()
                     session.expunge_all()
                     return WorkflowCommandResult(
@@ -11642,6 +11765,16 @@ class Database:
                             affected_edge=identity,
                         ),
                     ))
+                    _enqueue_api_event(
+                        session,
+                        project_id,
+                        "knowledge_graph_changed",
+                        affected_edge={
+                            "source": identity.source,
+                            "target": identity.target,
+                            "edge_type": identity.edge_type,
+                        },
+                    )
                     session.commit()
                     session.expunge_all()
                     return KnowledgeGraphCommandResult(
@@ -12099,6 +12232,13 @@ class Database:
                             original_changed=True,
                         ),
                     ))
+                    _enqueue_api_event(
+                        session,
+                        project_id,
+                        "continuity_changed",
+                        issue_id=issue_key,
+                        status=status,
+                    )
                     session.commit()
                     session.expunge_all()
                     return ContinuityCommandResult(

@@ -9,7 +9,10 @@ The **shared language** between the LogosForge Python core and every frontend
   export types/formats).
 - **`routes.ts`** — the `/api` route map.
 
-The current mirrored HTTP contract is **1.15.0**. The coherent Timeline
+The current mirrored HTTP contract is **1.16.0**. Phase 7D adds an opaque
+broker-instance token and bounded-ring reset signal to polling so transport
+replacement or cursor truncation forces authoritative resource reconciliation.
+The coherent Timeline
 snapshot now includes a story-flow curve aligned 1:1 with its active events,
 contiguous pacing warnings, and a required narrative-mode projection for
 Novel, Screenplay, Graphic Novel, Stage Script, or Series projects. The

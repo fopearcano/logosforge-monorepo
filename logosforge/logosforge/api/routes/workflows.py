@@ -214,14 +214,7 @@ def execute_workflow_command(
     except WorkflowCommandError as exc:
         raise bad_request(str(exc)) from exc
 
-    if result.changed and not result.replayed:
-        broker.publish(
-            "workflow_changed",
-            project_id=project.id,
-            run_id=int(result.snapshot.run.id),
-            command_kind=kind,
-            revision=result.snapshot.revision,
-        )
+    broker.reconcile()
     view = engine.workflow_run_view_from_snapshot(result.snapshot)
     return schemas.WorkflowCommandResultDTO(
         workflow=serializers.workflow_run_to_dto(view),

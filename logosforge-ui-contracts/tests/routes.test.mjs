@@ -350,8 +350,22 @@ for (const field of ['run_id', 'expected_revision']) {
 }
 
 const pythonApiApp = readFileSync('../logosforge/logosforge/api/app.py', 'utf8');
-if (!pythonApiApp.includes('API_CONTRACT_VERSION = "1.15.0"')) {
-  throw new Error('Timeline story-flow and mode projections must ship as HTTP contract 1.15.0');
+if (!pythonApiApp.includes('API_CONTRACT_VERSION = "1.16.0"')) {
+  throw new Error('Transactional event outbox reconciliation must ship as HTTP contract 1.16.0');
+}
+const pythonEventsPoll = pythonSchemas.match(
+  /class EventsPollDTO\(BaseModel\):([\s\S]*?)\n\nclass /,
+)?.[1] ?? '';
+const typescriptEventsPoll = typescriptSchemas.match(
+  /export interface EventsPollDTO \{([\s\S]*?)\n\}/,
+)?.[1] ?? '';
+for (const field of ['events', 'cursor', 'broker_instance_id', 'reset_required', 'known_events']) {
+  if (!pythonEventsPoll.includes(`${field}:`)) {
+    throw new Error(`Python EventsPollDTO is missing ${field}`);
+  }
+  if (!typescriptEventsPoll.includes(`${field}:`)) {
+    throw new Error(`TypeScript EventsPollDTO is missing ${field}`);
+  }
 }
 
 console.log('Guided Workflow contract parity tests: routes/event + 16 DTOs mirrored');

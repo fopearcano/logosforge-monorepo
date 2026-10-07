@@ -243,6 +243,21 @@ migration, Timeline command/topology revision change, or receipt v2 change was
 introduced. The MCP read carries the same data without adding to the 46-tool
 surface; mode-lens text is project data, never agent instructions.
 
+HTTP 1.16.0 adds Phase 7D durable live-event recovery for changed Timeline,
+Canvas Plot, Knowledge Graph, Semantic Continuity, and Guided Workflow
+commands. A compact invalidation row commits atomically with each mutation and
+receipt; the single-process broker reconciles and acknowledges pending rows
+after commit and at API-process startup. Poll responses expose
+`broker_instance_id` plus a bounded-ring reset flag, SSE sends a full
+`connected` message (including on a live ring gap) and ids for domain events,
+and Pro refetches authoritative surfaces after recovery, broker replacement,
+cursor regression, or truncation. Token-checked acknowledgement distinguishes
+reused SQLite row generations, and live invalidations prevent a post-boundary
+refetch from joining a stale in-flight GET. Legacy mutation routes remain best-effort;
+this is not multi-process fan-out or a background-delivery/LAN guarantee. MCP
+remains 1.11.0 with the same 46 tools. Full-suite and packaged Phase 7D
+validation are pending.
+
 Timeline, Canvas Plot, Knowledge Graph, and Continuity proposals use their
 opaque proposal id for a durable core receipt, so an
 ambiguous apply can recover the exact committed outcome across an MCP companion
@@ -271,9 +286,11 @@ by the packaged smoke remains read-only.
 
 The exact Phase 7B `cfd4c7b` AppImage passed the full packaged workspace + MCP
 journey on a clean Ubuntu 22.04 VM. The HTTP 1.15.0 / MCP 1.11.0 Phase 7C source
-and its Pro FLOW / MODE LENS UI are implemented, but Phase 7C packaged
-validation remains pending. Current-source Windows and macOS full journeys also
-remain pending; these statements are not a new published-release claim.
+and its Pro FLOW / MODE LENS UI are implemented. The exact `33feac9` source also
+passed the hosted Windows packaged pointer workspace, restart-persistence,
+frozen-companion, and cross-product journey. Current-source Linux/Xvfb and Intel
+macOS journeys remain pending; these statements are not a published-release
+claim.
 
 The packaged workspace acceptance exercises the production renderer rather than
 the preview harness. It crosses the manuscript save barrier, follows Radar into
@@ -284,8 +301,9 @@ real pointer input, mutates the dock layout, closes through the save handshake,
 and verifies all durable state after relaunch. Windows, Linux under Xvfb, and the
 Intel macOS 12 runner invoke this same script. The exact Phase 7B `cfd4c7b`
 AppImage passed it together with the packaged MCP journey on a clean Ubuntu
-22.04 VM; the current-source Windows and macOS journeys and all Phase 7C
-packaged validation remain pending.
+22.04 VM. The exact `33feac9` source passed the hosted Windows version of the
+same journey; current-source Linux/Xvfb and Intel macOS validation remain
+pending.
 
 See [`../logosforge/docs/MCP_GATEWAY.md`](../logosforge/docs/MCP_GATEWAY.md) for
 Codex configuration and the proposal/review/apply safety model.
@@ -307,7 +325,12 @@ Codex configuration and the proposal/review/apply safety model.
   descriptor-authenticated MCP companion for local Codex orchestration.
 - **Phase 7C source status:** HTTP 1.15.0 and MCP 1.11.0 expose the read-only
   Timeline story-flow and mode projections, and Pro renders FLOW and MODE LENS.
-  Packaged validation is pending. Durable broker outbox/reconciliation is the
-  separate next hardening milestone before LAN, multi-user, or
-  background-delivery support.
+  The exact `33feac9` source passed the hosted Windows packaged journey;
+  Linux/Xvfb and Intel macOS remain pending.
+- **Phase 7D source status:** HTTP 1.16.0 implements an atomic pending-event
+  outbox and restart reconciliation for the five transactional command
+  families. Pro recognizes broker replacement and recovery as authoritative
+  refetch boundaries. Full validation and packaged evidence remain pending;
+  legacy routes, multi-process fan-out, and independent background delivery are
+  not covered. MCP remains 1.11.0 with 46 tools.
 - The renderer uses bundled/local assets and runs under a restrictive CSP.

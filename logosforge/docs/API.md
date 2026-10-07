@@ -102,9 +102,12 @@ GET  /api/health → { status, service, mode, version, api_version, core_version
 `core_version` is the Logosforge build (e.g. `0.9.0-alpha`). Clients (Electron
 desktop and Web/PWA) read these to verify they're talking to a compatible
 backend. `version` mirrors `api_version` for backward compatibility.
-The current additive HTTP contract version is **1.15.0**. It adds read-only
-`story_flow` and writing-mode-discriminated `mode_projection` fields to the
-coherent Timeline snapshot. Version 1.14.0 added persisted scene-to-scene and
+The current additive HTTP contract version is **1.16.0**. It adds durable
+pending invalidations for changed Timeline, Canvas Plot, Knowledge Graph,
+Semantic Continuity, and Guided Workflow commands plus broker-generation-aware
+live-event recovery. Version 1.15.0 added read-only `story_flow` and
+writing-mode-discriminated `mode_projection` fields to the coherent Timeline
+snapshot. Version 1.14.0 added persisted scene-to-scene and
 scene-to-structure relationships to that snapshot/revision plus six guarded
 relationship commands and receipt payload v2 (with decoding support for
 existing v1 receipts). Version 1.13.0 added the
@@ -860,38 +863,63 @@ Two transports share the same event names so React handles both identically:
 
 **SSE (preferred)**
 ```
-GET /api/projects/{project_id}/events            # live stream (text/event-stream)
-GET /api/projects/{project_id}/events?once=true  # drain buffered events and close
+GET /api/projects/{project_id}/events                # live stream (text/event-stream)
+GET /api/projects/{project_id}/events?since={cursor} # resume within one broker process
+GET /api/projects/{project_id}/events?once=true      # drain buffered events and close
 ```
-Each message:
+`Last-Event-ID` is accepted when `since` is absent. A connection starts with a
+full `connected` message whose data identifies the broker process. Domain
+events include the SSE `id:` field as well as the id in their JSON payload:
 ```
+event: connected
+data: {"id": 12, "event": "connected", "project_id": 1, "data": {"broker_instance_id": "..."}, "ts": 1.7e9}
+
+id: 13
 event: scene_changed
-data: {"id": 12, "event": "scene_changed", "project_id": 1, "data": {"scene_id": 7}, "ts": 1.7e9}
+data: {"id": 13, "event": "scene_changed", "project_id": 1, "data": {"scene_id": 7}, "ts": 1.7e9}
 ```
 
 **Polling (fallback)**
 ```
 GET /api/projects/{project_id}/events/poll?since={cursor}
-→ { "events": [ ... ], "cursor": 12, "known_events": [ ... ] }
+→ { "events": [ ... ], "cursor": 13, "broker_instance_id": "...", "reset_required": false, "known_events": [ ... ] }
 ```
-Clients keep the last `cursor` and pass it as `since` to get only new events.
+Clients keep the last `cursor` only within the same `broker_instance_id` and
+pass it as `since` to get new events. `reset_required` becomes true when that
+cursor predates the bounded ring. Pro performs an authoritative surface refetch
+on initial connection, transport recovery, broker replacement, cursor
+regression, or ring truncation. SSE emits another `connected` control message
+when a continuously open stream detects the same gap.
 
 **Event names**
 ```
 project_loaded, project_data_changed, scene_changed, scenes_changed,
 outline_changed, plot_changed, canvas_plot_changed, timeline_changed, psyke_changed,
-notes_changed, dashboard_changed, assistant_action_completed
+knowledge_graph_changed, continuity_changed, workflow_changed, notes_changed,
+comments_changed, characters_changed, dashboard_changed, assistant_action_completed
 ```
 
 The API owns its own Qt-free event broker (`logosforge/api/events.py`); it
 does not require the desktop Qt event loop, so the PyQt app and the API can run
 independently.
 
-Committed command state and receipts are authoritative; live notifications are
-published after commit and are not backed by a transactional outbox. A missed
-notification is recovered by refetching the coherent surface. Durable broker
-outbox/reconciliation is tracked separately from Phase 7C and is required
-before LAN, multi-user, or background-delivery guarantees.
+Under HTTP 1.16.0, each changed Timeline, Canvas Plot, Knowledge Graph,
+Semantic Continuity, or Guided Workflow command writes a compact pending
+tokenized invalidation row in the same SQLite transaction as its mutation and receipt.
+The API broker reconciles committed rows into its bounded in-memory ring and
+then acknowledges the exact token-bearing row generation after command commit
+and when a new API process starts.
+These events are invalidation hints; the client still refetches the coherent,
+authoritative surface. An acknowledgement failure may produce an at-least-once
+invalidation after a later restart, which is safe because consumers refetch and
+do not apply event payloads as mutations.
+
+This boundary currently assumes one API process. It does not provide
+multi-process fan-out or an independent background delivery worker, and legacy
+mutation routes still publish best-effort after commit. Supported Alpha use
+therefore remains authenticated desktop/localhost; HTTP 1.16.0 is not a LAN,
+multi-user, or background-delivery guarantee. MCP remains independently
+versioned at 1.11.0 with the same 46 tools.
 
 ---
 

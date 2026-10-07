@@ -19,7 +19,10 @@ requireMarkers("components/common/RuntimeFaultBanner.tsx", ["focusTimerRef", "wi
 requireMarkers("components/common/useModalDialog.ts", ["window.clearTimeout(focusTimer)", "removeEventListener(\"keydown\"", "removeEventListener(\"focusin\""]);
 requireMarkers("components/common/useRuntimeFaultReporter.ts", ["for (const timer of pending) window.clearTimeout(timer)", "removeEventListener(\"unhandledrejection\""]);
 requireMarkers("adapters/httpApiClient.ts", ["if (timer) clearTimeout(timer)", "es.close()"]);
-requireMarkers("adapters/httpApiClient.ts", ["ApiRequestTimeoutError", "const timeoutOptions = { ...options }", "clientAbort.abort", "activeAbort?.abort", "getInflight.clear()", "cloneTransportValue", "streams.clear()", "dispose: () =>"]);
+requireMarkers("adapters/httpApiClient.ts", ["ApiRequestTimeoutError", "const timeoutOptions = { ...options }", "clientAbort.abort", "activeAbort?.abort", "getInflight.clear()", "cloneTransportValue", "streams.clear()", "dispose: () =>", "broker_instance_id", "connectedEvent(p, r.cursor)"]);
+requireMarkers("hooks/useResource.ts", ['e.event === "connected" || refetchOn.includes']);
+requireMarkers("components/shell/Chrome.tsx", ['["connected", "scene_changed"']);
+requireMarkers("components/aipanels/Logos.tsx", ['["connected", "scenes_changed"']);
 requireMarkers("adapters/clientLifetime.ts", ["queueMicrotask", "leases.get(value) !== 0", "dispose(value)"]);
 requireMarkers("hooks/resources.ts", [
   "const TIMELINE_REFRESH_EVENTS: EventName[] = [",

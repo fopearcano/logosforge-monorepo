@@ -221,9 +221,10 @@ review state, and fresh-companion receipt recovery alongside the other three
 transactional families.
 
 The exact Phase 7B `cfd4c7b` AppImage passed the full packaged workspace + MCP
-journey on a clean Ubuntu 22.04 VM. Current-source Windows and macOS full
-journeys remain pending, and Phase 7C packaged validation remains pending; this
-is not a new release claim.
+journey on a clean Ubuntu 22.04 VM. The exact `33feac9` source passed the hosted
+Windows packaged pointer workspace, restart-persistence, frozen-companion, and
+cross-product journey. Current-source Linux/Xvfb and Intel macOS Phase 7C
+journeys remain pending; this is not a new release claim.
 
 See [Pro MCP gateway](docs/MCP_GATEWAY.md) for the complete tool model,
 environment variables, Codex setup, remote-host restrictions, and checkpoint
@@ -357,10 +358,17 @@ keeps LibreChat as an *interface*, never an *authority*.
   LogosForge only at the panel chrome level (no LibreChat fork).
 * The MCP gateway is stdio-only. The MCP client is responsible for launching
   it and keeping the process alive while proposals are pending.
-* A durable broker outbox is not implemented. Authoritative refetch recovers
-  committed state after a missed post-commit notification; outbox/reconciliation
-  is separate hardening required before LAN, multi-user, or background-delivery
-  guarantees.
+* HTTP 1.16.0 adds a pending-invalidation outbox for changed Timeline, Canvas
+  Plot, Knowledge Graph, Semantic Continuity, and Guided Workflow commands.
+  Their invalidation rows commit atomically with mutations/receipts, and the
+  broker reconciles and acknowledges rows after commit and on process startup.
+  Token-checked acknowledgement distinguishes reused SQLite row generations.
+  Poll identifies broker generation and bounded-ring truncation, SSE signals
+  connection/replacement/gaps, and Pro refetches authoritative state on
+  recovery. This is a one-API-process
+  boundary: legacy mutation routes remain best-effort, and multi-process fan-out
+  plus independent background delivery remain unsupported. Phase 7D full-suite
+  and packaged validation are pending; MCP stays at 1.11.0 with 46 tools.
 * Project export is a manual checkpoint, not an automatic transactional
   rollback. Manuscript imports and delete operations are intentionally not
   exposed as MCP tools. Comment creation, anchor/root-body editing, and

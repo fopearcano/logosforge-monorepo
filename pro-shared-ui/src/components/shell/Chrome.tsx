@@ -75,7 +75,7 @@ export function ModeStrip() {
     if (projectId == null || typeof api.subscribe !== "function") return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const unsubscribe = api.subscribe(projectId, (event) => {
-      if (["scene_changed", "scenes_changed", "psyke_changed", "outline_changed", "project_data_changed"].includes(event.event)) {
+      if (["connected", "scene_changed", "scenes_changed", "psyke_changed", "outline_changed", "project_data_changed"].includes(event.event)) {
         if (timer) clearTimeout(timer);
         timer = setTimeout(() => { void loadAdapt(false); }, 180);
       }

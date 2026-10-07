@@ -45,7 +45,7 @@ check(typeof api.getContinuityCommandReceipt === "function", "preview mock must 
 
 const health = await api.health();
 check(
-  health.status === "ok" && health.version === "1.15.0" && health.api_version === "1.15.0",
+  health.status === "ok" && health.version === "1.16.0" && health.api_version === "1.16.0",
   "preview health must satisfy the core contract",
 );
 const projectMap = await api.getKnowledgeGraph(1, { limit: 160, include_inferred: true });

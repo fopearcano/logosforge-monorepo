@@ -28,6 +28,22 @@ class Project(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=_now)
 
 
+class ApiEventOutbox(SQLModel, table=True):
+    """Pending project invalidation committed with an authoritative mutation.
+
+    Rows contain only compact refetch metadata.  The API broker drains them
+    into its bounded live ring after commit, then acknowledges them.  Keeping
+    this as an outbox (rather than a manuscript-bearing event history) closes
+    the mutation/notification crash window without duplicating project data.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    project_id: int = Field(foreign_key="project.id", index=True)
+    event_name: str = Field(max_length=100)
+    data_json: str = "{}"
+    created_at: datetime = Field(default_factory=_now)
+
+
 class Character(SQLModel, table=True):
     """A character in the story."""
 

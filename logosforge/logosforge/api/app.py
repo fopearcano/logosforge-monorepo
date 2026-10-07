@@ -25,7 +25,7 @@ API_PREFIX = "/api"
 # Version of the HTTP DTO/action *contract* (bump when the API shape changes).
 # Kept separate from the Logosforge core build version so generated clients have
 # a stable contract version while still being able to check the core build.
-API_CONTRACT_VERSION = "1.15.0"
+API_CONTRACT_VERSION = "1.16.0"
 
 
 def _core_version() -> str:
@@ -58,7 +58,7 @@ def create_api(
     )
     app.state.db = db
     app.state.config = config
-    app.state.broker = ApiEventBroker()
+    app.state.broker = ApiEventBroker(db)
     # Command plans are capability-like and must not survive an API process
     # restart, even when the same Database object is reused by an embedded host.
     app.state.psyke_command_plans = PsykeCommandPlanService(db)

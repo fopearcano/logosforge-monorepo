@@ -65,6 +65,10 @@ export interface CharacterBackfillResultDTO { ok: boolean; linked: number }
 export interface EventsPollDTO {
   events: Array<Record<string, unknown>>;
   cursor: number;
+  /** Opaque per-process broker identity; a change requires authoritative refetch. */
+  broker_instance_id: string;
+  /** True when the requested cursor predates the bounded broker ring. */
+  reset_required: boolean;
   known_events: string[];
 }
 

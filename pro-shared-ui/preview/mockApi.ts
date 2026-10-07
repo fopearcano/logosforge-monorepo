@@ -2261,8 +2261,8 @@ export function createMockApiClient(): ApiClient {
         service: "logosforge-api",
         instance_nonce: "preview-mock",
         mode: "preview-mock",
-        version: "1.15.0",
-        api_version: "1.15.0",
+        version: "1.16.0",
+        api_version: "1.16.0",
         core_version: "preview",
       };
     },

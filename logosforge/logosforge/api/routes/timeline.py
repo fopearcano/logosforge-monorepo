@@ -133,14 +133,10 @@ def execute_timeline_command(
     except TimelineCommandError as exc:
         raise bad_request(str(exc)) from exc
 
-    if result.changed and not result.replayed:
-        for scene_id in result.affected_scene_ids:
-            broker.publish(
-                "scene_changed", project_id=project.id, scene_id=scene_id,
-            )
-        if result.affected_scene_ids:
-            broker.publish("plot_changed", project_id=project.id)
-        broker.publish("timeline_changed", project_id=project.id)
+    # The command transaction already staged its exact invalidation batch.
+    # Reconcile after commit; a crash before this call leaves the durable rows
+    # for the next API process instead of losing the notification.
+    broker.reconcile()
 
     return schemas.TimelineCommandResultDTO(
         timeline=serializers.timeline_snapshot_to_dto(result.snapshot),

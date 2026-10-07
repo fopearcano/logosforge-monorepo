@@ -226,16 +226,7 @@ def execute_knowledge_graph_command(
     except KnowledgeGraphReviewStateCorrupt as exc:
         raise _review_state_corrupt_error() from exc
 
-    if result.changed and not result.replayed:
-        broker.publish(
-            "knowledge_graph_changed",
-            project_id=project.id,
-            affected_edge={
-                "source": result.affected_edge.source,
-                "target": result.affected_edge.target,
-                "edge_type": result.affected_edge.edge_type,
-            },
-        )
+    broker.reconcile()
     # Rebuild after every successful command.  In particular, an exact replay
     # may discover a receipt after another writer advanced review state, so its
     # preflight graph is not safe to return.  ``applied_revision`` intentionally

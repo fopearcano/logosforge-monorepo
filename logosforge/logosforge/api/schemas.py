@@ -151,6 +151,8 @@ class CharacterBackfillResultDTO(BaseModel):
 class EventsPollDTO(BaseModel):
     events: list[dict[str, Any]] = Field(default_factory=list)
     cursor: int
+    broker_instance_id: str
+    reset_required: bool
     known_events: list[str] = Field(default_factory=list)
 
 

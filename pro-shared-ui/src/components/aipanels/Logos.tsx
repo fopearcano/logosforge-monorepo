@@ -131,7 +131,7 @@ export function Logos(props: PanelProps) {
     if (projectId == null || typeof api.subscribe !== "function") return;
     let t: ReturnType<typeof setTimeout> | undefined;
     const unsub = api.subscribe(projectId, (e) => {
-      if (["scenes_changed", "scene_changed", "psyke_changed", "project_data_changed", "outline_changed", "plot_changed", "timeline_changed"].includes(e.event)) {
+      if (["connected", "scenes_changed", "scene_changed", "psyke_changed", "project_data_changed", "outline_changed", "plot_changed", "timeline_changed"].includes(e.event)) {
         if (t) clearTimeout(t);
         t = setTimeout(loadProactive, 1500);
       }

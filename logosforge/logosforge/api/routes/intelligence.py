@@ -156,13 +156,7 @@ def execute_continuity_command(
     except ContinuityReviewStateCorrupt as exc:
         raise _continuity_state_corrupt_error() from exc
 
-    if result.changed and not result.replayed:
-        broker.publish(
-            "continuity_changed",
-            project_id=project.id,
-            issue_id=result.issue_key,
-            status=result.status,
-        )
+    broker.reconcile()
     current = _build_continuity_or_500(db, project.id)
     return schemas.ContinuityCommandResultDTO(
         continuity=serializers.continuity_report_to_dto(current),

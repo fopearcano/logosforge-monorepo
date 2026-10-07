@@ -2,6 +2,7 @@ import {
   ROUTES,
   KNOWN_EVENTS,
   type EventMessage,
+  type EventsPollDTO,
   type TimelineCommandDTO,
 } from "@logosforge/ui-contracts";
 import type { ApiClient } from "./api";
@@ -236,6 +237,98 @@ function cloneTransportValue<T>(value: T): T {
   try { return JSON.parse(JSON.stringify(value)) as T; } catch { return value; }
 }
 
+const LIVE_EVENT_NAMES = new Set<string>([...KNOWN_EVENTS, "connected"]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function validateEventsPollDTO(value: unknown): EventsPollDTO {
+  if (!isRecord(value)) {
+    throw new RuntimeDtoValidationError("events poll response", "an object", value);
+  }
+  if (!Array.isArray(value.events)) {
+    throw new RuntimeDtoValidationError("events poll response.events", "an array", value.events);
+  }
+  if (!Number.isSafeInteger(value.cursor) || (value.cursor as number) < 0) {
+    throw new RuntimeDtoValidationError(
+      "events poll response.cursor",
+      "a non-negative safe integer",
+      value.cursor,
+    );
+  }
+  if (
+    typeof value.broker_instance_id !== "string"
+    || value.broker_instance_id.length === 0
+    || value.broker_instance_id.length > 256
+  ) {
+    throw new RuntimeDtoValidationError(
+      "events poll response.broker_instance_id",
+      "a non-empty string of at most 256 characters",
+      value.broker_instance_id,
+    );
+  }
+  if (typeof value.reset_required !== "boolean") {
+    throw new RuntimeDtoValidationError(
+      "events poll response.reset_required",
+      "a boolean",
+      value.reset_required,
+    );
+  }
+  if (
+    !Array.isArray(value.known_events)
+    || value.known_events.some((name) => typeof name !== "string")
+  ) {
+    throw new RuntimeDtoValidationError(
+      "events poll response.known_events",
+      "an array of strings",
+      value.known_events,
+    );
+  }
+  return value as unknown as EventsPollDTO;
+}
+
+function normalizeEventMessage(value: unknown, projectId: number): EventMessage | null {
+  if (!isRecord(value) || typeof value.event !== "string" || !LIVE_EVENT_NAMES.has(value.event)) {
+    return null;
+  }
+  if (!Number.isSafeInteger(value.id) || (value.id as number) < 0) return null;
+  const connected = value.event === "connected";
+  const eventProjectId = value.project_id === null
+    ? null
+    : Number.isSafeInteger(value.project_id) && (value.project_id as number) > 0
+      ? value.project_id as number
+      : connected
+        ? projectId
+        : null;
+  if (!connected && eventProjectId == null) return null;
+  const data = isRecord(value.data) ? value.data : connected ? {} : null;
+  if (data == null) return null;
+  const ts = typeof value.ts === "number" && Number.isFinite(value.ts)
+    ? value.ts
+    : connected
+      ? Date.now() / 1000
+      : null;
+  if (ts == null) return null;
+  return {
+    id: value.id as number,
+    event: value.event as EventMessage["event"],
+    project_id: eventProjectId,
+    data,
+    ts,
+  };
+}
+
+function connectedEvent(projectId: number, cursor: number): EventMessage {
+  return {
+    id: cursor,
+    event: "connected",
+    project_id: projectId,
+    data: {},
+    ts: Date.now() / 1000,
+  };
+}
+
 function stableCompactJson(value: unknown): string {
   if (value === null) return "null";
   if (typeof value === "string" || typeof value === "boolean") {
@@ -421,21 +514,51 @@ export function createHttpApiClient(
   function startPolling(p: number, onEvent: (e: EventMessage) => void): () => void {
     let cursor = 0;
     let primed = false;
+    let brokerInstanceId: string | null = null;
+    let interrupted = false;
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let activeAbort: AbortController | null = null;
+    const dispatchSafely = (event: EventMessage) => {
+      try { onEvent(event); } catch { /* one bad listener must not break polling */ }
+    };
     const tick = async () => {
       if (stopped) return;
       const controller = new AbortController();
       activeAbort = controller;
       try {
-        const r = await req(`${ROUTES.eventsPoll(p)}?since=${cursor}`, { signal: controller.signal });
-        if (r && typeof r.cursor === "number") {
-          if (primed) for (const ev of r.events ?? []) { try { onEvent(ev as EventMessage); } catch { /* ignore */ } }
-          cursor = r.cursor;
-          primed = true;
+        const r = await req<EventsPollDTO>(
+          `${ROUTES.eventsPoll(p)}?since=${cursor}`,
+          { signal: controller.signal },
+          validateEventsPollDTO,
+        );
+        const brokerChanged = primed && brokerInstanceId !== r.broker_instance_id;
+        const cursorRegressed = primed && r.cursor < cursor;
+        if (!primed || interrupted || brokerChanged || cursorRegressed || r.reset_required) {
+          dispatchSafely(connectedEvent(p, r.cursor));
         }
-      } catch { /* transient/cancelled; try again only while still subscribed */ }
+        if (primed && !brokerChanged && !cursorRegressed) {
+          for (const rawEvent of r.events) {
+            const event = normalizeEventMessage(rawEvent, p);
+            if (
+              event != null
+              && event.id > cursor
+              && event.id <= r.cursor
+              && (event.project_id == null || event.project_id === p)
+            ) {
+              dispatchSafely(event);
+            }
+          }
+        }
+        cursor = r.cursor;
+        brokerInstanceId = r.broker_instance_id;
+        primed = true;
+        interrupted = false;
+      } catch {
+        // The next successful poll is a reconciliation boundary: the ring may
+        // have overflowed while this client could not observe it.
+        if (!stopped) interrupted = true;
+      }
       finally { if (activeAbort === controller) activeAbort = null; }
       if (!stopped) timer = setTimeout(tick, 3000);
     };
@@ -471,7 +594,10 @@ export function createHttpApiClient(
       }
       const handler = (e: MessageEvent) => {
         try {
-          dispatch(JSON.parse(e.data) as EventMessage);
+          const event = normalizeEventMessage(JSON.parse(e.data), p);
+          if (event != null && (event.project_id == null || event.project_id === p)) {
+            dispatch(event);
+          }
         } catch {
           /* ignore keep-alive / non-JSON frames */
         }
@@ -901,6 +1027,10 @@ export function createHttpApiClient(
       if (!s) {
         const listeners = new Set<(e: EventMessage) => void>();
         const dispatch = (e: EventMessage) => {
+          // A live event is an invalidation boundary. Do not let listeners'
+          // authoritative refetches coalesce onto a GET that began before the
+          // mutation/reconnect signal arrived.
+          getInflight.clear();
           for (const fn of [...listeners]) { try { fn(e); } catch { /* one bad listener must not break the rest */ } }
         };
         s = { listeners, close: openTransport(p, dispatch) };

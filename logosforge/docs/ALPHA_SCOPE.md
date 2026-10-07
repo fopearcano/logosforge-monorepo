@@ -94,10 +94,11 @@ These are frozen. Change only to fix a confirmed regression, with tests.
   guarded command and durable receipt boundary, while HTTP 1.15.0 adds
   read-only story-flow and mode-specific projections to the same coherent
   snapshot. Pro exposes the FLOW ribbon, Story Pulse, warning spans, scene-type
-  labels, and MODE LENS. Phase 7C packaged validation is pending. The exact
-  Phase 7B `cfd4c7b` AppImage passed the full packaged workspace + MCP journey
-  on a clean Ubuntu 22.04 VM; current-source Windows and macOS full journeys
-  remain pending. *(B)*
+  labels, and MODE LENS. The exact `33feac9` source passed the hosted Windows
+  packaged pointer workspace, restart-persistence, frozen-companion, and
+  cross-product journey. The exact Phase 7B `cfd4c7b` AppImage passed the full
+  packaged workspace + MCP journey on a clean Ubuntu 22.04 VM; current-source
+  Linux/Xvfb and Intel macOS journeys remain pending. *(B)*
 - **Counterpart** — works; thin automated coverage. *(B)*
 - **Connector** — write actions gated OFF by default; only read actions are on
   the default path. *(B)*
@@ -112,9 +113,11 @@ These are frozen. Change only to fix a confirmed regression, with tests.
   acceptance of this new surface is still pending. *(B)*
 - **FDX export** — experimental/gated. *(B)*
 - **Grammar / spelling** — rule-based, no external engine; basic accuracy. *(B)*
-- **API** — the versioned HTTP contract and local MCP gateway have broad
-  automated coverage, but **only authenticated desktop/localhost mode is in
-  Alpha**; LAN/remote exposure is not a supported release mode. *(B)*
+- **API** — HTTP 1.16.0 gives the five transactional command families a durable
+  tokenized pending-invalidation outbox plus broker-generation/ring-gap recovery; full-suite
+  and packaged validation are pending. The local MCP gateway remains 1.11.0
+  with 46 tools. **Only authenticated desktop/localhost mode is in Alpha**;
+  LAN/remote exposure is not a supported release mode. *(B)*
 
 ## 5. Known limitations
 
@@ -145,9 +148,11 @@ These are frozen. Change only to fix a confirmed regression, with tests.
   web/PWA distribution. The React/Electron shared UI itself is implemented.
 - Richer dated-event/plot-thread concepts and editable mode-projection controls
   beyond Phase 7C's read-only Timeline lens.
-- A durable broker outbox/reconciliation layer before any supported LAN,
-  multi-user, or background-delivery claim. This is transport hardening,
-  separate from Phase 7C's user-facing projections.
+- Multi-process broker fan-out and an independent background delivery worker.
+  Phase 7D's one-process outbox protects Timeline, Canvas Plot, Knowledge Graph,
+  Semantic Continuity, and Guided Workflow command invalidations, but legacy
+  mutation routes remain best-effort and no LAN, multi-user, or background-
+  delivery guarantee is claimed.
 - **FDX** export hardening.
 - Deeper **Counterpart**, **Connector** write-action breadth, **Go McKee**
   integration.
@@ -198,11 +203,12 @@ Highest priority, lowest tolerance for change:
 
 1. Record a **full-suite-green, source-bound** baseline for the release
    candidate, including a Writer QA run with **0 BLOCKER** findings.
-2. Run the current-source production-shell packaged journey on Windows and the
-   Intel macOS 12 runner, and run the Phase 7C package on every supported
-   platform. The exact Phase 7B `cfd4c7b` AppImage already passed the full
-   packaged workspace + MCP journey on a clean Ubuntu 22.04 VM; that evidence
-   does not validate the later HTTP 1.15.0 / MCP 1.11.0 Phase 7C changes.
+2. Run the current-source production-shell packaged journey on Linux/Xvfb and
+   the Intel macOS 12 runner. The exact `33feac9` source passed the hosted
+   Windows packaged journey, while the exact Phase 7B `cfd4c7b` AppImage passed
+   the full packaged workspace + MCP journey on a clean Ubuntu 22.04 VM; that
+   older Linux evidence does not validate the later HTTP 1.15.0 / MCP 1.11.0
+   Phase 7C changes.
 3. Complete hands-on acceptance of the installer/portable EXE, AppImage, and DMG
    on their supported operating systems before publishing.
 4. Keep desktop/localhost as the Alpha API posture. Before any future LAN/remote
@@ -210,8 +216,12 @@ Highest priority, lowest tolerance for change:
 5. Preserve the existing safety and data round-trip gates: disabled Connector
    writes and Go McKee stay inert, project lifecycle never cross-writes, and
    export/import and restart recovery lose no user data.
-6. Phase 7C source work is implemented; its packaged validation remains open.
-   Richer later Plot/Timeline concepts, custom workflow templates/reminders, and
-   a multi-project workflow dashboard are Beta feature work, not blockers for
-   Alpha stability. Durable broker outbox/reconciliation is the separate next
-   hardening step before LAN, multi-user, or background delivery is supported.
+6. Phase 7C source work and its Windows packaged journey are complete; the
+   current-source Linux/Xvfb and Intel macOS journeys remain open.
+   Phase 7D adds atomic pending invalidations and restart reconciliation for the
+   five transactional command families under HTTP 1.16.0, but its full-suite
+   and packaged gate are also pending. Richer later Plot/Timeline concepts,
+   custom workflow templates/reminders, and a multi-project workflow dashboard
+   are Beta feature work, not blockers for Alpha stability. Multi-process
+   fan-out, independent background delivery, authentication, and threat-model
+   hardening remain required before LAN or multi-user support.

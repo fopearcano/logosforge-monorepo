@@ -557,10 +557,24 @@ at 46 tools. The Phase 7B relationship editor and its six commands remain as
 documented under HTTP 1.14.0; Phase 7C adds no schema migration and does not
 change Timeline command schemas, topology revision, or receipt payload v2. The
 exact Phase 7B `cfd4c7b` AppImage passed the full packaged workspace + MCP
-journey on a clean Ubuntu 22.04 VM. Current-source Windows/macOS full journeys
-and Phase 7C packaged validation remain pending. Durable broker
-outbox/reconciliation is the separate next hardening milestone before LAN,
-multi-user, or background delivery.
+journey on a clean Ubuntu 22.04 VM. The exact `33feac9` source passed the hosted
+Windows packaged pointer workspace, restart-persistence, frozen-companion, and
+cross-product journey. Current-source Linux/Xvfb and Intel macOS Phase 7C
+validation remain pending.
+
+**Implementation status (Pro roadmap Phase 7D):** HTTP 1.16.0 adds compact
+pending invalidations committed atomically with mutation/receipt for Timeline,
+Canvas Plot, Knowledge Graph, Semantic Continuity, and Guided Workflows. The
+single-process broker reconciles and acknowledges committed rows after command
+commit and at process startup, using per-row tokens so acknowledgement cannot
+consume a reused SQLite row generation. Poll exposes `broker_instance_id` plus
+a bounded-ring reset signal; SSE emits a full `connected` message (again on a
+live ring gap) and resumable ids. Pro breaks stale GET coalescing and refetches
+its authoritative surfaces on connection recovery, broker replacement, cursor
+regression, or truncation.
+Legacy routes remain best-effort, and there is no multi-process fan-out or
+independent background-delivery/LAN claim. MCP stays at 1.11.0 and 46 tools.
+Full-suite and packaged validation of this source milestone remain pending.
 
 ### 4.4 PSYKE — the story bible
 (`psyke_view`, `psyke_console`, `psyke_highlighter`, `characters_view`,

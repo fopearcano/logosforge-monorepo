@@ -103,14 +103,7 @@ def execute_canvas_plot_command(
     except CanvasPlotCommandError as exc:
         raise bad_request(str(exc)) from exc
 
-    if result.changed and not result.replayed:
-        broker.publish(
-            "canvas_plot_changed",
-            project_id=project.id,
-            affected_node_ids=list(result.affected_node_ids),
-            affected_link_ids=list(result.affected_link_ids),
-            affected_frame_ids=list(result.affected_frame_ids),
-        )
+    broker.reconcile()
 
     return schemas.CanvasPlotCommandResultDTO(
         canvas_plot=serializers.canvas_plot_snapshot_to_dto(result.snapshot),

@@ -103,11 +103,12 @@ export function useResource<T>(
     if (refetchOn.length === 0 || projectId == null || typeof api?.subscribe !== "function") return;
     // Coalesce a burst of change-events (e.g. a manuscript save-all emitting one
     // `scene_changed` per scene) into a single refetch, instead of refetching once
-    // per event. Manual refetch() (writes) stays immediate; only the live event
-    // stream is debounced.
+    // per event. A (re)connected transport is also an authoritative reconciliation
+    // boundary because events may have been missed while the broker was unavailable.
+    // Manual refetch() (writes) stays immediate; only the live stream is debounced.
     let t: ReturnType<typeof setTimeout> | undefined;
     const unsub = api.subscribe(projectId, (e) => {
-      if (refetchOn.includes(e.event as EventName)) {
+      if (e.event === "connected" || refetchOn.includes(e.event as EventName)) {
         if (t) clearTimeout(t);
         t = setTimeout(refetch, 120);
       }
