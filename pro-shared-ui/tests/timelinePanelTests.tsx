@@ -421,6 +421,11 @@ check(
   "the mode lens must expose compact, meaningful screenplay facets",
 );
 check(
+  renderer.root.findByProps({ "data-timeline-board-scroll": "true" })
+    .findAllByProps({ "aria-label": "Timeline mode lens" }).length === 1,
+  "a populated Timeline must keep its mode lens inside the scrollable board so short docks cannot cover event controls",
+);
+check(
   renderer.root.findByProps({ "aria-label": "Scene type for Opening: dialogue" }),
   "event cards must expose a textual scene-type marker",
 );

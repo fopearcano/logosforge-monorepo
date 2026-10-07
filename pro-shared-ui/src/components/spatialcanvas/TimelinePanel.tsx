@@ -1021,11 +1021,15 @@ export function TimelinePanel(props: PanelProps) {
               ? message("Timeline unavailable")
               : (
                 <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-                  <TimelineModeProjection projection={timeline.mode_projection} />
                   {lanes.length === 0 && events.length === 0
-                    ? message("No Timeline yet — create a plot lane or add an existing scene")
+                    ? (
+                      <>
+                        <TimelineModeProjection projection={timeline.mode_projection} />
+                        {message("No Timeline yet — create a plot lane or add an existing scene")}
+                      </>
+                    )
                     : (
-                    <div style={{ flex: 1, overflow: "auto" }}>
+                    <div data-timeline-board-scroll="true" style={{ flex: 1, overflow: "auto" }}>
                     <div style={{ width: boardWidth, minWidth: boardWidth }}>
                       {showFlow && (
                         <TimelineStoryFlow
@@ -1036,6 +1040,7 @@ export function TimelinePanel(props: PanelProps) {
                           cardWidth={CARD_W}
                         />
                       )}
+                      <TimelineModeProjection projection={timeline.mode_projection} />
                       <div style={{ position: "relative" }}>
                         <div style={{ height: 20, display: "flex", alignItems: "center", borderBottom: "1px solid var(--line2)", backgroundImage: `repeating-linear-gradient(90deg,transparent 0 ${STEP - 1}px,rgba(245,177,51,.35) ${STEP - 1}px ${STEP}px)`, backgroundPosition: `${LABEL_W}px 0`, paddingLeft: 14 }}>
                           <span style={{ fontSize: 7, letterSpacing: ".16em", color: "var(--txt3)" }}>STORY TIME → · MANUSCRIPT ORDER IS NEVER CHANGED HERE</span>
