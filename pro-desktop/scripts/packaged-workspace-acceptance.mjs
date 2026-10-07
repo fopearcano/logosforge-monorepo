@@ -797,6 +797,17 @@ async function exerciseIntelligenceShell(session) {
   const repairLabel = repairSceneId == null
     ? 'ASK BILLY TO PLAN REPAIR'
     : `REPAIR SC.${repairSceneId}`;
+  const collapseRightDock = page.getByRole('button', {
+    name: 'Collapse right dock',
+    exact: true,
+  });
+  if (await collapseRightDock.isVisible().catch(() => false)) {
+    await collapseRightDock.click();
+    await waitVisible(
+      page.getByRole('button', { name: 'Expand right dock', exact: true }),
+      'collapsed right dock before Continuity repair handoff',
+    );
+  }
   await issueCard.getByRole('button', { name: repairLabel, exact: true }).click();
   const repairAiSurface = await waitVisible(
     page.locator('section[data-panel-id="ai-companions"]'),
@@ -924,6 +935,18 @@ async function exerciseIntelligenceShell(session) {
     reviewSurface.locator(`[data-continuity-issue-id="${issue.id}"]`),
     'Continuity issue before transactional review',
   );
+  const collapseRightForReview = page.getByRole('button', {
+    name: 'Collapse right dock',
+    exact: true,
+  });
+  const restoreRightAfterReview = await collapseRightForReview.isVisible().catch(() => false);
+  if (restoreRightAfterReview) {
+    await collapseRightForReview.click();
+    await waitVisible(
+      page.getByRole('button', { name: 'Expand right dock', exact: true }),
+      'collapsed right dock before Continuity decision review',
+    );
+  }
   await reviewIssue.getByRole('button', { name: 'RESOLVE', exact: true }).click();
   const reviewDialog = await waitVisible(
     page.getByRole('dialog', { name: 'REVIEW CONTINUITY', exact: true }),
@@ -935,6 +958,13 @@ async function exerciseIntelligenceShell(session) {
     async () => (await reviewIssue.textContent())?.includes('RESOLVED') ?? false,
     'resolved Continuity review state',
   );
+  if (restoreRightAfterReview) {
+    await page.getByRole('button', { name: 'Expand right dock', exact: true }).click();
+    await waitVisible(
+      page.getByRole('button', { name: 'Collapse right dock', exact: true }),
+      'restored right dock after Continuity decision review',
+    );
+  }
   const reviewedContinuity = await packagedCoreJson(
     session,
     `/api/projects/${projectId}/continuity`,

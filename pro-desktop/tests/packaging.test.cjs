@@ -169,9 +169,10 @@ check('packaged workspace acceptance covers Canvas Plot pointer authoring and pe
   packagedWorkspaceScript.includes('pointer-authored Canvas Plot content and viewport survived graceful packaged relaunch'));
 check('packaged workspace acceptance covers the real Graph, Radar, Continuity, and Billy shell journey',
   packagedWorkspaceScript.includes('seedIntelligenceJourney(session, projectId)') &&
-  packagedWorkspaceScript.includes("'Decision Radar navigation crossed the workspace before the pending manuscript edit was saved'") &&
+  packagedWorkspaceScript.includes("'Workspace navigation crossed the save barrier before the pending manuscript edit was saved'") &&
   packagedWorkspaceScript.includes("name: 'OPEN GRAPH EVIDENCE', exact: true") &&
   packagedWorkspaceScript.includes("name: 'OPEN CONTINUITY ISSUE', exact: true") &&
+  packagedWorkspaceScript.includes("'collapsed right dock before Continuity repair handoff'") &&
   packagedWorkspaceScript.includes("'Billy existing-draft preservation decision'") &&
   packagedWorkspaceScript.includes("'Logos companion selection before Continuity handoff'") &&
   packagedWorkspaceScript.includes("'Continuity handoff reselected Billy in the production companion dock'") &&
@@ -182,6 +183,8 @@ check('packaged workspace acceptance covers the real Graph, Radar, Continuity, a
   packagedWorkspaceScript.includes("name: '✓ APPLY', exact: true") &&
   packagedWorkspaceScript.includes("'Controlled Apply did not send the exact revision-bound scene mutation'") &&
   packagedWorkspaceScript.includes("name: 'CONFIRM DECISION', exact: true") &&
+  packagedWorkspaceScript.includes("'collapsed right dock before Continuity decision review'") &&
+  packagedWorkspaceScript.includes("'restored right dock after Continuity decision review'") &&
   packagedWorkspaceScript.includes("'Confirmed Controlled Apply mutation did not survive relaunch'") &&
   packagedWorkspaceScript.includes("'Durable Continuity review state did not survive packaged relaunch'"));
 check('packaged Windows CI runs and preserves diagnostics for the Pro pointer journey',
