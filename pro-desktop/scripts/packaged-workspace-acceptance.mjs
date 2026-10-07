@@ -673,10 +673,10 @@ async function exerciseIntelligenceShell(session) {
   const seeded = await seedIntelligenceJourney(session, projectId);
 
   const manuscript = await selectPanel(page, 'Manuscript', 'manuscript', 'Manuscript Editor');
-  const openingHost = await waitVisible(
-    manuscript.locator(`[data-scene-id="${seeded.opening.id}"]`),
-    'seeded manuscript scene',
-  );
+  const openingHost = manuscript.locator(`[data-scene-id="${seeded.opening.id}"]`).first();
+  await openingHost.waitFor({ state: 'attached', timeout: UI_TIMEOUT_MS });
+  await openingHost.scrollIntoViewIfNeeded({ timeout: UI_TIMEOUT_MS });
+  await waitVisible(openingHost, 'seeded manuscript scene');
   const staticProse = openingHost.getByRole('button', {
     name: `Activate prose editor for ${seeded.opening.title}`,
     exact: true,
