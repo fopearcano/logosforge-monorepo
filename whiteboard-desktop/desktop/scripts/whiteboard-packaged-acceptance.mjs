@@ -972,7 +972,11 @@ async function closeSession(session, { requireGraceful = true, requirePrompt = f
         CLOSE_TIMEOUT_MS,
         100,
       );
-      await session.app.evaluate(({ app }) => app.quit());
+      await withTimeout(
+        session.app.close(),
+        CLOSE_TIMEOUT_MS,
+        `${session.label} macOS application close`,
+      );
     }
     await withTimeout(exited, CLOSE_TIMEOUT_MS, `${session.label} graceful close`);
     graceful = true;

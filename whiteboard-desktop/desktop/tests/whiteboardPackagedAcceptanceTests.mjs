@@ -264,8 +264,8 @@ assert.match(
 );
 assert.match(
   harnessSource,
-  /if \(process\.platform === 'darwin'\) \{[\s\S]*BrowserWindow\.getAllWindows\(\)\.length === 0[\s\S]*app\.quit\(\)/,
-  'macOS lifecycle shutdown must close its window before explicitly quitting the resident app',
+  /if \(process\.platform === 'darwin'\) \{[\s\S]*BrowserWindow\.getAllWindows\(\)\.length === 0[\s\S]*session\.app\.close\(\)/,
+  'macOS lifecycle shutdown must close its window before releasing the resident app and inspector',
 );
 assert.match(
   harnessSource,
