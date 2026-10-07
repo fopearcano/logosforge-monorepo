@@ -50,6 +50,16 @@ from logosforge.db.database import (
     TimelineReadSnapshot,
     TimelineRevisionConflict,
     TimelineSceneNotFound,
+    WorkflowCommandError,
+    WorkflowCommandReceiptData,
+    WorkflowCommandResult,
+    WorkflowIdempotencyKeyConflict,
+    WorkflowProjectNotFound,
+    WorkflowRevisionConflict,
+    WorkflowRunNotFound,
+    WorkflowRunSnapshot,
+    WorkflowStateConflict,
+    WorkflowStepNotFound,
 )
 
 __all__ = [
@@ -104,4 +114,14 @@ __all__ = [
     "TimelineReadSnapshot",
     "TimelineRevisionConflict",
     "TimelineSceneNotFound",
+    "WorkflowCommandError",
+    "WorkflowCommandReceiptData",
+    "WorkflowCommandResult",
+    "WorkflowIdempotencyKeyConflict",
+    "WorkflowProjectNotFound",
+    "WorkflowRevisionConflict",
+    "WorkflowRunNotFound",
+    "WorkflowRunSnapshot",
+    "WorkflowStateConflict",
+    "WorkflowStepNotFound",
 ]

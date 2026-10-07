@@ -1597,26 +1597,180 @@ export interface StructuralAnalysisDTO {
   issues: StructuralIssueDTO[];
   suggestions: string[];
 }
+// ── Guided Workflows / Project OS ──────────────────────────────────────────
+
+export type WorkflowStepKind = "creative" | "check" | "manual";
+export type WorkflowStepStatus =
+  | "pending"
+  | "active"
+  | "completed"
+  | "skipped"
+  | "blocked";
+export type WorkflowRunStatus =
+  | "active"
+  | "paused"
+  | "completed"
+  | "cancelled"
+  | "blocked";
+
+/** One immutable step descriptor in a built-in workflow template. */
+export interface WorkflowTemplateStepDTO {
+  id: string;
+  title: string;
+  description: string;
+  kind: WorkflowStepKind;
+  section_name: string;
+  action_id: string;
+  completion_check: string;
+  /** Empty means the step applies to every writing mode. */
+  modes: string[];
+}
+
+/** One data-driven workflow offered for the active writing mode. */
+export interface WorkflowTemplateDTO {
+  id: string;
+  title: string;
+  description: string;
+  category: string;
+  /** Empty means the template applies to every writing mode. */
+  modes: string[];
+  steps: WorkflowTemplateStepDTO[];
+}
+
+/** Deterministic, Decision-Radar-backed suggestion; starting remains explicit. */
+export interface WorkflowRecommendationDTO {
+  template_id: string;
+  title: string;
+  reason: string;
+  severity: string;
+}
+
+/** Persisted state for one step, enriched with its immutable template metadata. */
 export interface WorkflowStepDTO {
   step_id: string;
   title: string;
-  /** pending | active | completed | skipped */
-  status: string;
+  description: string;
+  kind: WorkflowStepKind;
+  status: WorkflowStepStatus;
   sort_index: number;
   section_name: string;
   action_id: string;
+  completion_check: string;
+  notes: string;
+  target_type: string;
+  target_id: number | null;
+  created_at: string | null;
+  updated_at: string | null;
 }
+
+/** Authoritative, revisioned view of one persisted workflow run. */
 export interface WorkflowRunDTO {
   id: number;
+  project_id: number;
   title: string;
-  /** active | paused | completed | cancelled */
-  status: string;
+  description: string;
+  status: WorkflowRunStatus;
   writing_mode: string;
   template_id: string;
   current_step_id: string;
   total_steps: number;
   completed_steps: number;
+  /** Content-addressed optimistic-concurrency token for this run and its steps. */
+  revision: string;
+  source_type: string;
+  source_id: number | null;
+  created_at: string | null;
+  updated_at: string | null;
+  completed_at: string | null;
   steps: WorkflowStepDTO[];
+}
+
+/** One immutable audit entry in a run's bounded event history. */
+export interface WorkflowEventDTO {
+  id: number;
+  project_id: number;
+  workflow_run_id: number;
+  step_id: string | null;
+  event_type: string;
+  message: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface WorkflowStartCommandDTO {
+  kind: "start_workflow";
+  template_id: string;
+  title?: string | null;
+}
+
+interface WorkflowRevisionCommandBase {
+  run_id: number;
+  expected_revision: string;
+}
+
+export interface WorkflowCompleteStepCommandDTO extends WorkflowRevisionCommandBase {
+  kind: "complete_step";
+  step_id: string;
+  notes?: string;
+}
+
+export interface WorkflowSkipStepCommandDTO extends WorkflowRevisionCommandBase {
+  kind: "skip_step";
+  step_id: string;
+  notes?: string;
+}
+
+export interface WorkflowAdvanceCommandDTO extends WorkflowRevisionCommandBase {
+  kind: "advance";
+}
+
+export interface WorkflowRefreshCommandDTO extends WorkflowRevisionCommandBase {
+  kind: "refresh";
+}
+
+export interface WorkflowPauseCommandDTO extends WorkflowRevisionCommandBase {
+  kind: "pause";
+}
+
+export interface WorkflowResumeCommandDTO extends WorkflowRevisionCommandBase {
+  kind: "resume";
+}
+
+export interface WorkflowCancelCommandDTO extends WorkflowRevisionCommandBase {
+  kind: "cancel";
+}
+
+export type WorkflowCommandDTO =
+  | WorkflowStartCommandDTO
+  | WorkflowCompleteStepCommandDTO
+  | WorkflowSkipStepCommandDTO
+  | WorkflowAdvanceCommandDTO
+  | WorkflowRefreshCommandDTO
+  | WorkflowPauseCommandDTO
+  | WorkflowResumeCommandDTO
+  | WorkflowCancelCommandDTO;
+
+/** Authoritative run returned after one atomic, project-owned command. */
+export interface WorkflowCommandResultDTO {
+  workflow: WorkflowRunDTO;
+  changed: boolean;
+  /** True when this call returned a previously committed idempotent command. */
+  replayed: boolean;
+  /** Revision produced by the original command, even if the run advanced later. */
+  applied_revision: string;
+}
+
+/** Durable, project-scoped receipt for one idempotent workflow command. */
+export interface WorkflowCommandReceiptDTO {
+  project_id: number;
+  request_digest: string;
+  command_kind: WorkflowCommandDTO["kind"];
+  /** Empty for start_workflow, which creates rather than revises a run. */
+  expected_revision: string;
+  applied_revision: string;
+  original_changed: boolean;
+  original_run_id: number;
+  committed_at: string;
 }
 
 // ── Decision radar (project intelligence) + Quantum outliner (generative) ────

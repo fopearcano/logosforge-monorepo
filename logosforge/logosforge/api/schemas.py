@@ -2101,22 +2101,190 @@ class StructuralAnalysisDTO(BaseModel):
 class WorkflowStepDTO(BaseModel):
     step_id: str
     title: str
-    status: str  # pending | active | completed | skipped
+    description: str = ""
+    kind: Literal["creative", "check", "manual"] = "check"
+    status: Literal["pending", "active", "completed", "skipped", "blocked"]
     sort_index: int = 0
     section_name: str = ""
     action_id: str = ""
+    completion_check: str = ""
+    notes: str = ""
+    target_type: str = ""
+    target_id: int | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class WorkflowRunDTO(BaseModel):
     id: int
+    project_id: int
     title: str
-    status: str  # active | paused | completed | cancelled
+    description: str = ""
+    status: Literal["active", "paused", "completed", "cancelled", "blocked"]
     writing_mode: str = ""
     template_id: str = ""
     current_step_id: str = ""
     total_steps: int = 0
     completed_steps: int = 0
+    revision: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    source_type: str = ""
+    source_id: int | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    completed_at: datetime | None = None
     steps: list[WorkflowStepDTO] = Field(default_factory=list)
+
+
+class WorkflowTemplateStepDTO(BaseModel):
+    id: str
+    title: str
+    description: str = ""
+    kind: Literal["creative", "check", "manual"] = "check"
+    section_name: str = ""
+    action_id: str = ""
+    completion_check: str = ""
+    modes: list[str] = Field(default_factory=list)
+
+
+class WorkflowTemplateDTO(BaseModel):
+    id: str
+    title: str
+    description: str = ""
+    category: str = "general"
+    modes: list[str] = Field(default_factory=list)
+    steps: list[WorkflowTemplateStepDTO] = Field(default_factory=list)
+
+
+class WorkflowRecommendationDTO(BaseModel):
+    template_id: str
+    title: str
+    reason: str
+    severity: str = "suggestion"
+
+
+class WorkflowEventDTO(BaseModel):
+    id: int
+    project_id: int
+    workflow_run_id: int
+    step_id: str | None = None
+    event_type: str
+    message: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+
+class _WorkflowRevisionCommandBase(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: int = Field(gt=0, strict=True)
+    expected_revision: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+
+class WorkflowStartCommandDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["start_workflow"]
+    template_id: str = Field(min_length=1, max_length=128)
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+class WorkflowCompleteStepCommandDTO(_WorkflowRevisionCommandBase):
+    kind: Literal["complete_step"]
+    step_id: str = Field(min_length=1, max_length=128)
+    notes: str = Field(default="", max_length=4000)
+
+
+class WorkflowSkipStepCommandDTO(_WorkflowRevisionCommandBase):
+    kind: Literal["skip_step"]
+    step_id: str = Field(min_length=1, max_length=128)
+    notes: str = Field(default="", max_length=4000)
+
+
+class WorkflowAdvanceCommandDTO(_WorkflowRevisionCommandBase):
+    kind: Literal["advance"]
+
+
+class WorkflowRefreshCommandDTO(_WorkflowRevisionCommandBase):
+    kind: Literal["refresh"]
+
+
+class WorkflowPauseCommandDTO(_WorkflowRevisionCommandBase):
+    kind: Literal["pause"]
+
+
+class WorkflowResumeCommandDTO(_WorkflowRevisionCommandBase):
+    kind: Literal["resume"]
+
+
+class WorkflowCancelCommandDTO(_WorkflowRevisionCommandBase):
+    kind: Literal["cancel"]
+
+
+_WorkflowCommandUnion = Annotated[
+    WorkflowStartCommandDTO
+    | WorkflowCompleteStepCommandDTO
+    | WorkflowSkipStepCommandDTO
+    | WorkflowAdvanceCommandDTO
+    | WorkflowRefreshCommandDTO
+    | WorkflowPauseCommandDTO
+    | WorkflowResumeCommandDTO
+    | WorkflowCancelCommandDTO,
+    Field(discriminator="kind"),
+]
+
+
+class WorkflowCommandDTO(RootModel[_WorkflowCommandUnion]):
+    """Unwrapped, project-scoped Guided Workflow command."""
+
+
+class WorkflowCommandResultDTO(BaseModel):
+    workflow: WorkflowRunDTO
+    changed: bool
+    replayed: bool
+    applied_revision: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+
+class WorkflowCommandReceiptDTO(BaseModel):
+    project_id: int
+    request_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    command_kind: Literal[
+        "start_workflow",
+        "complete_step",
+        "skip_step",
+        "advance",
+        "refresh",
+        "pause",
+        "resume",
+        "cancel",
+    ]
+    expected_revision: str = Field(
+        max_length=64,
+        pattern=r"^(?:|[0-9a-f]{64})$",
+    )
+    applied_revision: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    original_changed: bool
+    original_run_id: int
+    committed_at: datetime
 
 
 # ---------------------------------------------------------------------------

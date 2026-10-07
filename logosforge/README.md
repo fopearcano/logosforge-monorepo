@@ -124,9 +124,9 @@ in Assistant Settings. Step-by-step setup: **[`docs/AI_SETUP.md`](docs/AI_SETUP.
 
 ## Known Limitations (Alpha)
 
-- Some intelligence services (Knowledge Graph, Semantic Continuity, Decision
-  Radar, Guided Workflows) ship as **services + Logos/Assistant surfaces**;
-  their dedicated **UI panels are deferred to beta**.
+- Knowledge Graph, Semantic Continuity, Decision Radar, and Guided Workflows
+  have dedicated Pro panels. Persistent custom Radar filters, custom workflow
+  templates/reminders, and richer multi-project workflow views remain deferred.
 - **PDF/DOCX** export needs optional libraries (see Install). **FDX** and **LAN/
   remote API** are experimental.
 - Plot/Timeline are derived from scene fields (no separate rich models).

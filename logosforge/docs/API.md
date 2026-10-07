@@ -102,10 +102,13 @@ GET  /api/health → { status, service, mode, version, api_version, core_version
 `core_version` is the Logosforge build (e.g. `0.9.0-alpha`). Clients (Electron
 desktop and Web/PWA) read these to verify they're talking to a compatible
 backend. `version` mirrors `api_version` for backward compatibility.
-The current additive HTTP contract version is **1.12.0**. It adds a transactional
-Semantic Continuity review contract with revision-guarded defer, dismiss, and
-resolve commands plus durable, project-scoped idempotency receipts. Version
-1.11.0 added a separate, bounded Semantic Continuity Decision Radar feed with
+The current additive HTTP contract version is **1.13.0**. It adds the Guided
+Workflow Project OS contract: mode-filtered templates, active-run-aware
+recommendations, coherent revisioned run reads, bounded event history, and an
+atomic lifecycle command boundary with durable project-scoped idempotency
+receipts. Version 1.12.0 added transactional Semantic Continuity defer, dismiss,
+and resolve commands plus durable receipts. Version 1.11.0 added a separate,
+bounded Semantic Continuity Decision Radar feed with
 canonical issue keys,
 structured issue/scene evidence, and an explicit availability state. HTTP 1.10.0
 introduced the equivalent Knowledge Graph feed and graph deep-link scope; the
@@ -159,6 +162,37 @@ PATCH  /api/projects/{project_id}/settings { settings: { ... } }   # merged
 Changing `narrative_engine` is accepted only while the project is still an
 empty scaffold. Once manuscript or planning content exists, the API returns
 `409 writing_mode_locked` so existing prose is never reinterpreted silently.
+
+### Guided Workflows / Project OS
+```
+GET  /api/projects/{project_id}/workflow-templates
+GET  /api/projects/{project_id}/workflow-recommendations
+GET  /api/projects/{project_id}/workflows
+GET  /api/projects/{project_id}/workflows/{run_id}
+GET  /api/projects/{project_id}/workflows/{run_id}/events?limit=100
+POST /api/projects/{project_id}/workflows/commands
+GET  /api/projects/{project_id}/workflows/command-receipt
+```
+
+Templates and their steps are filtered to the project's writing mode.
+Recommendations suppress templates with active, paused, or blocked runs. Run
+revisions deterministically bind logical run/step state, row-incarnation
+identity, and applicable template semantics; commands other than
+`start_workflow` require the currently loaded revision. Supported commands are
+`start_workflow`, `complete_step`, `skip_step`, `advance`, `refresh`, `pause`,
+`resume`, and `cancel`. Every command requires a 16–128 character safe-ASCII
+`Idempotency-Key`; the raw key is never stored. Exact retries replay the durable
+receipt without repeating the transition or event. Reusing a key for another
+request, using a stale revision, or attempting an invalid lifecycle transition
+returns 409. Missing and foreign run/step identities are indistinguishable 404s.
+
+`refresh` auto-completes only deterministic `check` steps that can be proven in
+the same SQL transaction as the workflow update. Creative/manual steps are
+never auto-completed, and aggregate graph/radar/export checks fail closed until
+their engines expose a transaction-coherent snapshot. Commands never mutate
+manuscript, PSYKE, outline, or other project content. Event reads are capped at
+200 entries; each fresh state change emits exactly one `workflow_changed` live
+event, while no-ops and receipt replays emit none.
 
 ### Project search
 ```

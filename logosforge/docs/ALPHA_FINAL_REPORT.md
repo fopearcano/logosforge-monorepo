@@ -29,7 +29,8 @@ few formats are experimental (all documented).
 - **Connector** — local app-control bridge (writes off by default).
 - **Intelligence services** — Project Intelligence / Decision Radar, Narrative
   Knowledge Graph, Semantic Continuity, Guided Workflows, Rewrite Sandbox,
-  Controlled Apply, Revision Intelligence (services + Logos/Assistant surfaces).
+  Controlled Apply, Revision Intelligence (services + Logos/Assistant surfaces;
+  dedicated Pro panels for Radar, Graph, Continuity, and Guided Workflows).
 - **Export/Import** — Markdown/TXT/Fountain/FDX/HTML/JSON/CSV + PDF/DOCX (optional
   libs); story-elements / PSYKE / full-project; non-destructive import.
 - **Autosave / Versioning / Backup-Restore** — atomic writes, per-project

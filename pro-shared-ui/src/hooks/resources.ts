@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import type { NoteDTO, InlineCommentDTO, CharacterDTO, SceneDTO, ManuscriptSnapshotDTO, StoryStructureDTO, PsykeEntryDTO, PsykeRelationDTO, PsykeProgressionDTO, OutlineNodeDTO, ProjectDTO, TimelineSnapshotDTO, CanvasPlotSnapshotDTO, PlotBlockDTO, ExportRequestDTO, ExportResponseDTO, NarrativeDashboardDTO, ContinuityReportDTO, PacingInsightDTO, BalanceDataDTO, StoryHealthDTO, StructuralAnalysisDTO, WorkflowRunDTO, DecisionRadarDTO, KnowledgeGraphQueryDTO, KnowledgeGraphReadDTO, KnowledgeGraphHiddenEdgePageDTO, GraphGravityDTO, AdaptDTO, ReviewReportDTO, FormatReviewDTO, QuantumResultDTO, AssistantResponseDTO, ExtractionResultDTO, ExtractionApplyRequestDTO, ExtractionApplyReportDTO } from "@logosforge/ui-contracts";
+import type { NoteDTO, InlineCommentDTO, CharacterDTO, SceneDTO, ManuscriptSnapshotDTO, StoryStructureDTO, PsykeEntryDTO, PsykeRelationDTO, PsykeProgressionDTO, OutlineNodeDTO, ProjectDTO, TimelineSnapshotDTO, CanvasPlotSnapshotDTO, PlotBlockDTO, ExportRequestDTO, ExportResponseDTO, NarrativeDashboardDTO, ContinuityReportDTO, PacingInsightDTO, BalanceDataDTO, StoryHealthDTO, StructuralAnalysisDTO, WorkflowTemplateDTO, WorkflowRecommendationDTO, WorkflowRunDTO, WorkflowEventDTO, DecisionRadarDTO, KnowledgeGraphQueryDTO, KnowledgeGraphReadDTO, KnowledgeGraphHiddenEdgePageDTO, GraphGravityDTO, AdaptDTO, ReviewReportDTO, FormatReviewDTO, QuantumResultDTO, AssistantResponseDTO, ExtractionResultDTO, ExtractionApplyRequestDTO, ExtractionApplyReportDTO } from "@logosforge/ui-contracts";
 import type { ExtractionJobDTO } from "@logosforge/ui-contracts";
 import { useStudio } from "../adapters/StudioProvider";
 import { useResource, type Resource } from "./useResource";
@@ -173,7 +173,55 @@ export function useStructureAnalysis(): Resource<StructuralAnalysisDTO> {
 /** Guided-workflow runs (steps + progress) for the active project. */
 export function useWorkflows(): Resource<WorkflowRunDTO[]> {
   const { api, projectId } = useStudio();
-  return useResource(projectId ?? null, () => api.getWorkflows(projectId as number), ["project_data_changed"]);
+  return useResource(projectId ?? null, () => api.getWorkflows(projectId as number), ["project_data_changed", "workflow_changed"]);
+}
+
+/** Mode-filtered built-in workflow gallery for the active project. */
+export function useWorkflowTemplates(): Resource<WorkflowTemplateDTO[]> {
+  const { api, projectId } = useStudio();
+  return useResource(
+    projectId ?? null,
+    () => api.getWorkflowTemplates(projectId as number),
+    ["workflow_changed", "project_data_changed"],
+  );
+}
+
+/** Deterministic Decision-Radar-backed workflow suggestions. */
+export function useWorkflowRecommendations(): Resource<WorkflowRecommendationDTO[]> {
+  const { api, projectId } = useStudio();
+  return useResource(
+    projectId ?? null,
+    () => api.getWorkflowRecommendations(projectId as number),
+    [
+      "workflow_changed", "project_data_changed", "scene_changed", "scenes_changed",
+      "psyke_changed", "outline_changed", "knowledge_graph_changed", "continuity_changed",
+    ],
+  );
+}
+
+/** One authoritative run view; disabled when no run is selected. */
+export function useWorkflowRun(runId: number | null): Resource<WorkflowRunDTO> {
+  const { api, projectId } = useStudio();
+  const key = projectId == null || runId == null ? null : `${projectId}\u0000workflow\u0000${runId}`;
+  return useResource(
+    key,
+    () => api.getWorkflowRun(projectId as number, runId as number),
+    ["workflow_changed"],
+  );
+}
+
+/** Compact bounded quest log for one selected workflow run. */
+export function useWorkflowEvents(runId: number | null, limit = 40): Resource<WorkflowEventDTO[]> {
+  const { api, projectId } = useStudio();
+  const safeLimit = Math.max(1, Math.min(200, Math.floor(limit) || 40));
+  const key = projectId == null || runId == null
+    ? null
+    : `${projectId}\u0000workflow-events\u0000${runId}\u0000${safeLimit}`;
+  return useResource(
+    key,
+    () => api.getWorkflowEvents(projectId as number, runId as number, safeLimit),
+    ["workflow_changed"],
+  );
 }
 
 /** Decision radar — ranked decision cards (blocking→info) for the active project. */

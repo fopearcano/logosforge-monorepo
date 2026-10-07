@@ -375,6 +375,7 @@ from logosforge.models import (
     WorkflowRun,
     WorkflowStepState,
     WorkflowEvent,
+    WorkflowCommandReceipt,
     KnowledgeGraphNode,
     KnowledgeGraphEdge,
     KnowledgeGraphCommandReceipt,
@@ -541,6 +542,39 @@ class ContinuityIssueNotFound(LookupError):
 
 class ContinuityReviewStateCorrupt(RuntimeError):
     """Persisted Continuity review rows violate canonical uniqueness."""
+
+
+class WorkflowRevisionConflict(RuntimeError):
+    """Raised when a workflow command targets an older run revision."""
+
+    def __init__(self, expected: str, current: str) -> None:
+        super().__init__("guided-workflow revision does not match")
+        self.expected = expected
+        self.current = current
+
+
+class WorkflowCommandError(ValueError):
+    """A Guided Workflow command is malformed or unsupported."""
+
+
+class WorkflowIdempotencyKeyConflict(RuntimeError):
+    """An Idempotency-Key was committed for another workflow command."""
+
+
+class WorkflowProjectNotFound(LookupError):
+    """The path-scoped Project disappeared before the transaction began."""
+
+
+class WorkflowRunNotFound(LookupError):
+    """A run is missing or belongs to another project."""
+
+
+class WorkflowStepNotFound(LookupError):
+    """A step is missing or belongs to another workflow run."""
+
+
+class WorkflowStateConflict(RuntimeError):
+    """The requested transition is invalid for the current workflow state."""
 
 
 @dataclass(frozen=True)
@@ -757,10 +791,44 @@ class ContinuityCommandReceiptData:
     created_at: datetime
 
 
+@dataclass(frozen=True)
+class WorkflowRunSnapshot:
+    """One coherent workflow run read detached from SQLite."""
+
+    run: WorkflowRun
+    steps: tuple[WorkflowStepState, ...]
+    revision: str
+
+
+@dataclass(frozen=True)
+class WorkflowCommandResult:
+    """Committed workflow state plus exactly-once recovery metadata."""
+
+    snapshot: WorkflowRunSnapshot
+    changed: bool
+    replayed: bool = False
+    applied_revision: str = ""
+
+
+@dataclass(frozen=True)
+class WorkflowCommandReceiptData:
+    """Decoded durable Guided Workflow command receipt."""
+
+    project_id: int
+    request_digest: str
+    kind: str
+    expected_revision: str
+    applied_revision: str
+    original_changed: bool
+    run_id: int
+    created_at: datetime
+
+
 _TIMELINE_RECEIPT_SCHEMA_VERSION = 1
 _CANVAS_PLOT_RECEIPT_SCHEMA_VERSION = 1
 _KNOWLEDGE_GRAPH_RECEIPT_SCHEMA_VERSION = 1
 _CONTINUITY_RECEIPT_SCHEMA_VERSION = 2
+_WORKFLOW_RECEIPT_SCHEMA_VERSION = 1
 _TIMELINE_COMMAND_KINDS = frozenset({
     "create_lane",
     "update_lane",
@@ -790,6 +858,16 @@ _CONTINUITY_COMMAND_STATUSES = {
     "dismiss_issue": "dismissed",
     "resolve_issue": "resolved",
 }
+_WORKFLOW_COMMAND_KINDS = frozenset({
+    "start_workflow",
+    "complete_step",
+    "skip_step",
+    "advance",
+    "refresh",
+    "pause",
+    "resume",
+    "cancel",
+})
 _TIMELINE_IDEMPOTENCY_KEY_RE = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$"
 )
@@ -800,6 +878,9 @@ _KNOWLEDGE_GRAPH_IDEMPOTENCY_KEY_RE = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$"
 )
 _CONTINUITY_IDEMPOTENCY_KEY_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$"
+)
+_WORKFLOW_IDEMPOTENCY_KEY_RE = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$"
 )
 _CONTINUITY_ISSUE_KEY_RE = re.compile(r"^[0-9a-f]{16}$")
@@ -1474,6 +1555,310 @@ def _decode_continuity_command_receipt(
     )
 
 
+def _workflow_idempotency_key_hash(value: str) -> str:
+    """Validate and irreversibly identify one workflow retry capability."""
+    if not isinstance(value, str):
+        raise WorkflowCommandError("Idempotency-Key must be a string")
+    if (
+        value != value.strip()
+        or _WORKFLOW_IDEMPOTENCY_KEY_RE.fullmatch(value) is None
+    ):
+        raise WorkflowCommandError(
+            "Idempotency-Key must contain 16-128 safe ASCII characters"
+        )
+    return hashlib.sha256(value.encode("ascii")).hexdigest()
+
+
+def _normalize_workflow_command(
+    kind: str,
+    expected_revision: str,
+    fields: dict,
+) -> tuple[str, dict]:
+    """Validate the Core command envelope before hashing or opening a write."""
+    if kind not in _WORKFLOW_COMMAND_KINDS:
+        raise WorkflowCommandError(
+            f"Unsupported Guided Workflow command: {kind!r}"
+        )
+    allowed = {
+        "start_workflow": {"template_id", "title"},
+        "complete_step": {"run_id", "step_id", "notes"},
+        "skip_step": {"run_id", "step_id", "notes"},
+        "advance": {"run_id"},
+        "refresh": {"run_id"},
+        "pause": {"run_id"},
+        "resume": {"run_id"},
+        "cancel": {"run_id"},
+    }[kind]
+    unexpected = sorted(set(fields) - allowed)
+    if unexpected:
+        raise WorkflowCommandError(
+            f"Unexpected field(s) for {kind}: {', '.join(unexpected)}"
+        )
+
+    normalized: dict = {}
+    if kind == "start_workflow":
+        if expected_revision not in ("", None):
+            raise WorkflowCommandError(
+                "start_workflow does not accept expected_revision"
+            )
+        template_id = fields.get("template_id")
+        if (
+            not isinstance(template_id, str)
+            or not template_id.strip()
+            or len(template_id.strip()) > 128
+        ):
+            raise WorkflowCommandError("template_id must be a non-empty string")
+        normalized["template_id"] = template_id.strip()
+        if "title" in fields and fields["title"] is not None:
+            title = fields["title"]
+            if (
+                not isinstance(title, str)
+                or not title.strip()
+                or len(title.strip()) > 200
+            ):
+                raise WorkflowCommandError(
+                    "title must be a non-empty string up to 200 characters"
+                )
+            normalized["title"] = title.strip()
+        return "", normalized
+
+    if (
+        not isinstance(expected_revision, str)
+        or _LOWER_SHA256_RE.fullmatch(expected_revision) is None
+    ):
+        raise WorkflowCommandError(
+            "expected_revision must be a lowercase SHA-256 digest"
+        )
+    run_id = fields.get("run_id")
+    if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id <= 0:
+        raise WorkflowCommandError("run_id must be a positive integer")
+    normalized["run_id"] = run_id
+    if kind in {"complete_step", "skip_step"}:
+        step_id = fields.get("step_id")
+        if (
+            not isinstance(step_id, str)
+            or not step_id.strip()
+            or len(step_id.strip()) > 128
+        ):
+            raise WorkflowCommandError("step_id must be a non-empty string")
+        normalized["step_id"] = step_id.strip()
+        notes = fields.get("notes", "")
+        if not isinstance(notes, str) or len(notes) > 4000:
+            raise WorkflowCommandError(
+                "notes must be a string up to 4000 characters"
+            )
+        normalized["notes"] = notes
+    return expected_revision, normalized
+
+
+def _workflow_command_request_digest(
+    project_id: int,
+    kind: str,
+    expected_revision: str,
+    fields: dict,
+) -> str:
+    encoded = json.dumps(
+        {
+            "scope": "guided-workflow-command-v1",
+            "project_id": int(project_id),
+            "kind": kind,
+            "expected_revision": expected_revision,
+            "fields": fields,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _workflow_receipt_result_json(
+    *,
+    kind: str,
+    expected_revision: str,
+    applied_revision: str,
+    original_changed: bool,
+    run_id: int,
+) -> str:
+    return json.dumps(
+        {
+            "schema_version": _WORKFLOW_RECEIPT_SCHEMA_VERSION,
+            "kind": kind,
+            "expected_revision": expected_revision,
+            "applied_revision": applied_revision,
+            "original_changed": original_changed,
+            "run_id": int(run_id),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _decode_workflow_command_receipt(
+    row: WorkflowCommandReceipt,
+) -> WorkflowCommandReceiptData:
+    """Decode a workflow receipt fail-closed; corrupt proof cannot replay."""
+    try:
+        payload = json.loads(row.result_json)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise RuntimeError("Guided Workflow command receipt is corrupt") from exc
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema_version") != _WORKFLOW_RECEIPT_SCHEMA_VERSION
+        or isinstance(payload.get("schema_version"), bool)
+    ):
+        raise RuntimeError(
+            "Guided Workflow command receipt has an unsupported schema"
+        )
+    kind = payload.get("kind")
+    expected_revision = payload.get("expected_revision")
+    applied_revision = payload.get("applied_revision")
+    original_changed = payload.get("original_changed")
+    run_id = payload.get("run_id")
+    if (
+        kind not in _WORKFLOW_COMMAND_KINDS
+        or not isinstance(expected_revision, str)
+        or (
+            kind != "start_workflow"
+            and _LOWER_SHA256_RE.fullmatch(expected_revision) is None
+        )
+        or (kind == "start_workflow" and expected_revision != "")
+        or not isinstance(applied_revision, str)
+        or _LOWER_SHA256_RE.fullmatch(applied_revision) is None
+        or not isinstance(original_changed, bool)
+        or isinstance(run_id, bool)
+        or not isinstance(run_id, int)
+        or run_id <= 0
+        or _LOWER_SHA256_RE.fullmatch(row.idempotency_key_hash or "") is None
+        or _LOWER_SHA256_RE.fullmatch(row.request_digest or "") is None
+    ):
+        raise RuntimeError(
+            "Guided Workflow command receipt has invalid result data"
+        )
+    return WorkflowCommandReceiptData(
+        project_id=int(row.project_id),
+        request_digest=row.request_digest,
+        kind=kind,
+        expected_revision=expected_revision,
+        applied_revision=applied_revision,
+        original_changed=original_changed,
+        run_id=run_id,
+        created_at=row.created_at,
+    )
+
+
+def _workflow_completion_check_in_session(
+    session: Session,
+    project: Project,
+    check_name: str,
+) -> bool:
+    """Evaluate only checks that can be proven in the current SQL snapshot.
+
+    Complex graph/radar/export checks deliberately fail closed.  A refresh may
+    under-complete and be retried; it must never permanently complete a step
+    from a torn or stale multi-session report.
+    """
+    project_id = int(project.id)
+
+    def scenes() -> tuple[Scene, ...]:
+        return tuple(session.exec(
+            select(Scene).where(Scene.project_id == project_id)
+        ).all())
+
+    if check_name == "project_has_title":
+        return bool((project.title or "").strip()) and project.title != "Untitled"
+    if check_name == "project_has_description":
+        return bool((project.description or "").strip())
+    if check_name == "has_scenes":
+        return session.exec(
+            select(func.count(Scene.id)).where(Scene.project_id == project_id)
+        ).one() > 0
+    if check_name == "all_scenes_have_summary":
+        rows = scenes()
+        return bool(rows) and all((row.summary or "").strip() for row in rows)
+    if check_name == "all_scenes_have_chapter":
+        rows = scenes()
+        return bool(rows) and all((row.chapter or "").strip() for row in rows)
+    if check_name == "has_outline_nodes":
+        return session.exec(
+            select(func.count(OutlineNode.id)).where(
+                OutlineNode.project_id == project_id
+            )
+        ).one() > 0
+    if check_name in {"psyke_has_entries", "psyke_notes_filled", "psyke_has_relations"}:
+        entries = tuple(session.exec(
+            select(PsykeEntry).where(PsykeEntry.project_id == project_id)
+        ).all())
+        if check_name == "psyke_has_entries":
+            return bool(entries)
+        if check_name == "psyke_notes_filled":
+            return all((entry.notes or "").strip() for entry in entries)
+        entry_ids = {int(entry.id) for entry in entries}
+        if not entry_ids:
+            return True
+        related_ids: set[int] = set()
+        for relation in session.exec(
+            select(PsykeRelation).where(
+                PsykeRelation.entry_id.in_(entry_ids),
+                PsykeRelation.related_entry_id.in_(entry_ids),
+            )
+        ).all():
+            related_ids.add(int(relation.entry_id))
+            related_ids.add(int(relation.related_entry_id))
+        return related_ids == entry_ids
+    if check_name == "no_pending_apply":
+        return session.exec(
+            select(func.count(ControlledApplyOperation.id)).where(
+                ControlledApplyOperation.project_id == project_id,
+                ControlledApplyOperation.status.in_(("draft", "previewed")),
+            )
+        ).one() == 0
+    if check_name == "no_preferred_rewrite":
+        return session.exec(
+            select(func.count(RewriteVariant.id)).where(
+                RewriteVariant.project_id == project_id,
+                RewriteVariant.status == "preferred",
+            )
+        ).one() == 0
+    if check_name == "no_stale_rewrite":
+        # Proving source freshness requires comparing live narrative content.
+        # With no open session there is nothing that can be stale; otherwise
+        # fail closed rather than auto-completing from an out-of-transaction
+        # content read.
+        return session.exec(
+            select(func.count(RewriteSession.id)).where(
+                RewriteSession.project_id == project_id,
+                RewriteSession.status == "open",
+            )
+        ).one() == 0
+    if check_name == "production_active":
+        return session.exec(
+            select(func.count(ProductionDraft.id)).where(
+                ProductionDraft.project_id == project_id,
+                ProductionDraft.is_active.is_(True),
+            )
+        ).one() > 0
+    if check_name == "production_has_revision_set":
+        active_ids = tuple(session.exec(
+            select(ProductionDraft.id).where(
+                ProductionDraft.project_id == project_id,
+                ProductionDraft.is_active.is_(True),
+            )
+        ).all())
+        return bool(active_ids) and session.exec(
+            select(func.count(RevisionSet.id)).where(
+                RevisionSet.project_id == project_id,
+                RevisionSet.draft_id.in_(active_ids),
+            )
+        ).one() > 0
+
+    # Graph isolation, Decision Radar and rendered export validation aggregate
+    # non-SQL engines. They remain manual until those engines expose a coherent
+    # session-bound snapshot token.
+    return False
+
+
 @dataclass(frozen=True)
 class PlotBlockUpdateResult:
     """One committed Plot block mutation and its invalidation metadata."""
@@ -1526,6 +1911,8 @@ class Database:
         self._knowledge_graph_write_locks: dict[int, threading.RLock] = {}
         self._continuity_locks_guard = threading.RLock()
         self._continuity_write_locks: dict[int, threading.RLock] = {}
+        self._workflow_locks_guard = threading.RLock()
+        self._workflow_write_locks: dict[int, threading.RLock] = {}
         self._structure_locks_guard = threading.RLock()
         self._structure_write_locks: dict[int, threading.RLock] = {}
         # ``check_same_thread=False`` lets FastAPI's threadpool use pooled
@@ -1640,6 +2027,17 @@ class Database:
         with self._continuity_locks_guard:
             lock = self._continuity_write_locks.setdefault(
                 project_id, threading.RLock()
+            )
+        with lock:
+            yield
+
+    @contextmanager
+    def workflow_write_lock(self, project_id: int):
+        """Serialize Guided Workflow writers for one project in-process."""
+        key = int(project_id)
+        with self._workflow_locks_guard:
+            lock = self._workflow_write_locks.setdefault(
+                key, threading.RLock(),
             )
         with lock:
             yield
@@ -9495,12 +9893,609 @@ class Database:
             session.refresh(ev)
             return ev
 
-    def get_workflow_events(self, workflow_run_id: int) -> list[WorkflowEvent]:
+    def get_workflow_events(
+        self,
+        workflow_run_id: int,
+        *,
+        limit: int | None = None,
+    ) -> list[WorkflowEvent]:
         with Session(self._engine) as session:
             stmt = select(WorkflowEvent).where(
-                WorkflowEvent.workflow_run_id == workflow_run_id).order_by(
-                WorkflowEvent.id)
-            return list(session.exec(stmt).all())
+                WorkflowEvent.workflow_run_id == workflow_run_id
+            )
+            if limit is None:
+                return list(session.exec(stmt.order_by(WorkflowEvent.id)).all())
+            if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
+                raise WorkflowCommandError("event limit must be between 1 and 200")
+            rows = list(session.exec(
+                stmt.order_by(WorkflowEvent.id.desc()).limit(limit)
+            ).all())
+            rows.reverse()
+            return rows
+
+    def get_project_workflow_events(
+        self,
+        project_id: int,
+        workflow_run_id: int,
+        *,
+        limit: int = 100,
+    ) -> "list[WorkflowEvent] | None":
+        """Return a bounded event tail, or ``None`` for missing/foreign runs."""
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
+            raise WorkflowCommandError("event limit must be between 1 and 200")
+        with Session(self._engine) as session:
+            run = session.get(WorkflowRun, workflow_run_id)
+            if run is None or int(run.project_id) != int(project_id):
+                return None
+            rows = list(session.exec(
+                select(WorkflowEvent)
+                .where(
+                    WorkflowEvent.project_id == project_id,
+                    WorkflowEvent.workflow_run_id == workflow_run_id,
+                )
+                .order_by(WorkflowEvent.id.desc())
+                .limit(limit)
+            ).all())
+            rows.reverse()
+            return rows
+
+    def _workflow_run_snapshot_in_session(
+        self,
+        session: Session,
+        project_id: int,
+        run_id: int,
+    ) -> "WorkflowRunSnapshot | None":
+        from logosforge.guided_workflows.revision import workflow_run_revision
+
+        run = session.get(WorkflowRun, run_id)
+        if run is None or int(run.project_id) != int(project_id):
+            return None
+        steps = tuple(session.exec(
+            select(WorkflowStepState)
+            .where(WorkflowStepState.workflow_run_id == run_id)
+            .order_by(WorkflowStepState.sort_index, WorkflowStepState.id)
+        ).all())
+        if any(int(step.project_id) != int(run.project_id) for step in steps):
+            raise RuntimeError(
+                "Guided Workflow step project does not match its run"
+            )
+        if len({step.step_id for step in steps}) != len(steps):
+            raise RuntimeError("Guided Workflow contains duplicate step identities")
+        return WorkflowRunSnapshot(
+            run=run,
+            steps=steps,
+            revision=workflow_run_revision(run, steps),
+        )
+
+    def read_workflow_run_snapshot(
+        self,
+        project_id: int,
+        run_id: int,
+    ) -> "WorkflowRunSnapshot | None":
+        """Read one project-owned workflow run and its deterministic revision."""
+        with Session(self._engine, expire_on_commit=False) as session:
+            snapshot = self._workflow_run_snapshot_in_session(
+                session, project_id, run_id,
+            )
+            session.expunge_all()
+            return snapshot
+
+    def read_workflow_run_snapshot_by_id(
+        self,
+        run_id: int,
+    ) -> "WorkflowRunSnapshot | None":
+        """Compatibility read for callers that already hold a trusted run id."""
+        with Session(self._engine, expire_on_commit=False) as session:
+            run = session.get(WorkflowRun, run_id)
+            if run is None:
+                return None
+            snapshot = self._workflow_run_snapshot_in_session(
+                session, int(run.project_id), run_id,
+            )
+            session.expunge_all()
+            return snapshot
+
+    def read_workflow_runs_snapshot(
+        self,
+        project_id: int,
+    ) -> "tuple[WorkflowRunSnapshot, ...] | None":
+        """Read every run and step from one coherent SQLite snapshot."""
+        from logosforge.guided_workflows.revision import workflow_run_revision
+
+        with Session(self._engine, expire_on_commit=False) as session:
+            project = session.get(Project, project_id)
+            if project is None:
+                return None
+            runs = tuple(session.exec(
+                select(WorkflowRun)
+                .where(WorkflowRun.project_id == project_id)
+                .order_by(WorkflowRun.id)
+            ).all())
+            project_steps = tuple(session.exec(
+                select(WorkflowStepState)
+                .where(WorkflowStepState.project_id == project_id)
+                .order_by(
+                    WorkflowStepState.workflow_run_id,
+                    WorkflowStepState.sort_index,
+                    WorkflowStepState.id,
+                )
+            ).all())
+            run_ids = {int(run.id) for run in runs}
+            linked_steps = tuple(session.exec(
+                select(WorkflowStepState)
+                .where(WorkflowStepState.workflow_run_id.in_(run_ids))
+                .order_by(
+                    WorkflowStepState.workflow_run_id,
+                    WorkflowStepState.sort_index,
+                    WorkflowStepState.id,
+                )
+            ).all()) if run_ids else ()
+            if any(
+                int(step.workflow_run_id) not in run_ids
+                for step in project_steps
+            ):
+                raise RuntimeError("Guided Workflow contains an orphaned step")
+            if any(
+                int(step.project_id) != int(project_id)
+                for step in linked_steps
+            ):
+                raise RuntimeError(
+                    "Guided Workflow step project does not match its run"
+                )
+            all_steps_by_id = {
+                int(step.id): step for step in (*project_steps, *linked_steps)
+            }
+            all_steps = tuple(sorted(
+                all_steps_by_id.values(),
+                key=lambda step: (
+                    int(step.workflow_run_id),
+                    int(step.sort_index),
+                    int(step.id),
+                ),
+            ))
+            steps_by_run: dict[int, list[WorkflowStepState]] = {
+                run_id: [] for run_id in run_ids
+            }
+            for step in all_steps:
+                steps_by_run[int(step.workflow_run_id)].append(step)
+            snapshots: list[WorkflowRunSnapshot] = []
+            for run in runs:
+                steps = tuple(steps_by_run[int(run.id)])
+                if len({step.step_id for step in steps}) != len(steps):
+                    raise RuntimeError(
+                        "Guided Workflow contains duplicate step identities"
+                    )
+                snapshots.append(WorkflowRunSnapshot(
+                    run=run,
+                    steps=steps,
+                    revision=workflow_run_revision(run, steps),
+                ))
+            session.expunge_all()
+            return tuple(snapshots)
+
+    def get_workflow_command_receipt(
+        self,
+        project_id: int,
+        idempotency_key: str,
+    ) -> "WorkflowCommandReceiptData | None":
+        key_hash = _workflow_idempotency_key_hash(idempotency_key)
+        with Session(self._engine) as session:
+            row = session.get(
+                WorkflowCommandReceipt,
+                (int(project_id), key_hash),
+            )
+            return (
+                _decode_workflow_command_receipt(row)
+                if row is not None
+                else None
+            )
+
+    def execute_workflow_command(
+        self,
+        project_id: int,
+        *,
+        kind: str,
+        idempotency_key: str,
+        expected_revision: str = "",
+        _legacy_allow_noncurrent: bool = False,
+        **fields,
+    ) -> WorkflowCommandResult:
+        """Apply one project-scoped Guided Workflow command atomically.
+
+        The transaction mutates only ``Workflow*`` rows.  Every successful
+        command, including an exact no-op refresh, commits a durable receipt in
+        the same transaction.  Receipt replay is checked before optimistic
+        concurrency and lifecycle guards, making ambiguous retries recoverable
+        after a process restart without repeating an event or transition.
+        """
+        from logosforge.guided_workflows.models import KIND_CHECK
+        from logosforge.guided_workflows.registry import get_template
+        from logosforge.models.models import _now
+        from logosforge.writing_modes import get_project_writing_mode
+
+        expected_revision, normalized = _normalize_workflow_command(
+            kind, expected_revision, fields,
+        )
+        key_hash = _workflow_idempotency_key_hash(idempotency_key)
+        request_digest = _workflow_command_request_digest(
+            project_id, kind, expected_revision, normalized,
+        )
+
+        with self.workflow_write_lock(project_id):
+            with Session(self._engine, expire_on_commit=False) as session:
+                session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+                try:
+                    project = session.get(Project, project_id)
+                    if project is None:
+                        raise WorkflowProjectNotFound(project_id)
+
+                    receipt_row = session.get(
+                        WorkflowCommandReceipt,
+                        (int(project_id), key_hash),
+                    )
+                    if receipt_row is not None:
+                        receipt = _decode_workflow_command_receipt(receipt_row)
+                        if not hmac.compare_digest(
+                            receipt.request_digest, request_digest,
+                        ):
+                            raise WorkflowIdempotencyKeyConflict(
+                                "Idempotency-Key was already used for a "
+                                "different Guided Workflow command"
+                            )
+                        replay = self._workflow_run_snapshot_in_session(
+                            session, project_id, receipt.run_id,
+                        )
+                        if replay is None:
+                            raise RuntimeError(
+                                "Guided Workflow receipt references a missing run"
+                            )
+                        session.expunge_all()
+                        session.rollback()
+                        return WorkflowCommandResult(
+                            snapshot=replay,
+                            changed=False,
+                            replayed=True,
+                            applied_revision=receipt.applied_revision,
+                        )
+
+                    if kind == "start_workflow":
+                        template = get_template(normalized["template_id"])
+                        if template is None:
+                            raise WorkflowCommandError("Unknown workflow template")
+                        mode = get_project_writing_mode(project)
+                        if not template.applies_to(mode):
+                            raise WorkflowCommandError(
+                                "Workflow template is not available for this writing mode"
+                            )
+                        duplicate = session.exec(
+                            select(WorkflowRun).where(
+                                WorkflowRun.project_id == project_id,
+                                WorkflowRun.template_id == template.id,
+                                WorkflowRun.status.in_((
+                                    "active", "paused", "blocked",
+                                )),
+                            )
+                        ).first()
+                        if duplicate is not None:
+                            raise WorkflowStateConflict(
+                                "An active run of this workflow already exists"
+                            )
+                        template_steps = template.steps_for_mode(mode)
+                        run = WorkflowRun(
+                            project_id=project_id,
+                            template_id=template.id,
+                            title=normalized.get("title", template.title),
+                            writing_mode=mode,
+                            status="active",
+                            current_step_id=(
+                                template_steps[0].id if template_steps else ""
+                            ),
+                        )
+                        session.add(run)
+                        session.flush()
+                        for index, template_step in enumerate(template_steps):
+                            session.add(WorkflowStepState(
+                                project_id=project_id,
+                                workflow_run_id=int(run.id),
+                                step_id=template_step.id,
+                                title=template_step.title,
+                                status="active" if index == 0 else "pending",
+                                section_name=template_step.section_name or None,
+                                action_id=template_step.action_id or None,
+                                sort_index=index,
+                            ))
+                        session.add(WorkflowEvent(
+                            project_id=project_id,
+                            workflow_run_id=int(run.id),
+                            event_type="started",
+                            message=f"Started workflow '{run.title}'.",
+                        ))
+                        session.flush()
+                        updated = self._workflow_run_snapshot_in_session(
+                            session, project_id, int(run.id),
+                        )
+                        assert updated is not None
+                        session.add(WorkflowCommandReceipt(
+                            project_id=project_id,
+                            idempotency_key_hash=key_hash,
+                            request_digest=request_digest,
+                            result_json=_workflow_receipt_result_json(
+                                kind=kind,
+                                expected_revision="",
+                                applied_revision=updated.revision,
+                                original_changed=True,
+                                run_id=int(run.id),
+                            ),
+                        ))
+                        session.commit()
+                        session.expunge_all()
+                        return WorkflowCommandResult(
+                            snapshot=updated,
+                            changed=True,
+                            applied_revision=updated.revision,
+                        )
+
+                    run_id = normalized["run_id"]
+                    current = self._workflow_run_snapshot_in_session(
+                        session, project_id, run_id,
+                    )
+                    if current is None:
+                        raise WorkflowRunNotFound(run_id)
+                    if not hmac.compare_digest(
+                        expected_revision, current.revision,
+                    ):
+                        raise WorkflowRevisionConflict(
+                            expected_revision, current.revision,
+                        )
+
+                    run = current.run
+                    steps = list(current.steps)
+                    template = get_template(run.template_id)
+
+                    def event(
+                        event_type: str,
+                        message: str,
+                        step_id: str | None = None,
+                    ) -> None:
+                        session.add(WorkflowEvent(
+                            project_id=project_id,
+                            workflow_run_id=run_id,
+                            step_id=step_id,
+                            event_type=event_type,
+                            message=message,
+                        ))
+
+                    def require_status(*statuses: str) -> None:
+                        if run.status not in statuses:
+                            raise WorkflowStateConflict(
+                                f"Command {kind} is unavailable while the "
+                                f"workflow is {run.status}"
+                            )
+
+                    def requested_step() -> WorkflowStepState:
+                        step_id = normalized["step_id"]
+                        state = next((
+                            item for item in steps if item.step_id == step_id
+                        ), None)
+                        if state is None:
+                            raise WorkflowStepNotFound(step_id)
+                        return state
+
+                    def recompute_pointer() -> None:
+                        open_steps = [
+                            item for item in steps
+                            if item.status in {"pending", "active"}
+                        ]
+                        if open_steps:
+                            first = open_steps[0]
+                            for item in open_steps:
+                                desired = "active" if item is first else "pending"
+                                if item.status != desired:
+                                    item.status = desired
+                                    item.updated_at = _now()
+                                    session.add(item)
+                            run.current_step_id = first.step_id
+                        else:
+                            blocked_steps = [
+                                item for item in steps
+                                if item.status == "blocked"
+                            ]
+                            if blocked_steps:
+                                run.status = "blocked"
+                                run.current_step_id = blocked_steps[0].step_id
+                                run.completed_at = None
+                                event(
+                                    "blocked",
+                                    f"Workflow blocked at step "
+                                    f"'{blocked_steps[0].title}'.",
+                                    blocked_steps[0].step_id,
+                                )
+                            else:
+                                run.status = "completed"
+                                run.current_step_id = ""
+                                run.completed_at = _now()
+                                event("completed", "Workflow completed.")
+
+                    if kind in {"complete_step", "skip_step"}:
+                        require_status("active")
+                        state = requested_step()
+                        if state.status not in {"pending", "active"} or (
+                            not _legacy_allow_noncurrent
+                            and (
+                                state.status != "active"
+                                or state.step_id != run.current_step_id
+                            )
+                        ):
+                            raise WorkflowStateConflict(
+                                "Only the current active step can be changed"
+                            )
+                        state.status = (
+                            "completed" if kind == "complete_step" else "skipped"
+                        )
+                        if normalized.get("notes"):
+                            state.notes = normalized["notes"]
+                        state.updated_at = _now()
+                        session.add(state)
+                        event_type = (
+                            "step_completed"
+                            if kind == "complete_step"
+                            else "step_skipped"
+                        )
+                        verb = "Completed" if kind == "complete_step" else "Skipped"
+                        event(
+                            event_type,
+                            f"{verb} step '{state.title}'.",
+                            state.step_id,
+                        )
+                        recompute_pointer()
+
+                    elif kind == "advance":
+                        require_status("active")
+                        current_step = next((
+                            item for item in steps
+                            if item.step_id == run.current_step_id
+                            and item.status == "active"
+                        ), None)
+                        if current_step is None:
+                            raise WorkflowStateConflict(
+                                "Workflow has no current active step"
+                            )
+                        open_steps = [
+                            item for item in steps
+                            if item.status in {"pending", "active"}
+                        ]
+                        current_index = open_steps.index(current_step)
+                        next_step = open_steps[
+                            (current_index + 1) % len(open_steps)
+                        ]
+                        if next_step is not current_step:
+                            current_step.status = "pending"
+                            current_step.updated_at = _now()
+                            next_step.status = "active"
+                            next_step.updated_at = _now()
+                            run.current_step_id = next_step.step_id
+                            session.add(current_step)
+                            session.add(next_step)
+                            event(
+                                "advanced",
+                                f"Advanced to step '{next_step.title}'.",
+                                next_step.step_id,
+                            )
+
+                    elif kind == "refresh":
+                        require_status("active")
+                        refreshed = False
+                        for state in steps:
+                            template_step = next((
+                                item for item in (
+                                    template.steps if template else ()
+                                )
+                                if item.id == state.step_id
+                            ), None)
+                            if (
+                                state.status in {"pending", "active"}
+                                and template_step is not None
+                                and template_step.kind == KIND_CHECK
+                                and template_step.completion_check
+                                and _workflow_completion_check_in_session(
+                                    session,
+                                    project,
+                                    template_step.completion_check,
+                                )
+                            ):
+                                state.status = "completed"
+                                state.updated_at = _now()
+                                session.add(state)
+                                event(
+                                    "step_auto_completed",
+                                    "Auto-completed verifiable step "
+                                    f"'{state.title}'.",
+                                    state.step_id,
+                                )
+                                refreshed = True
+                        if refreshed:
+                            recompute_pointer()
+
+                    elif kind == "pause":
+                        require_status("active")
+                        run.status = "paused"
+                        event("paused", "Workflow paused.")
+
+                    elif kind == "resume":
+                        require_status("paused", "blocked")
+                        if run.status == "blocked":
+                            blocked_steps = [
+                                item for item in steps if item.status == "blocked"
+                            ]
+                            current_blocked = next((
+                                item for item in blocked_steps
+                                if item.step_id == run.current_step_id
+                            ), None)
+                            if current_blocked is None and blocked_steps:
+                                current_blocked = blocked_steps[0]
+                                run.current_step_id = current_blocked.step_id
+                            if current_blocked is None:
+                                raise WorkflowStateConflict(
+                                    "Blocked workflow has no blocked step to resume"
+                                )
+                            for item in blocked_steps:
+                                item.status = (
+                                    "active"
+                                    if item is current_blocked
+                                    else "pending"
+                                )
+                                item.updated_at = _now()
+                                session.add(item)
+                        run.status = "active"
+                        event("resumed", "Workflow resumed.")
+
+                    elif kind == "cancel":
+                        require_status("active", "paused", "blocked")
+                        run.status = "cancelled"
+                        run.current_step_id = ""
+                        run.completed_at = _now()
+                        event("cancelled", "Workflow cancelled.")
+
+                    session.add(run)
+                    session.flush()
+                    updated = self._workflow_run_snapshot_in_session(
+                        session, project_id, run_id,
+                    )
+                    assert updated is not None
+                    changed = not hmac.compare_digest(
+                        current.revision, updated.revision,
+                    )
+                    if changed:
+                        run.updated_at = _now()
+                        session.add(run)
+                        session.flush()
+                        updated = self._workflow_run_snapshot_in_session(
+                            session, project_id, run_id,
+                        )
+                        assert updated is not None
+
+                    session.add(WorkflowCommandReceipt(
+                        project_id=project_id,
+                        idempotency_key_hash=key_hash,
+                        request_digest=request_digest,
+                        result_json=_workflow_receipt_result_json(
+                            kind=kind,
+                            expected_revision=expected_revision,
+                            applied_revision=updated.revision,
+                            original_changed=changed,
+                            run_id=run_id,
+                        ),
+                    ))
+                    session.commit()
+                    session.expunge_all()
+                    return WorkflowCommandResult(
+                        snapshot=updated,
+                        changed=changed,
+                        applied_revision=updated.revision,
+                    )
+                except Exception:
+                    session.rollback()
+                    raise
 
     # -- Knowledge graph (Phase 10P) -----------------------------------------
     # Only user-confirmed / hidden edges (and their nodes) are persisted; the

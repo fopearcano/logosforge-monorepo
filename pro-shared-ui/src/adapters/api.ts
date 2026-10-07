@@ -117,7 +117,13 @@ import type {
   BalanceDataDTO,
   StoryHealthDTO,
   StructuralAnalysisDTO,
+  WorkflowTemplateDTO,
+  WorkflowRecommendationDTO,
   WorkflowRunDTO,
+  WorkflowEventDTO,
+  WorkflowCommandDTO,
+  WorkflowCommandResultDTO,
+  WorkflowCommandReceiptDTO,
   DecisionRadarDTO,
   QuantumResultDTO,
   QuantumOutlineRequestDTO,
@@ -317,7 +323,23 @@ export interface ApiClient {
   getBalance(p: number): Promise<BalanceDataDTO>;
   getStoryHealth(p: number): Promise<StoryHealthDTO>;
   getStructureAnalysis(p: number): Promise<StructuralAnalysisDTO>;
+  getWorkflowTemplates(p: number): Promise<WorkflowTemplateDTO[]>;
+  getWorkflowRecommendations(p: number): Promise<WorkflowRecommendationDTO[]>;
   getWorkflows(p: number): Promise<WorkflowRunDTO[]>;
+  getWorkflowRun(p: number, runId: number): Promise<WorkflowRunDTO>;
+  getWorkflowEvents(p: number, runId: number, limit?: number): Promise<WorkflowEventDTO[]>;
+  /** Apply one revision-guarded, idempotent workflow-state command. */
+  executeWorkflowCommand(
+    p: number,
+    body: WorkflowCommandDTO,
+    idempotencyKey: string,
+  ): Promise<WorkflowCommandResultDTO>;
+  /** Resolve an ambiguously completed workflow command by capability key. */
+  getWorkflowCommandReceipt(
+    p: number,
+    idempotencyKey: string,
+    expectedCommand: WorkflowCommandDTO,
+  ): Promise<WorkflowCommandReceiptDTO>;
   getDecisionRadar(p: number): Promise<DecisionRadarDTO>;
   getAdapt(p: number): Promise<AdaptDTO>;
   getReview(p: number): Promise<ReviewReportDTO>;

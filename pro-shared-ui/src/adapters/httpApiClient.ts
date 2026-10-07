@@ -39,6 +39,13 @@ import {
   validateContinuityCommandReceiptDTOForRequest,
   validateContinuityCommandResultDTOForRequest,
   validateContinuityReportDTOForRequest,
+  validateWorkflowTemplateListDTO,
+  validateWorkflowRecommendationListDTO,
+  validateWorkflowRunDTOForRequest,
+  validateWorkflowRunListDTOForRequest,
+  validateWorkflowEventListDTOForRequest,
+  validateWorkflowCommandResultDTOForRequest,
+  validateWorkflowCommandReceiptDTOForRequest,
   validateKnowledgeGraphReadDTOForRequest,
   validateKnowledgeGraphCommandResultDTOForRequest,
   validateKnowledgeGraphCommandReceiptDTOForRequest,
@@ -617,7 +624,53 @@ export function createHttpApiClient(
     getBalance: (p) => get(ROUTES.balance(p)),
     getStoryHealth: (p) => get(ROUTES.storyHealth(p)),
     getStructureAnalysis: (p) => get(ROUTES.structureAnalysis(p)),
-    getWorkflows: (p) => get(ROUTES.workflows(p)),
+    getWorkflowTemplates: (p) => get(
+      ROUTES.workflowTemplates(p),
+      validateWorkflowTemplateListDTO,
+    ),
+    getWorkflowRecommendations: (p) => get(
+      ROUTES.workflowRecommendations(p),
+      validateWorkflowRecommendationListDTO,
+    ),
+    getWorkflows: (p) => get(
+      ROUTES.workflows(p),
+      (value) => validateWorkflowRunListDTOForRequest(value, p),
+    ),
+    getWorkflowRun: (p, runId) => get(
+      ROUTES.workflowRun(p, runId),
+      (value) => validateWorkflowRunDTOForRequest(value, p, runId),
+    ),
+    getWorkflowEvents: (p, runId, requestedLimit = 40) => {
+      const limit = Math.max(1, Math.min(200, Math.floor(requestedLimit) || 40));
+      return get(
+        `${ROUTES.workflowEvents(p, runId)}?limit=${limit}`,
+        (value) => validateWorkflowEventListDTOForRequest(value, p, runId, limit),
+      );
+    },
+    executeWorkflowCommand: (p, body, idempotencyKey) => trackProjectOperation(
+      req(
+        ROUTES.workflowCommands(p),
+        {
+          method: "POST",
+          body: JSON.stringify(body),
+          headers: { "Idempotency-Key": idempotencyKey },
+        },
+        (value) => validateWorkflowCommandResultDTOForRequest(value, p, body),
+      ),
+      { persistence: true },
+    ),
+    getWorkflowCommandReceipt: (p, idempotencyKey, expectedCommand) => req(
+      ROUTES.workflowCommandReceipt(p),
+      {
+        headers: {
+          "Idempotency-Key": idempotencyKey,
+          "Cache-Control": "no-store",
+        },
+      },
+      (value) => validateWorkflowCommandReceiptDTOForRequest(
+        value, p, expectedCommand,
+      ),
+    ),
     getDecisionRadar: (p) => get(
       ROUTES.decisionRadar(p),
       (value) => validateDecisionRadarDTOForRequest(value, p),

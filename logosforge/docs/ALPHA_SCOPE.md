@@ -55,7 +55,8 @@ systems:
   and a separate Billy → Controlled Apply repair handoff.
 - **Dashboard / Decision Radar** — ranked Project Intelligence, Knowledge Graph,
   and Semantic Continuity cards with exact Graph/issue/scene deep links.
-- **Guided Workflows** *(engine)* — resumable, mode-aware step paths.
+- **Guided Workflows** — resumable, mode-aware engine, HTTP command/receipt
+  contract, and dedicated Pro cockpit panel.
 - **Rewrite Sandbox / Controlled Apply / Revision Intelligence** — safe,
   confirm-gated change tooling.
 - **Export / Import** — Fountain, DOCX, PDF, HTML preview, plain text, project
@@ -97,8 +98,9 @@ These are frozen. Change only to fix a confirmed regression, with tests.
   panels and guarded review flows are implemented; cross-platform packaged
   acceptance for the current production-shell candidate is still incomplete.
   *(B)*
-- **Guided Workflows** — the engine and Logos/Assistant surfaces exist; a
-  dedicated workflow panel remains deferred. *(B)*
+- **Guided Workflows** — the engine, Logos/Assistant context, HTTP 1.13.0
+  transaction boundary, and dedicated Pro panel are implemented; packaged
+  acceptance of this new surface is still pending. *(B)*
 - **FDX export** — experimental/gated. *(B)*
 - **Grammar / spelling** — rule-based, no external engine; basic accuracy. *(B)*
 - **API** — the versioned HTTP contract and local MCP gateway have broad
@@ -113,16 +115,18 @@ These are frozen. Change only to fix a confirmed regression, with tests.
   findings; it flags only evidence-backed, deterministic issues.
 - Knowledge Graph centrality is plain degree (explainable, not PageRank);
   undefined-term detection is heuristic.
-- Guided Workflows are surfaced through the engine and Logos/Assistant rather
-  than a dedicated workflow panel.
+- Guided Workflows use the built-in A–K templates only. Custom templates,
+  per-step reminders, and a multi-project workflow dashboard are not included;
+  aggregate Graph/Radar/export verification remains manual/fail-closed where a
+  same-transaction proof is unavailable.
 - Grammar/spell is rule-based.
 - Single-user, local-only; no collaboration or remote sync.
 
 ## 6. Deferred features (→ Beta)
 
-- A dedicated **Guided Workflows** UI panel and persistent custom Radar filters/
-  dismissal controls. Graph, Semantic Continuity, and Decision Radar panels are
-  already part of the Pro Alpha.
+- Persistent custom Radar filters/dismissal controls. Graph, Semantic
+  Continuity, Decision Radar, and Guided Workflows panels are already part of
+  the Pro Alpha.
 - Supported **API** `lan` / `remote` transport with required authentication, and
   web/PWA distribution. The React/Electron shared UI itself is implemented.
 - Richer **Plot** and **Timeline** models.
@@ -177,7 +181,10 @@ Highest priority, lowest tolerance for change:
 1. Record a **full-suite-green, source-bound** baseline for the release
    candidate, including a Writer QA run with **0 BLOCKER** findings.
 2. Run the unchanged production-shell packaged journey on hosted Linux/Xvfb and
-   the Intel macOS 12 runner; the current candidate has passed on Windows only.
+   the Intel macOS 12 runner. The current 1.12.0 candidate passed the full
+   Windows journey and a separate clean-Ubuntu-VM AppImage launch/relaunch smoke
+   as an unprivileged user with Chromium sandboxing enabled; that VM smoke is
+   not packaged validation of the newer HTTP 1.13.0 Guided Workflows changes.
 3. Complete hands-on acceptance of the installer/portable EXE, AppImage, and DMG
    on their supported operating systems before publishing.
 4. Keep desktop/localhost as the Alpha API posture. Before any future LAN/remote
@@ -185,5 +192,6 @@ Highest priority, lowest tolerance for change:
 5. Preserve the existing safety and data round-trip gates: disabled Connector
    writes and Go McKee stay inert, project lifecycle never cross-writes, and
    export/import and restart recovery lose no user data.
-6. A dedicated Guided Workflows panel and richer Plot/Timeline models are Beta
-   feature work, not blockers for Alpha stability.
+6. Richer Plot/Timeline models, custom workflow templates/reminders, and a
+   multi-project workflow dashboard are Beta feature work, not blockers for
+   Alpha stability.

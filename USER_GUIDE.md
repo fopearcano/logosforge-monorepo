@@ -430,6 +430,19 @@ apply target reflects the latest saved prose. Controlled Apply rereads it again
 before writing and refuses the change if the request-time target is no longer
 current.
 
+The **Guided Workflows** panel is Pro's explicit Project OS checklist. Choose
+from the mode-compatible built-in templates or a deterministic recommendation,
+then work through one persisted run at a time. The panel shows progress, the
+current creative/check/manual step, and a compact event history. **OPEN
+SECTION** follows only known Studio destinations; a Logos suggestion opens
+Logos for review but never runs it. Use **MARK COMPLETE**, **SKIP**,
+**ADVANCE**, or **VERIFY CHECKS** explicitly, and Pause/Resume or confirm Cancel
+when needed.
+Only deterministic checks that Core can prove transactionally are verified;
+creative/manual work always remains your decision. If command delivery is
+uncertain, keep using the offered same-receipt recovery control—Pro preserves
+the exact command/key and will never invent a replacement retry.
+
 Under **Visual Overlays**, node sizing defaults to **Story Gravity**, a
 project-wide 0–100% narrative-importance signal. Choose **View Links** to size by
 relationship degree in the complete selected view/evidence scope instead. Core

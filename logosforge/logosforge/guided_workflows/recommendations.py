@@ -51,6 +51,12 @@ def build_workflow_recommendations(db, project_id: int, *, cap: int = 4,
 
     mode = normalize_mode(report.overview.get("writing_mode"))
     offered = {t.id for t in list_workflow_templates(mode)}
+    active_templates = {
+        snapshot.run.template_id
+        for snapshot in (db.read_workflow_runs_snapshot(project_id) or ())
+        if snapshot.run.status in ("active", "paused", "blocked")
+    }
+    offered.difference_update(active_templates)
 
     recs: list[WorkflowRecommendation] = []
     seen: set[str] = set()
@@ -58,7 +64,7 @@ def build_workflow_recommendations(db, project_id: int, *, cap: int = 4,
     # 1. Empty-project bootstrap.
     if not report.overview.get("total_scenes"):
         tpl = get_template("project_setup")
-        if tpl and "project_setup" not in seen:
+        if tpl and tpl.id in offered and "project_setup" not in seen:
             recs.append(WorkflowRecommendation(
                 tpl.id, tpl.title, "Project has no scenes yet — start here.",
                 "suggestion"))

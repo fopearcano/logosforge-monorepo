@@ -27,6 +27,7 @@ from logosforge.guided_workflows.engine import (
     skip_workflow_step,
     start_workflow,
     workflow_status_summary,
+    workflow_run_view_from_snapshot,
 )
 from logosforge.guided_workflows.models import (
     WorkflowStep,
@@ -64,4 +65,5 @@ __all__ = [
     "refresh_workflow_run",
     "check_step_completion",
     "workflow_status_summary",
+    "workflow_run_view_from_snapshot",
 ]

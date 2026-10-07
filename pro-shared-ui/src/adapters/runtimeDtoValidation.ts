@@ -55,6 +55,15 @@ import type {
   ContinuityCommandResultDTO,
   ContinuityIssueDTO,
   ContinuityReportDTO,
+  WorkflowCommandDTO,
+  WorkflowCommandReceiptDTO,
+  WorkflowCommandResultDTO,
+  WorkflowEventDTO,
+  WorkflowRecommendationDTO,
+  WorkflowRunDTO,
+  WorkflowStepDTO,
+  WorkflowTemplateDTO,
+  WorkflowTemplateStepDTO,
   KnowledgeGraphEdgeDTO,
   KnowledgeGraphEdgeIdentityDTO,
   KnowledgeGraphNodeDTO,
@@ -1341,6 +1350,279 @@ export function validateContinuityCommandReceiptDTOForRequest(
   if (appliedRevision === expectedRevision) fail("$.applied_revision", "a new committed revision", appliedRevision);
   if (!committedAt.trim() || Number.isNaN(Date.parse(committedAt))) fail("$.committed_at", "a non-empty ISO timestamp", committedAt);
   return value as ContinuityCommandReceiptDTO;
+}
+
+const WORKFLOW_STEP_KINDS = new Set(["creative", "check", "manual"]);
+const WORKFLOW_STEP_STATUSES = new Set(["pending", "active", "completed", "skipped", "blocked"]);
+const WORKFLOW_RUN_STATUSES = new Set(["active", "paused", "completed", "cancelled", "blocked"]);
+
+function isoTimestamp(value: unknown, path: string): string {
+  const timestamp = stringValue(value, path);
+  if (!timestamp.trim() || Number.isNaN(Date.parse(timestamp))) {
+    fail(path, "a non-empty ISO timestamp", timestamp);
+  }
+  return timestamp;
+}
+
+function nullableIsoTimestamp(value: unknown, path: string): string | null {
+  return nullable(value, path, isoTimestamp);
+}
+
+function workflowTemplateStep(value: unknown, path: string): WorkflowTemplateStepDTO {
+  const dto = record(value, path);
+  for (const key of ["id", "title", "description", "section_name", "action_id", "completion_check"] as const) {
+    const item = stringValue(requireField(dto, key, path), fieldPath(path, key));
+    if ((key === "id" || key === "title") && !item.trim()) {
+      fail(fieldPath(path, key), "a non-empty string", item);
+    }
+  }
+  const kind = stringValue(requireField(dto, "kind", path), fieldPath(path, "kind"));
+  if (!WORKFLOW_STEP_KINDS.has(kind)) {
+    fail(fieldPath(path, "kind"), "creative, check, or manual", kind);
+  }
+  stringArray(requireField(dto, "modes", path), fieldPath(path, "modes"));
+  return value as WorkflowTemplateStepDTO;
+}
+
+function workflowTemplate(value: unknown, path: string): WorkflowTemplateDTO {
+  const dto = record(value, path);
+  for (const key of ["id", "title", "description", "category"] as const) {
+    const item = stringValue(requireField(dto, key, path), fieldPath(path, key));
+    if ((key === "id" || key === "title") && !item.trim()) {
+      fail(fieldPath(path, key), "a non-empty string", item);
+    }
+  }
+  stringArray(requireField(dto, "modes", path), fieldPath(path, "modes"));
+  const steps = arrayOf(
+    requireField(dto, "steps", path),
+    fieldPath(path, "steps"),
+    workflowTemplateStep,
+  );
+  const stepIds = steps.map((step) => step.id);
+  if (new Set(stepIds).size !== stepIds.length) {
+    fail(fieldPath(path, "steps"), "unique step ids", steps);
+  }
+  return value as WorkflowTemplateDTO;
+}
+
+function workflowRecommendation(value: unknown, path: string): WorkflowRecommendationDTO {
+  const dto = record(value, path);
+  for (const key of ["template_id", "title", "reason", "severity"] as const) {
+    const item = stringValue(requireField(dto, key, path), fieldPath(path, key));
+    if ((key === "template_id" || key === "title") && !item.trim()) {
+      fail(fieldPath(path, key), "a non-empty string", item);
+    }
+  }
+  return value as WorkflowRecommendationDTO;
+}
+
+function workflowStep(value: unknown, path: string): WorkflowStepDTO {
+  const dto = record(value, path);
+  for (const key of [
+    "step_id", "title", "description", "section_name", "action_id",
+    "completion_check", "notes", "target_type",
+  ] as const) {
+    const item = stringValue(requireField(dto, key, path), fieldPath(path, key));
+    if ((key === "step_id" || key === "title") && !item.trim()) {
+      fail(fieldPath(path, key), "a non-empty string", item);
+    }
+  }
+  const kind = stringValue(requireField(dto, "kind", path), fieldPath(path, "kind"));
+  if (!WORKFLOW_STEP_KINDS.has(kind)) {
+    fail(fieldPath(path, "kind"), "creative, check, or manual", kind);
+  }
+  const status = stringValue(requireField(dto, "status", path), fieldPath(path, "status"));
+  if (!WORKFLOW_STEP_STATUSES.has(status)) {
+    fail(fieldPath(path, "status"), "a supported workflow step status", status);
+  }
+  const sortIndex = integerValue(requireField(dto, "sort_index", path), fieldPath(path, "sort_index"));
+  if (sortIndex < 0) fail(fieldPath(path, "sort_index"), "zero or greater", sortIndex);
+  const targetId = nullable(requireField(dto, "target_id", path), fieldPath(path, "target_id"), integerValue);
+  if (targetId !== null && targetId <= 0) fail(fieldPath(path, "target_id"), "null or a positive id", targetId);
+  nullableIsoTimestamp(requireField(dto, "created_at", path), fieldPath(path, "created_at"));
+  nullableIsoTimestamp(requireField(dto, "updated_at", path), fieldPath(path, "updated_at"));
+  return value as WorkflowStepDTO;
+}
+
+function workflowRun(value: unknown, path: string): WorkflowRunDTO {
+  const dto = record(value, path);
+  const id = integerValue(requireField(dto, "id", path), fieldPath(path, "id"));
+  const projectId = integerValue(requireField(dto, "project_id", path), fieldPath(path, "project_id"));
+  if (id <= 0) fail(fieldPath(path, "id"), "a positive Workflow run id", id);
+  if (projectId <= 0) fail(fieldPath(path, "project_id"), "a positive Project id", projectId);
+  for (const key of [
+    "title", "description", "writing_mode", "template_id", "current_step_id", "source_type",
+  ] as const) {
+    stringValue(requireField(dto, key, path), fieldPath(path, key));
+  }
+  const status = stringValue(requireField(dto, "status", path), fieldPath(path, "status"));
+  if (!WORKFLOW_RUN_STATUSES.has(status)) {
+    fail(fieldPath(path, "status"), "a supported workflow run status", status);
+  }
+  const totalSteps = integerValue(requireField(dto, "total_steps", path), fieldPath(path, "total_steps"));
+  const completedSteps = integerValue(requireField(dto, "completed_steps", path), fieldPath(path, "completed_steps"));
+  const revision = stringValue(requireField(dto, "revision", path), fieldPath(path, "revision"));
+  if (!/^[0-9a-f]{64}$/.test(revision)) {
+    fail(fieldPath(path, "revision"), "a 64-character lowercase hexadecimal revision", revision);
+  }
+  const sourceId = nullable(requireField(dto, "source_id", path), fieldPath(path, "source_id"), integerValue);
+  if (sourceId !== null && sourceId <= 0) fail(fieldPath(path, "source_id"), "null or a positive id", sourceId);
+  nullableIsoTimestamp(requireField(dto, "created_at", path), fieldPath(path, "created_at"));
+  nullableIsoTimestamp(requireField(dto, "updated_at", path), fieldPath(path, "updated_at"));
+  nullableIsoTimestamp(requireField(dto, "completed_at", path), fieldPath(path, "completed_at"));
+  const steps = arrayOf(requireField(dto, "steps", path), fieldPath(path, "steps"), workflowStep);
+  if (totalSteps !== steps.length) {
+    fail(fieldPath(path, "total_steps"), `the returned step count (${steps.length})`, totalSteps);
+  }
+  const countedCompleted = steps.filter((step) => step.status === "completed" || step.status === "skipped").length;
+  if (completedSteps !== countedCompleted) {
+    fail(fieldPath(path, "completed_steps"), `the completed/skipped step count (${countedCompleted})`, completedSteps);
+  }
+  const stepIds = steps.map((step) => step.step_id);
+  if (new Set(stepIds).size !== stepIds.length) fail(fieldPath(path, "steps"), "unique step ids", steps);
+  const currentStepId = stringValue(requireField(dto, "current_step_id", path), fieldPath(path, "current_step_id"));
+  if (currentStepId && !steps.some((step) => step.step_id === currentStepId)) {
+    fail(fieldPath(path, "current_step_id"), "an id present in steps", currentStepId);
+  }
+  const activeSteps = steps.filter((step) => step.status === "active");
+  if (activeSteps.length > 1) {
+    fail(fieldPath(path, "steps"), "at most one active workflow step", steps);
+  }
+  const expectedPointerStatus = status === "blocked"
+    ? "blocked"
+    : status === "active" || status === "paused"
+      ? "active"
+      : null;
+  const pointerStatusSteps = expectedPointerStatus == null
+    ? []
+    : steps.filter((step) => step.status === expectedPointerStatus);
+  if (pointerStatusSteps.length > 1) {
+    fail(fieldPath(path, "steps"), `at most one ${expectedPointerStatus} workflow step`, steps);
+  }
+  if (currentStepId && expectedPointerStatus != null
+      && !pointerStatusSteps.some((step) => step.step_id === currentStepId)) {
+    fail(fieldPath(path, "current_step_id"), `the ${expectedPointerStatus} workflow step id`, currentStepId);
+  }
+  if ((status === "completed" || status === "cancelled") && currentStepId) {
+    fail(fieldPath(path, "current_step_id"), `empty for a ${status} workflow`, currentStepId);
+  }
+  if (status === "completed" && completedSteps !== totalSteps) {
+    fail(fieldPath(path, "completed_steps"), "all steps completed or skipped for a completed workflow", completedSteps);
+  }
+  return value as WorkflowRunDTO;
+}
+
+function workflowEvent(value: unknown, path: string): WorkflowEventDTO {
+  const dto = record(value, path);
+  for (const key of ["id", "project_id", "workflow_run_id"] as const) {
+    const id = integerValue(requireField(dto, key, path), fieldPath(path, key));
+    if (id <= 0) fail(fieldPath(path, key), "a positive id", id);
+  }
+  nullable(requireField(dto, "step_id", path), fieldPath(path, "step_id"), stringValue);
+  stringValue(requireField(dto, "event_type", path), fieldPath(path, "event_type"));
+  stringValue(requireField(dto, "message", path), fieldPath(path, "message"));
+  record(requireField(dto, "metadata", path), fieldPath(path, "metadata"));
+  isoTimestamp(requireField(dto, "created_at", path), fieldPath(path, "created_at"));
+  return value as WorkflowEventDTO;
+}
+
+export const validateWorkflowTemplateListDTO: RuntimeDtoValidator<WorkflowTemplateDTO[]> = (value) =>
+  arrayOf(value, "$", workflowTemplate);
+
+export const validateWorkflowRecommendationListDTO: RuntimeDtoValidator<WorkflowRecommendationDTO[]> = (value) =>
+  arrayOf(value, "$", workflowRecommendation);
+
+export function validateWorkflowRunDTOForRequest(
+  value: unknown,
+  projectId: number,
+  runId?: number,
+): WorkflowRunDTO {
+  const run = workflowRun(value, "$");
+  if (run.project_id !== projectId) fail("$.project_id", `the requested project id ${projectId}`, run.project_id);
+  if (runId != null && run.id !== runId) fail("$.id", `the requested workflow run id ${runId}`, run.id);
+  return run;
+}
+
+export function validateWorkflowRunListDTOForRequest(
+  value: unknown,
+  projectId: number,
+): WorkflowRunDTO[] {
+  const runs = arrayOf(value, "$", workflowRun);
+  const ids = new Set<number>();
+  runs.forEach((run, index) => {
+    if (run.project_id !== projectId) fail(`$[${index}].project_id`, `the requested project id ${projectId}`, run.project_id);
+    if (ids.has(run.id)) fail(`$[${index}].id`, "a unique workflow run id", run.id);
+    ids.add(run.id);
+  });
+  return runs;
+}
+
+export function validateWorkflowEventListDTOForRequest(
+  value: unknown,
+  projectId: number,
+  runId: number,
+  limit = 40,
+): WorkflowEventDTO[] {
+  const events = arrayOf(value, "$", workflowEvent);
+  const cap = Math.max(1, Math.min(200, Math.floor(limit) || 40));
+  if (events.length > cap) fail("$", `at most the requested ${cap} workflow events`, events);
+  events.forEach((event, index) => {
+    if (event.project_id !== projectId) fail(`$[${index}].project_id`, `the requested project id ${projectId}`, event.project_id);
+    if (event.workflow_run_id !== runId) fail(`$[${index}].workflow_run_id`, `the requested workflow run id ${runId}`, event.workflow_run_id);
+  });
+  return events;
+}
+
+export function validateWorkflowCommandResultDTOForRequest(
+  value: unknown,
+  projectId: number,
+  command: WorkflowCommandDTO,
+): WorkflowCommandResultDTO {
+  const dto = record(value, "$");
+  const run = workflowRun(requireField(dto, "workflow", "$"), "$.workflow");
+  const changed = booleanValue(requireField(dto, "changed", "$"), "$.changed");
+  const replayed = booleanValue(requireField(dto, "replayed", "$"), "$.replayed");
+  const appliedRevision = stringValue(requireField(dto, "applied_revision", "$"), "$.applied_revision");
+  if (!/^[0-9a-f]{64}$/.test(appliedRevision)) fail("$.applied_revision", "a 64-character lowercase hexadecimal revision", appliedRevision);
+  if (run.project_id !== projectId) fail("$.workflow.project_id", `the requested project id ${projectId}`, run.project_id);
+  if (command.kind === "start_workflow") {
+    if (run.template_id !== command.template_id) fail("$.workflow.template_id", "the submitted template id", run.template_id);
+  } else {
+    if (run.id !== command.run_id) fail("$.workflow.id", `the submitted workflow run id ${command.run_id}`, run.id);
+  }
+  if (replayed && changed) fail("$.changed", "false for an idempotent replay", changed);
+  if (!replayed && run.revision !== appliedRevision) {
+    fail("$.workflow.revision", "the freshly applied revision", run.revision);
+  }
+  return value as WorkflowCommandResultDTO;
+}
+
+export function validateWorkflowCommandReceiptDTOForRequest(
+  value: unknown,
+  projectId: number,
+  command: WorkflowCommandDTO,
+): WorkflowCommandReceiptDTO {
+  const dto = record(value, "$");
+  const returnedProjectId = integerValue(requireField(dto, "project_id", "$"), "$.project_id");
+  const requestDigest = stringValue(requireField(dto, "request_digest", "$"), "$.request_digest");
+  const commandKind = stringValue(requireField(dto, "command_kind", "$"), "$.command_kind");
+  const expectedRevision = stringValue(requireField(dto, "expected_revision", "$"), "$.expected_revision");
+  const appliedRevision = stringValue(requireField(dto, "applied_revision", "$"), "$.applied_revision");
+  booleanValue(requireField(dto, "original_changed", "$"), "$.original_changed");
+  const originalRunId = integerValue(requireField(dto, "original_run_id", "$"), "$.original_run_id");
+  const committedAt = isoTimestamp(requireField(dto, "committed_at", "$"), "$.committed_at");
+  if (returnedProjectId !== projectId) fail("$.project_id", `the requested project id ${projectId}`, returnedProjectId);
+  if (!/^[0-9a-f]{64}$/.test(requestDigest)) fail("$.request_digest", "a 64-character lowercase hexadecimal digest", requestDigest);
+  if (commandKind !== command.kind) fail("$.command_kind", `the submitted command kind ${command.kind}`, commandKind);
+  const submittedRevision = command.kind === "start_workflow" ? "" : command.expected_revision;
+  if (expectedRevision !== submittedRevision) fail("$.expected_revision", "the submitted expected revision", expectedRevision);
+  if (!/^[0-9a-f]{64}$/.test(appliedRevision)) fail("$.applied_revision", "a 64-character lowercase hexadecimal revision", appliedRevision);
+  if (originalRunId <= 0) fail("$.original_run_id", "a positive Workflow run id", originalRunId);
+  if (command.kind !== "start_workflow" && originalRunId !== command.run_id) {
+    fail("$.original_run_id", `the submitted workflow run id ${command.run_id}`, originalRunId);
+  }
+  if (!committedAt) fail("$.committed_at", "a non-empty ISO timestamp", committedAt);
+  return value as WorkflowCommandReceiptDTO;
 }
 
 function knowledgeGraphNode(value: unknown, path: string): KnowledgeGraphNodeDTO {

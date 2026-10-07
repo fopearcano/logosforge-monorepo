@@ -17,8 +17,11 @@ alpha. Nothing here is a data-safety risk; it's about scope and polish. See
 - **Decision Radar / Project Intelligence** — the Dashboard panel is implemented;
   persistent custom filters and card dismissal remain deferred.
   ([DecisionRadar.md](DecisionRadar.md))
-- **Guided Workflows** — engine + Logos + Assistant context; no workflow panel.
-  ([GuidedWorkflows.md](GuidedWorkflows.md))
+- **Guided Workflows** — engine, HTTP transaction/receipt boundary, Logos,
+  Assistant context, and dedicated Pro panel are implemented. Custom templates,
+  per-step reminders, and a multi-project workflow dashboard remain deferred;
+  aggregate Graph/Radar/export checks do not auto-complete unless Core can prove
+  them in the command transaction. ([GuidedWorkflows.md](GuidedWorkflows.md))
 
 ## Experimental / optional
 
@@ -206,11 +209,20 @@ alpha. Nothing here is a data-safety risk; it's about scope and polish. See
    QA findings, for the exact release candidate.
 2. Pass the unchanged production-shell packaged journey on Linux/Xvfb and the
    Intel macOS 12 runner, then complete hands-on acceptance on all three native
-   platforms. The current candidate has passed packaged Windows acceptance.
-3. Complete the remaining Guided Workflows UI.
-4. Harden and authenticate API LAN/remote transport before any non-desktop
+   platforms. The HTTP 1.12.0 candidate passed the full Windows journey and a
+   separate clean-Ubuntu-VM AppImage launch/relaunch smoke; the latter is not a
+   substitute for the full journey and does not validate HTTP 1.13.0.
+3. Harden and authenticate API LAN/remote transport before any non-desktop
    exposure.
-5. Add richer Plot/Timeline models and opt-in semantic continuity checks.
+4. Add richer Plot/Timeline models and opt-in semantic continuity checks.
+
+## Live-event delivery boundary
+
+Guided Workflow state and command receipts are crash-safe, but
+`workflow_changed` is published after the database commit rather than through a
+transactional outbox. A process death in that narrow window can omit the live
+notification; an authoritative refetch/reconnect still returns the committed
+state. Durable broker outbox/reconciliation is a future hardening item.
 
 ## Not a bug
 

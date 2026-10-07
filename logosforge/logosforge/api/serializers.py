@@ -908,29 +908,120 @@ def workflow_run_to_dto(view) -> schemas.WorkflowRunDTO:
     run = view.run
     return schemas.WorkflowRunDTO(
         id=getattr(run, "id", 0),
+        project_id=getattr(run, "project_id", 0),
         title=getattr(run, "title", "") or "",
+        description=(
+            getattr(view.template, "description", "") or ""
+            if view.template is not None
+            else ""
+        ),
         status=getattr(run, "status", "") or "",
         writing_mode=getattr(run, "writing_mode", "") or "",
         template_id=getattr(run, "template_id", "") or "",
         current_step_id=getattr(run, "current_step_id", "") or "",
         total_steps=view.total_steps,
         completed_steps=view.completed_steps,
+        revision=view.revision,
+        source_type=getattr(run, "source_type", "") or "",
+        source_id=getattr(run, "source_id", None),
+        created_at=getattr(run, "created_at", None),
+        updated_at=getattr(run, "updated_at", None),
+        completed_at=getattr(run, "completed_at", None),
         steps=[
             schemas.WorkflowStepDTO(
                 step_id=getattr(s, "step_id", "") or "",
                 title=getattr(s, "title", "") or "",
+                description=(
+                    getattr(template_step, "description", "") or ""
+                    if template_step is not None
+                    else ""
+                ),
+                kind=(
+                    getattr(template_step, "kind", "check") or "check"
+                    if template_step is not None
+                    else "check"
+                ),
                 status=getattr(s, "status", "") or "",
                 sort_index=getattr(s, "sort_index", 0) or 0,
                 section_name=getattr(s, "section_name", "") or "",
                 action_id=getattr(s, "action_id", "") or "",
+                completion_check=(
+                    getattr(template_step, "completion_check", "") or ""
+                    if template_step is not None
+                    else ""
+                ),
+                notes=getattr(s, "notes", "") or "",
+                target_type=getattr(s, "target_type", "") or "",
+                target_id=getattr(s, "target_id", None),
+                created_at=getattr(s, "created_at", None),
+                updated_at=getattr(s, "updated_at", None),
             )
             for s in view.steps
+            for template_step in [next((
+                item for item in (
+                    view.template.steps if view.template is not None else ()
+                )
+                if item.id == getattr(s, "step_id", "")
+            ), None)]
         ],
     )
 
 
 def workflows_to_dtos(views) -> list[schemas.WorkflowRunDTO]:
     return [workflow_run_to_dto(v) for v in views]
+
+
+def workflow_template_to_dto(
+    template,
+    *,
+    mode: str | None = None,
+) -> schemas.WorkflowTemplateDTO:
+    steps = template.steps if mode is None else template.steps_for_mode(mode)
+    return schemas.WorkflowTemplateDTO(
+        id=template.id,
+        title=template.title,
+        description=template.description,
+        category=template.category,
+        modes=list(template.modes),
+        steps=[
+            schemas.WorkflowTemplateStepDTO(
+                id=step.id,
+                title=step.title,
+                description=step.description,
+                kind=step.kind,
+                section_name=step.section_name,
+                action_id=step.action_id,
+                completion_check=step.completion_check,
+                modes=list(step.modes),
+            )
+            for step in steps
+        ],
+    )
+
+
+def workflow_recommendation_to_dto(
+    recommendation,
+) -> schemas.WorkflowRecommendationDTO:
+    return schemas.WorkflowRecommendationDTO(**recommendation.to_dict())
+
+
+def workflow_event_to_dto(event) -> schemas.WorkflowEventDTO:
+    try:
+        metadata = json.loads(getattr(event, "metadata_json", "") or "{}")
+    except (json.JSONDecodeError, TypeError):
+        metadata = {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    return schemas.WorkflowEventDTO(
+        id=int(event.id),
+        project_id=int(event.project_id),
+        workflow_run_id=int(event.workflow_run_id),
+        step_id=event.step_id,
+        event_type=event.event_type,
+        message=event.message or "",
+        metadata=metadata,
+        created_at=event.created_at,
+    )
 
 
 _DECISION_SEVERITIES = {

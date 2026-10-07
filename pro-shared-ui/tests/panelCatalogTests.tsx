@@ -5,6 +5,7 @@ import {
 } from "../src/components/manuscript";
 import {
   DecisionRadar,
+  GuidedWorkflowStepper,
   NarrativeDashboard,
 } from "../src/components/projectos";
 import { StoryHealthHud } from "../src/components/intelligence";
@@ -49,6 +50,7 @@ const EXPECTED_PANEL_IDS = [
   "tags",
   "continuity",
   "decision-radar",
+  "guided-workflows",
   "adapt",
   "review",
   "psyke",
@@ -97,11 +99,13 @@ check(findStudioPanel("manuscript")?.node.type === ManuscriptEditor, "manuscript
 check(findStudioPanel("dashboard")?.node.type === NarrativeDashboard, "dashboard catalog node must be the real dashboard");
 check(findStudioPanel("outline")?.node.type === OutlinePanel, "outline catalog node must be the real outline panel");
 check(findStudioPanel("decision-radar")?.node.type === DecisionRadar, "decision-radar catalog node must be the real panel");
+check(findStudioPanel("guided-workflows")?.node.type === GuidedWorkflowStepper, "guided-workflows catalog node must be the live workflow panel");
 check(findStudioPanel("health")?.node.type === StoryHealthHud, "health catalog node must be the real story-health panel");
 
 check(findStudioPanel("outline")?.preferredRegion === "bottom", "Outline must retain its preferred bottom dock");
 check(findStudioPanel("health")?.preferredRegion === "bottom", "Health must retain its preferred bottom dock");
 check(findStudioPanel("decision-radar")?.preferredRegion === "right", "Decision Radar must retain its preferred right dock");
+check(findStudioPanel("guided-workflows")?.preferredRegion === "right", "Guided Workflows must prefer the right dock");
 
 function idsFor(mode: WritingMode): Set<string> {
   return new Set(studioPanelsForMode(mode).map((panel) => panel.id));

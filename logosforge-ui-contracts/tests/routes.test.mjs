@@ -159,7 +159,49 @@ if (JSON.stringify(psykeCommandRoutes) !== JSON.stringify(expectedPsykeCommandRo
   throw new Error(`PSYKE command route mismatch: ${psykeCommandRoutes}`);
 }
 
-console.log('Contract route/event tests: 15 passed, 0 failed');
+const workflowRoutes = [
+  ROUTES.workflowTemplates(42),
+  ROUTES.workflowRecommendations(42),
+  ROUTES.workflows(42),
+  ROUTES.workflowRun(42, 7),
+  ROUTES.workflowEvents(42, 7),
+  ROUTES.workflowCommands(42),
+  ROUTES.workflowCommandReceipt(42),
+];
+const expectedWorkflowRoutes = [
+  '/api/projects/42/workflow-templates',
+  '/api/projects/42/workflow-recommendations',
+  '/api/projects/42/workflows',
+  '/api/projects/42/workflows/7',
+  '/api/projects/42/workflows/7/events',
+  '/api/projects/42/workflows/commands',
+  '/api/projects/42/workflows/command-receipt',
+];
+if (JSON.stringify(workflowRoutes) !== JSON.stringify(expectedWorkflowRoutes)) {
+  throw new Error(`Guided Workflow route mismatch: ${workflowRoutes}`);
+}
+if (!KNOWN_EVENTS.includes('workflow_changed')) {
+  throw new Error('workflow_changed is missing from the known project events');
+}
+const pythonWorkflowRoute = readFileSync(
+  '../logosforge/logosforge/api/routes/workflows.py',
+  'utf8',
+);
+for (const route of [
+  '"/projects/{project_id}/workflow-templates"',
+  '"/projects/{project_id}/workflow-recommendations"',
+  '"/projects/{project_id}/workflows"',
+  '"/projects/{project_id}/workflows/{run_id}"',
+  '"/projects/{project_id}/workflows/{run_id}/events"',
+  '"/projects/{project_id}/workflows/commands"',
+  '"/projects/{project_id}/workflows/command-receipt"',
+]) {
+  if (!pythonWorkflowRoute.includes(route)) {
+    throw new Error(`Python Guided Workflow route is missing or drifted: ${route}`);
+  }
+}
+
+console.log('Contract route/event tests: 16 passed, 0 failed');
 
 const pythonSchemas = readFileSync('../logosforge/logosforge/api/schemas.py', 'utf8');
 const typescriptSchemas = readFileSync('src/types.ts', 'utf8');
@@ -218,6 +260,98 @@ for (const field of ['surface', 'drafter_page_id']) {
 }
 
 console.log('Whiteboard comment-scope parity tests: 2 fields mirrored');
+
+const workflowDtoFields = {
+  WorkflowTemplateStepDTO: [
+    'id', 'title', 'description', 'kind', 'section_name', 'action_id',
+    'completion_check', 'modes',
+  ],
+  WorkflowTemplateDTO: [
+    'id', 'title', 'description', 'category', 'modes', 'steps',
+  ],
+  WorkflowRecommendationDTO: ['template_id', 'title', 'reason', 'severity'],
+  WorkflowStepDTO: [
+    'step_id', 'title', 'description', 'kind', 'status', 'sort_index',
+    'section_name', 'action_id', 'completion_check', 'notes', 'target_type',
+    'target_id', 'created_at', 'updated_at',
+  ],
+  WorkflowRunDTO: [
+    'id', 'project_id', 'title', 'description', 'status', 'writing_mode',
+    'template_id', 'current_step_id', 'total_steps', 'completed_steps',
+    'revision', 'source_type', 'source_id', 'created_at', 'updated_at',
+    'completed_at', 'steps',
+  ],
+  WorkflowEventDTO: [
+    'id', 'project_id', 'workflow_run_id', 'step_id', 'event_type', 'message',
+    'metadata', 'created_at',
+  ],
+  WorkflowStartCommandDTO: ['kind', 'template_id', 'title'],
+  WorkflowCompleteStepCommandDTO: ['kind', 'step_id', 'notes'],
+  WorkflowSkipStepCommandDTO: ['kind', 'step_id', 'notes'],
+  WorkflowAdvanceCommandDTO: ['kind'],
+  WorkflowRefreshCommandDTO: ['kind'],
+  WorkflowPauseCommandDTO: ['kind'],
+  WorkflowResumeCommandDTO: ['kind'],
+  WorkflowCancelCommandDTO: ['kind'],
+  WorkflowCommandResultDTO: [
+    'workflow', 'changed', 'replayed', 'applied_revision',
+  ],
+  WorkflowCommandReceiptDTO: [
+    'project_id', 'request_digest', 'command_kind', 'expected_revision',
+    'applied_revision', 'original_changed', 'original_run_id', 'committed_at',
+  ],
+};
+for (const [dtoName, fields] of Object.entries(workflowDtoFields)) {
+  const pythonBody = pythonSchemas.match(new RegExp(
+    `class ${dtoName}\\([^)]*\\):([\\s\\S]*?)\\n\\n(?:class |WorkflowCommandKind = )`,
+  ))?.[1] ?? '';
+  const typescriptBody = typescriptSchemas.match(new RegExp(
+    `export interface ${dtoName}[^\\{]*\\{([\\s\\S]*?)\\n\\}`,
+  ))?.[1] ?? '';
+  for (const field of fields) {
+    if (!pythonBody.includes(`${field}:`)) {
+      throw new Error(`Python ${dtoName} is missing ${field}`);
+    }
+    if (!typescriptBody.includes(field)) {
+      throw new Error(`TypeScript ${dtoName} is missing ${field}`);
+    }
+  }
+}
+
+const workflowKinds = [
+  'start_workflow', 'complete_step', 'skip_step', 'advance', 'refresh',
+  'pause', 'resume', 'cancel',
+];
+for (const kind of workflowKinds) {
+  if (!pythonSchemas.includes(`Literal["${kind}"]`)) {
+    throw new Error(`Python WorkflowCommandDTO is missing kind ${kind}`);
+  }
+  if (!typescriptSchemas.includes(`kind: "${kind}"`)) {
+    throw new Error(`TypeScript WorkflowCommandDTO is missing kind ${kind}`);
+  }
+}
+
+const pythonWorkflowRevisionBase = pythonSchemas.match(
+  /class _WorkflowRevisionCommandBase\(BaseModel\):([\s\S]*?)\n\nclass /,
+)?.[1] ?? '';
+const typescriptWorkflowRevisionBase = typescriptSchemas.match(
+  /interface WorkflowRevisionCommandBase \{([\s\S]*?)\n\}/,
+)?.[1] ?? '';
+for (const field of ['run_id', 'expected_revision']) {
+  if (!pythonWorkflowRevisionBase.includes(`${field}:`)) {
+    throw new Error(`Python Workflow revision command base is missing ${field}`);
+  }
+  if (!typescriptWorkflowRevisionBase.includes(`${field}:`)) {
+    throw new Error(`TypeScript Workflow revision command base is missing ${field}`);
+  }
+}
+
+const pythonApiApp = readFileSync('../logosforge/logosforge/api/app.py', 'utf8');
+if (!pythonApiApp.includes('API_CONTRACT_VERSION = "1.13.0"')) {
+  throw new Error('Guided Workflows must ship as HTTP contract 1.13.0');
+}
+
+console.log('Guided Workflow contract parity tests: routes/event + 16 DTOs mirrored');
 
 const decisionRadarDtoFields = {
   DecisionEvidenceDTO: [

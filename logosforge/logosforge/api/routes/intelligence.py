@@ -37,7 +37,6 @@ from logosforge.db import (
     ContinuityRevisionConflict,
     Database,
 )
-from logosforge.guided_workflows import engine as workflow_engine
 from logosforge.knowledge_graph.builder import build_knowledge_graph
 from logosforge.knowledge_graph.decision_cards import build_graph_decision_cards
 from logosforge.project_intelligence import build_project_intelligence_report
@@ -263,17 +262,6 @@ def get_structure_analysis(project=Depends(get_project), db: Database = Depends(
     """Structural weaknesses (act balance, climax prep, beat placement, …)."""
     return serializers.structural_analysis_to_dto(
         structural_intelligence.compute_structural_analysis(db, project.id)
-    )
-
-
-@router.get(
-    "/projects/{project_id}/workflows",
-    response_model=list[schemas.WorkflowRunDTO],
-)
-def get_workflows(project=Depends(get_project), db: Database = Depends(get_db)):
-    """Guided-workflow runs for the project (steps + progress)."""
-    return serializers.workflows_to_dtos(
-        workflow_engine.get_all_workflows(db, project.id)
     )
 
 

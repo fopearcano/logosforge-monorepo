@@ -26,8 +26,16 @@ user. The OS proposes; the user disposes.
 
 - **Writing Modes** decide which workflows/steps are even offered (e.g.
   screenplay-only Production Prep).
-- **Project Intelligence + Decision Radar** drive workflow *recommendations* and
-  *completion checks* (one read-only report, reused).
+- **Project Intelligence + Decision Radar** drive deterministic workflow
+  *recommendations*. Command refresh verifies only checks that can be proven in
+  its own SQL transaction; aggregate Graph/Radar/export checks fail closed until
+  those engines expose a coherent transaction-bound snapshot.
+- **HTTP 1.13.0** is the canonical control plane: mode-filtered templates,
+  active-run-aware recommendations, coherent revisioned reads, bounded events,
+  eight lifecycle commands, and durable command-receipt recovery.
+- **Pro Studio** supplies the dockable Guided Workflows cockpit: run/progress
+  list, template gallery, recommendations, safe section and Logos handoffs,
+  explicit lifecycle controls, and a compact event timeline.
 - **Logos** exposes the OS deterministically (`Active Workflows`,
   `Recommend Workflows`) plus one advisory generative action
   (`Explain Workflow Step`).
@@ -45,9 +53,17 @@ user. The OS proposes; the user disposes.
 
 ## Persistence & isolation
 
-State lives in three idempotent tables (`WorkflowRun`, `WorkflowStepState`,
-`WorkflowEvent`) keyed by `project_id`. Switching projects never leaks state;
-old databases gain the empty tables via `create_all`.
+State lives in four idempotent tables (`WorkflowRun`, `WorkflowStepState`,
+`WorkflowEvent`, `WorkflowCommandReceipt`) keyed by `project_id`. Switching
+projects never leaks state; old databases gain the empty tables via
+`create_all`.
+
+Reads return one coherent run/list snapshot. Every write is bound to an
+optimistic run revision and required idempotency key; state, audit event, and
+receipt commit atomically. Exact replay cannot repeat the transition. A fresh
+changed command publishes `workflow_changed`, while a no-op or replay does not.
+If live delivery is interrupted, the authoritative read and receipt remain the
+source of truth.
 
 ## See also
 

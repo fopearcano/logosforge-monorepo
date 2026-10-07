@@ -53,8 +53,9 @@ Step-by-step: `docs/AI_SETUP.md`. Stuck? `docs/TROUBLESHOOTING.md`.
 
 - **PDF/DOCX** need optional libraries; **FDX/HTML** and the **API LAN/remote**
   modes are experimental.
-- **Knowledge Graph, Semantic Continuity, Decision Radar, Guided Workflows** ship
-  as services surfaced through Logos/Assistant — **no dedicated UI panel yet**.
+- **Knowledge Graph, Semantic Continuity, Decision Radar, and Guided Workflows**
+  now have dedicated Pro panels; custom workflow templates/reminders and
+  persistent custom Radar filters remain deferred.
 - Plot/Timeline are derived from scene fields; grammar is basic.
 - Single-user, **local-only** (no cloud sync or collaboration).
 

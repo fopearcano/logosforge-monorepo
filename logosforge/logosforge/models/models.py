@@ -541,6 +541,23 @@ class WorkflowEvent(SQLModel, table=True):
     created_at: datetime = Field(default_factory=_now)
 
 
+class WorkflowCommandReceipt(SQLModel, table=True):
+    """Durable exactly-once receipt for a Guided Workflow command.
+
+    The raw caller-supplied ``Idempotency-Key`` is never persisted.  Its
+    SHA-256 digest is scoped to the project so the same capability can be used
+    independently by two projects without leaking across their boundaries.
+    ``result_json`` intentionally contains only compact workflow-state
+    metadata; it never contains manuscript or other project content.
+    """
+
+    project_id: int = Field(foreign_key="project.id", primary_key=True)
+    idempotency_key_hash: str = Field(primary_key=True, max_length=64)
+    request_digest: str = Field(max_length=64)
+    result_json: str
+    created_at: datetime = Field(default_factory=_now)
+
+
 WORKFLOW_RUN_STATUSES = ("active", "paused", "completed", "cancelled", "blocked")
 WORKFLOW_STEP_STATUSES = ("pending", "active", "completed", "skipped", "blocked")
 

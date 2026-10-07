@@ -52,6 +52,13 @@ import type {
   ContinuityCommandReceiptDTO,
   ContinuityIssueDTO,
   ContinuityReportDTO,
+  WorkflowCommandDTO,
+  WorkflowCommandReceiptDTO,
+  WorkflowCommandResultDTO,
+  WorkflowEventDTO,
+  WorkflowRecommendationDTO,
+  WorkflowRunDTO,
+  WorkflowTemplateDTO,
   PlotBlockDTO,
   PlotSceneDTO,
   ExportRequestDTO,
@@ -443,6 +450,38 @@ const MOCK_VOICE_HISTORY: VoiceHistoryEntryDTO[] = [{
 const MOCK_VOICE_INTENTS = new Map<string, VoiceIntentPreviewDTO>();
 const MOCK_VOICE_BILLY = new Map<string, VoiceBillyProposalDTO>();
 let MOCK_VOICE_SEQ = 1;
+
+const MOCK_WORKFLOW_TEMPLATES: readonly WorkflowTemplateDTO[] = [{
+  id: "project_setup",
+  title: "Project Setup",
+  description: "Get a new project ready: title, logline, mode, and first structure.",
+  category: "setup",
+  modes: [],
+  steps: [
+    { id: "title", title: "Set a project title", description: "Name the project.", kind: "check", section_name: "Projects", action_id: "", completion_check: "project_has_title", modes: [] },
+    { id: "logline", title: "Write the logline", description: "Capture the central dramatic promise.", kind: "creative", section_name: "Manuscript", action_id: "", completion_check: "", modes: [] },
+  ],
+}, {
+  id: "rewrite",
+  title: "Rewrite",
+  description: "Generate, compare, and safely apply a rewrite.",
+  category: "rewrite",
+  modes: [],
+  steps: [
+    { id: "select", title: "Select the passage", description: "Choose the material to revise.", kind: "manual", section_name: "Manuscript", action_id: "", completion_check: "", modes: [] },
+    { id: "strategy", title: "Choose a rewrite strategy", description: "Ask Logos for a bounded suggestion.", kind: "manual", section_name: "Manuscript", action_id: "rw_suggest_strategy", completion_check: "", modes: [] },
+    { id: "apply", title: "Apply through Controlled Apply", description: "Review the diff and impact before applying.", kind: "check", section_name: "Manuscript", action_id: "", completion_check: "no_preferred_rewrite", modes: [] },
+  ],
+}, {
+  id: "screenplay_production_prep",
+  title: "Screenplay Production Prep",
+  description: "Prepare a screenplay production draft.",
+  category: "production",
+  modes: ["screenplay"],
+  steps: [
+    { id: "validate", title: "Validate production export", description: "Check the production package.", kind: "check", section_name: "Export", action_id: "sp_validate_production", completion_check: "export_safe", modes: ["screenplay"] },
+  ],
+}];
 
 export function createMockApiClient(): ApiClient {
   // Keep project lifecycle state local to one preview transport. Recreating the
@@ -1691,6 +1730,107 @@ export function createMockApiClient(): ApiClient {
       unavailable: [],
     };
   };
+  interface MockWorkflowReceipt {
+    serializedCommand: string;
+    receipt: WorkflowCommandReceiptDTO;
+    result: WorkflowCommandResultDTO;
+  }
+  const workflowRuns = new Map<number, WorkflowRunDTO[]>();
+  const workflowEvents = new Map<number, WorkflowEventDTO[]>();
+  const workflowReceipts = new Map<string, MockWorkflowReceipt>();
+  let workflowRunSequence = 1;
+  let workflowEventSequence = 1;
+  const workflowRevision = (run: Omit<WorkflowRunDTO, "revision"> | WorkflowRunDTO): string => mockSha256({
+    id: run.id,
+    project_id: run.project_id,
+    status: run.status,
+    current_step_id: run.current_step_id,
+    steps: run.steps.map((step) => [step.step_id, step.status, step.notes, step.updated_at]),
+    updated_at: run.updated_at,
+  });
+  const workflowsFor = (projectId: number): WorkflowRunDTO[] => {
+    let runs = workflowRuns.get(projectId);
+    if (!runs) {
+      runs = [];
+      workflowRuns.set(projectId, runs);
+    }
+    return runs;
+  };
+  const addWorkflowEvent = (
+    projectId: number,
+    runId: number,
+    eventType: string,
+    message: string,
+    stepId: string | null = null,
+  ): void => {
+    const events = workflowEvents.get(runId) ?? [];
+    events.push({
+      id: workflowEventSequence++, project_id: projectId, workflow_run_id: runId,
+      step_id: stepId, event_type: eventType, message, metadata: {}, created_at: new Date().toISOString(),
+    });
+    workflowEvents.set(runId, events);
+  };
+  const createWorkflowRun = (
+    projectId: number,
+    template: WorkflowTemplateDTO,
+    writingMode: string,
+    title = template.title,
+  ): WorkflowRunDTO => {
+    const timestamp = new Date().toISOString();
+    const applicable = template.steps.filter((step) => step.modes.length === 0 || step.modes.includes(writingMode));
+    const runWithoutRevision: Omit<WorkflowRunDTO, "revision"> = {
+      id: workflowRunSequence++, project_id: projectId, title,
+      description: template.description, status: "active", writing_mode: writingMode,
+      template_id: template.id, current_step_id: applicable[0]?.id ?? "",
+      total_steps: applicable.length, completed_steps: 0, source_type: "",
+      source_id: null, created_at: timestamp, updated_at: timestamp, completed_at: null,
+      steps: applicable.map((step, index) => ({
+        step_id: step.id, title: step.title, description: step.description, kind: step.kind,
+        status: index === 0 ? "active" : "pending", sort_index: index,
+        section_name: step.section_name, action_id: step.action_id,
+        completion_check: step.completion_check, notes: "", target_type: "", target_id: null,
+        created_at: timestamp, updated_at: timestamp,
+      })),
+    };
+    const run: WorkflowRunDTO = { ...runWithoutRevision, revision: workflowRevision(runWithoutRevision) };
+    workflowsFor(projectId).push(run);
+    addWorkflowEvent(projectId, run.id, "started", `Started workflow '${run.title}'.`);
+    return run;
+  };
+  const refreshWorkflowPointer = (run: WorkflowRunDTO, timestamp: string): void => {
+    run.completed_steps = run.steps.filter((step) => step.status === "completed" || step.status === "skipped").length;
+    const next = run.steps.find((step) => step.status === "pending" || step.status === "active" || step.status === "blocked");
+    run.steps.forEach((step) => {
+      if (step === next && step.status !== "active") {
+        step.status = "active";
+        step.updated_at = timestamp;
+      } else if (step !== next && step.status === "active") {
+        step.status = "pending";
+        step.updated_at = timestamp;
+      }
+    });
+    run.current_step_id = next?.step_id ?? "";
+    if (!next && run.total_steps > 0) {
+      run.status = "completed";
+      run.completed_at = timestamp;
+    }
+  };
+  const projectOne = projects.find((project) => project.id === fixtureProjectId)!;
+  const seededRewrite = createWorkflowRun(
+    fixtureProjectId,
+    MOCK_WORKFLOW_TEMPLATES.find((template) => template.id === "rewrite")!,
+    projectOne.narrative_engine,
+    "Rewrite Pass",
+  );
+  const seededTimestamp = new Date().toISOString();
+  seededRewrite.steps[0]!.status = "completed";
+  seededRewrite.steps[0]!.updated_at = seededTimestamp;
+  seededRewrite.steps[1]!.status = "active";
+  seededRewrite.current_step_id = seededRewrite.steps[1]!.step_id;
+  seededRewrite.completed_steps = 1;
+  seededRewrite.updated_at = seededTimestamp;
+  seededRewrite.revision = workflowRevision(seededRewrite);
+  addWorkflowEvent(fixtureProjectId, seededRewrite.id, "step_completed", "Completed step 'Select the passage'.", seededRewrite.steps[0]!.step_id);
   let commandPlanSequence = 1;
   const commandPlans = new Map<string, PsykeConsoleCommandPlanDTO & { entry_type?: string; entry_name?: string }>();
   const client: ApiClient = {
@@ -1701,8 +1841,8 @@ export function createMockApiClient(): ApiClient {
         service: "logosforge-api",
         instance_nonce: "preview-mock",
         mode: "preview-mock",
-        version: "1.12.0",
-        api_version: "1.12.0",
+        version: "1.13.0",
+        api_version: "1.13.0",
         core_version: "preview",
       };
     },
@@ -2464,19 +2604,215 @@ export function createMockApiClient(): ApiClient {
         suggestions: ["Add subplots, reversals, or deeper conflict to the middle.", "Alternate high-tension and reflective scenes."],
       };
     },
-    async getWorkflows() {
+    async getWorkflowTemplates(p: number) {
       await delay();
-      return [
-        {
-          id: 1, title: "Rewrite Pass", status: "active", writing_mode: "screenplay", template_id: "rewrite_pass", current_step_id: "s2", total_steps: 4, completed_steps: 1,
-          steps: [
-            { step_id: "s1", title: "Run continuity check", status: "completed", sort_index: 0, section_name: "Review", action_id: "continuity" },
-            { step_id: "s2", title: "Confirm beat plan", status: "active", sort_index: 1, section_name: "Plan", action_id: "" },
-            { step_id: "s3", title: "Apply rewrites", status: "pending", sort_index: 2, section_name: "Apply", action_id: "" },
-            { step_id: "s4", title: "Final read", status: "pending", sort_index: 3, section_name: "Review", action_id: "" },
-          ],
+      const project = findMockProject(projects, p, "GET", `/api/projects/${p}/workflow-templates`);
+      return MOCK_WORKFLOW_TEMPLATES
+        .filter((template) => template.modes.length === 0 || template.modes.includes(project.narrative_engine))
+        .map((template) => structuredClone(template));
+    },
+    async getWorkflowRecommendations(p: number) {
+      await delay();
+      const project = findMockProject(projects, p, "GET", `/api/projects/${p}/workflow-recommendations`);
+      const unavailable = new Set(
+        workflowsFor(p)
+          .filter((run) => run.status === "active" || run.status === "paused" || run.status === "blocked")
+          .map((run) => run.template_id),
+      );
+      const candidate = MOCK_WORKFLOW_TEMPLATES.find((template) => (
+        !unavailable.has(template.id)
+        && (template.modes.length === 0 || template.modes.includes(project.narrative_engine))
+      ));
+      return candidate ? [{
+        template_id: candidate.id,
+        title: candidate.title,
+        reason: "The current project state has an unfinished next step this workflow can guide.",
+        severity: "suggestion",
+      }] : [];
+    },
+    async getWorkflows(p: number) {
+      await delay();
+      findMockProject(projects, p, "GET", `/api/projects/${p}/workflows`);
+      return structuredClone(workflowsFor(p));
+    },
+    async getWorkflowRun(p: number, runId: number) {
+      await delay();
+      findMockProject(projects, p, "GET", `/api/projects/${p}/workflows/${runId}`);
+      const run = workflowsFor(p).find((candidate) => candidate.id === runId);
+      if (!run) {
+        throw new ApiRequestError(
+          "GET", `/api/projects/${p}/workflows/${runId}`, 404,
+          "Workflow run not found", "not_found",
+        );
+      }
+      return structuredClone(run);
+    },
+    async getWorkflowEvents(p: number, runId: number, limit = 40) {
+      await delay();
+      findMockProject(projects, p, "GET", `/api/projects/${p}/workflows/${runId}/events`);
+      if (!workflowsFor(p).some((candidate) => candidate.id === runId)) {
+        throw new ApiRequestError(
+          "GET", `/api/projects/${p}/workflows/${runId}/events`, 404,
+          "Workflow run not found", "not_found",
+        );
+      }
+      const cap = Math.max(1, Math.min(200, Math.floor(limit) || 40));
+      return structuredClone((workflowEvents.get(runId) ?? []).slice(-cap));
+    },
+    async executeWorkflowCommand(p: number, command: WorkflowCommandDTO, idempotencyKey: string) {
+      await delay(120);
+      const path = `/api/projects/${p}/workflows/commands`;
+      const project = findMockProject(projects, p, "POST", path);
+      if (!/^[\x21-\x7e]{16,128}$/.test(idempotencyKey)) {
+        throw new ApiRequestError("POST", path, 400, "Idempotency-Key must contain 16 to 128 visible ASCII characters.", "bad_request");
+      }
+      const receiptKey = `${p}:${idempotencyKey}`;
+      const serializedCommand = JSON.stringify(command);
+      const replay = workflowReceipts.get(receiptKey);
+      if (replay) {
+        if (replay.serializedCommand !== serializedCommand) {
+          throw new ApiRequestError("POST", path, 409, "This Idempotency-Key was already used for another workflow command.", "idempotency_key_conflict");
+        }
+        return { ...structuredClone(replay.result), changed: false, replayed: true };
+      }
+
+      let run: WorkflowRunDTO;
+      let changed = true;
+      let eventType = "";
+      let eventMessage = "";
+      let eventStepId: string | null = null;
+      if (command.kind === "start_workflow") {
+        const template = MOCK_WORKFLOW_TEMPLATES.find((candidate) => candidate.id === command.template_id);
+        if (!template || (template.modes.length > 0 && !template.modes.includes(project.narrative_engine))) {
+          throw new ApiRequestError("POST", path, 400, "Workflow template is unavailable for this writing mode.", "bad_request");
+        }
+        if (workflowsFor(p).some((candidate) => candidate.template_id === template.id
+          && (candidate.status === "active" || candidate.status === "paused" || candidate.status === "blocked"))) {
+          throw new ApiRequestError("POST", path, 409, "This workflow template already has an unfinished run.", "workflow_conflict");
+        }
+        run = createWorkflowRun(p, template, project.narrative_engine, command.title?.trim() || template.title);
+      } else {
+        const candidate = workflowsFor(p).find((item) => item.id === command.run_id);
+        if (!candidate) {
+          throw new ApiRequestError("POST", path, 404, "Workflow run not found.", "not_found");
+        }
+        if (candidate.revision !== command.expected_revision) {
+          throw new ApiRequestError("POST", path, 409, "The workflow changed after it was loaded.", "workflow_conflict");
+        }
+        run = candidate;
+        const timestamp = new Date().toISOString();
+        if (command.kind === "complete_step" || command.kind === "skip_step") {
+          const step = run.steps.find((item) => item.step_id === command.step_id);
+          if (run.status !== "active" || !step || step.status !== "active" || run.current_step_id !== step.step_id) {
+            throw new ApiRequestError("POST", path, 409, "Only the current active step can be changed.", "workflow_conflict");
+          }
+          step.status = command.kind === "complete_step" ? "completed" : "skipped";
+          step.notes = command.notes?.trim() || step.notes;
+          step.updated_at = timestamp;
+          eventType = command.kind === "complete_step" ? "step_completed" : "step_skipped";
+          eventMessage = `${command.kind === "complete_step" ? "Completed" : "Skipped"} step '${step.title}'.`;
+          eventStepId = step.step_id;
+          refreshWorkflowPointer(run, timestamp);
+        } else if (command.kind === "advance") {
+          if (run.status !== "active") {
+            throw new ApiRequestError("POST", path, 409, "Only an active workflow can advance.", "workflow_conflict");
+          }
+          const currentIndex = run.steps.findIndex((step) => step.step_id === run.current_step_id && step.status === "active");
+          if (currentIndex < 0) {
+            throw new ApiRequestError("POST", path, 409, "The active workflow has no current step.", "workflow_conflict");
+          }
+          const current = run.steps[currentIndex]!;
+          const next = run.steps.find((step, index) => index > currentIndex && step.status === "pending")
+            ?? run.steps.find((step, index) => index < currentIndex && step.status === "pending");
+          if (!next) {
+            changed = false;
+          } else {
+            current.status = "pending";
+            current.updated_at = timestamp;
+            next.status = "active";
+            next.updated_at = timestamp;
+            run.current_step_id = next.step_id;
+            eventType = "advanced";
+            eventMessage = `Advanced to step '${next.title}'.`;
+            eventStepId = next.step_id;
+          }
+        } else if (command.kind === "refresh") {
+          if (run.status !== "active") {
+            throw new ApiRequestError("POST", path, 409, "Only an active workflow can refresh checks.", "workflow_conflict");
+          }
+          const verifiable = run.steps.filter((step) => (
+            step.kind === "check"
+            && Boolean(step.completion_check)
+            && step.status !== "completed"
+            && step.status !== "skipped"
+          ));
+          if (verifiable.length === 0) {
+            changed = false;
+          } else {
+            verifiable.forEach((step) => {
+              step.status = "completed";
+              step.updated_at = timestamp;
+              addWorkflowEvent(p, run.id, "step_auto_completed", `Auto-completed verifiable step '${step.title}'.`, step.step_id);
+            });
+            refreshWorkflowPointer(run, timestamp);
+            eventType = "refreshed";
+            eventMessage = "Refreshed deterministic workflow checks.";
+          }
+        } else if (command.kind === "pause") {
+          if (run.status !== "active") throw new ApiRequestError("POST", path, 409, "Only an active workflow can pause.", "workflow_conflict");
+          run.status = "paused";
+          eventType = "paused";
+          eventMessage = "Workflow paused.";
+        } else if (command.kind === "resume") {
+          if (run.status !== "paused" && run.status !== "blocked") throw new ApiRequestError("POST", path, 409, "Only a paused or blocked workflow can resume.", "workflow_conflict");
+          run.status = "active";
+          eventType = "resumed";
+          eventMessage = "Workflow resumed.";
+        } else {
+          if (run.status === "completed" || run.status === "cancelled") {
+            throw new ApiRequestError("POST", path, 409, "The workflow is already terminal.", "workflow_conflict");
+          }
+          run.status = "cancelled";
+          run.current_step_id = "";
+          eventType = "cancelled";
+          eventMessage = "Workflow cancelled.";
+        }
+        if (changed) {
+          run.updated_at = timestamp;
+          run.revision = workflowRevision(run);
+          if (eventType) addWorkflowEvent(p, run.id, eventType, eventMessage, eventStepId);
+          if (run.completed_at === timestamp) addWorkflowEvent(p, run.id, "completed", "Workflow completed.");
+        }
+      }
+
+      const appliedRevision = run.revision;
+      const result: WorkflowCommandResultDTO = {
+        workflow: structuredClone(run), changed, replayed: false, applied_revision: appliedRevision,
+      };
+      const expectedRevision = command.kind === "start_workflow" ? "" : command.expected_revision;
+      workflowReceipts.set(receiptKey, {
+        serializedCommand,
+        result: structuredClone(result),
+        receipt: {
+          project_id: p, request_digest: mockSha256(command), command_kind: command.kind,
+          expected_revision: expectedRevision, applied_revision: appliedRevision,
+          original_changed: changed, original_run_id: run.id, committed_at: new Date().toISOString(),
         },
-      ];
+      });
+      return result;
+    },
+    async getWorkflowCommandReceipt(p: number, idempotencyKey: string, expectedCommand: WorkflowCommandDTO) {
+      await delay();
+      const path = `/api/projects/${p}/workflows/command-receipt`;
+      findMockProject(projects, p, "GET", path);
+      const stored = workflowReceipts.get(`${p}:${idempotencyKey}`);
+      if (!stored) {
+        throw new ApiRequestError("GET", path, 404, "No committed Guided Workflow command exists for this Idempotency-Key.", "workflow_receipt_not_found");
+      }
+      if (stored.serializedCommand !== JSON.stringify(expectedCommand)) {
+        throw new ApiRequestError("GET", path, 409, "The receipt does not belong to the expected workflow command.", "idempotency_key_conflict");
+      }
+      return structuredClone(stored.receipt);
     },
     async getDecisionRadar(p: number) {
       await delay();

@@ -522,6 +522,92 @@ try {
     throw new Error('Continuity receipt recovery did not use the exact no-store capability request');
   }
 
+  const workflowRun = {
+    id: 31, project_id: 7, title: 'Rewrite Pass', description: 'Guided rewrite',
+    status: 'active', writing_mode: 'novel', template_id: 'rewrite', current_step_id: 'draft',
+    total_steps: 1, completed_steps: 0, revision: 'a'.repeat(64), source_type: '', source_id: null,
+    created_at: '2026-10-07T12:00:00Z', updated_at: '2026-10-07T12:00:00Z', completed_at: null,
+    steps: [{
+      step_id: 'draft', title: 'Draft the rewrite', description: 'Draft safely.', kind: 'creative',
+      status: 'active', sort_index: 0, section_name: 'Manuscript', action_id: 'inline_rewrite',
+      completion_check: '', notes: '', target_type: 'scene', target_id: 12,
+      created_at: '2026-10-07T12:00:00Z', updated_at: '2026-10-07T12:00:00Z',
+    }],
+  };
+  globalThis.fetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    requests.push({ input: String(input), init });
+    return new Response(JSON.stringify([workflowRun]), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    });
+  };
+  const workflowRuns = await browser.getWorkflows(7);
+  if (requests.at(-1)?.input !== '/api/projects/7/workflows'
+      || workflowRuns[0]?.revision !== workflowRun.revision) {
+    throw new Error('Guided Workflow list read did not use and validate the project route');
+  }
+  globalThis.fetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    requests.push({ input: String(input), init });
+    return new Response(JSON.stringify([{ id: 1, project_id: 7, workflow_run_id: 31, step_id: null,
+      event_type: 'started', message: 'Started.', metadata: {}, created_at: '2026-10-07T12:00:00Z' }]), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    });
+  };
+  await browser.getWorkflowEvents(7, 31, 999);
+  if (requests.at(-1)?.input !== '/api/projects/7/workflows/31/events?limit=200') {
+    throw new Error('Guided Workflow event reads did not clamp and encode the bounded limit');
+  }
+
+  let releaseWorkflowCommand!: (response: Response) => void;
+  globalThis.fetch = (input: RequestInfo | URL, init: RequestInit = {}) => {
+    requests.push({ input: String(input), init });
+    return new Promise<Response>((resolve) => { releaseWorkflowCommand = resolve; });
+  };
+  const workflowCommand = {
+    kind: 'pause' as const, run_id: 31, expected_revision: workflowRun.revision,
+  };
+  const workflowKey = 'workflow-http-key-0001';
+  const pendingWorkflowCommand = browser.executeWorkflowCommand(7, workflowCommand, workflowKey);
+  for (let i = 0; i < 6; i++) await Promise.resolve();
+  const workflowCommandRequest = requests.at(-1);
+  const workflowHeaders = new Headers(workflowCommandRequest?.init.headers);
+  if (workflowCommandRequest?.input !== '/api/projects/7/workflows/commands'
+      || workflowCommandRequest.init.method !== 'POST'
+      || workflowHeaders.get('Idempotency-Key') !== workflowKey
+      || String(workflowCommandRequest.init.body) !== JSON.stringify(workflowCommand)) {
+    throw new Error('Guided Workflow command did not preserve its route, body, and Idempotency-Key');
+  }
+  let workflowBarrierDone = false;
+  const workflowBarrier = flushPendingProjectSaves().then(() => { workflowBarrierDone = true; });
+  for (let i = 0; i < 6; i++) await Promise.resolve();
+  if (workflowBarrierDone) throw new Error('Guided Workflow command escaped the persistence barrier');
+  const pausedWorkflow = { ...workflowRun, status: 'paused', revision: 'b'.repeat(64), updated_at: '2026-10-07T12:01:00Z' };
+  releaseWorkflowCommand(new Response(JSON.stringify({
+    workflow: pausedWorkflow, changed: true, replayed: false, applied_revision: pausedWorkflow.revision,
+  }), { status: 200, headers: { 'content-type': 'application/json' } }));
+  const workflowCommandResult = await pendingWorkflowCommand;
+  await workflowBarrier;
+  if (!workflowCommandResult.changed || workflowCommandResult.workflow.status !== 'paused') {
+    throw new Error('Guided Workflow command response was not request-bound and validated');
+  }
+
+  globalThis.fetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    requests.push({ input: String(input), init });
+    return new Response(JSON.stringify({
+      project_id: 7, request_digest: 'c'.repeat(64), command_kind: workflowCommand.kind,
+      expected_revision: workflowCommand.expected_revision, applied_revision: pausedWorkflow.revision,
+      original_changed: true, original_run_id: 31, committed_at: '2026-10-07T12:01:00Z',
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  const workflowReceipt = await browser.getWorkflowCommandReceipt(7, workflowKey, workflowCommand);
+  const workflowReceiptRequest = requests.at(-1);
+  const workflowReceiptHeaders = new Headers(workflowReceiptRequest?.init.headers);
+  if (workflowReceiptRequest?.input !== '/api/projects/7/workflows/command-receipt'
+      || workflowReceiptHeaders.get('Idempotency-Key') !== workflowKey
+      || workflowReceiptHeaders.get('Cache-Control') !== 'no-store'
+      || workflowReceipt.original_run_id !== 31) {
+    throw new Error('Guided Workflow receipt recovery did not use the exact no-store capability request');
+  }
+
   let releaseRead!: (response: Response) => void;
   globalThis.fetch = () => new Promise<Response>((resolve) => { releaseRead = resolve; });
   const pendingRead = browser.health();
@@ -571,7 +657,7 @@ try {
   await Promise.all([failedPatch, recoveredPatch]);
   if (failureCalls !== 2) throw new Error('PATCH queue stopped after a rejected request');
 
-  console.log('HTTP API client tests: 29 passed, 0 failed');
+  console.log('HTTP API client tests: 34 passed, 0 failed');
 } finally {
   globalThis.fetch = originalFetch;
 }

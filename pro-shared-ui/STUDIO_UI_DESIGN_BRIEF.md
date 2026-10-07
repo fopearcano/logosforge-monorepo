@@ -1055,9 +1055,10 @@ contract: deterministic, evidence-backed, capped, **advisory-only**; issues carr
   `BeatAnalysisView` (HTML: phase coverage of 7 Save-the-Cat phases + beat summary
   + beat positions with `scene:<id>` links); `ActAnalysisView` (act table +
   per-act listing); `TagAnalysisView` (tag grouping + clickable scene lists).
-  **Notably absent** (engines with no Qt view): Project Intelligence / Decision
-  Radar, Guided Workflows, the Semantic Continuity Engine — the biggest greenfield
-  surfaces (see §4.9).
+  **Absent from the legacy Qt surface:** Project Intelligence / Decision Radar,
+  Guided Workflows, and the Semantic Continuity Engine. Their dedicated React
+  Pro panels are implemented; the legacy-view inventory here remains useful
+  historical context (see §4.9).
 
 - **Studio panels & interactions:** turn these engines into a **dockable analytics
   workbench** with a persistent intelligence HUD. A **Decision Radar Dock**
@@ -1255,8 +1256,8 @@ ProjectOperatingSystem, DecisionRadar, GuidedWorkflows, ControlledApply)
   temporal/spatial/object/plot/lore/theme/dialogue/production/mode_specific), **13
   issue types**, **4 severities**, **4 confidences**, **11 fact types**.
 
-- **Studio panels & interactions:** a **Decision Radar Dock** (*highest priority —
-  no view exists today*) — a ranked, filterable card stack from
+- **Studio panels & interactions:** a **Decision Radar Dock** (*implemented*) —
+  a ranked, filterable card stack from
   `ProjectIntelligenceReport.radar`, each card a severity chip + confidence badge +
   title + expandable explanation + `suggested_action` + a "Go to {related_section}"
   deep-link / "Start workflow" button; group-by-category; severity counts in the
@@ -1265,14 +1266,14 @@ ProjectOperatingSystem, DecisionRadar, GuidedWorkflows, ControlledApply)
   Control"** (a dense tile grid of overview + the four collector summaries — words,
   scenes, chapters/acts, a PSYKE by-type donut, graph nodes/edges/isolated, workflow
   status, export readiness — with `summary_line()` as a status bar, cheap `light`
-  recompute). A **Continuity Inspector Dock** (*no view exists*) — issues grouped by
+  recompute). A **Continuity Inspector Dock** (*implemented*) — issues grouped by
   `dimension` (10-dimension legend) + `severity` with confidence badges, evidence
   excerpts, related-scene chips, dismiss/resolve/defer; a **"most affected scenes"
   heat strip**; an `issues_by_dimension` radial; a **per-scene continuity gutter**
   in the editor; and a **rewrite-safety inline panel** invoking
   `validate_continuity_change` before any Controlled Apply (showing `is_safe` +
-  warnings + `suggested_apply_mode`). A **Guided Workflows Panel** (*no view
-  exists*) — a left-rail stepper of active runs with progress bars, current step
+  warnings + `suggested_apply_mode`). A **Guided Workflows Panel** (*implemented
+  in Pro roadmap Phase 7A*) — a run selector and stepper with progress, current step
   highlighted, step-kind icons (creative manual-only, check auto-verifiable with a
   live green tick when its `completion_check` passes, manual ack), `section_name`
   deep-links, `action_id` "run suggestion" buttons, a mode-filtered template

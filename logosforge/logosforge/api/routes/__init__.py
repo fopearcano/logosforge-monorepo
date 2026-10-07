@@ -30,6 +30,7 @@ from logosforge.api.routes import (
     timeline,
     voice,
     writing_modes,
+    workflows,
 )
 
 # Ordered list of every router mounted under the /api prefix.
@@ -50,6 +51,7 @@ ALL_ROUTERS = [
     themes.router,
     dashboard.router,
     intelligence.router,
+    workflows.router,
     knowledge_graph.router,
     quantum.router,
     extraction.router,

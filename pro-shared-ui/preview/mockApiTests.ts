@@ -45,7 +45,7 @@ check(typeof api.getContinuityCommandReceipt === "function", "preview mock must 
 
 const health = await api.health();
 check(
-  health.status === "ok" && health.version === "1.12.0" && health.api_version === "1.12.0",
+  health.status === "ok" && health.version === "1.13.0" && health.api_version === "1.13.0",
   "preview health must satisfy the core contract",
 );
 const projectMap = await api.getKnowledgeGraph(1, { limit: 160, include_inferred: true });
@@ -1452,5 +1452,75 @@ const importedReply = editedImported.replies.find((reply) => reply.source_id)!;
 await api.deleteCommentReply(1, rootComment.id, importedReply.id);
 check(!(await api.listComments(1))[0]!.replies.some((reply) => reply.id === importedReply.id),
   "imported replies remain deletable while provenance is present");
+
+const workflowApi = createMockApiClient();
+const workflowTemplates = await workflowApi.getWorkflowTemplates(1);
+const initialWorkflowRuns = await workflowApi.getWorkflows(1);
+const initialWorkflow = initialWorkflowRuns.find((run) => run.template_id === "rewrite")!;
+check(
+  workflowTemplates.some((template) => template.id === "rewrite")
+    && workflowTemplates.every((template) => template.modes.length === 0 || template.modes.includes("screenplay"))
+    && initialWorkflow.project_id === 1
+    && /^[0-9a-f]{64}$/.test(initialWorkflow.revision)
+    && initialWorkflow.steps.every((step) => Boolean(step.kind) && step.created_at != null),
+  "preview Guided Workflows must expose mode-filtered rich templates and revisioned project-owned runs",
+);
+const initialWorkflowEvents = await workflowApi.getWorkflowEvents(1, initialWorkflow.id, 1);
+check(
+  initialWorkflowEvents.length === 1
+    && initialWorkflowEvents[0]?.workflow_run_id === initialWorkflow.id,
+  "preview Guided Workflow events must honor the bounded run-owned limit",
+);
+const activeWorkflowStep = initialWorkflow.steps.find((step) => step.step_id === initialWorkflow.current_step_id)!;
+const completeWorkflowCommand = {
+  kind: "complete_step" as const,
+  run_id: initialWorkflow.id,
+  step_id: activeWorkflowStep.step_id,
+  expected_revision: initialWorkflow.revision,
+};
+const workflowKey = "preview-workflow-key-0001";
+const completedWorkflow = await workflowApi.executeWorkflowCommand(1, completeWorkflowCommand, workflowKey);
+check(
+  completedWorkflow.changed
+    && !completedWorkflow.replayed
+    && completedWorkflow.workflow.steps.find((step) => step.step_id === activeWorkflowStep.step_id)?.status === "completed"
+    && completedWorkflow.applied_revision === completedWorkflow.workflow.revision,
+  "preview Guided Workflow commands must atomically apply the current active step",
+);
+const workflowReceipt = await workflowApi.getWorkflowCommandReceipt(1, workflowKey, completeWorkflowCommand);
+const replayedWorkflow = await workflowApi.executeWorkflowCommand(1, completeWorkflowCommand, workflowKey);
+check(
+  workflowReceipt.original_run_id === initialWorkflow.id
+    && workflowReceipt.applied_revision === completedWorkflow.applied_revision
+    && replayedWorkflow.replayed
+    && !replayedWorkflow.changed,
+  "preview Guided Workflow command recovery must preserve a durable exact-command receipt",
+);
+let staleWorkflowFailure: unknown = null;
+try {
+  await workflowApi.executeWorkflowCommand(1, {
+    kind: "pause",
+    run_id: initialWorkflow.id,
+    expected_revision: initialWorkflow.revision,
+  }, "preview-workflow-key-0002");
+} catch (error) {
+  staleWorkflowFailure = error;
+}
+check(
+  staleWorkflowFailure instanceof ApiRequestError
+    && staleWorkflowFailure.status === 409
+    && staleWorkflowFailure.code === "workflow_conflict",
+  "preview Guided Workflow commands must reject stale revisions without mutating",
+);
+const startedWorkflow = await workflowApi.executeWorkflowCommand(1, {
+  kind: "start_workflow",
+  template_id: "project_setup",
+}, "preview-workflow-key-0003");
+check(
+  startedWorkflow.workflow.template_id === "project_setup"
+    && startedWorkflow.workflow.current_step_id === "title"
+    && startedWorkflow.workflow.steps[0]?.status === "active",
+  "preview Guided Workflow starts must materialize the selected compatible template",
+);
 
 console.log(`Preview API tests: ${passed} passed, 0 failed`);
