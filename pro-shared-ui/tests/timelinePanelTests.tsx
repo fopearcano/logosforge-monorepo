@@ -523,6 +523,18 @@ check(
   "target-picking mode must keep the relationship editor compact enough for short dock cards to remain reachable",
 );
 check(
+  renderer.root.findByProps({ "aria-label": "Timeline relationship editor" }).props.style.flexShrink === 1,
+  "target-picking mode must let the relationship editor shrink before it starves the target board",
+);
+check(
+  renderer.root.findByProps({ "data-timeline-content": "true" }).props.style.minHeight === 64,
+  "target-picking mode must reserve a scrollable board viewport in short docks",
+);
+check(
+  renderer.root.findAllByProps({ role: "status" }).length === 0,
+  "target-picking mode must not duplicate its instruction in a board-consuming live status row",
+);
+check(
   !renderedText(renderer.root.findByProps({ "aria-label": "Timeline relationship editor" })).includes("EVENT LINKS"),
   "target-picking mode must defer relationship management rows instead of covering the target board",
 );

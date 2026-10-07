@@ -601,7 +601,10 @@ export function TimelinePanel(props: PanelProps) {
     setPendingSourceId(event.id);
     setEditingLinkId(null);
     setMutationError("");
-    setStatus(`Choose a target event for a ${linkDraft.linkType.replaceAll("_", " ")} relationship.`);
+    // The relationship editor already carries the target-mode instruction. Keeping
+    // the same message in the live status row can consume the entire board viewport
+    // in a short dock, leaving target cards present but impossible to click.
+    setStatus("");
   };
 
   const chooseLinkEndpoint = (event: TimelineEventDTO) => {
@@ -751,7 +754,7 @@ export function TimelinePanel(props: PanelProps) {
   ));
 
   const relationshipWorkspace = timeline && (selectedEvent || pendingSourceId != null || showAllLinks) ? (
-    <section aria-label="Timeline relationship editor" style={{ flex: "none", minHeight: 0, maxHeight: pendingSourceId != null ? 92 : 188, overflow: "auto", padding: "7px 14px", borderBottom: "1px solid var(--line2)", background: "var(--base)" }}>
+    <section aria-label="Timeline relationship editor" style={{ flex: pendingSourceId != null ? "0 1 auto" : "none", flexShrink: pendingSourceId != null ? 1 : 0, boxSizing: "border-box", minHeight: 0, maxHeight: pendingSourceId != null ? 92 : 188, overflow: "auto", padding: "7px 14px", borderBottom: "1px solid var(--line2)", background: "var(--base)" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
         <strong style={{ fontFamily: "'Chakra Petch'", fontSize: 9, letterSpacing: ".08em", color: "var(--strong)" }}>
           {showAllLinks ? "ALL RELATIONSHIPS" : `RELATIONSHIPS · ${selectedEvent?.title || `SCENE #${pendingSourceId}`}`}
@@ -1020,7 +1023,7 @@ export function TimelinePanel(props: PanelProps) {
             : !timeline
               ? message("Timeline unavailable")
               : (
-                <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+                <div data-timeline-content="true" style={{ flex: 1, minHeight: pendingSourceId != null ? 64 : 0, display: "flex", flexDirection: "column" }}>
                   {lanes.length === 0 && events.length === 0
                     ? (
                       <>
