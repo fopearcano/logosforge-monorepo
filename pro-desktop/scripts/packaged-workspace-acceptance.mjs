@@ -709,16 +709,27 @@ async function seedIntelligenceJourney(session, projectId) {
     name: 'Lonely Relic',
     type: 'object',
   });
-  const opening = await post(`/api/projects/${projectId}/scenes`, {
+  // The mounted Manuscript can observe each POST before the location PATCH.
+  // Keep final prose in that same PATCH so it is a visible marker for the exact
+  // revision the editor must reconcile before the save-barrier exercise.
+  const createdOpening = await post(`/api/projects/${projectId}/scenes`, {
     title: 'Acceptance Opening',
-    content: 'Alice waits beside the sealed window.',
   });
-  const crossing = await post(`/api/projects/${projectId}/scenes`, {
+  const createdCrossing = await post(`/api/projects/${projectId}/scenes`, {
     title: 'Acceptance Crossing',
+  });
+  const crossing = await patch(`/api/projects/${projectId}/scenes/${createdCrossing.id}`, {
+    expected_revision: createdCrossing.revision,
+    location: 'Castle',
     content: 'Alice studies the silent stonework.',
   });
-  await patch(`/api/projects/${projectId}/scenes/${opening.id}`, { location: 'Kitchen' });
-  await patch(`/api/projects/${projectId}/scenes/${crossing.id}`, { location: 'Castle' });
+  // Finalize Opening last. Its unique rendered prose is therefore also a
+  // happens-before marker for the complete two-scene fixture.
+  const opening = await patch(`/api/projects/${projectId}/scenes/${createdOpening.id}`, {
+    expected_revision: createdOpening.revision,
+    location: 'Kitchen',
+    content: 'Alice waits beside the sealed window.',
+  });
 
   const radar = await packagedCoreJson(session, `/api/projects/${projectId}/decision-radar`);
   const continuity = await packagedCoreJson(session, `/api/projects/${projectId}/continuity`);
@@ -746,6 +757,13 @@ async function exerciseIntelligenceShell(session) {
   const { page } = session;
   const { projectId } = await waitProReady(session);
   const seeded = await seedIntelligenceJourney(session, projectId);
+  // Fixture writes happen out-of-band through the packaged Core. Rehydrate the
+  // renderer explicitly so this setup does not depend on when its event poll
+  // subscribed or which intermediate scene revision it observed.
+  await page.reload({ waitUntil: 'domcontentloaded', timeout: STARTUP_TIMEOUT_MS });
+  const rehydrated = await waitProReady(session);
+  assert.equal(rehydrated.projectId, projectId, 'Packaged renderer changed project while rehydrating its fixture');
+  record('fixture', `rehydrated renderer on finalized project ${projectId}`);
 
   const manuscript = await selectPanel(page, 'Manuscript', 'manuscript', 'Manuscript Editor');
   await setWorkspaceMode(page, 'FOCUS', 'focus');
@@ -753,6 +771,13 @@ async function exerciseIntelligenceShell(session) {
   await openingHost.waitFor({ state: 'attached', timeout: UI_TIMEOUT_MS });
   await openingHost.scrollIntoViewIfNeeded({ timeout: UI_TIMEOUT_MS });
   await waitVisible(openingHost, 'seeded manuscript scene');
+  const seededProse = openingHost.locator('[data-prose-static], [data-prose]').first();
+  // SceneEditor publishes this prose only after synchronously advancing its
+  // revision guard to the finalized fixture DTO.
+  await waitFor(
+    async () => await seededProse.innerText() === seeded.opening.content,
+    'seeded manuscript scene revision',
+  );
   const staticProse = openingHost.getByRole('button', {
     name: `Activate prose editor for ${seeded.opening.title}`,
     exact: true,

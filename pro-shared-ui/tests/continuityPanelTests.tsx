@@ -255,6 +255,10 @@ check(
   cachedReads === 2 && cachedClears === 0,
   "a target arriving over a cached panel must wait for its own authoritative refresh",
 );
+check(
+  cachedRenderer.root.findAllByProps({ "data-continuity-issue-id": "0123456789abcdef" }).length === 1,
+  "a background authoritative refresh must keep the current issue card mounted so deep-link focus is not discarded",
+);
 resolvePostBarrier({ ...report, blocking_count: 0, issues: [] });
 await act(async () => {
   await flush();

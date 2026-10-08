@@ -1,6 +1,6 @@
 {
   "name": "@logosforge/pro-desktop",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "engines": { "node": ">=22.12.0" },
   "description": "LogosForge Studio (Pro) — Electron desktop shell. Spawns the logosforge core API and composes the @logosforge/pro-shared-ui panels into a workspace.",

@@ -754,7 +754,9 @@ export function ContinuityPanel(props: PanelProps) {
                 <button type="button" onClick={() => setTargetNotice("")} style={{ marginLeft: 8, border: "1px solid var(--line2)", background: "transparent", color: "var(--txt2)", font: "inherit", fontSize: 7.5, padding: "2px 5px", cursor: "pointer" }}>SHOW CURRENT ISSUES</button>
               </div>
             ) : null}
-            {loading
+            {/* Keep the current cards mounted during background reconciliation.
+                Replacing them with a loading surface would discard exact deep-link focus. */}
+            {loading && !report
               ? message("Loading continuity report…")
               : error
                 ? message(`Couldn't load continuity — ${error}`)

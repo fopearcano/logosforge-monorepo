@@ -27,6 +27,18 @@ const packagedWorkspaceScriptPath = path.join(
   'packaged-workspace-acceptance.mjs',
 );
 const packagedWorkspaceScript = fs.readFileSync(packagedWorkspaceScriptPath, 'utf8');
+const createdOpeningStart = packagedWorkspaceScript.indexOf('const createdOpening = await post');
+const createdCrossingStart = packagedWorkspaceScript.indexOf('const createdCrossing = await post');
+const finalizedCrossingStart = packagedWorkspaceScript.indexOf('const crossing = await patch');
+const finalizedOpeningStart = packagedWorkspaceScript.indexOf('const opening = await patch');
+const fixtureRadarStart = packagedWorkspaceScript.indexOf('const radar = await packagedCoreJson', finalizedOpeningStart);
+const seedJourneyCallStart = packagedWorkspaceScript.indexOf('const seeded = await seedIntelligenceJourney(session, projectId)');
+const fixtureReloadStart = packagedWorkspaceScript.indexOf("await page.reload({ waitUntil: 'domcontentloaded'", seedJourneyCallStart);
+const rehydratedReadyStart = packagedWorkspaceScript.indexOf('const rehydrated = await waitProReady(session)', fixtureReloadStart);
+const createdOpeningSource = packagedWorkspaceScript.slice(createdOpeningStart, createdCrossingStart);
+const createdCrossingSource = packagedWorkspaceScript.slice(createdCrossingStart, finalizedCrossingStart);
+const finalizedCrossingSource = packagedWorkspaceScript.slice(finalizedCrossingStart, finalizedOpeningStart);
+const finalizedOpeningSource = packagedWorkspaceScript.slice(finalizedOpeningStart, fixtureRadarStart);
 const linuxJobStart = releaseWorkflow.indexOf('\n  build_linux:');
 const linuxJobEnd = releaseWorkflow.indexOf('\n  build_macos:', linuxJobStart);
 const linuxJob = releaseWorkflow.slice(linuxJobStart, linuxJobEnd);
@@ -206,6 +218,29 @@ check('packaged workspace acceptance covers the real Graph, Radar, Continuity, a
   packagedWorkspaceScript.includes("'restored right dock after Continuity decision review'") &&
   packagedWorkspaceScript.includes("'Confirmed Controlled Apply mutation did not survive relaunch'") &&
   packagedWorkspaceScript.includes("'Durable Continuity review state did not survive packaged relaunch'"));
+check('packaged intelligence fixture finalizes prose and location before the editor save barrier',
+  createdOpeningStart > 0 &&
+  createdCrossingStart > createdOpeningStart &&
+  finalizedCrossingStart > createdCrossingStart &&
+  finalizedOpeningStart > finalizedCrossingStart &&
+  fixtureRadarStart > finalizedOpeningStart &&
+  !createdOpeningSource.includes('content:') &&
+  !createdCrossingSource.includes('content:') &&
+  finalizedOpeningSource.includes('expected_revision: createdOpening.revision') &&
+  finalizedOpeningSource.includes("location: 'Kitchen'") &&
+  finalizedOpeningSource.includes("content: 'Alice waits beside the sealed window.'") &&
+  finalizedCrossingSource.includes('expected_revision: createdCrossing.revision') &&
+  finalizedCrossingSource.includes("location: 'Castle'") &&
+  finalizedCrossingSource.includes("content: 'Alice studies the silent stonework.'") &&
+  seedJourneyCallStart > fixtureRadarStart &&
+  fixtureReloadStart > seedJourneyCallStart &&
+  rehydratedReadyStart > fixtureReloadStart &&
+  packagedWorkspaceScript.includes("assert.equal(rehydrated.projectId, projectId, 'Packaged renderer changed project while rehydrating its fixture')") &&
+  packagedWorkspaceScript.includes("openingHost.locator('[data-prose-static], [data-prose]').first()") &&
+  packagedWorkspaceScript.includes('async () => await seededProse.innerText() === seeded.opening.content') &&
+  rehydratedReadyStart < packagedWorkspaceScript.indexOf("'seeded manuscript scene revision'") &&
+  packagedWorkspaceScript.indexOf("'seeded manuscript scene revision'")
+    < packagedWorkspaceScript.indexOf('await prose.fill(barrierText)'));
 check('packaged workspace acceptance gives the manuscript save barrier a named 90-second Cockpit budget with UI diagnostics',
   packagedWorkspaceScript.includes('const SAVE_BARRIER_TIMEOUT_MS = 90_000;') &&
   packagedWorkspaceScript.includes('timeoutMs: SAVE_BARRIER_TIMEOUT_MS') &&
