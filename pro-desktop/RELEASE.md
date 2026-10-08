@@ -44,9 +44,11 @@ another job or OS.
 After packaging, the Windows, Intel macOS and Linux jobs run
 `npm run test:packaged-workspace` against the real unpacked native application.
 The Playwright Electron journey uses an isolated profile, performs pointer
-Canvas and dock mutations, closes through the production save barrier, and
-relaunches to verify the persisted board and project layout. The Linux job runs
-the unpacked `release/linux-unpacked/logosforge-pro` executable in one
+Canvas and dock mutations, detaches a panel into a real top-level native window,
+moves it beyond the main window (and onto another display when available),
+minimizes, restores and redocks it, closes through the production save barrier,
+and relaunches to verify the persisted board and project layout. The Linux job
+runs the unpacked `release/linux-unpacked/logosforge-pro` executable in one
 1600x1000 Xvfb display, explicitly enables Playwright's Chromium sandbox, and
 asserts that the packaged command line does not contain `--no-sandbox`. This
 complements the distributable inspection and MCP smoke; it does not replace
@@ -85,7 +87,7 @@ Actions download after hosted ingestion and is also retained in the runner's
 validation.
 
 ```bash
-git tag v0.1.3 && git push origin v0.1.3
+git tag v0.1.4 && git push origin v0.1.4
 ```
 
 The workflow assumes a **single monorepo checkout** containing `logosforge/`,

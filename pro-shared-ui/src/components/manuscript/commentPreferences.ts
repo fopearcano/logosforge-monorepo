@@ -1,12 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
+import { usePanelHostWindow } from "../common/PanelHost";
 
 export const COMMENT_VISIBILITY_STORAGE_KEY = "lf.comments.hideResolved";
 export const COMMENT_VISIBILITY_EVENT = "logosforge:comments-visibility-changed";
 
-function browserStorage(): Storage | null {
-  if (typeof window === "undefined") return null;
+function ambientWindow(): Window | null {
+  return typeof window === "undefined" ? null : window;
+}
+
+function browserStorage(ownerWindow: Window | null = ambientWindow()): Storage | null {
+  if (!ownerWindow) return null;
   try {
-    return window.localStorage;
+    return ownerWindow.localStorage;
   } catch {
     return null;
   }
@@ -26,15 +31,18 @@ export function readHideResolvedPreference(storage: Pick<Storage, "getItem"> | n
 export function writeHideResolvedPreference(
   value: boolean,
   storage: Pick<Storage, "setItem"> | null = browserStorage(),
+  ownerWindow: Window | null = ambientWindow(),
 ): void {
   try {
     storage?.setItem(COMMENT_VISIBILITY_STORAGE_KEY, value ? "1" : "0");
   } catch {
     // Private browsing and locked-down webviews may reject localStorage writes.
   }
-  if (typeof window !== "undefined") {
+  if (ownerWindow) {
     try {
-      window.dispatchEvent(new CustomEvent<boolean>(COMMENT_VISIBILITY_EVENT, { detail: value }));
+      const event = ownerWindow.document.createEvent("CustomEvent");
+      event.initCustomEvent(COMMENT_VISIBILITY_EVENT, false, false, value);
+      ownerWindow.dispatchEvent(event);
     } catch {
       // A non-standard embedded host may expose window without event constructors.
     }
@@ -43,33 +51,36 @@ export function writeHideResolvedPreference(
 
 /** Shared by the panel now and the manuscript mark layer when that Phase 5B slice lands. */
 export function useHideResolvedPreference(): [boolean, (value: boolean) => void] {
-  const [hideResolved, setHideResolvedState] = useState(readHideResolvedPreference);
+  const ownerWindow = usePanelHostWindow();
+  const [hideResolved, setHideResolvedState] = useState(() => readHideResolvedPreference(browserStorage(ownerWindow)));
 
   useEffect(() => {
-    if (typeof window === "undefined") return undefined;
+    if (!ownerWindow) return undefined;
     const onPreference = (event: Event) => {
-      const value = event instanceof CustomEvent && typeof event.detail === "boolean"
-        ? event.detail
-        : readHideResolvedPreference();
+      const detail = (event as CustomEvent<unknown>).detail;
+      const value = typeof detail === "boolean"
+        ? detail
+        : readHideResolvedPreference(browserStorage(ownerWindow));
       setHideResolvedState(value);
     };
     const onStorage = (event: StorageEvent) => {
       if (event.key === COMMENT_VISIBILITY_STORAGE_KEY || event.key == null) {
-        setHideResolvedState(readHideResolvedPreference());
+        setHideResolvedState(readHideResolvedPreference(browserStorage(ownerWindow)));
       }
     };
-    window.addEventListener(COMMENT_VISIBILITY_EVENT, onPreference);
-    window.addEventListener("storage", onStorage);
+    setHideResolvedState(readHideResolvedPreference(browserStorage(ownerWindow)));
+    ownerWindow.addEventListener(COMMENT_VISIBILITY_EVENT, onPreference);
+    ownerWindow.addEventListener("storage", onStorage);
     return () => {
-      window.removeEventListener(COMMENT_VISIBILITY_EVENT, onPreference);
-      window.removeEventListener("storage", onStorage);
+      ownerWindow.removeEventListener(COMMENT_VISIBILITY_EVENT, onPreference);
+      ownerWindow.removeEventListener("storage", onStorage);
     };
-  }, []);
+  }, [ownerWindow]);
 
   const setHideResolved = useCallback((value: boolean) => {
     setHideResolvedState(value);
-    writeHideResolvedPreference(value);
-  }, []);
+    writeHideResolvedPreference(value, browserStorage(ownerWindow), ownerWindow);
+  }, [ownerWindow]);
 
   return [hideResolved, setHideResolved];
 }

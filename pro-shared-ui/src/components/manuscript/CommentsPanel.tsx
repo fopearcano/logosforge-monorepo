@@ -20,6 +20,7 @@ import {
   isImportedSource,
   sceneName,
 } from "./commentPresentation";
+import { usePanelHostDocument, usePanelHostWindow } from "../common/PanelHost";
 
 const panelBox: CSSProperties = {
   position: "relative",
@@ -477,6 +478,8 @@ function CommentDetail({
 
 export function CommentsPanel(props: PanelProps) {
   const { api, platform, projectId } = useStudio();
+  const ownerDocument = usePanelHostDocument();
+  const ownerWindow = usePanelHostWindow();
   const navigate = useNavigate();
   const commentTarget = useCommentTarget();
   const mounted = useMountedRef();
@@ -499,9 +502,13 @@ export function CommentsPanel(props: PanelProps) {
   const draftStateRef = useRef<LocalCommentDraftState | null>(null);
   const consumingTargetRef = useRef<number | null>(null);
   const clearTargetRef = useRef(commentTarget.clear);
-  const focusFrameRef = useRef<number | null>(null);
+  const ownerDocumentRef = useRef(ownerDocument);
+  const ownerWindowRef = useRef(ownerWindow);
+  const focusFrameRef = useRef<{ ownerWindow: Window; handle: number } | null>(null);
   projectIdRef.current = projectId;
   clearTargetRef.current = commentTarget.clear;
+  ownerDocumentRef.current = ownerDocument;
+  ownerWindowRef.current = ownerWindow;
 
   const comments = (commentsData ?? []).filter((comment) => comment.id !== deletedThreadId);
   const scenes = scenesData ?? [];
@@ -522,7 +529,14 @@ export function CommentsPanel(props: PanelProps) {
   const selected = visible.find((comment) => comment.id === selectedId) ?? visible[0] ?? null;
 
   const scheduleThreadFocus = useCallback((commentId: number, afterFocus?: (focused: boolean) => void) => {
-    if (focusFrameRef.current != null) window.cancelAnimationFrame(focusFrameRef.current);
+    if (!ownerDocumentRef.current || !ownerWindowRef.current) {
+      afterFocus?.(false);
+      return;
+    }
+    if (focusFrameRef.current) {
+      focusFrameRef.current.ownerWindow.cancelAnimationFrame(focusFrameRef.current.handle);
+      focusFrameRef.current = null;
+    }
     let remainingAttempts = 120;
     const attempt = () => {
       if (remainingAttempts <= 0) {
@@ -530,7 +544,12 @@ export function CommentsPanel(props: PanelProps) {
         return;
       }
       remainingAttempts -= 1;
-      focusFrameRef.current = window.requestAnimationFrame(() => {
+      const frameWindow = ownerWindowRef.current;
+      if (!frameWindow) {
+        afterFocus?.(false);
+        return;
+      }
+      const frameHandle = frameWindow.requestAnimationFrame(() => {
         focusFrameRef.current = null;
         const button = threadButtonRefs.current.get(commentId);
         if (!button || button.disabled) {
@@ -542,25 +561,35 @@ export function CommentsPanel(props: PanelProps) {
         // A hidden target may mount one commit after selection, while modal
         // teardown or dock focus work can reclaim focus. Only consume the
         // navigation target after its row remains active for a full frame.
-        focusFrameRef.current = window.requestAnimationFrame(() => {
+        const confirmWindow = ownerWindowRef.current;
+        if (!confirmWindow) {
+          afterFocus?.(false);
+          return;
+        }
+        const confirmHandle = confirmWindow.requestAnimationFrame(() => {
           focusFrameRef.current = null;
-          if (document.activeElement === button) afterFocus?.(true);
+          if (button.ownerDocument.activeElement === button) afterFocus?.(true);
           else attempt();
         });
+        focusFrameRef.current = { ownerWindow: confirmWindow, handle: confirmHandle };
       });
+      focusFrameRef.current = { ownerWindow: frameWindow, handle: frameHandle };
     };
     attempt();
   }, []);
 
   useEffect(() => () => {
-    if (focusFrameRef.current != null) window.cancelAnimationFrame(focusFrameRef.current);
+    if (focusFrameRef.current) {
+      focusFrameRef.current.ownerWindow.cancelAnimationFrame(focusFrameRef.current.handle);
+      focusFrameRef.current = null;
+    }
   }, []);
 
   const canLeaveCurrentThread = useCallback((nextThreadId: number | null): boolean => {
     const draft = draftStateRef.current;
     if (!draft?.dirty || draft.threadId === nextThreadId) return true;
     setActionError("Save or cancel the current comment edit, or post or clear its reply, before opening another thread.");
-    window.requestAnimationFrame(() => draft.focus());
+    ownerWindowRef.current?.requestAnimationFrame(() => draft.focus());
     return false;
   }, []);
 
@@ -645,10 +674,10 @@ export function CommentsPanel(props: PanelProps) {
   }, [commentsData, deletedThreadId, revealedTargetId]);
 
   useEffect(() => {
-    if (typeof window === "undefined") return undefined;
-    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
-    return () => window.clearInterval(timer);
-  }, []);
+    if (!ownerWindow) return undefined;
+    const timer = ownerWindow.setInterval(() => setNow(Date.now()), 60_000);
+    return () => ownerWindow.clearInterval(timer);
+  }, [ownerWindow]);
 
   const beginOperation = (next: ThreadOperation): number | null => {
     if (projectId == null || operationRef.current != null) return null;

@@ -7,6 +7,7 @@ import { discardProjectSavePending, markProjectSavePending, registerProjectFlush
 import { createSceneSaveQueue, type SceneSaveQueue } from "./sceneSaveQueue";
 import { ConfirmDeleteButton } from "../common/ConfirmDeleteButton";
 import { useMountedRef } from "../../hooks/useMountedRef";
+import { usePanelHostDocument, usePanelHostWindow } from "../common/PanelHost";
 
 const panelBox: CSSProperties = {
   position: "relative",
@@ -319,6 +320,8 @@ const message = (text: string) => (
 
 export function NotesPanel(props: PanelProps) {
   const { api, projectId } = useStudio();
+  const ownerDocument = usePanelHostDocument();
+  const ownerWindow = usePanelHostWindow();
   const noteTarget = useNoteTarget();
   const { data: notes, loading, error, refetch } = useNotes();
   const [editing, setEditing] = useState<NoteDTO | null>(null);
@@ -326,13 +329,24 @@ export function NotesPanel(props: PanelProps) {
   const [actionError, setActionError] = useState<string | null>(null);
   const consumingTargetRef = useRef<number | null>(null);
   const clearTargetRef = useRef(noteTarget.clear);
-  const focusFrameRef = useRef<number | null>(null);
+  const ownerDocumentRef = useRef(ownerDocument);
+  const ownerWindowRef = useRef(ownerWindow);
+  const focusFrameRef = useRef<{ ownerWindow: Window; handle: number } | null>(null);
   clearTargetRef.current = noteTarget.clear;
+  ownerDocumentRef.current = ownerDocument;
+  ownerWindowRef.current = ownerWindow;
   const count = notes?.length ?? 0;
   const pinned = notes?.filter((n) => n.pinned).length ?? 0;
 
   const scheduleNoteFocus = useCallback((noteId: number, afterFocus?: (focused: boolean) => void) => {
-    if (focusFrameRef.current != null) window.cancelAnimationFrame(focusFrameRef.current);
+    if (!ownerDocumentRef.current || !ownerWindowRef.current) {
+      afterFocus?.(false);
+      return;
+    }
+    if (focusFrameRef.current) {
+      focusFrameRef.current.ownerWindow.cancelAnimationFrame(focusFrameRef.current.handle);
+      focusFrameRef.current = null;
+    }
     let remainingAttempts = 120;
     const attempt = () => {
       if (remainingAttempts <= 0) {
@@ -340,9 +354,15 @@ export function NotesPanel(props: PanelProps) {
         return;
       }
       remainingAttempts -= 1;
-      focusFrameRef.current = window.requestAnimationFrame(() => {
+      const frameWindow = ownerWindowRef.current;
+      const frameDocument = ownerDocumentRef.current;
+      if (!frameWindow || !frameDocument) {
+        afterFocus?.(false);
+        return;
+      }
+      const frameHandle = frameWindow.requestAnimationFrame(() => {
         focusFrameRef.current = null;
-        const input = document.querySelector<HTMLInputElement>(`[data-note-editor-id="${noteId}"]`);
+        const input = ownerDocumentRef.current?.querySelector<HTMLInputElement>(`[data-note-editor-id="${noteId}"]`);
         if (!input) {
           attempt();
           return;
@@ -351,18 +371,28 @@ export function NotesPanel(props: PanelProps) {
         // Modal isolation and workspace commits may still reclaim focus in the
         // same frame. Confirm that the handoff survives a full frame before
         // consuming the one-shot navigation target.
-        focusFrameRef.current = window.requestAnimationFrame(() => {
+        const confirmWindow = ownerWindowRef.current;
+        if (!confirmWindow) {
+          afterFocus?.(false);
+          return;
+        }
+        const confirmHandle = confirmWindow.requestAnimationFrame(() => {
           focusFrameRef.current = null;
-          if (document.activeElement === input) afterFocus?.(true);
+          if (input.ownerDocument.activeElement === input) afterFocus?.(true);
           else attempt();
         });
+        focusFrameRef.current = { ownerWindow: confirmWindow, handle: confirmHandle };
       });
+      focusFrameRef.current = { ownerWindow: frameWindow, handle: frameHandle };
     };
     attempt();
   }, []);
 
   useEffect(() => () => {
-    if (focusFrameRef.current != null) window.cancelAnimationFrame(focusFrameRef.current);
+    if (focusFrameRef.current) {
+      focusFrameRef.current.ownerWindow.cancelAnimationFrame(focusFrameRef.current.handle);
+      focusFrameRef.current = null;
+    }
   }, []);
 
   useEffect(() => {

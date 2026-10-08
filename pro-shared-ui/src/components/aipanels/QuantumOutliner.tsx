@@ -201,10 +201,14 @@ export function QuantumOutliner(props: PanelProps) {
   // oscillates. Below this width the radial is unreadable → show the branch list.
   useLayoutEffect(() => {
     const el = panelRef.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
+    if (!el) return;
+    const ResizeObserverConstructor = (el.ownerDocument.defaultView as (Window & {
+      ResizeObserver?: typeof ResizeObserver;
+    }) | null)?.ResizeObserver;
+    if (!ResizeObserverConstructor) return;
     const measure = () => { const w = el.clientWidth; if (w > 0) setPanelW(w); };
     measure();
-    const ro = new ResizeObserver(measure);
+    const ro = new ResizeObserverConstructor(measure);
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
@@ -213,10 +217,14 @@ export function QuantumOutliner(props: PanelProps) {
   // observed box size, so measuring the field for SCALE is loop-safe.
   useLayoutEffect(() => {
     const el = fieldRef.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
+    if (!el) return;
+    const ResizeObserverConstructor = (el.ownerDocument.defaultView as (Window & {
+      ResizeObserver?: typeof ResizeObserver;
+    }) | null)?.ResizeObserver;
+    if (!ResizeObserverConstructor) return;
     const measure = () => { const w = el.clientWidth, h = el.clientHeight; if (w > 0 && h > 0) setFieldScale(Math.min(w / FIELD_W, h / FIELD_H, 1)); };
     measure();
-    const ro = new ResizeObserver(measure);
+    const ro = new ResizeObserverConstructor(measure);
     ro.observe(el);
     return () => ro.disconnect();
   }, [compact]);

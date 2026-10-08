@@ -8,7 +8,7 @@
  */
 
 export const WORKSPACE_LAYOUT_SCHEMA = "logosforge.pro.workspace-layout" as const;
-export const WORKSPACE_LAYOUT_VERSION = 1 as const;
+export const WORKSPACE_LAYOUT_VERSION = 2 as const;
 
 export const WORKSPACE_PANEL_LIMIT = 128;
 export const WORKSPACE_PANEL_ID_LIMIT = 120;
@@ -35,6 +35,12 @@ export interface DockRegionLayout {
 
 export interface FloatingPanelLayout {
   panelId: string;
+  /**
+   * Workspace coordinates are used by the browser fallback. Screen coordinates
+   * are Electron display-independent pixels and may legitimately be negative
+   * when a display sits to the left or above the primary monitor.
+   */
+  coordinateSpace: "workspace" | "screen";
   x: number;
   y: number;
   width: number;
@@ -94,7 +100,11 @@ export interface RestoredWorkspaceLayout {
 
 export type PanelPlacement =
   | { kind: "dock"; region: DockRegionId; index: number }
-  | { kind: "floating"; bounds?: Partial<FloatingPanelBounds> };
+  | {
+    kind: "floating";
+    bounds?: Partial<FloatingPanelBounds>;
+    coordinateSpace?: FloatingPanelLayout["coordinateSpace"];
+  };
 
 export interface FloatingPanelBounds {
   x: number;
@@ -281,8 +291,16 @@ function readFloatingPanel(
     issues.push(`${path} must be an object`);
     return null;
   }
-  checkExactKeys(value, ["panelId", "x", "y", "width", "height", "minimized", "zIndex"], path, issues);
+  checkExactKeys(
+    value,
+    ["panelId", "coordinateSpace", "x", "y", "width", "height", "minimized", "zIndex"],
+    path,
+    issues,
+  );
   if (!isPanelId(value.panelId)) issues.push(`${path}.panelId is not valid`);
+  if (value.coordinateSpace !== "workspace" && value.coordinateSpace !== "screen") {
+    issues.push(`${path}.coordinateSpace must be workspace or screen`);
+  }
   if (!isIntegerInRange(value.x, -POSITION_LIMIT, POSITION_LIMIT)) {
     issues.push(`${path}.x is outside the supported range`);
   }
@@ -301,6 +319,7 @@ function readFloatingPanel(
   }
   if (
     !isPanelId(value.panelId)
+    || (value.coordinateSpace !== "workspace" && value.coordinateSpace !== "screen")
     || !isIntegerInRange(value.x, -POSITION_LIMIT, POSITION_LIMIT)
     || !isIntegerInRange(value.y, -POSITION_LIMIT, POSITION_LIMIT)
     || !isIntegerInRange(value.width, FLOATING_PANEL_SIZE.minWidth, FLOATING_PANEL_SIZE.maxWidth)
@@ -310,6 +329,7 @@ function readFloatingPanel(
   ) return null;
   return {
     panelId: value.panelId,
+    coordinateSpace: value.coordinateSpace,
     x: value.x,
     y: value.y,
     width: value.width,
@@ -700,6 +720,22 @@ export function resetWorkspaceLayout(allowedPanelIds?: Iterable<string>): Worksp
   return parsed.value;
 }
 
+function migrateWorkspaceLayoutV1(value: Record<string, unknown>): unknown {
+  if (value.schema !== WORKSPACE_LAYOUT_SCHEMA || value.version !== 1 || !Array.isArray(value.floatingPanels)) {
+    return value;
+  }
+  return {
+    ...value,
+    version: WORKSPACE_LAYOUT_VERSION,
+    // Version 1 floats were always measured from the dock-workspace origin.
+    // Preserve that meaning explicitly so desktop can translate them once,
+    // rather than accidentally treating old values as native screen pixels.
+    floatingPanels: value.floatingPanels.map((entry) => isRecord(entry)
+      ? { ...entry, coordinateSpace: "workspace" }
+      : entry),
+  };
+}
+
 /**
  * Restore saved state without ever leaking a partially valid object to the UI.
  * Invalid, corrupt, or future-version data falls back to a fresh default.
@@ -757,6 +793,30 @@ export function restoreWorkspaceLayout(
     };
   }
 
+
+  if (
+    isRecord(candidate)
+    && candidate.schema === WORKSPACE_LAYOUT_SCHEMA
+    && candidate.version === 1
+  ) {
+    const migratedCandidate = migrateWorkspaceLayoutV1(candidate);
+    const reconciled = allowed === null
+      ? { value: migratedCandidate, changed: false }
+      : reconcileRawCurrentLayout(migratedCandidate, allowed);
+    const migrated = validateWorkspaceLayout(reconciled.value);
+    if (migrated.ok) return {
+      layout: migrated.value,
+      source: "migrated",
+      diagnostics: reconciled.changed ? ["Unavailable or duplicate panels were removed"] : [],
+    };
+    return {
+      layout: fallback(),
+      source: "default",
+      diagnostics: migrated.issues,
+      fallbackReason: "invalid",
+    };
+  }
+
   const reconciled = allowed === null
     ? { value: candidate, changed: false }
     : reconcileRawCurrentLayout(candidate, allowed);
@@ -810,6 +870,7 @@ export function serializeWorkspaceLayout(layout: WorkspaceLayout): string {
     },
     floatingPanels: value.floatingPanels.map((panel) => ({
       panelId: panel.panelId,
+      coordinateSpace: panel.coordinateSpace,
       x: panel.x,
       y: panel.y,
       width: panel.width,
@@ -938,6 +999,7 @@ export function placePanel(
     assertFiniteNumber(rawHeight, "floating height");
     next.floatingPanels.push({
       panelId,
+      coordinateSpace: placement.coordinateSpace ?? previousFloating?.coordinateSpace ?? "workspace",
       x: clampInteger(rawX, -POSITION_LIMIT, POSITION_LIMIT),
       y: clampInteger(rawY, -POSITION_LIMIT, POSITION_LIMIT),
       width: clampInteger(rawWidth, FLOATING_PANEL_SIZE.minWidth, FLOATING_PANEL_SIZE.maxWidth),
@@ -1081,6 +1143,7 @@ export function moveFloatingPanel(
   const next = cloneWorkspaceLayout(layout);
   const panel = next.floatingPanels.find((entry) => entry.panelId === panelId);
   if (panel) {
+    panel.coordinateSpace = "workspace";
     panel.x = clampInteger(x, -POSITION_LIMIT, POSITION_LIMIT);
     panel.y = clampInteger(y, -POSITION_LIMIT, POSITION_LIMIT);
   }
@@ -1100,6 +1163,33 @@ export function resizeFloatingPanel(
   if (panel) {
     panel.width = clampInteger(width, FLOATING_PANEL_SIZE.minWidth, FLOATING_PANEL_SIZE.maxWidth);
     panel.height = clampInteger(height, FLOATING_PANEL_SIZE.minHeight, FLOATING_PANEL_SIZE.maxHeight);
+  }
+  return next;
+}
+
+/**
+ * Atomically persist native-window geometry. Electron reports all four values
+ * together in screen DIP coordinates, so a resize must never be paired with a
+ * stale position from a different display event.
+ */
+export function setFloatingPanelBounds(
+  layout: WorkspaceLayout,
+  panelId: string,
+  bounds: FloatingPanelBounds,
+  coordinateSpace: FloatingPanelLayout["coordinateSpace"] = "screen",
+): WorkspaceLayout {
+  assertFiniteNumber(bounds.x, "floating x");
+  assertFiniteNumber(bounds.y, "floating y");
+  assertFiniteNumber(bounds.width, "floating width");
+  assertFiniteNumber(bounds.height, "floating height");
+  const next = cloneWorkspaceLayout(layout);
+  const panel = next.floatingPanels.find((entry) => entry.panelId === panelId);
+  if (panel) {
+    panel.coordinateSpace = coordinateSpace;
+    panel.x = clampInteger(bounds.x, -POSITION_LIMIT, POSITION_LIMIT);
+    panel.y = clampInteger(bounds.y, -POSITION_LIMIT, POSITION_LIMIT);
+    panel.width = clampInteger(bounds.width, FLOATING_PANEL_SIZE.minWidth, FLOATING_PANEL_SIZE.maxWidth);
+    panel.height = clampInteger(bounds.height, FLOATING_PANEL_SIZE.minHeight, FLOATING_PANEL_SIZE.maxHeight);
   }
   return next;
 }

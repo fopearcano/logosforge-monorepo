@@ -35,6 +35,7 @@ import { useStudio, type StudioNavigationOptions } from "../../adapters/StudioPr
 import { createLatestRequestGate } from "../../hooks/latestRequest";
 import { ModalPortal } from "../common/ModalPortal";
 import { useModalDialog } from "../common/useModalDialog";
+import { usePanelHostDocument, usePanelHostWindow } from "../common/PanelHost";
 
 const backdropStyle: CSSProperties = {
   position: "fixed",
@@ -158,6 +159,8 @@ export function StudioOmnibox({
   onError,
 }: StudioOmniboxProps) {
   const { api, projectId } = useStudio();
+  const ownerDocument = usePanelHostDocument();
+  const ownerWindow = usePanelHostWindow();
   const { selection } = useSelection();
   const inputRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -207,8 +210,8 @@ export function StudioOmnibox({
     setPlanOwner(null);
     setActionError("");
     setMessage(nextMessage);
-    window.requestAnimationFrame(() => inputRef.current?.focus());
-  }, [requests]);
+    ownerWindow?.requestAnimationFrame(() => inputRef.current?.focus());
+  }, [ownerWindow, requests]);
 
   const closeNow = useCallback(() => {
     planAbortRef.current?.abort();
@@ -322,7 +325,7 @@ export function StudioOmnibox({
     setProjectSearchError("");
     const searchQuery = query.trim();
     if (!open || slashQuery || !searchQuery || projectId == null || plan != null || planning) return;
-    const timer = window.setTimeout(() => {
+    const timer = ownerWindow?.setTimeout(() => {
       const token = requests.begin("project-search");
       const controller = new AbortController();
       projectSearchAbortRef.current = controller;
@@ -345,11 +348,11 @@ export function StudioOmnibox({
       );
     }, 120);
     return () => {
-      window.clearTimeout(timer);
+      if (timer != null) ownerWindow?.clearTimeout(timer);
       projectSearchAbortRef.current?.abort();
       projectSearchAbortRef.current = null;
     };
-  }, [api, open, plan, planning, projectId, query, requests, slashQuery]);
+  }, [api, open, ownerWindow, plan, planning, projectId, query, requests, slashQuery]);
 
   useEffect(() => {
     suggestionAbortRef.current?.abort();
@@ -361,7 +364,7 @@ export function StudioOmnibox({
     if (!open || !slashQuery || projectId == null || plan != null || planning) return;
     const command = query.trim();
     if (!command) return;
-    const timer = window.setTimeout(() => {
+    const timer = ownerWindow?.setTimeout(() => {
       const token = requests.begin("suggestions");
       const controller = new AbortController();
       suggestionAbortRef.current = controller;
@@ -383,11 +386,11 @@ export function StudioOmnibox({
       );
     }, 120);
     return () => {
-      window.clearTimeout(timer);
+      if (timer != null) ownerWindow?.clearTimeout(timer);
       suggestionAbortRef.current?.abort();
       suggestionAbortRef.current = null;
     };
-  }, [api, open, plan, planning, projectId, query, requests, selection.sceneId, slashQuery]);
+  }, [api, open, ownerWindow, plan, planning, projectId, query, requests, selection.sceneId, slashQuery]);
 
   const viewSections = useMemo<readonly ViewSection[]>(() => {
     if (slashQuery) {
@@ -443,9 +446,9 @@ export function StudioOmnibox({
   const activeItem = flatItems[selectedIndex];
   const activeOptionId = activeItem ? omniboxOptionDomId(idPrefix, activeItem.key) : undefined;
   useEffect(() => {
-    if (!open || plan != null || !activeOptionId || typeof document === "undefined") return;
-    document.getElementById(activeOptionId)?.scrollIntoView({ block: "nearest" });
-  }, [activeOptionId, open, plan]);
+    if (!open || plan != null || !activeOptionId) return;
+    ownerDocument?.getElementById(activeOptionId)?.scrollIntoView({ block: "nearest" });
+  }, [activeOptionId, open, ownerDocument, plan]);
 
   const planCommand = useCallback((rawCommand: string) => {
     const command = rawCommand.trim();
@@ -481,7 +484,7 @@ export function StudioOmnibox({
         setMessage(nextPlan.requires_confirmation
           ? "Review the project change before confirming."
           : "Review the resolved navigation target.");
-        window.requestAnimationFrame(() => confirmRef.current?.focus());
+        ownerWindow?.requestAnimationFrame(() => confirmRef.current?.focus());
       },
       (error) => {
         if (!requests.isCurrent(token)) return;
@@ -496,7 +499,7 @@ export function StudioOmnibox({
         onError?.(error, command);
       },
     );
-  }, [api, onError, projectId, requests, selection.sceneId]);
+  }, [api, onError, ownerWindow, projectId, requests, selection.sceneId]);
 
   const activateTarget = useCallback(async (item: OmniboxItem) => {
     if (activatingRef.current || item.disabled) return;
@@ -556,8 +559,8 @@ export function StudioOmnibox({
     setSuggestions([]);
     setSelectedIndex(-1);
     setMessage("Complete the command, then preview its exact effect.");
-    window.requestAnimationFrame(() => inputRef.current?.focus());
-  }, [activateTarget, planCommand]);
+    ownerWindow?.requestAnimationFrame(() => inputRef.current?.focus());
+  }, [activateTarget, ownerWindow, planCommand]);
 
   const runPlan = useCallback(async () => {
     if (!plan || !planOwner || executingRef.current) return;
@@ -609,12 +612,12 @@ export function StudioOmnibox({
       setActionError(detail);
       setMessage("");
       onError?.(error, plan.normalized_command);
-      window.requestAnimationFrame(() => (keepPlan ? confirmRef.current : inputRef.current)?.focus());
+      ownerWindow?.requestAnimationFrame(() => (keepPlan ? confirmRef.current : inputRef.current)?.focus());
     } finally {
       executingRef.current = false;
       if (openRef.current && requests.isCurrent(token)) setExecuting(false);
     }
-  }, [api, closeNow, onError, onNavigate, plan, planOwner, requests]);
+  }, [api, closeNow, onError, onNavigate, ownerWindow, plan, planOwner, requests]);
 
   const onInputKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
     if (event.key === "ArrowDown") {

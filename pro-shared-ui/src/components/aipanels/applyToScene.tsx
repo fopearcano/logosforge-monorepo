@@ -5,6 +5,7 @@ import { useScenes } from "../../hooks";
 import { flushPendingProjectSaves, trackProjectWrite } from "../../adapters/projectSaveCoordinator";
 import { ModalPortal } from "../common/ModalPortal";
 import { useModalDialog } from "../common/useModalDialog";
+import { usePanelHostWindow } from "../common/PanelHost";
 
 /**
  * The single mutation gate for AI-proposed prose. The AI companions (Billy,
@@ -150,6 +151,7 @@ export function ApplyDiffModal({
   onConfirm: () => Promise<void>;
   onClose: () => void;
 }) {
+  const ownerWindow = usePanelHostWindow();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
@@ -177,12 +179,13 @@ export function ApplyDiffModal({
   }, [busy, noChange, onConfirm, onClose]);
 
   useEffect(() => {
+    if (!ownerWindow) return undefined;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void confirm(); }
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [confirm]);
+    ownerWindow.addEventListener("keydown", onKey);
+    return () => ownerWindow.removeEventListener("keydown", onKey);
+  }, [confirm, ownerWindow]);
 
   return (
     <ModalPortal>

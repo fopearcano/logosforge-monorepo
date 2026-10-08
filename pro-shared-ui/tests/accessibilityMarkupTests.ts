@@ -138,7 +138,7 @@ for (const marker of [
   "button?.scrollIntoView({ block: \"nearest\" })",
   "button?.focus({ preventScroll: true })",
   "scheduleThreadFocus(targetId, (focused) => {",
-  "document.activeElement === button",
+  "ownerDocument.activeElement === button",
 ]) {
   if (!commentsPanel.includes(marker)) violations.push(`CommentsPanel is missing ${marker}`);
 }
@@ -148,7 +148,7 @@ for (const marker of [
   'data-note-editor-id={note.id}',
   '`[data-note-editor-id="${noteId}"]`',
   "input.focus({ preventScroll: true })",
-  "document.activeElement === input",
+  "ownerDocument.activeElement === input",
   "scheduleNoteFocus(targetId, (focused) => {",
 ]) {
   if (!notesPanel.includes(marker)) violations.push(`NotesPanel target focus is missing ${marker}`);
@@ -172,7 +172,7 @@ for (const marker of [
   'event.key === "ArrowUp"',
   'event.key === "Enter"',
   'event.key === "Escape"',
-  'window.setTimeout(() =>',
+  'ownerWindow.setTimeout(() =>',
   '}, 100)',
   'requests.isCurrent(token)',
   'navigate("PSYKE", { psykeEntryId: suggestion.entry_id })',
@@ -180,7 +180,7 @@ for (const marker of [
   'skipNextQuerySearch.current = false',
   'if (nextQuery !== query) skipNextQuerySearch.current = true',
   'searchTimerRef.current = null',
-  'window.clearTimeout(searchTimerRef.current)',
+  'ownerWindow?.clearTimeout(searchTimerRef.current)',
   'searchAbortRef.current?.abort()',
   'controller.signal',
   'suggestion.category === "entity"',

@@ -51,10 +51,12 @@ removing a scene from the non-destructive Timeline remain immediate.
 Interactive cards, filters, toggles and authoring commands use native controls
 (or a keyboard-complete ARIA button for spatial cards), with visible
 `:focus-visible` styling and accessible names for every form field. Dock
-separators and floating-panel title bars/resizers are keyboard operable: arrow
-keys move or resize, Shift changes the step, and Home/End reach the relevant
-limits. Pointer cancellation restores drag state, and the shell honors the
-operating system's reduced-motion preference. The command palette and
+separators are keyboard operable: arrow keys resize, Shift changes the step,
+and Home/End reach the relevant limits. Detached panels use the operating
+system's accessible window title bar and borders for moving and resizing;
+their in-panel dock, minimize, and close controls remain keyboard accessible.
+Pointer cancellation restores drag state, and the shell honors the operating
+system's reduced-motion preference. The command palette and
 Controlled Apply are true modal dialogs: focus stays inside while open, the
 workspace behind them is inert, Escape closes when safe, and focus returns to
 the originating control.
@@ -142,10 +144,13 @@ from one project can never appear inside another.
 
 Each project also owns a versioned workspace layout. All 37 Pro panels,
 including Manuscript and the host-composed AI Companions panel, can move among
-the left, center, right and bottom tab stacks or detach into modeless floating
-windows. A float can be moved, resized, minimized, restored, raised and docked
-again; Manuscript and AI Companions remain non-closable so the two permanent
-work surfaces are always recoverable. Every panel has one unique `Primary`
+the left, center, right and bottom tab stacks or detach into secure, modeless
+native windows. These are independent top-level operating-system windows, not
+overlays clipped by the Studio frame, so they can be moved and resized outside
+the main window or onto another monitor. A float can also be minimized,
+restored, raised and docked again; Manuscript and AI Companions remain
+non-closable so the two permanent work surfaces are always recoverable. Every
+panel has one unique `Primary`
 shortcut (`Cmd` on macOS, `Ctrl` elsewhere). The established direct bindings
 remain—Projects `Primary+O`, Manuscript `Primary+1`, Dashboard `Primary+2`,
 Outline `Primary+3`, Timeline `Primary+4`, Comments `Primary+Shift+C`, Export
@@ -155,8 +160,11 @@ canonical panel catalog. A shortcut opens a closed panel, activates a docked
 panel, or restores and raises its existing float rather than creating a duplicate.
 
 Focus is a non-destructive Manuscript-only projection: it hides the Cockpit
-docks and floating windows without rewriting their placement, then restores the
-exact saved arrangement on exit. Panel shortcuts, tab controls, drag/drop, and
+docks and native panel windows without rewriting their placement, then restores
+the exact saved arrangement on exit. Native outer-window bounds are stored in
+screen coordinates per project; if a saved display is no longer connected,
+Studio recovers the panel into a visible work area. Panel shortcuts, tab
+controls, drag/drop, and
 cross-panel navigation all use the same project save barrier, so an active field
 is committed and pending Manuscript, Note, PSYKE, Outline, and Structure work is
 drained before context changes. Layout writes use that project handoff/close
@@ -173,9 +181,11 @@ profile. Linux runs that journey in one 1600x1000 Xvfb display while retaining
 Chromium's sandbox; the harness rejects any packaged launch carrying
 `--no-sandbox`.
 `npm run test:packaged-workspace` uses real mouse input to author and arrange a
-Canvas Plot, tear off, move, resize, minimize, restore and dock a panel, resize
-and collapse a dock, close through the production save handshake, then relaunch
-the same project and verify the persisted board, placement and dock width.
+Canvas Plot, tear a panel into a real native window, move that window beyond the
+main application bounds (and onto another display when one is available),
+minimize, restore and redock it, resize and collapse a dock, close through the
+production save handshake, then relaunch the same project and verify the
+persisted board, placement and dock width.
 Failure diagnostics stay inside the explicitly validated run directory;
 successful temporary runs remove only that exact directory. Windows failures
 and Linux failures are uploaded by Actions, while Monterey failures are retained
@@ -326,12 +336,14 @@ Codex configuration and the proposal/review/apply safety model.
 ## Status
 
 - **Workspace** is a dockable, keyboard-accessible four-region shell in which
-  all 37 panels—including Manuscript and AI Companions—can be docked, detached,
-  moved, resized and minimized. Every panel has a unique open/focus shortcut;
+  all 37 panels—including Manuscript and AI Companions—can be docked or detached
+  into independent native windows that move outside the Studio frame and across
+  monitors. Every panel has a unique open/focus shortcut;
   Manuscript and AI Companions remain non-closable. Per-project versioned
   persistence, a non-destructive Manuscript-only Focus projection, and safe reset
-  preserve window bounds, z-order, minimization, and every dock's active/collapsed
-  state across project changes and application restarts.
+  preserve screen-coordinate window bounds, z-order, minimization, and every
+  dock's active/collapsed state across project changes and application restarts;
+  disconnected-display recovery keeps restored windows reachable.
   At the supported 1024 px minimum window width, the Studio chrome reflows into
   two rows so the command palette, Adaptive mode, Focus/Cockpit controls and
   local-save status all remain visible and operable.

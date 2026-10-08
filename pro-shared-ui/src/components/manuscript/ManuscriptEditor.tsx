@@ -53,6 +53,12 @@ import {
   stepScenePlacementDraft,
 } from "../shell/storyStructurePlacement";
 import { planAppendSceneCommand } from "./structureAuthoring";
+import {
+  isPanelHostHTMLElement,
+  isPanelHostNode,
+  usePanelHostDocument,
+  usePanelHostWindow,
+} from "../common/PanelHost";
 
 /**
  * The Studio's genuine writing surface — a continuous, inline-editable manuscript.
@@ -136,10 +142,10 @@ const viewportAnchorFromRect = (rect: Pick<DOMRect, "left" | "right" | "top" | "
   left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom,
 });
 
-function anchoredPopoverStyle(anchor: ViewportAnchor | null, width: number, heightHint: number): CSSProperties {
-  if (typeof window === "undefined") return { ...commentPopover, position: "fixed", top: 64, right: 24, width };
+function anchoredPopoverStyle(anchor: ViewportAnchor | null, width: number, heightHint: number, ownerWindow: Window | null): CSSProperties {
+  if (!ownerWindow) return { ...commentPopover, position: "fixed", top: 64, right: 24, width };
   const gutter = 12;
-  const availableWidth = Math.max(240, window.innerWidth - gutter * 2);
+  const availableWidth = Math.max(240, ownerWindow.innerWidth - gutter * 2);
   const panelWidth = Math.min(width, availableWidth);
   if (!anchor) {
     return {
@@ -147,9 +153,9 @@ function anchoredPopoverStyle(anchor: ViewportAnchor | null, width: number, heig
       maxWidth: availableWidth, maxHeight: "calc(100vh - 76px)", overflowY: "auto",
     };
   }
-  const left = Math.min(Math.max(gutter, anchor.right - panelWidth), window.innerWidth - panelWidth - gutter);
+  const left = Math.min(Math.max(gutter, anchor.right - panelWidth), ownerWindow.innerWidth - panelWidth - gutter);
   const below = anchor.bottom + 8;
-  const top = below + heightHint <= window.innerHeight - gutter
+  const top = below + heightHint <= ownerWindow.innerHeight - gutter
     ? below
     : Math.max(gutter, anchor.top - heightHint - 8);
   return {
@@ -158,11 +164,11 @@ function anchoredPopoverStyle(anchor: ViewportAnchor | null, width: number, heig
   };
 }
 
-function anchoredCommentButtonStyle(anchor: ViewportAnchor | null): CSSProperties {
-  if (typeof window === "undefined" || !anchor) return { ...commentAction, position: "absolute", right: 0, top: 42, zIndex: 12 };
+function anchoredCommentButtonStyle(anchor: ViewportAnchor | null, ownerWindow: Window | null): CSSProperties {
+  if (!ownerWindow || !anchor) return { ...commentAction, position: "absolute", right: 0, top: 42, zIndex: 12 };
   const width = 104;
-  const left = Math.min(Math.max(8, anchor.right + 7), window.innerWidth - width - 8);
-  const top = Math.min(Math.max(8, anchor.bottom + 7), window.innerHeight - 36);
+  const left = Math.min(Math.max(8, anchor.right + 7), ownerWindow.innerWidth - width - 8);
+  const top = Math.min(Math.max(8, anchor.bottom + 7), ownerWindow.innerHeight - 36);
   return { ...commentAction, position: "fixed", left, top, zIndex: 16, boxShadow: "0 8px 24px rgba(0,0,0,.55)" };
 }
 
@@ -256,6 +262,8 @@ function SceneEditor({
   onExternalCommentDraftConsumed: (requestId: number) => void;
 }) {
   const { api, projectId } = useStudio();
+  const ownerDocument = usePanelHostDocument();
+  const ownerWindow = usePanelHostWindow();
   const navigate = useNavigate();
   // A SceneEditor belongs to the project it mounted under. Keep that owner id
   // even if a host accidentally rerenders once with a new active project before
@@ -285,7 +293,7 @@ function SceneEditor({
   const [commentDraftAnchor, setCommentDraftAnchor] = useState<ViewportAnchor | null>(null);
   const [commentMarkAnchor, setCommentMarkAnchor] = useState<ViewportAnchor | null>(null);
   const [commentClock, setCommentClock] = useState(Date.now);
-  const timer = useRef<number | null>(null);
+  const timer = useRef<{ ownerWindow: Window; handle: number } | null>(null);
   const mounted = useMountedRef();
   const sceneElementRef = useRef<HTMLDivElement | null>(null);
   const commentCloseRef = useRef<HTMLButtonElement | null>(null);
@@ -368,18 +376,23 @@ function SceneEditor({
     const next = { ...draftRef.current, ...patch };
     draftRef.current = next;
     queueRef.current!.update(next);
-    if (timer.current !== null) clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => {
+    if (timer.current) timer.current.ownerWindow.clearTimeout(timer.current.handle);
+    if (!ownerWindow) {
+      void queueRef.current!.flush();
+      return;
+    }
+    const handle = ownerWindow.setTimeout(() => {
       timer.current = null;
       void queueRef.current!.flush();
     }, SAVE_DEBOUNCE_MS);
+    timer.current = { ownerWindow, handle };
   };
   const flushNow = useCallback(async (): Promise<boolean> => {
-    if (timer.current !== null) { clearTimeout(timer.current); timer.current = null; }
+    if (timer.current) { timer.current.ownerWindow.clearTimeout(timer.current.handle); timer.current = null; }
     return queueRef.current?.flush() ?? true;
   }, []);
   const cancelSave = useCallback(() => {
-    if (timer.current !== null) { clearTimeout(timer.current); timer.current = null; }
+    if (timer.current) { timer.current.ownerWindow.clearTimeout(timer.current.handle); timer.current = null; }
     queueRef.current?.cancel();
   }, []);
   const reloadAfterConflict = useCallback(async () => {
@@ -392,7 +405,7 @@ function SceneEditor({
       if (draftRef.current !== localAtStart) {
         throw new Error("The local draft changed while reloading. Review it and choose again.");
       }
-      if (timer.current !== null) { clearTimeout(timer.current); timer.current = null; }
+      if (timer.current) { timer.current.ownerWindow.clearTimeout(timer.current.handle); timer.current = null; }
       const next: SceneDraft = {
         title: latest.title ?? "", content: latest.content ?? "",
         plotline: latest.plotline ?? "", summary: latest.summary ?? "",
@@ -465,8 +478,8 @@ function SceneEditor({
   const restoreCommentFocus = useCallback(() => {
     const target = commentReturnFocusRef.current;
     commentReturnFocusRef.current = null;
-    if (target?.isConnected) window.setTimeout(() => target.focus({ preventScroll: true }), 0);
-  }, []);
+    if (target?.isConnected) ownerWindow?.setTimeout(() => target.focus({ preventScroll: true }), 0);
+  }, [ownerWindow]);
 
   const closeCommentPopover = useCallback(() => {
     setConfirmDeleteCommentId(null);
@@ -497,24 +510,26 @@ function SceneEditor({
     const pointed = pointer && Date.now() - pointer.at < 1_000
       ? candidates.find(({ rect }) => pointer.x >= rect.left && pointer.x <= rect.right && pointer.y >= rect.top && pointer.y <= rect.bottom)
       : undefined;
-    const viewportMiddle = window.innerHeight / 2;
-    const visible = candidates.filter(({ rect }) => rect.bottom >= 0 && rect.top <= window.innerHeight);
+    const viewportHeight = ownerWindow?.innerHeight ?? Number.POSITIVE_INFINITY;
+    const viewportMiddle = viewportHeight / 2;
+    const visible = candidates.filter(({ rect }) => rect.bottom >= 0 && rect.top <= viewportHeight);
     const selected = pointed ?? (visible.length ? visible : candidates)
       .slice()
       .sort((left, right) => Math.abs((left.rect.top + left.rect.bottom) / 2 - viewportMiddle) - Math.abs((right.rect.top + right.rect.bottom) / 2 - viewportMiddle))[0];
     return selected ? viewportAnchorFromRect(selected.rect) : null;
-  }, []);
+  }, [ownerWindow]);
 
   const openCommentThreads = useCallback((ids: number[], explicitAnchor?: ViewportAnchor) => {
     if (!ids.length) return;
-    if (document.activeElement instanceof HTMLElement && !commentPopoverRef.current?.contains(document.activeElement)) {
-      commentReturnFocusRef.current = document.activeElement;
+    const activeElement = ownerDocument?.activeElement;
+    if (ownerDocument && isPanelHostHTMLElement(activeElement, ownerDocument) && !commentPopoverRef.current?.contains(activeElement)) {
+      commentReturnFocusRef.current = activeElement;
     }
     clearCommentDraft(false);
     setCommentError("");
     setCommentMarkAnchor(explicitAnchor ?? findCommentMarkAnchor(ids));
     onOpenComments(ids);
-  }, [clearCommentDraft, findCommentMarkAnchor, onOpenComments]);
+  }, [clearCommentDraft, findCommentMarkAnchor, onOpenComments, ownerDocument]);
 
   useEffect(() => {
     if (
@@ -522,7 +537,8 @@ function SceneEditor({
       || externalCommentDraft.projectId !== ownerProjectId
       || externalCommentDraft.sceneId !== scene.id
     ) return;
-    if (document.activeElement instanceof HTMLElement) commentReturnFocusRef.current = document.activeElement;
+    const activeElement = ownerDocument?.activeElement;
+    if (ownerDocument && isPanelHostHTMLElement(activeElement, ownerDocument)) commentReturnFocusRef.current = activeElement;
     onCommentDraftOwnership(scene.id);
     onOpenComments([]);
     setCommentDraft(externalCommentDraft.draft);
@@ -531,7 +547,7 @@ function SceneEditor({
     setCommentBody("");
     setCommentError("");
     onExternalCommentDraftConsumed(externalCommentDraft.requestId);
-  }, [externalCommentDraft, onCommentDraftOwnership, onExternalCommentDraftConsumed, onOpenComments, ownerProjectId, scene.id]);
+  }, [externalCommentDraft, onCommentDraftOwnership, onExternalCommentDraftConsumed, onOpenComments, ownerDocument, ownerProjectId, scene.id]);
 
   useEffect(() => {
     if (activeCommentDraftSceneId === scene.id) return;
@@ -547,15 +563,16 @@ function SceneEditor({
       setCommentMarkAnchor(null);
       return undefined;
     }
-    if (document.activeElement instanceof HTMLElement && !commentPopoverRef.current?.contains(document.activeElement)) {
-      commentReturnFocusRef.current = document.activeElement;
+    const activeElement = ownerDocument?.activeElement;
+    if (ownerDocument && isPanelHostHTMLElement(activeElement, ownerDocument) && !commentPopoverRef.current?.contains(activeElement)) {
+      commentReturnFocusRef.current = activeElement;
     }
     setCommentMarkAnchor(findCommentMarkAnchor(openCommentIds));
-    const timer = window.setTimeout(() => commentCloseRef.current?.focus({ preventScroll: true }), 0);
-    return () => window.clearTimeout(timer);
+    const timer = ownerWindow?.setTimeout(() => commentCloseRef.current?.focus({ preventScroll: true }), 0);
+    return () => { if (timer != null) ownerWindow?.clearTimeout(timer); };
     // openCommentIdsKey is the stable identity; the array is recreated by render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [findCommentMarkAnchor, openCommentIdsKey]);
+  }, [findCommentMarkAnchor, openCommentIdsKey, ownerDocument, ownerWindow]);
 
   useEffect(() => {
     setDeletedReplyIds((current) => {
@@ -568,44 +585,45 @@ function SceneEditor({
   useEffect(() => {
     if (!openCommentIdsKey) return undefined;
     setCommentClock(Date.now());
-    const timer = window.setInterval(() => setCommentClock(Date.now()), 60_000);
-    return () => window.clearInterval(timer);
-  }, [openCommentIdsKey]);
+    const timer = ownerWindow?.setInterval(() => setCommentClock(Date.now()), 60_000);
+    return () => { if (timer != null) ownerWindow?.clearInterval(timer); };
+  }, [openCommentIdsKey, ownerWindow]);
 
   useEffect(() => {
     if (confirmDeleteCommentId == null) return undefined;
-    const timer = window.setTimeout(() => commentConfirmDeleteRef.current?.focus({ preventScroll: true }), 0);
-    return () => window.clearTimeout(timer);
-  }, [confirmDeleteCommentId]);
+    const timer = ownerWindow?.setTimeout(() => commentConfirmDeleteRef.current?.focus({ preventScroll: true }), 0);
+    return () => { if (timer != null) ownerWindow?.clearTimeout(timer); };
+  }, [confirmDeleteCommentId, ownerWindow]);
 
   useEffect(() => {
     if (!commentDraft && !openCommentIdsKey) return undefined;
     let frame: number | null = null;
     const onViewportChange = (event: Event) => {
       const target = event.target;
-      if (target instanceof Node && commentPopoverRef.current?.contains(target)) return;
+      if (ownerDocument && isPanelHostNode(target, ownerDocument) && commentPopoverRef.current?.contains(target)) return;
       if (commentDraft && !commentComposerOpen && !commentBusy) clearCommentDraft(false);
       if (openCommentIds.length) {
-        if (frame != null) window.cancelAnimationFrame(frame);
-        frame = window.requestAnimationFrame(() => {
+        if (frame != null) ownerWindow?.cancelAnimationFrame(frame);
+        frame = ownerWindow?.requestAnimationFrame(() => {
           frame = null;
           setCommentMarkAnchor(findCommentMarkAnchor(openCommentIds));
-        });
+        }) ?? null;
       }
     };
-    window.addEventListener("scroll", onViewportChange, true);
-    window.addEventListener("resize", onViewportChange);
+    ownerWindow?.addEventListener("scroll", onViewportChange, true);
+    ownerWindow?.addEventListener("resize", onViewportChange);
     return () => {
-      window.removeEventListener("scroll", onViewportChange, true);
-      window.removeEventListener("resize", onViewportChange);
-      if (frame != null) window.cancelAnimationFrame(frame);
+      ownerWindow?.removeEventListener("scroll", onViewportChange, true);
+      ownerWindow?.removeEventListener("resize", onViewportChange);
+      if (frame != null) ownerWindow?.cancelAnimationFrame(frame);
     };
-  }, [clearCommentDraft, commentBusy, commentComposerOpen, commentDraft, findCommentMarkAnchor, openCommentIds, openCommentIdsKey]);
+  }, [clearCommentDraft, commentBusy, commentComposerOpen, commentDraft, findCommentMarkAnchor, openCommentIds, openCommentIdsKey, ownerDocument, ownerWindow]);
 
   const captureCommentSelection = (field: "content" | "title", fromOffset: number, toOffset: number, anchor?: ViewportAnchor) => {
     if (commentComposerOpen) return;
     const draft = createSingleFieldCommentDraft({ ...scene, title, content }, field, fromOffset, toOffset);
-    if (document.activeElement instanceof HTMLElement) commentReturnFocusRef.current = document.activeElement;
+    const activeElement = ownerDocument?.activeElement;
+    if (ownerDocument && isPanelHostHTMLElement(activeElement, ownerDocument)) commentReturnFocusRef.current = activeElement;
     onCommentDraftOwnership(scene.id);
     onOpenComments([]);
     setCommentDraft(draft);
@@ -618,7 +636,7 @@ function SceneEditor({
       if (!commentComposerOpen && activeCommentDraftSceneId === scene.id) clearCommentDraft(false);
       return;
     }
-    const selection = window.getSelection();
+    const selection = ownerWindow?.getSelection();
     const domRange = selection?.rangeCount ? selection.getRangeAt(0) : null;
     const rect = domRange?.getBoundingClientRect();
     captureCommentSelection(
@@ -719,7 +737,7 @@ function SceneEditor({
     } finally {
       setCommentBusy(false);
       setCommentOperation(null);
-      window.setTimeout(() => replyComposerRefs.current.get(comment.id)?.focus({ preventScroll: true }), 0);
+      ownerWindow?.setTimeout(() => replyComposerRefs.current.get(comment.id)?.focus({ preventScroll: true }), 0);
     }
   };
 
@@ -737,7 +755,7 @@ function SceneEditor({
     } finally {
       setCommentBusy(false);
       setCommentOperation(null);
-      window.setTimeout(() => replyComposerRefs.current.get(comment.id)?.focus({ preventScroll: true }), 0);
+      ownerWindow?.setTimeout(() => replyComposerRefs.current.get(comment.id)?.focus({ preventScroll: true }), 0);
     }
   };
 
@@ -915,7 +933,7 @@ function SceneEditor({
             }
           }}
           onClick={() => setCommentComposerOpen(true)}
-          style={anchoredCommentButtonStyle(commentDraftAnchor)}
+          style={anchoredCommentButtonStyle(commentDraftAnchor, ownerWindow)}
         >
           ＋ COMMENT
         </button>
@@ -931,7 +949,7 @@ function SceneEditor({
               clearCommentDraft(true);
             }
           }}
-          style={anchoredPopoverStyle(commentDraftAnchor, 340, 310)}
+          style={anchoredPopoverStyle(commentDraftAnchor, 340, 310, ownerWindow)}
         >
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
             <span style={{ color: "var(--amber)", letterSpacing: ".14em", fontSize: 8.5 }}>NEW COMMENT</span>
@@ -973,12 +991,12 @@ function SceneEditor({
             if (confirmDeleteCommentId != null) {
               const id = confirmDeleteCommentId;
               setConfirmDeleteCommentId(null);
-              window.setTimeout(() => deleteThreadButtonRefs.current.get(id)?.focus({ preventScroll: true }), 0);
+              ownerWindow?.setTimeout(() => deleteThreadButtonRefs.current.get(id)?.focus({ preventScroll: true }), 0);
             } else {
               closeCommentPopover();
             }
           }}
-          style={anchoredPopoverStyle(commentMarkAnchor, 390, 620)}
+          style={anchoredPopoverStyle(commentMarkAnchor, 390, 620, ownerWindow)}
         >
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
             <span style={{ color: "var(--amber)", letterSpacing: ".14em", fontSize: 8.5 }}>{activeComments.length === 1 ? "COMMENT THREAD" : `${activeComments.length} OVERLAPPING THREADS`}</span>
@@ -1090,7 +1108,7 @@ function SceneEditor({
                           disabled={commentBusy}
                           onClick={() => {
                             setConfirmDeleteCommentId(null);
-                            window.setTimeout(() => deleteThreadButtonRefs.current.get(comment.id)?.focus({ preventScroll: true }), 0);
+                            ownerWindow?.setTimeout(() => deleteThreadButtonRefs.current.get(comment.id)?.focus({ preventScroll: true }), 0);
                           }}
                           style={{ ...commentAction, color: "var(--txt2)", opacity: commentBusy ? .45 : 1 }}
                         >CANCEL</button>
@@ -1208,6 +1226,8 @@ function ManuscriptRail({
 // ------------------------------------------------------------------- Manuscript
 export function ManuscriptEditor(props: PanelProps) {
   const { api, projectId, writingMode } = useStudio();
+  const ownerDocument = usePanelHostDocument();
+  const ownerWindow = usePanelHostWindow();
   const { selection, setSelection } = useSelection();
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
@@ -1275,7 +1295,9 @@ export function ManuscriptEditor(props: PanelProps) {
   const showFormat = isScript && format && !focus;
   const showFormatRef = useRef(showFormat);
   showFormatRef.current = showFormat;
-  const intersectionSupported = typeof IntersectionObserver !== "undefined";
+  const intersectionSupported = Boolean((ownerWindow as (Window & {
+    IntersectionObserver?: typeof IntersectionObserver;
+  }) | null)?.IntersectionObserver);
 
   useEffect(() => {
     setWordsById({}); setActiveContent(null); setStatusById({}); setActiveId(null);
@@ -1335,8 +1357,16 @@ export function ManuscriptEditor(props: PanelProps) {
 
   useEffect(() => {
     const root = manuscriptScrollRef.current;
-    if (!root || typeof IntersectionObserver === "undefined") return undefined;
-    const observer = new IntersectionObserver((entries) => {
+    const rootWindow = root?.ownerDocument.defaultView as (Window & {
+      IntersectionObserver?: typeof IntersectionObserver;
+    }) | null | undefined;
+    const fallbackWindow = ownerWindow as (Window & {
+      IntersectionObserver?: typeof IntersectionObserver;
+    }) | null;
+    const IntersectionObserverConstructor = rootWindow?.IntersectionObserver
+      ?? fallbackWindow?.IntersectionObserver;
+    if (!root || !IntersectionObserverConstructor) return undefined;
+    const observer = new IntersectionObserverConstructor((entries) => {
       if (sceneObserverRef.current !== observer) return;
       setNearSceneIds((current) => {
         let next: Set<number> | null = null;
@@ -1357,7 +1387,7 @@ export function ManuscriptEditor(props: PanelProps) {
       observer.disconnect();
       if (sceneObserverRef.current === observer) sceneObserverRef.current = null;
     };
-  }, [projectId]);
+  }, [ownerWindow, projectId]);
 
   const sceneIdsKey = ordered.map((scene) => scene.id).join(",");
   useEffect(() => {
@@ -1413,7 +1443,7 @@ export function ManuscriptEditor(props: PanelProps) {
     setExternalCommentDraft({ requestId, projectId, sceneId: start.sceneId, draft, anchor });
   }, [commentScenes, onActive, projectId]);
   const captureCrossSceneCommentSelection = useCallback(() => {
-    const selection = window.getSelection();
+    const selection = ownerWindow?.getSelection();
     if (!selection || selection.isCollapsed || selection.rangeCount !== 1) return;
     const range = selection.getRangeAt(0);
     const startRoot = proseRootForDomPoint(range.startContainer);
@@ -1430,17 +1460,17 @@ export function ManuscriptEditor(props: PanelProps) {
     const end = commentSelectionEndpointFromDomPoint(endRoot, range.endContainer, range.endOffset);
     if (!start || !end) return;
     publishCrossSceneCommentDraft(start, end, viewportAnchorForSelectionRange(range));
-  }, [publishCrossSceneCommentDraft]);
+  }, [ownerWindow, publishCrossSceneCommentDraft]);
   const beginCrossScenePointerSelection = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     crossScenePointerStart.current = null;
-    if (event.button !== 0 || !(event.target instanceof Node)) return;
+    if (event.button !== 0 || !ownerDocument || !isPanelHostNode(event.target, ownerDocument)) return;
     const root = proseRootForDomPoint(event.target);
     if (!root || !manuscriptScrollRef.current?.contains(root)) return;
     const point = proseDomPointFromViewport(root, event.clientX, event.clientY);
     if (!point) return;
     const endpoint = commentSelectionEndpointFromDomPoint(root, point.container, point.offset);
     if (endpoint) crossScenePointerStart.current = { root, endpoint, x: event.clientX, y: event.clientY };
-  }, []);
+  }, [ownerDocument]);
   const finishCrossScenePointerSelection = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     const started = crossScenePointerStart.current;
     crossScenePointerStart.current = null;
@@ -1452,7 +1482,7 @@ export function ManuscriptEditor(props: PanelProps) {
       captureCrossSceneCommentSelection();
       return;
     }
-    const hit = document.elementFromPoint(event.clientX, event.clientY);
+    const hit = ownerDocument?.elementFromPoint(event.clientX, event.clientY) ?? null;
     const endRoot = proseRootForDomPoint(hit);
     if (!endRoot || endRoot === started.root || !manuscriptScrollRef.current?.contains(endRoot)) {
       captureCrossSceneCommentSelection();
@@ -1463,8 +1493,9 @@ export function ManuscriptEditor(props: PanelProps) {
     const released = commentSelectionEndpointFromDomPoint(endRoot, endPoint.container, endPoint.offset);
     if (!released) return;
     const relationship = started.root.compareDocumentPosition(endRoot);
-    if (relationship & Node.DOCUMENT_POSITION_DISCONNECTED) return;
-    const startComesFirst = Boolean(relationship & Node.DOCUMENT_POSITION_FOLLOWING);
+    const HostNode = (ownerWindow as (Window & { Node?: typeof Node }) | null)?.Node;
+    if (relationship & (HostNode?.DOCUMENT_POSITION_DISCONNECTED ?? 1)) return;
+    const startComesFirst = Boolean(relationship & (HostNode?.DOCUMENT_POSITION_FOLLOWING ?? 4));
     const start = startComesFirst ? started.endpoint : released;
     const end = startComesFirst ? released : started.endpoint;
     publishCrossSceneCommentDraft(start, end, {
@@ -1473,7 +1504,7 @@ export function ManuscriptEditor(props: PanelProps) {
       top: event.clientY,
       bottom: event.clientY,
     });
-  }, [captureCrossSceneCommentSelection, publishCrossSceneCommentDraft]);
+  }, [captureCrossSceneCommentSelection, ownerDocument, ownerWindow, publishCrossSceneCommentDraft]);
   const commentSaveBlocked = ordered.some((scene) => {
     const status = statusById[scene.id];
     return status === "dirty" || status === "saving" || status === "error";
@@ -1536,7 +1567,7 @@ export function ManuscriptEditor(props: PanelProps) {
     const ownerProjectId = projectId;
     const sceneSnapshot = commentScenes;
     const commentsSnapshot = commentData;
-    const timer = window.setTimeout(() => {
+    const timer = ownerWindow?.setTimeout(() => {
       const guard = commentMutationGuardRef.current;
       const guardedStatuses = statusGuardRef.current.projectId === ownerProjectId
         ? statusGuardRef.current.byScene
@@ -1573,8 +1604,8 @@ export function ManuscriptEditor(props: PanelProps) {
         }
       });
     }, 1200);
-    return () => window.clearTimeout(timer);
-  }, [api, commentData, commentMutationsSafe, commentScenes, projectId, refetchComments]);
+    return () => { if (timer != null) ownerWindow?.clearTimeout(timer); };
+  }, [api, commentData, commentMutationsSafe, commentScenes, ownerWindow, projectId, refetchComments]);
 
   // A comment is deleted only after its live text has saved and neither its quote
   // nor either context landmark can be found. The same delayed guard prevents
@@ -1586,7 +1617,7 @@ export function ManuscriptEditor(props: PanelProps) {
     const ownerProjectId = projectId;
     const sceneSnapshot = commentScenes;
     const commentsSnapshot = commentData;
-    const timer = window.setTimeout(() => {
+    const timer = ownerWindow?.setTimeout(() => {
       const guard = commentMutationGuardRef.current;
       const guardedStatuses = statusGuardRef.current.projectId === ownerProjectId
         ? statusGuardRef.current.byScene
@@ -1612,8 +1643,8 @@ export function ManuscriptEditor(props: PanelProps) {
           }
         });
     }, 1200);
-    return () => window.clearTimeout(timer);
-  }, [api, commentData, commentMutationsSafe, commentScenes, projectId, refetchComments]);
+    return () => { if (timer != null) ownerWindow?.clearTimeout(timer); };
+  }, [api, commentData, commentMutationsSafe, commentScenes, ownerWindow, projectId, refetchComments]);
 
   const total = useMemo(() => ordered.reduce((n, s) => n + (wordsById[s.id] ?? wordCount(s.content)), 0), [ordered, wordsById]);
   const statuses = useMemo(() => ordered.map((s) => statusById[s.id]).filter(Boolean) as SaveStatus[], [ordered, statusById]);
@@ -1626,13 +1657,13 @@ export function ManuscriptEditor(props: PanelProps) {
 
   const jump = useCallback((id: number, focusProse = true) => {
     onActive(id);
-    const el = document.getElementById(`ms-scene-${id}`);
+    const el = ownerDocument?.getElementById(`ms-scene-${id}`);
     el?.scrollIntoView({ block: "center", behavior: "smooth" });
     cancelJumpFocus.current?.();
     cancelJumpFocus.current = startSceneFocusRetry({
       shouldContinue: () => activeIdRef.current === id,
       tryFocus: () => {
-        const current = document.getElementById(`ms-scene-${id}`);
+        const current = ownerDocument?.getElementById(`ms-scene-${id}`);
         if (!focusProse) {
           current?.scrollIntoView({ block: "center", behavior: "smooth" });
           return true;
@@ -1641,18 +1672,22 @@ export function ManuscriptEditor(props: PanelProps) {
         if (!prose) return false;
         current?.scrollIntoView({ block: "center", behavior: "smooth" });
         prose.focus({ preventScroll: true });
-        return document.activeElement === prose;
+        return ownerDocument?.activeElement === prose;
       },
       isFocusStable: () => {
         if (!focusProse) return true;
-        const current = document.getElementById(`ms-scene-${id}`);
+        const current = ownerDocument?.getElementById(`ms-scene-${id}`);
         const prose = current?.querySelector("[data-prose]") as HTMLElement | null;
-        return prose != null && document.activeElement === prose;
+        return prose != null && ownerDocument?.activeElement === prose;
       },
-      schedule: (callback, delayMs) => window.setTimeout(callback, delayMs),
-      cancel: (handle) => window.clearTimeout(handle),
+      schedule: (callback, delayMs) => ownerWindow?.setTimeout(callback, delayMs)
+        ?? globalThis.setTimeout(callback, delayMs) as unknown as number,
+      cancel: (handle) => {
+        if (ownerWindow) ownerWindow.clearTimeout(handle);
+        else globalThis.clearTimeout(handle);
+      },
     });
-  }, [onActive]);
+  }, [onActive, ownerDocument, ownerWindow]);
 
   useEffect(() => {
     if (focusAfter.current != null && ordered.some((s) => s.id === focusAfter.current)) {
@@ -1670,12 +1705,12 @@ export function ManuscriptEditor(props: PanelProps) {
       // flips navTarget→null, which re-runs this effect and its cleanup would
       // cancel the still-pending jump (a real race — the scene never activated).
       const target = navTarget;
-      const t = window.setTimeout(() => { jump(target); clearNavTarget(); }, 60);
-      return () => clearTimeout(t);
+      const t = ownerWindow?.setTimeout(() => { jump(target); clearNavTarget(); }, 60);
+      return () => { if (t != null) ownerWindow?.clearTimeout(t); };
     }
     return undefined;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navTarget, ordered.map((s) => s.id).join(",")]);
+  }, [navTarget, ordered.map((s) => s.id).join(","), ownerWindow]);
 
   const addScene = async () => {
     if (projectId == null || busy) return;

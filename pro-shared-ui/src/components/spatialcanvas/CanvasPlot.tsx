@@ -27,6 +27,7 @@ import {
 } from "../../adapters/projectSaveCoordinator";
 import { useCanvasPlot, useMountedRef, useSettings } from "../../hooks";
 import { PanelShell, type PanelProps } from "../shell/PanelShell";
+import { usePanelHostWindow } from "../common/PanelHost";
 import {
   canvasContentBounds,
   canvasLinkGeometry,
@@ -267,6 +268,7 @@ export function CanvasPlot(props: PanelProps) {
   const { data, loading, error, refetch } = useCanvasPlot();
   const settings = useSettings();
   const { api, projectId } = useStudio();
+  const ownerWindow = usePanelHostWindow();
   const { setSelection: publishSelection } = useSelection();
   const mounted = useMountedRef();
   const projectIdRef = useRef(projectId);
@@ -281,6 +283,8 @@ export function CanvasPlot(props: PanelProps) {
   const inspectorDetachedRef = useRef(false);
   const viewportElementRef = useRef<HTMLDivElement | null>(null);
   const gestureRef = useRef<Gesture | null>(null);
+  // This timer deliberately belongs to the stable opener realm. A panel can be
+  // rehosted and its native Window destroyed without unmounting this component.
   const viewportPersistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const settingsPatchRef = useRef(settings.patch);
   settingsPatchRef.current = settings.patch;
@@ -343,7 +347,9 @@ export function CanvasPlot(props: PanelProps) {
     setViewport({ ...DEFAULT_CANVAS_VIEWPORT });
     setViewportReady(false);
     publishSelection({ sceneId: null, text: "", section: "Canvas Plot", nodeId: null });
-    if (viewportPersistTimerRef.current) clearTimeout(viewportPersistTimerRef.current);
+    if (viewportPersistTimerRef.current !== null) {
+      globalThis.clearTimeout(viewportPersistTimerRef.current);
+    }
     viewportPersistTimerRef.current = null;
   }, [projectId, publishSelection]);
 
@@ -383,17 +389,24 @@ export function CanvasPlot(props: PanelProps) {
       }
     };
     measure();
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    const elementWindow = element.ownerDocument?.defaultView ?? ownerWindow;
+    const ResizeObserverConstructor = (elementWindow as (Window & {
+      ResizeObserver?: typeof ResizeObserver;
+    }) | null)?.ResizeObserver;
+    const observer = ResizeObserverConstructor ? new ResizeObserverConstructor(measure) : null;
     observer?.observe(element);
-    if (typeof window !== "undefined") window.addEventListener("resize", measure);
+    elementWindow?.addEventListener("resize", measure);
     return () => {
       observer?.disconnect();
-      if (typeof window !== "undefined") window.removeEventListener("resize", measure);
+      elementWindow?.removeEventListener("resize", measure);
     };
-  }, []);
+  }, [ownerWindow]);
 
   useEffect(() => () => {
-    if (viewportPersistTimerRef.current) clearTimeout(viewportPersistTimerRef.current);
+    if (viewportPersistTimerRef.current !== null) {
+      globalThis.clearTimeout(viewportPersistTimerRef.current);
+      viewportPersistTimerRef.current = null;
+    }
   }, []);
 
   const persistViewport = useCallback((next: CanvasViewport, delayed = false) => {
@@ -401,9 +414,12 @@ export function CanvasPlot(props: PanelProps) {
       viewportPersistTimerRef.current = null;
       void settingsPatchRef.current({ [VIEW_SETTING_KEY]: next });
     };
-    if (viewportPersistTimerRef.current) clearTimeout(viewportPersistTimerRef.current);
-    if (delayed) viewportPersistTimerRef.current = setTimeout(save, 240);
-    else save();
+    if (viewportPersistTimerRef.current !== null) {
+      globalThis.clearTimeout(viewportPersistTimerRef.current);
+    }
+    if (delayed) {
+      viewportPersistTimerRef.current = globalThis.setTimeout(save, 240);
+    } else save();
   }, []);
 
   const applyViewport = useCallback((next: CanvasViewport, delayed = false) => {

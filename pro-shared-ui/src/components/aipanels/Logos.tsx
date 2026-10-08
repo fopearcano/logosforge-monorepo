@@ -5,6 +5,7 @@ import { useStudio } from "../../adapters/StudioProvider";
 import { useSelection } from "../../adapters/selection";
 import { useApplyToScene, ApplyDiffModal, type SceneTarget } from "./applyToScene";
 import { createLatestRequestGate } from "../../hooks/latestRequest";
+import { usePanelHostWindow } from "../common/PanelHost";
 
 /**
  * Logos — the inline/contextual action panel on the core `logosforge.logos` engine.
@@ -50,6 +51,7 @@ function CatalogBtn({ a, on, disabled, busy }: { a: LogosActionDTO; on: () => vo
 
 export function Logos(props: PanelProps) {
   const { api, projectId, writingMode } = useStudio();
+  const ownerWindow = usePanelHostWindow();
   const { selection } = useSelection();
   const { target, apply } = useApplyToScene();
   const requests = useRef(createLatestRequestGate()).current;
@@ -63,8 +65,10 @@ export function Logos(props: PanelProps) {
   const [running, setRunning] = useState<string | null>(null);
   const [result, setResult] = useState<LogosResultDTO | null>(null);
   const [err, setErr] = useState("");
-  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => { if (copiedTimer.current) clearTimeout(copiedTimer.current); }, []);
+  const copiedTimer = useRef<{ ownerWindow: Window; handle: number } | null>(null);
+  useEffect(() => () => {
+    if (copiedTimer.current) copiedTimer.current.ownerWindow.clearTimeout(copiedTimer.current.handle);
+  }, []);
   const [copied, setCopied] = useState(false);
   const [suggestions, setSuggestions] = useState<LogosSuggestionDTO[]>([]);
   const [proactiveError, setProactiveError] = useState("");
@@ -129,15 +133,15 @@ export function Logos(props: PanelProps) {
   // is project-wide, so a burst of edits collapses into one re-scan).
   useEffect(() => {
     if (projectId == null || typeof api.subscribe !== "function") return;
-    let t: ReturnType<typeof setTimeout> | undefined;
+    let t: number | undefined;
     const unsub = api.subscribe(projectId, (e) => {
       if (["connected", "scenes_changed", "scene_changed", "psyke_changed", "project_data_changed", "outline_changed", "plot_changed", "timeline_changed"].includes(e.event)) {
-        if (t) clearTimeout(t);
-        t = setTimeout(loadProactive, 1500);
+        if (t) ownerWindow?.clearTimeout(t);
+        t = ownerWindow?.setTimeout(loadProactive, 1500);
       }
     });
-    return () => { if (t) clearTimeout(t); unsub?.(); };
-  }, [api, projectId, loadProactive]);
+    return () => { if (t) ownerWindow?.clearTimeout(t); unsub?.(); };
+  }, [api, loadProactive, ownerWindow, projectId]);
 
   const sel = text.trim();
   const busSel = (selection.text || "").trim();
@@ -201,10 +205,12 @@ export function Logos(props: PanelProps) {
     if (!result?.message) return;
     setErr("");
     try {
-      await navigator.clipboard.writeText(result.message);
+      if (!ownerWindow?.navigator.clipboard) throw new Error("Clipboard access is unavailable.");
+      await ownerWindow.navigator.clipboard.writeText(result.message);
       setCopied(true);
-      if (copiedTimer.current) clearTimeout(copiedTimer.current);
-      copiedTimer.current = setTimeout(() => { copiedTimer.current = null; setCopied(false); }, 1600);
+      if (copiedTimer.current) copiedTimer.current.ownerWindow.clearTimeout(copiedTimer.current.handle);
+      const handle = ownerWindow.setTimeout(() => { copiedTimer.current = null; setCopied(false); }, 1600);
+      copiedTimer.current = { ownerWindow, handle };
     } catch (error) {
       setErr(`Copy failed — ${error instanceof Error ? error.message : String(error)}`);
     }

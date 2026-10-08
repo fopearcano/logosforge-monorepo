@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { RuntimeFault } from "./runtimeFaults";
+import { isPanelHostHTMLElement, usePanelHostDocument, usePanelHostWindow } from "./PanelHost";
 
 export function RuntimeFaultBanner({
   fault,
@@ -10,6 +11,8 @@ export function RuntimeFaultBanner({
   onDismiss: () => void;
   bottom?: number;
 }) {
+  const ownerDocument = usePanelHostDocument();
+  const ownerWindow = usePanelHostWindow();
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const wasVisibleRef = useRef(false);
   const focusTimerRef = useRef<number | null>(null);
@@ -17,29 +20,29 @@ export function RuntimeFaultBanner({
   useEffect(() => {
     if (fault && !wasVisibleRef.current) {
       if (focusTimerRef.current !== null) {
-        window.clearTimeout(focusTimerRef.current);
+        ownerWindow?.clearTimeout(focusTimerRef.current);
         focusTimerRef.current = null;
       }
-      returnFocusRef.current = document.activeElement instanceof HTMLElement
-        ? document.activeElement
+      returnFocusRef.current = ownerDocument && isPanelHostHTMLElement(ownerDocument.activeElement, ownerDocument)
+        ? ownerDocument.activeElement
         : null;
     }
     wasVisibleRef.current = fault != null;
     if (!fault) returnFocusRef.current = null;
-  }, [fault]);
+  }, [fault, ownerDocument, ownerWindow]);
   useEffect(() => () => {
-    if (focusTimerRef.current !== null) window.clearTimeout(focusTimerRef.current);
-  }, []);
+    if (focusTimerRef.current !== null) ownerWindow?.clearTimeout(focusTimerRef.current);
+  }, [ownerWindow]);
 
   if (!fault) return null;
   const dismiss = () => {
     const returnFocus = returnFocusRef.current;
     onDismiss();
-    if (focusTimerRef.current !== null) window.clearTimeout(focusTimerRef.current);
-    focusTimerRef.current = window.setTimeout(() => {
+    if (focusTimerRef.current !== null) ownerWindow?.clearTimeout(focusTimerRef.current);
+    focusTimerRef.current = ownerWindow?.setTimeout(() => {
       focusTimerRef.current = null;
       if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
-    }, 0);
+    }, 0) ?? null;
   };
   return (
     <div role="alert" aria-atomic="true" data-runtime-fault={fault.key} style={{

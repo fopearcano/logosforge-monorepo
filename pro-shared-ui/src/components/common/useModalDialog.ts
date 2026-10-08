@@ -1,4 +1,9 @@
 import { useEffect, useRef, type RefObject } from "react";
+import {
+  isPanelHostHTMLElement,
+  isPanelHostNode,
+  usePanelHostDocument,
+} from "./PanelHost";
 
 const FOCUSABLE = [
   "a[href]",
@@ -21,9 +26,27 @@ interface BackgroundState {
   ariaHidden: string | null;
 }
 
-const modalStack: ModalEntry[] = [];
-const backgroundStates = new Map<HTMLElement, BackgroundState>();
-let unlockedBodyOverflow: string | null = null;
+interface ModalEnvironment {
+  ownerDocument: Document;
+  modalStack: ModalEntry[];
+  backgroundStates: Map<HTMLElement, BackgroundState>;
+  unlockedBodyOverflow: string | null;
+}
+
+const modalEnvironments = new WeakMap<Document, ModalEnvironment>();
+
+function modalEnvironment(ownerDocument: Document): ModalEnvironment {
+  const existing = modalEnvironments.get(ownerDocument);
+  if (existing) return existing;
+  const created: ModalEnvironment = {
+    ownerDocument,
+    modalStack: [],
+    backgroundStates: new Map(),
+    unlockedBodyOverflow: null,
+  };
+  modalEnvironments.set(ownerDocument, created);
+  return created;
+}
 
 function restoreBackgroundElement(element: HTMLElement, state: BackgroundState): void {
   element.inert = state.inert;
@@ -32,28 +55,31 @@ function restoreBackgroundElement(element: HTMLElement, state: BackgroundState):
 }
 
 /** Recompute isolation from the current topmost modal, including out-of-order unmounts. */
-function syncBackgroundIsolation(): void {
+function syncBackgroundIsolation(environment: ModalEnvironment): void {
+  const { ownerDocument, modalStack, backgroundStates } = environment;
   const top = modalStack[modalStack.length - 1];
   if (!top) {
     for (const [element, state] of backgroundStates) restoreBackgroundElement(element, state);
     backgroundStates.clear();
-    if (unlockedBodyOverflow != null) {
-      document.body.style.overflow = unlockedBodyOverflow;
-      unlockedBodyOverflow = null;
+    if (environment.unlockedBodyOverflow != null) {
+      ownerDocument.body.style.overflow = environment.unlockedBodyOverflow;
+      environment.unlockedBodyOverflow = null;
     }
     return;
   }
 
-  if (unlockedBodyOverflow == null) unlockedBodyOverflow = document.body.style.overflow;
-  document.body.style.overflow = "hidden";
+  if (environment.unlockedBodyOverflow == null) {
+    environment.unlockedBodyOverflow = ownerDocument.body.style.overflow;
+  }
+  ownerDocument.body.style.overflow = "hidden";
 
   let visibleBranch = top.layer;
-  while (visibleBranch?.parentElement && visibleBranch.parentElement !== document.body) {
+  while (visibleBranch?.parentElement && visibleBranch.parentElement !== ownerDocument.body) {
     visibleBranch = visibleBranch.parentElement;
   }
 
-  for (const child of Array.from(document.body.children)) {
-    if (!(child instanceof HTMLElement)) continue;
+  for (const child of Array.from(ownerDocument.body.children)) {
+    if (!isPanelHostHTMLElement(child, ownerDocument)) continue;
     if (child === visibleBranch) {
       const original = backgroundStates.get(child);
       if (original) {
@@ -73,11 +99,11 @@ function syncBackgroundIsolation(): void {
   }
 }
 
-function focusableElements(root: HTMLElement): HTMLElement[] {
+function focusableElements(root: HTMLElement, ownerWindow: Window | null): HTMLElement[] {
   return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((element) => {
     if (element.closest("[hidden],[aria-hidden='true']")) return false;
-    const style = window.getComputedStyle(element);
-    return element.tabIndex >= 0 && style.display !== "none" && style.visibility !== "hidden";
+    const style = ownerWindow?.getComputedStyle(element);
+    return element.tabIndex >= 0 && style?.display !== "none" && style?.visibility !== "hidden";
   });
 }
 
@@ -100,20 +126,26 @@ export function useModalDialog<T extends HTMLElement>({
   onClose: () => void;
   canClose?: boolean;
 }): void {
+  const hostDocument = usePanelHostDocument();
   const onCloseRef = useRef(onClose);
   const canCloseRef = useRef(canClose);
   onCloseRef.current = onClose;
   canCloseRef.current = canClose;
 
   useEffect(() => {
-    if (!open || typeof document === "undefined") return undefined;
+    if (!open) return undefined;
     const dialog = dialogRef.current;
     if (!dialog) return undefined;
+    const ownerDocument = dialog.ownerDocument ?? hostDocument;
+    if (!ownerDocument?.body) return undefined;
+    const ownerWindow = ownerDocument.defaultView;
+    const environment = modalEnvironment(ownerDocument);
+    const { modalStack } = environment;
 
     const token = Symbol("logosforge-modal");
     const layer = dialog.closest<HTMLElement>("[data-lf-modal-layer]");
-    const previousFocus = document.activeElement instanceof HTMLElement
-      ? document.activeElement
+    const previousFocus = isPanelHostHTMLElement(ownerDocument.activeElement, ownerDocument)
+      ? ownerDocument.activeElement
       : null;
     const entry: ModalEntry = { token, dialog, layer, returnFocus: previousFocus };
     modalStack.push(entry);
@@ -131,7 +163,7 @@ export function useModalDialog<T extends HTMLElement>({
     // Move focus before applying aria-hidden, otherwise Chromium rejects hiding
     // the application root while it still owns the active element.
     focusInside();
-    syncBackgroundIsolation();
+    syncBackgroundIsolation(environment);
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (!isTop()) return;
@@ -143,13 +175,13 @@ export function useModalDialog<T extends HTMLElement>({
       }
       if (event.key !== "Tab") return;
 
-      const focusable = focusableElements(dialog);
+      const focusable = focusableElements(dialog, ownerWindow);
       if (focusable.length === 0) {
         event.preventDefault();
         dialog.focus({ preventScroll: true });
         return;
       }
-      const activeIndex = focusable.indexOf(document.activeElement as HTMLElement);
+      const activeIndex = focusable.indexOf(ownerDocument.activeElement as HTMLElement);
       if (event.shiftKey && activeIndex <= 0) {
         event.preventDefault();
         focusable[focusable.length - 1]!.focus({ preventScroll: true });
@@ -160,19 +192,22 @@ export function useModalDialog<T extends HTMLElement>({
     };
 
     const onFocusIn = (event: FocusEvent) => {
-      if (isTop() && event.target instanceof Node && !dialog.contains(event.target)) {
+      if (isTop() && isPanelHostNode(event.target, ownerDocument) && !dialog.contains(event.target)) {
         focusInside();
       }
     };
 
-    document.addEventListener("keydown", onKeyDown, true);
-    document.addEventListener("focusin", onFocusIn, true);
-    const focusTimer = window.setTimeout(focusInside, 0);
+    ownerDocument.addEventListener("keydown", onKeyDown, true);
+    ownerDocument.addEventListener("focusin", onFocusIn, true);
+    const focusTimer = ownerWindow
+      ? ownerWindow.setTimeout(focusInside, 0)
+      : globalThis.setTimeout(focusInside, 0);
 
     return () => {
-      window.clearTimeout(focusTimer);
-      document.removeEventListener("keydown", onKeyDown, true);
-      document.removeEventListener("focusin", onFocusIn, true);
+      if (ownerWindow) ownerWindow.clearTimeout(focusTimer);
+      else globalThis.clearTimeout(focusTimer);
+      ownerDocument.removeEventListener("keydown", onKeyDown, true);
+      ownerDocument.removeEventListener("focusin", onFocusIn, true);
       const wasTop = isTop();
       const stackIndex = modalStack.findIndex((candidate) => candidate.token === token);
       for (const remaining of modalStack) {
@@ -181,7 +216,7 @@ export function useModalDialog<T extends HTMLElement>({
         }
       }
       if (stackIndex >= 0) modalStack.splice(stackIndex, 1);
-      syncBackgroundIsolation();
+      syncBackgroundIsolation(environment);
       if (wasTop) {
         const nextDialog = modalStack[modalStack.length - 1]?.dialog;
         const returnFocus = entry.returnFocus;
@@ -191,5 +226,5 @@ export function useModalDialog<T extends HTMLElement>({
         destination?.focus({ preventScroll: true });
       }
     };
-  }, [dialogRef, initialFocusRef, open]);
+  }, [dialogRef, hostDocument, initialFocusRef, open]);
 }

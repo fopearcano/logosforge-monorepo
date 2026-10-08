@@ -5,6 +5,7 @@ import { Placeholder } from "@tiptap/extensions";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import type { Node as PMNode } from "@tiptap/pm/model";
 import { classifyLines, fountainLineStyle, type FountainType } from "../../format/fountain";
+import { usePanelHostDocument } from "../common/PanelHost";
 
 /**
  * The true in-place writing surface — a TipTap/ProseMirror editor whose document
@@ -208,8 +209,8 @@ function buildDecorations(
     const resolved = points.every((point) => point.resolved);
     const className = resolved ? "pm-comment-mark pm-comment-mark--resolved" : "pm-comment-mark";
     const label = ids.length === 1 ? "Open comment thread" : `Open ${ids.length} comment threads`;
-    decos.push(Decoration.widget(position, () => {
-      const marker = document.createElement("span");
+    decos.push(Decoration.widget(position, (view) => {
+      const marker = view.dom.ownerDocument.createElement("span");
       marker.setAttribute("data-comment-ids", ids.join(","));
       marker.setAttribute("role", "button");
       marker.setAttribute("tabindex", "0");
@@ -234,17 +235,16 @@ const PM_CSS = `
 .pm-comment-mark--resolved{background:rgba(84,212,158,.11);border-bottom-color:var(--green);}
 .pm-comment-caret{display:inline-block;width:1.1em;margin:0 .12em;color:var(--amber);font-family:'Chakra Petch',sans-serif;font-size:.78em;line-height:1;text-align:center;vertical-align:middle;}
 `;
-let cssInjected = false;
-function useProseCss() {
+function useProseCss(): Document | null {
+  const ownerDocument = usePanelHostDocument();
   useEffect(() => {
-    if (cssInjected || typeof document === "undefined") return;
-    cssInjected = true;
-    if (document.getElementById("lf-pm-styles")) return; // survive HMR / module re-eval
-    const el = document.createElement("style");
+    if (!ownerDocument || ownerDocument.getElementById("lf-pm-styles")) return;
+    const el = ownerDocument.createElement("style");
     el.id = "lf-pm-styles";
     el.textContent = PM_CSS;
-    document.head.appendChild(el);
-  }, []);
+    ownerDocument.head.appendChild(el);
+  }, [ownerDocument]);
+  return ownerDocument;
 }
 
 export function ProseEditor({
@@ -272,7 +272,7 @@ export function ProseEditor({
   onCommentActivate?: (commentIds: number[]) => void;
   placeholder?: string;
 }) {
-  useProseCss();
+  const ownerDocument = useProseCss();
   // latest callbacks + format flags via refs, so the once-created editor never
   // runs a stale closure.
   const cb = useRef({ onChange, onFocusActive, onSelectionText, onBlur, onSelectionRange, onCommentActivate });
@@ -313,7 +313,10 @@ export function ProseEditor({
       },
       handleDOMEvents: {
         click: (_view, event) => {
-          const target = event.target instanceof Element ? event.target.closest<HTMLElement>("[data-comment-ids]") : null;
+          const eventTarget = event.target as (EventTarget & { nodeType?: number }) | null;
+          const target = eventTarget?.nodeType === 1
+            ? (eventTarget as Element).closest<HTMLElement>("[data-comment-ids]")
+            : null;
           if (!target) return false;
           const ids = (target.dataset.commentIds ?? "").split(",").map(Number).filter(Number.isSafeInteger);
           if (!ids.length) return false;
@@ -323,7 +326,10 @@ export function ProseEditor({
         },
         keydown: (_view, event) => {
           if (event.key !== "Enter" && event.key !== " ") return false;
-          const target = event.target instanceof Element ? event.target.closest<HTMLElement>("[data-comment-ids]") : null;
+          const eventTarget = event.target as (EventTarget & { nodeType?: number }) | null;
+          const target = eventTarget?.nodeType === 1
+            ? (eventTarget as Element).closest<HTMLElement>("[data-comment-ids]")
+            : null;
           if (!target) return false;
           const ids = (target.dataset.commentIds ?? "").split(",").map(Number).filter(Number.isSafeInteger);
           if (!ids.length) return false;
@@ -365,6 +371,14 @@ export function ProseEditor({
     },
     onBlur: () => cb.current.onBlur(),
   }, []);
+
+  // StablePanelPortal preserves this editor while adopting its DOM into a
+  // native panel document (and back again on redock). ProseMirror caches the
+  // root used for selection APIs, so invalidate that cache after each move.
+  useEffect(() => {
+    if (!editor || !ownerDocument) return;
+    editor.view.updateRoot();
+  }, [editor, ownerDocument]);
 
   // External content changes (AI apply / refetch reconcile) — replace the doc,
   // but ONLY when it's a genuine outside change (not an echo of our own edit),

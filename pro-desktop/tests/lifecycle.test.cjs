@@ -261,11 +261,16 @@ for (const marker of [
 ]) {
   if (!app.includes(marker)) failures.push(`App generic panel-shortcut routing missing ${marker}`);
 }
-const panelShortcutEffect = app.match(/\/\/ Every catalog shortcut[\s\S]*?window\.removeEventListener\('keydown', onKey\);[\s\S]*?\}, \[[^\]]+\]\);/)?.[0] ?? '';
-if (!panelShortcutEffect.includes('panelIdForKeyboardShortcut(e)')
-    || !panelShortcutEffect.includes('workspaceHydrated')
-    || !panelShortcutEffect.includes('selectPanelAndFocus(panelId)')) {
+const panelShortcutHandler = app.match(/const handleWorkspaceKeyDown = useCallback[\s\S]*?window\.addEventListener\('keydown', handleWorkspaceKeyDown\);/)?.[0] ?? '';
+if (!panelShortcutHandler.includes('panelIdForKeyboardShortcut(e)')
+    || !panelShortcutHandler.includes('workspaceHydrated')
+    || !panelShortcutHandler.includes('selectPanelAndFocus(panelId)')
+    || !panelShortcutHandler.includes('getPanelHostDocuments()')) {
   failures.push('Global panel shortcuts do not use the canonical matcher and hydrated save-aware navigation path');
+}
+if (!app.includes("window.removeEventListener('keydown', handleWorkspaceKeyDown)")
+    || !app.includes('onExternalWindowKeyDown={handleWorkspaceKeyDown}')) {
+  failures.push('Global panel shortcuts are not shared with native panel documents');
 }
 const selectPanelBlock = app.match(/const selectPanel = useCallback[\s\S]*?const panelFocusTarget = useCallback/)?.[0] ?? '';
 const selectPanelAndFocusBlock = app.match(/const selectPanelAndFocus = useCallback[\s\S]*?\/\/ Cross-panel navigation/)?.[0] ?? '';

@@ -70,6 +70,7 @@ function runFrames(): void {
 function focusNode(label: string) {
   return {
     label,
+    ownerDocument: mockDocument,
     focus() { mockDocument.activeElement = this; },
     scrollIntoView() {},
   };

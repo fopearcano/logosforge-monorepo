@@ -11,6 +11,7 @@ import {
   type RefObject,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   DOCK_SIZE,
   FLOATING_PANEL_SIZE,
@@ -26,6 +27,7 @@ import {
   workspacePanelDomToken,
   type WorkspaceActionResult,
 } from "./workspaceInteraction";
+import { PanelHostProvider } from "../common/PanelHost";
 
 export const WORKSPACE_DOCK_REGIONS = ["left", "center", "right", "bottom"] as const;
 export type WorkspaceDockRegion = (typeof WORKSPACE_DOCK_REGIONS)[number];
@@ -59,6 +61,26 @@ export interface DockWorkspaceProps {
   onMinimizeFloating: (panelId: string, minimized: boolean) => WorkspaceActionResult;
   onFocusFloating: (panelId: string) => void;
   onReset: () => WorkspaceActionResult;
+  /**
+   * Desktop-only host for true operating-system windows. Browser and preview
+   * consumers omit this and retain the bounded in-workspace floating fallback.
+   */
+  externalFloatingWindows?: ExternalFloatingWindowHost;
+  /** Native child windows do not bubble keyboard events to their opener. */
+  onExternalWindowKeyDown?: (event: KeyboardEvent) => void;
+}
+
+export interface ExternalFloatingWindowHost {
+  open(
+    panelId: string,
+    label: string,
+    bounds: FloatingPanelBounds,
+  ): Window | null;
+  /** Authorize and finish closing a host-owned panel window. */
+  release(panelId: string): void;
+  /** Reveal only after styles and the stable portal host have been adopted. */
+  show(panelId: string, activate: boolean): void;
+  focus(panelId: string): void;
 }
 
 export interface WorkspaceNavigatorProps {
@@ -645,6 +667,229 @@ type FloatingInteraction =
     restoreHeight: number;
   };
 
+function nativeScreenBounds(
+  floating: FloatingPanelLayout,
+  workspace: HTMLDivElement | null,
+): FloatingPanelBounds {
+  if (floating.coordinateSpace === "screen" || !workspace) {
+    return {
+      x: floating.x,
+      y: floating.y,
+      width: floating.width,
+      height: floating.height,
+    };
+  }
+  const ownerWindow = workspace.ownerDocument.defaultView;
+  if (!ownerWindow) {
+    return { x: floating.x, y: floating.y, width: floating.width, height: floating.height };
+  }
+  const workspaceBounds = workspace.getBoundingClientRect();
+  const sideFrame = Math.max(0, Math.round((ownerWindow.outerWidth - ownerWindow.innerWidth) / 2));
+  const topFrame = Math.max(
+    0,
+    Math.round(ownerWindow.outerHeight - ownerWindow.innerHeight - sideFrame),
+  );
+  return {
+    x: Math.round(ownerWindow.screenX + sideFrame + workspaceBounds.left + floating.x),
+    y: Math.round(ownerWindow.screenY + topFrame + workspaceBounds.top + floating.y),
+    width: floating.width,
+    height: floating.height,
+  };
+}
+
+function copyPanelWindowHead(source: Document, target: Document): void {
+  target.head.replaceChildren();
+  const charset = target.createElement("meta");
+  charset.setAttribute("charset", "utf-8");
+  target.head.appendChild(charset);
+  source.head.querySelectorAll('style,link[rel="stylesheet"]').forEach((node) => {
+    if (node.tagName === "LINK") {
+      const sourceLink = node as HTMLLinkElement;
+      const link = target.createElement("link");
+      link.rel = "stylesheet";
+      link.href = sourceLink.href;
+      if (sourceLink.media) link.media = sourceLink.media;
+      if (sourceLink.crossOrigin) link.crossOrigin = sourceLink.crossOrigin;
+      target.head.appendChild(link);
+    } else {
+      target.head.appendChild(node.cloneNode(true));
+    }
+  });
+}
+
+/**
+ * Keep one portal container for the lifetime of a panel and adopt that exact
+ * node between the dock grid and a native child document. React consequently
+ * preserves editors, AI conversations, and pending writes while tearing off.
+ */
+function StablePanelPortal({
+  panelId,
+  label,
+  floating,
+  visible,
+  focused,
+  suspended,
+  workspaceRef,
+  host,
+  onExternalWindowKeyDown,
+  children,
+}: {
+  panelId: string;
+  label: string;
+  floating: FloatingPanelLayout | undefined;
+  visible: boolean;
+  focused: boolean;
+  suspended: boolean;
+  workspaceRef: RefObject<HTMLDivElement>;
+  host: ExternalFloatingWindowHost;
+  onExternalWindowKeyDown?: (event: KeyboardEvent) => void;
+  children: (external: boolean) => ReactNode;
+}) {
+  const inlineMountRef = useRef<HTMLDivElement>(null);
+  const popupRef = useRef<Window | null>(null);
+  const keyHandlerRef = useRef<((event: KeyboardEvent) => void) | null>(null);
+  const externalKeyHandlerRef = useRef(onExternalWindowKeyDown);
+  externalKeyHandlerRef.current = onExternalWindowKeyDown;
+  const mountedRef = useRef(false);
+  const [portalHost] = useState<HTMLDivElement | null>(() => (
+    typeof document === "undefined" ? null : document.createElement("div")
+  ));
+  const [hostDocument, setHostDocument] = useState<Document>(() => (
+    typeof document === "undefined" ? ({} as Document) : document
+  ));
+  const [external, setExternal] = useState(false);
+  // Keep a live native window while it is OS-minimized. A layout restored from
+  // disk with a minimized panel stays lazy until the writer restores it. Focus
+  // mode is different: it temporarily suspends every external surface.
+  const wantsExternal = floating !== undefined
+    && !suspended
+    && (visible || popupRef.current !== null);
+
+  const moveInline = useCallback(() => {
+    if (!portalHost || !inlineMountRef.current) return;
+    portalHost.className = "lf-panel-portal-host";
+    portalHost.removeAttribute("data-skin");
+    portalHost.removeAttribute("style");
+    inlineMountRef.current.appendChild(portalHost);
+    setHostDocument(inlineMountRef.current.ownerDocument);
+    setExternal(false);
+  }, [portalHost]);
+
+  const releasePopup = useCallback(() => {
+    const popup = popupRef.current;
+    if (!popup) return;
+    const keyHandler = keyHandlerRef.current;
+    if (keyHandler) popup.removeEventListener("keydown", keyHandler);
+    keyHandlerRef.current = null;
+    popupRef.current = null;
+    host.release(panelId);
+  }, [host, panelId]);
+
+  useLayoutEffect(() => {
+    moveInline();
+  }, [moveInline]);
+
+  useLayoutEffect(() => {
+    if (!external || !portalHost) return;
+    const sourceShell = workspaceRef.current?.closest<HTMLElement>(".lf-shell");
+    portalHost.setAttribute("data-skin", sourceShell?.dataset.skin ?? "forge");
+    const sourceStyle = sourceShell?.getAttribute("style");
+    if (sourceStyle) portalHost.setAttribute("style", sourceStyle);
+    portalHost.style.width = "100%";
+    portalHost.style.height = "100%";
+    portalHost.style.minHeight = "0";
+    portalHost.style.overflow = "hidden";
+  });
+
+  useLayoutEffect(() => {
+    if (!portalHost) return;
+    if (!wantsExternal || !floating) {
+      moveInline();
+      if (popupRef.current) releasePopup();
+      return;
+    }
+    const existing = popupRef.current;
+    if (existing && !existing.closed) return;
+
+    const popup = host.open(
+      panelId,
+      label,
+      nativeScreenBounds(floating, workspaceRef.current),
+    );
+    if (!popup) {
+      moveInline();
+      return;
+    }
+    const popupDocument = popup.document;
+    popupDocument.title = `LogosForge Pro — ${label}`;
+    copyPanelWindowHead(workspaceRef.current?.ownerDocument ?? document, popupDocument);
+    popupDocument.documentElement.className = "lf-native-panel-document";
+    popupDocument.body.className = "lf-native-panel-body";
+    popupDocument.body.replaceChildren();
+    const sourceShell = workspaceRef.current?.closest<HTMLElement>(".lf-shell");
+    portalHost.className = "lf-shell lf-native-panel-window-host";
+    portalHost.setAttribute("data-skin", sourceShell?.dataset.skin ?? "forge");
+    const sourceStyle = sourceShell?.getAttribute("style");
+    if (sourceStyle) portalHost.setAttribute("style", sourceStyle);
+    portalHost.style.width = "100%";
+    portalHost.style.height = "100%";
+    portalHost.style.minHeight = "0";
+    portalHost.style.overflow = "hidden";
+    popupDocument.body.appendChild(portalHost);
+    popupRef.current = popup;
+    // The listener remains attached for the popup lifetime, but resolves the
+    // current callback so mode, modal, hydration and palette state never go
+    // stale while the native window stays open.
+    const keyHandler = (event: KeyboardEvent) => externalKeyHandlerRef.current?.(event);
+    keyHandlerRef.current = keyHandler;
+    popup.addEventListener("keydown", keyHandler);
+    setHostDocument(popupDocument);
+    setExternal(true);
+    host.show(panelId, focused);
+  }, [
+    floating,
+    focused,
+    host,
+    label,
+    moveInline,
+    onExternalWindowKeyDown,
+    panelId,
+    portalHost,
+    releasePopup,
+    wantsExternal,
+    workspaceRef,
+  ]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      queueMicrotask(() => {
+        // React StrictMode deliberately performs a setup/cleanup/setup cycle in
+        // development. A microtask lets that remount reclaim the same portal
+        // before we authorize destruction of its native BrowserWindow.
+        if (mountedRef.current) return;
+        if (portalHost && inlineMountRef.current) inlineMountRef.current.appendChild(portalHost);
+        releasePopup();
+        portalHost?.remove();
+      });
+    };
+  }, [portalHost, releasePopup]);
+
+  if (!portalHost) return <>{children(false)}</>;
+  return (
+    <>
+      <div ref={inlineMountRef} className="lf-panel-portal-anchor" />
+      {createPortal(
+        <PanelHostProvider ownerDocument={hostDocument}>
+          {children(external)}
+        </PanelHostProvider>,
+        portalHost,
+      )}
+    </>
+  );
+}
+
 function WorkspacePanelSurface({
   panel,
   layout,
@@ -661,6 +906,8 @@ function WorkspacePanelSurface({
   onResizeFloating,
   onMinimizeFloating,
   onFocusFloating,
+  externalFloatingWindows,
+  onExternalWindowKeyDown,
 }: {
   panel: WorkspacePanelDefinition;
   layout: WorkspaceLayout;
@@ -677,6 +924,8 @@ function WorkspacePanelSurface({
   onResizeFloating: DockWorkspaceProps["onResizeFloating"];
   onMinimizeFloating: DockWorkspaceProps["onMinimizeFloating"];
   onFocusFloating: DockWorkspaceProps["onFocusFloating"];
+  externalFloatingWindows?: ExternalFloatingWindowHost;
+  onExternalWindowKeyDown?: DockWorkspaceProps["onExternalWindowKeyDown"];
 }) {
   const interactionRef = useRef<FloatingInteraction | null>(null);
   const token = workspacePanelDomToken(panel.id);
@@ -746,12 +995,15 @@ function WorkspacePanelSurface({
       ? Math.max(FLOATING_PANEL_SIZE.minHeight, viewport.height - projected.y)
       : FLOATING_PANEL_SIZE.maxHeight;
     onFocusFloating(panel.id);
+    if (floating?.coordinateSpace === "screen") {
+      onMoveFloating(panel.id, projected.x, projected.y);
+    }
     onResizeFloating(
       panel.id,
       Math.max(FLOATING_PANEL_SIZE.minWidth, Math.min(maximumWidth, Math.round(width))),
       Math.max(FLOATING_PANEL_SIZE.minHeight, Math.min(maximumHeight, Math.round(height))),
     );
-  }, [interactionDisabled, onFocusFloating, onResizeFloating, panel.id, projected, viewport]);
+  }, [floating?.coordinateSpace, interactionDisabled, onFocusFloating, onMoveFloating, onResizeFloating, panel.id, projected, viewport]);
 
   const dockGrid = region === "left"
     ? { gridColumn: "1", gridRow: "2" }
@@ -772,10 +1024,10 @@ function WorkspacePanelSurface({
   const floatingActive = floating !== undefined && layout.focused?.zone === "floating"
     && layout.focused.panelId === panel.id;
 
-  return (
+  const renderSurface = (external: boolean) => (
     <section
       id={`lf-panel-${token}`}
-      className={`${floating ? "lf-floating-panel" : `lf-dock-panel lf-dock-panel-${region}`}${
+      className={`${floating ? `lf-floating-panel${external ? " lf-native-floating-panel" : ""}` : `lf-dock-panel lf-dock-panel-${region}`}${
         floatingActive ? " lf-floating-panel-active" : ""
       }${floating?.minimized ? " lf-floating-panel-minimized" : ""}${
         panel.flush ? " lf-dock-panel-flush" : ""
@@ -790,7 +1042,8 @@ function WorkspacePanelSurface({
       data-panel-focused={layout.focused?.panelId === panel.id || undefined}
       data-dock-region={region ?? undefined}
       data-floating-panel={floating ? "true" : undefined}
-      style={surfaceStyle}
+      data-native-floating-panel={external || undefined}
+      style={external ? undefined : surfaceStyle}
       onFocusCapture={() => {
         if (floating && !disabled) onFocusFloating(panel.id);
       }}
@@ -802,12 +1055,14 @@ function WorkspacePanelSurface({
         id={`lf-floating-title-${token}`}
         className="lf-floating-panel-titlebar"
         role="toolbar"
-        aria-label={`Move ${panel.label} floating panel`}
-        tabIndex={floating && !interactionDisabled ? 0 : -1}
+        aria-label={external
+          ? `${panel.label} native window controls`
+          : `Move ${panel.label} floating panel`}
+        tabIndex={floating && !interactionDisabled && !external ? 0 : -1}
         hidden={!floating}
-        onKeyDown={moveByKeyboard}
+        onKeyDown={external ? undefined : moveByKeyboard}
         onPointerDown={(event) => {
-          if (interactionDisabled || !projected) return;
+          if (external || interactionDisabled || !projected) return;
           const target = event.target;
           if (target instanceof Element && target.closest("button")) return;
           onFocusFloating(panel.id);
@@ -821,8 +1076,8 @@ function WorkspacePanelSurface({
             restoreY: floating?.y ?? projected.y,
           };
           event.currentTarget.setPointerCapture(event.pointerId);
-          document.body.style.cursor = "move";
-          document.body.style.userSelect = "none";
+          event.currentTarget.ownerDocument.body.style.cursor = "move";
+          event.currentTarget.ownerDocument.body.style.userSelect = "none";
         }}
         onPointerMove={(event) => {
           const interaction = interactionRef.current;
@@ -837,7 +1092,9 @@ function WorkspacePanelSurface({
         onPointerUp={clearInteraction}
         onPointerCancel={cancelInteraction}
         onLostPointerCapture={cancelInteraction}
-        title={`Drag ${panel.label}; arrow keys move it and Shift moves farther`}
+        title={external
+          ? `${panel.label} is in a native window; use the operating-system title bar to move it between monitors`
+          : `Drag ${panel.label}; arrow keys move it and Shift moves farther`}
       >
         <span className="lf-floating-panel-title">{panel.label}</span>
         <span className="lf-floating-panel-actions">
@@ -904,11 +1161,11 @@ function WorkspacePanelSurface({
         aria-description={projected
           ? `${projected.width} by ${projected.height} pixels. Left and right adjust width; up and down adjust height.`
           : "Left and right adjust width; up and down adjust height."}
-        tabIndex={floating && !interactionDisabled ? 0 : -1}
-        hidden={!floating}
-        onKeyDown={resizeByKeyboard}
+        tabIndex={floating && !interactionDisabled && !external ? 0 : -1}
+        hidden={!floating || external}
+        onKeyDown={external ? undefined : resizeByKeyboard}
         onPointerDown={(event) => {
-          if (interactionDisabled || !projected) return;
+          if (external || interactionDisabled || !projected) return;
           onFocusFloating(panel.id);
           interactionRef.current = {
             kind: "resize",
@@ -920,8 +1177,8 @@ function WorkspacePanelSurface({
             restoreHeight: floating?.height ?? projected.height,
           };
           event.currentTarget.setPointerCapture(event.pointerId);
-          document.body.style.cursor = "nwse-resize";
-          document.body.style.userSelect = "none";
+          event.currentTarget.ownerDocument.body.style.cursor = "nwse-resize";
+          event.currentTarget.ownerDocument.body.style.userSelect = "none";
         }}
         onPointerMove={(event) => {
           const interaction = interactionRef.current;
@@ -932,6 +1189,9 @@ function WorkspacePanelSurface({
           const maximumHeight = viewport.height > 0
             ? Math.max(FLOATING_PANEL_SIZE.minHeight, viewport.height - projected.y)
             : FLOATING_PANEL_SIZE.maxHeight;
+          if (floating?.coordinateSpace === "screen") {
+            onMoveFloating(panel.id, projected.x, projected.y);
+          }
           onResizeFloating(
             panel.id,
             Math.max(FLOATING_PANEL_SIZE.minWidth, Math.min(
@@ -951,6 +1211,25 @@ function WorkspacePanelSurface({
       />
     </section>
   );
+
+  if (externalFloatingWindows) {
+    return (
+      <StablePanelPortal
+        panelId={panel.id}
+        label={panel.label}
+        floating={floating}
+        visible={visible}
+        focused={floatingActive}
+        suspended={layout.preset === "focus"}
+        workspaceRef={workspaceRef}
+        host={externalFloatingWindows}
+        onExternalWindowKeyDown={onExternalWindowKeyDown}
+      >
+        {renderSurface}
+      </StablePanelPortal>
+    );
+  }
+  return renderSurface(false);
 }
 
 /**
@@ -973,6 +1252,8 @@ export function DockWorkspace({
   onMinimizeFloating,
   onFocusFloating,
   onReset,
+  externalFloatingWindows,
+  onExternalWindowKeyDown,
 }: DockWorkspaceProps) {
   const workspaceRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState<WorkspaceViewport>({ width: 0, height: 0 });
@@ -1275,6 +1556,8 @@ export function DockWorkspace({
               onResizeFloating={onResizeFloating}
               onMinimizeFloating={onMinimizeFloating}
               onFocusFloating={onFocusFloating}
+              externalFloatingWindows={externalFloatingWindows}
+              onExternalWindowKeyDown={onExternalWindowKeyDown}
             />
           );
         })}

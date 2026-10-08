@@ -9,15 +9,15 @@ const requireMarkers = (file: string, markers: string[]) => {
   return source;
 };
 
-const quantum = requireMarkers("components/aipanels/QuantumOutliner.tsx", ["new ResizeObserver", "ro.disconnect()"]);
-if ((quantum.match(/new ResizeObserver/g) ?? []).length !== (quantum.match(/ro\.disconnect\(\)/g) ?? []).length) {
+const quantum = requireMarkers("components/aipanels/QuantumOutliner.tsx", ["new ResizeObserverConstructor", "ro.disconnect()"]);
+if ((quantum.match(/new ResizeObserverConstructor/g) ?? []).length !== (quantum.match(/ro\.disconnect\(\)/g) ?? []).length) {
   failures.push("QuantumOutliner ResizeObserver creation/cleanup count differs");
 }
 requireMarkers("components/formatpanels/VoiceHud.tsx", ["setInterval(", "clearInterval(", "recorder.current?.cancel()"]);
 requireMarkers("components/formatpanels/mic.ts", ["if (closed) return", "track.stop()", "ctx.close().catch", "catch (error)", "cleanup();"]);
-requireMarkers("components/common/RuntimeFaultBanner.tsx", ["focusTimerRef", "window.clearTimeout(focusTimerRef.current)"]);
-requireMarkers("components/common/useModalDialog.ts", ["window.clearTimeout(focusTimer)", "removeEventListener(\"keydown\"", "removeEventListener(\"focusin\""]);
-requireMarkers("components/common/useRuntimeFaultReporter.ts", ["for (const timer of pending) window.clearTimeout(timer)", "removeEventListener(\"unhandledrejection\""]);
+requireMarkers("components/common/RuntimeFaultBanner.tsx", ["focusTimerRef", "ownerWindow?.clearTimeout(focusTimerRef.current)"]);
+requireMarkers("components/common/useModalDialog.ts", ["ownerWindow.clearTimeout(focusTimer)", "removeEventListener(\"keydown\"", "removeEventListener(\"focusin\""]);
+requireMarkers("components/common/useRuntimeFaultReporter.ts", ["for (const timer of pending) ownerWindow.clearTimeout(timer)", "removeEventListener(\"unhandledrejection\""]);
 requireMarkers("adapters/httpApiClient.ts", ["if (timer) clearTimeout(timer)", "es.close()"]);
 requireMarkers("adapters/httpApiClient.ts", ["ApiRequestTimeoutError", "const timeoutOptions = { ...options }", "clientAbort.abort", "activeAbort?.abort", "getInflight.clear()", "cloneTransportValue", "streams.clear()", "dispose: () =>", "broker_instance_id", "connectedEvent(p, r.cursor)"]);
 requireMarkers("hooks/useResource.ts", ['e.event === "connected" || refetchOn.includes']);
@@ -86,11 +86,12 @@ requireMarkers("components/help/HelpPanel.tsx", [
   "STUDIO_PANEL_SHORTCUTS.filter((definition) => definition.group === group)",
   "<Kbd>{formatStudioShortcut(definition.shortcut)}</Kbd>",
   '"Panels & floating windows"',
-  "Every panel—including Manuscript and AI Companions—can move to any dock or float above the workspace.",
+  "Every panel—including Manuscript and AI Companions—can move to any dock or float.",
+  "a float is a separate operating-system window",
   "A panel shortcut opens a closed panel, selects a docked one, or restores and raises a minimized floating one.",
 ]);
 const manuscript = requireMarkers("components/manuscript/ManuscriptEditor.tsx", [
-  "new IntersectionObserver", "observer.disconnect()", "data-prose-static", "data-scene-prose", "touchWarmSceneIds", "contentVisibility",
+  "new IntersectionObserverConstructor", "observer.disconnect()", "data-prose-static", "data-scene-prose", "touchWarmSceneIds", "contentVisibility",
   "beginCrossScenePointerSelection", "finishCrossScenePointerSelection", "proseDomPointFromViewport",
   "commentDraft && !commentComposerOpen && !commentBusy",
   "contentVisibility: commentOverlayActive ? \"visible\" : \"auto\"",
@@ -139,20 +140,20 @@ requireMarkers("components/manuscript/NotesPanel.tsx", [
   "useNoteTarget()",
   "notes.find((note) => note.id === targetId)",
   'data-note-editor-id={note.id}',
-  "window.requestAnimationFrame",
+  "frameWindow.requestAnimationFrame",
   "clearTargetRef.current()",
   "<NoteEditor key={editing.id}",
 ]);
 requireMarkers("components/manuscript/CommentsPanel.tsx", [
-  "window.setInterval",
-  "window.clearInterval(timer)",
+  "ownerWindow.setInterval",
+  "ownerWindow.clearInterval(timer)",
   "mutationSequence.current += 1",
   "useCommentTarget()",
   "commentsData.find((comment) => comment.id === targetId",
   "comment.id === revealedTargetId",
   "scheduleThreadFocus(targetId, (focused) => {",
-  "document.activeElement === button",
-  "window.cancelAnimationFrame(focusFrameRef.current)",
+  "ownerDocument.activeElement === button",
+  "focusFrameRef.current.ownerWindow.cancelAnimationFrame(focusFrameRef.current.handle)",
   "loading && commentsData === undefined",
   "error && commentsData === undefined",
 ]);
@@ -184,7 +185,7 @@ const studioOmnibox = requireMarkers("components/shell/StudioOmnibox.tsx", [
   "planAbortRef.current?.abort()",
   "suggestionAbortRef.current?.abort()",
   "new AbortController()",
-  "window.clearTimeout(timer)",
+  "ownerWindow?.clearTimeout(timer)",
   "controller.signal",
   "requests.isCurrent(token)",
   "identityRef.current.projectId !== ownerIdentity.projectId",
@@ -209,10 +210,10 @@ if ((studioOmnibox.match(/!requests\.isCurrent\(token\)/g) ?? []).length < 4) {
 if ((studioOmnibox.match(/new AbortController\(\)/g) ?? []).length < 3) {
   failures.push("StudioOmnibox must independently cancel project search, suggestions, and command-plan requests");
 }
-if (!/return \(\) => \{[\s\S]*?window\.clearTimeout\(timer\);[\s\S]*?projectSearchAbortRef\.current\?\.abort\(\)/.test(studioOmnibox)) {
+if (!/return \(\) => \{[\s\S]*?ownerWindow\?\.clearTimeout\(timer\);[\s\S]*?projectSearchAbortRef\.current\?\.abort\(\)/.test(studioOmnibox)) {
   failures.push("StudioOmnibox project-search debounce does not clear its timer and abort its request on cleanup");
 }
-if (!/return \(\) => \{[\s\S]*?window\.clearTimeout\(timer\);[\s\S]*?suggestionAbortRef\.current\?\.abort\(\)/.test(studioOmnibox)) {
+if (!/return \(\) => \{[\s\S]*?ownerWindow\?\.clearTimeout\(timer\);[\s\S]*?suggestionAbortRef\.current\?\.abort\(\)/.test(studioOmnibox)) {
   failures.push("StudioOmnibox suggestion debounce does not clear its timer and abort its request on cleanup");
 }
 const mountedRef = requireMarkers("hooks/useMountedRef.ts", ["mounted.current = true", "mounted.current = false"]);

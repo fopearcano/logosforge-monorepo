@@ -27,7 +27,7 @@ function resample(input: Float32Array, from: number, to: number): Float32Array {
   return out;
 }
 
-function toBase64Int16(float: Float32Array): string {
+function toBase64Int16(float: Float32Array, encodeBase64: (value: string) => string): string {
   const buf = new ArrayBuffer(float.length * 2);
   const view = new DataView(buf);
   for (let i = 0; i < float.length; i += 1) {
@@ -40,14 +40,24 @@ function toBase64Int16(float: Float32Array): string {
   for (let i = 0; i < bytes.length; i += CHUNK) {
     bin += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + CHUNK)) as unknown as number[]);
   }
-  return btoa(bin);
+  return encodeBase64(bin);
 }
 
-export async function startMic(): Promise<MicRecorder> {
-  const stream = await navigator.mediaDevices.getUserMedia({
+export async function startMic(ownerWindow?: Window | null): Promise<MicRecorder> {
+  const hostWindow = ownerWindow ?? (typeof window === "undefined" ? null : window);
+  if (!hostWindow) throw new Error("Microphone capture requires a browser window.");
+  const audioWindow = hostWindow as Window & {
+    AudioContext?: typeof AudioContext;
+    webkitAudioContext?: typeof AudioContext;
+  };
+  const AC = audioWindow.AudioContext ?? audioWindow.webkitAudioContext;
+  if (!AC) throw new Error("Web Audio is unavailable in this window.");
+  const hostNavigator = hostWindow.navigator
+    ?? (typeof navigator === "undefined" ? null : navigator);
+  if (!hostNavigator?.mediaDevices) throw new Error("Microphone capture is unavailable in this window.");
+  const stream = await hostNavigator.mediaDevices.getUserMedia({
     audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
   });
-  const AC: typeof AudioContext = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
   let ctx: AudioContext | null = null;
   let source: MediaStreamAudioSourceNode | null = null;
   let node: ScriptProcessorNode | null = null;
@@ -98,7 +108,12 @@ export async function startMic(): Promise<MicRecorder> {
         let o = 0;
         for (const c of chunks) { merged.set(c, o); o += c.length; }
         const pcm = resample(merged, rate, 16000);
-        return { base64: toBase64Int16(pcm), sampleRate: 16000 };
+        return {
+          base64: toBase64Int16(pcm, (value) => (
+            typeof hostWindow.btoa === "function" ? hostWindow.btoa(value) : globalThis.btoa(value)
+          )),
+          sampleRate: 16000,
+        };
       },
     };
   } catch (error) {

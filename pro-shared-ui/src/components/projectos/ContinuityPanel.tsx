@@ -13,6 +13,7 @@ import { flushPendingProjectSaves } from "../../adapters/projectSaveCoordinator"
 import { ApiRequestError, ApiRequestTimeoutError } from "../../adapters/httpApiClient";
 import { ModalPortal } from "../common/ModalPortal";
 import { useModalDialog } from "../common/useModalDialog";
+import { usePanelHostWindow } from "../common/PanelHost";
 import {
   buildContinuityRepairBrief,
   createContinuityIdempotencyKey,
@@ -246,6 +247,7 @@ function groupCounts(items: ContinuityIssueDTO[]): { n: string; color: string }[
 
 export function ContinuityPanel(props: PanelProps) {
   const { api, projectId } = useStudio();
+  const ownerWindow = usePanelHostWindow();
   const {
     data,
     loading,
@@ -261,7 +263,8 @@ export function ContinuityPanel(props: PanelProps) {
   const targetRequestRef = useRef<{ token: string; requestId: number } | null>(null);
   const focusingTargetRef = useRef("");
   const exhaustedFocusTargetRef = useRef("");
-  const focusFrameRef = useRef<number | null>(null);
+  const ownerWindowRef = useRef(ownerWindow);
+  const focusFrameRef = useRef<{ ownerWindow: Window; handle: number } | null>(null);
   const clearTargetRef = useRef(clearContinuityTarget);
   const renderedTargetToken = targetIssueKey ? `${projectId ?? ""}:${targetIssueKey}` : "";
   const renderedTargetTokenRef = useRef(renderedTargetToken);
@@ -280,6 +283,7 @@ export function ContinuityPanel(props: PanelProps) {
   const [actionNotice, setActionNotice] = useState("");
   projectIdRef.current = projectId;
   apiRef.current = api;
+  ownerWindowRef.current = ownerWindow;
   clearTargetRef.current = clearContinuityTarget;
   renderedTargetTokenRef.current = renderedTargetToken;
   const report: ContinuityReportDTO | undefined = data;
@@ -297,8 +301,8 @@ export function ContinuityPanel(props: PanelProps) {
   }, []);
 
   const cancelIssueFocus = useCallback(() => {
-    if (focusFrameRef.current != null && typeof window !== "undefined") {
-      window.cancelAnimationFrame(focusFrameRef.current);
+    if (focusFrameRef.current) {
+      focusFrameRef.current.ownerWindow.cancelAnimationFrame(focusFrameRef.current.handle);
     }
     focusFrameRef.current = null;
     focusingTargetRef.current = "";
@@ -306,7 +310,7 @@ export function ContinuityPanel(props: PanelProps) {
 
   const scheduleIssueFocus = useCallback((token: string, issueId: string, afterFocus: (focused: boolean) => void) => {
     cancelIssueFocus();
-    if (typeof window === "undefined") {
+    if (!ownerWindowRef.current) {
       afterFocus(false);
       return;
     }
@@ -320,7 +324,13 @@ export function ContinuityPanel(props: PanelProps) {
         return;
       }
       remainingAttempts -= 1;
-      focusFrameRef.current = window.requestAnimationFrame(() => {
+      const frameWindow = ownerWindowRef.current;
+      if (!frameWindow) {
+        focusingTargetRef.current = "";
+        afterFocus(false);
+        return;
+      }
+      const frameHandle = frameWindow.requestAnimationFrame(() => {
         focusFrameRef.current = null;
         if (focusingTargetRef.current !== token || renderedTargetTokenRef.current !== token) return;
         const node = issueRefs.current.get(issueId);
@@ -333,7 +343,13 @@ export function ContinuityPanel(props: PanelProps) {
         // Workspace commits and modal teardown can reclaim focus in the same
         // frame. Consume the one-shot target only when the issue card remains
         // active for a complete animation frame.
-        focusFrameRef.current = window.requestAnimationFrame(() => {
+        const confirmWindow = ownerWindowRef.current;
+        if (!confirmWindow) {
+          focusingTargetRef.current = "";
+          afterFocus(false);
+          return;
+        }
+        const confirmHandle = confirmWindow.requestAnimationFrame(() => {
           focusFrameRef.current = null;
           if (focusingTargetRef.current !== token || renderedTargetTokenRef.current !== token) return;
           if (node.ownerDocument.activeElement === node) {
@@ -343,7 +359,9 @@ export function ContinuityPanel(props: PanelProps) {
             attempt();
           }
         });
+        focusFrameRef.current = { ownerWindow: confirmWindow, handle: confirmHandle };
       });
+      focusFrameRef.current = { ownerWindow: frameWindow, handle: frameHandle };
     };
     attempt();
   }, [cancelIssueFocus]);

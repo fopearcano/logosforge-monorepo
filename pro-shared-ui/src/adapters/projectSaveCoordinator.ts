@@ -1,5 +1,10 @@
 /** Global barrier for local Pro editor state before panel/project handoffs. */
 
+import {
+  getPanelHostDocuments,
+  isPanelHostHTMLElement,
+} from "../components/common/panelHostDocuments";
+
 export type ProjectFlusher = () => Promise<boolean>;
 
 /** Observable, process-local persistence state for the active Pro workspace. */
@@ -352,10 +357,16 @@ export async function flushPendingProjectSaves(
   flushDepth += 1;
   publishStatus();
   try {
-    if (options.commitActiveField && typeof document !== 'undefined' && typeof HTMLElement !== 'undefined') {
-      const active = document.activeElement;
-      if (active instanceof HTMLElement && active.matches('input, textarea, select')) {
-        active.blur();
+    if (options.commitActiveField) {
+      let blurredActiveField = false;
+      for (const ownerDocument of getPanelHostDocuments()) {
+        const active = ownerDocument.activeElement;
+        if (isPanelHostHTMLElement(active, ownerDocument) && active.matches('input, textarea, select')) {
+          active.blur();
+          blurredActiveField = true;
+        }
+      }
+      if (blurredActiveField) {
         // Let synchronous framework event handlers enqueue their tracked write.
         await Promise.resolve();
       }

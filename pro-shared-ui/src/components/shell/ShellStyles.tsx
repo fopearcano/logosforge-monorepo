@@ -78,6 +78,9 @@ const CSS = `
 .lf-dock-header-actions{display:flex;align-items:stretch;margin-left:auto;flex:none;border-left:1px solid var(--line2);}
 .lf-dock-header-actions button{padding:0 10px;}
 .lf-dock-panel-layer{display:contents;}
+.lf-panel-portal-anchor,.lf-panel-portal-host{display:contents;}
+.lf-native-panel-document,.lf-native-panel-body{width:100%;height:100%;min-width:0;min-height:0;margin:0;overflow:hidden;background:#05070b;}
+.lf-native-panel-window-host{display:block!important;width:100%;height:100%;min-width:0;min-height:0;overflow:hidden;}
 .lf-dock-panel{position:relative;min-width:0;min-height:0;overflow:auto;padding:12px;background:var(--base);}
 .lf-dock-panel-content{min-width:0;min-height:0;height:100%;}
 .lf-dock-panel-left{border-right:1px solid var(--line2);}
@@ -101,6 +104,8 @@ const CSS = `
 /* Modeless tear-off panels remain in the stable panel layer. Bounds and stack
    order are supplied as inline layout state; these classes own their chrome. */
 .lf-floating-panel{position:absolute!important;display:flex;flex-direction:column;min-width:220px;min-height:132px;max-width:calc(100% - 16px);max-height:calc(100% - 16px);padding:0;overflow:hidden;border:1px solid var(--line2);border-radius:var(--panel-radius);background:var(--panel);box-shadow:var(--chrome-shadow),0 0 0 1px color-mix(in srgb,var(--accent) 8%,transparent);z-index:var(--lf-floating-z,20);}
+.lf-floating-panel.lf-native-floating-panel{position:relative!important;inset:auto!important;width:100%!important;height:100%!important;min-width:0;min-height:0;max-width:none;max-height:none;border:0;border-radius:0;box-shadow:none;}
+.lf-native-floating-panel .lf-floating-panel-titlebar{cursor:default;}
 .lf-floating-panel[hidden]{display:none!important;}
 .lf-floating-panel-active,.lf-floating-panel:focus-within{border-color:color-mix(in srgb,var(--accent) 68%,var(--line2));box-shadow:0 14px 42px rgba(0,0,0,.56),0 0 14px color-mix(in srgb,var(--accent) 18%,transparent);}
 .lf-floating-panel-minimized{display:none!important;}

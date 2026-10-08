@@ -23,6 +23,7 @@ import {
   serializeWorkspaceLayout,
   setDockCollapsed,
   setFloatingPanelMinimized,
+  setFloatingPanelBounds,
   setNavigatorCollapsed,
   setWorkspacePreset,
   toggleWorkspacePreset,
@@ -98,6 +99,20 @@ function jsonClone<T>(value: T): T {
 
   const corruptJson = restoreWorkspaceLayout("{broken");
   check("corrupt JSON safely falls back", corruptJson.source === "default" && corruptJson.fallbackReason === "invalid" && corruptJson.diagnostics.length === 1);
+
+  const versionOne = JSON.parse(serializeWorkspaceLayout(movePanel(
+    createDefaultWorkspaceLayout(),
+    "outline",
+    { kind: "floating", bounds: { x: 14, y: 28, width: 420, height: 300 } },
+  ))) as Record<string, unknown> & { floatingPanels: Array<Record<string, unknown>> };
+  versionOne.version = 1;
+  delete versionOne.floatingPanels[0]?.coordinateSpace;
+  const versionOneRestored = restoreWorkspaceLayout(versionOne);
+  check(
+    "v1 workspace-relative floats migrate explicitly",
+    versionOneRestored.source === "migrated"
+      && versionOneRestored.layout.floatingPanels[0]?.coordinateSpace === "workspace",
+  );
 }
 
 {
@@ -120,6 +135,27 @@ function jsonClone<T>(value: T): T {
   layout = movePanel(layout, "ai-companions", { kind: "floating", bounds: { x: 17, y: 29, width: 700, height: 510 } });
   check("tear-off removes dock tab", !layout.docks.right.panelIds.includes("ai-companions"));
   check("tear-off preserves requested geometry", layout.floatingPanels[0]?.x === 17 && layout.floatingPanels[0]?.width === 700);
+  check("new tear-offs use workspace coordinates", layout.floatingPanels[0]?.coordinateSpace === "workspace");
+
+  layout = setFloatingPanelBounds(
+    layout,
+    "ai-companions",
+    { x: -1420, y: 80, width: 820, height: 620 },
+    "screen",
+  );
+  check(
+    "native bounds atomically switch to screen coordinates",
+    layout.floatingPanels[0]?.coordinateSpace === "screen"
+      && layout.floatingPanels[0]?.x === -1420
+      && layout.floatingPanels[0]?.width === 820,
+  );
+  layout = moveFloatingPanel(layout, "ai-companions", 24, 36);
+  check(
+    "browser movement converts persisted screen coordinates back to workspace coordinates",
+    layout.floatingPanels[0]?.coordinateSpace === "workspace"
+      && layout.floatingPanels[0]?.x === 24
+      && layout.floatingPanels[0]?.y === 36,
+  );
 
   layout = movePanel(layout, "outline", { kind: "floating" });
   layout = bringFloatingPanelToFront(layout, "ai-companions");

@@ -8,6 +8,7 @@ import { discardProjectSavePending, markProjectSavePending, registerProjectFlush
 import { createSceneSaveQueue, type SceneSaveQueue } from "../manuscript/sceneSaveQueue";
 import { ConfirmDeleteButton } from "../common/ConfirmDeleteButton";
 import { useMountedRef } from "../../hooks/useMountedRef";
+import { usePanelHostDocument, usePanelHostWindow } from "../common/PanelHost";
 
 const panelBox: CSSProperties = {
   position: "relative",
@@ -292,6 +293,8 @@ function PsykeEditor({ entry, onClose, onChanged }: { entry: PsykeEntryDTO; onCl
 
 export function PsykeBible(props: PanelProps) {
   const { api, projectId } = useStudio();
+  const ownerDocument = usePanelHostDocument();
+  const ownerWindow = usePanelHostWindow();
   const psykeTarget = usePsykeTarget();
   const ownerProjectId = useRef(projectId).current;
   const { data: entriesData, loading, error, refetch } = usePsykeEntries();
@@ -321,11 +324,11 @@ export function PsykeBible(props: PanelProps) {
     setRoleFilter(null);
     setSelId(psykeTarget.entryId);
     const targetId = psykeTarget.entryId;
-    window.requestAnimationFrame(() => {
-      document.querySelector<HTMLElement>(`[data-psyke-entry-id="${targetId}"]`)?.scrollIntoView({ block: "nearest" });
+    ownerWindow?.requestAnimationFrame(() => {
+      ownerDocument?.querySelector<HTMLElement>(`[data-psyke-entry-id="${targetId}"]`)?.scrollIntoView({ block: "nearest" });
     });
     psykeTarget.clear();
-  }, [entries, psykeTarget.entryId, psykeTarget.clear]);
+  }, [entries, ownerDocument, ownerWindow, psykeTarget.entryId, psykeTarget.clear]);
   const progressionDraftRef = useRef<{
     progression: PsykeProgressionDTO;
     original: string;

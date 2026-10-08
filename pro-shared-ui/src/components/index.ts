@@ -8,6 +8,7 @@ export * from "./intelligence";
 export * from "./formats";
 export * from "./help";
 export * from "./common/ModalPortal";
+export * from "./common/PanelHost";
 export * from "./common/useModalDialog";
 export * from "./common/PanelErrorBoundary";
 export * from "./common/runtimeFaults";

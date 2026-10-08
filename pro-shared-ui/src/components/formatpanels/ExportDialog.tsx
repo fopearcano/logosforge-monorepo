@@ -3,6 +3,7 @@ import type { ExportRequestDTO } from "@logosforge/ui-contracts";
 import { PanelShell, Corners, type PanelProps } from "../shell/PanelShell";
 import { useExport } from "../../hooks";
 import { useStudio } from "../../adapters/StudioProvider";
+import { usePanelHostWindow } from "../common/PanelHost";
 
 const panelBox: CSSProperties = {
   position: "relative",
@@ -86,6 +87,7 @@ function Check({ label, checked = false, mb, onClick }: { label: string; checked
 
 export function ExportDialog(props: PanelProps) {
   const { platform } = useStudio();
+  const ownerWindow = usePanelHostWindow();
   const { run, running, result, error } = useExport();
   const [format, setFormat] = useState("markdown");
   const [exportType, setExportType] = useState("full_project");
@@ -111,7 +113,7 @@ export function ExportDialog(props: PanelProps) {
   const shown = text.slice(0, 8000);
   // base64 inflates ~4/3 over raw bytes (minus padding) — a good-enough size hint.
   const approxBytes = result?.content_base64 ? Math.floor(result.content_base64.replace(/=+$/, "").length * 0.75) : 0;
-  const canCopy = !!text && typeof navigator !== "undefined" && !!navigator.clipboard;
+  const canCopy = !!text && !!ownerWindow?.navigator.clipboard;
   // platform is always injected, but the preview harness passes an empty stub — guard.
   const hasSave = typeof platform?.saveFile === "function";
   const canSave = !!result && hasSave && (isBinary || !!text);
@@ -137,7 +139,7 @@ export function ExportDialog(props: PanelProps) {
     if (!canCopy) return;
     setSaveMsg(null);
     try {
-      await navigator.clipboard.writeText(text);
+      await ownerWindow!.navigator.clipboard.writeText(text);
       setSaveMsg({ ok: true, text: "copied to clipboard" });
     } catch (copyError) {
       setSaveMsg({ ok: false, text: `copy failed — ${copyError instanceof Error ? copyError.message : String(copyError)}` });

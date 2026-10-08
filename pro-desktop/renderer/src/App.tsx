@@ -14,6 +14,7 @@ import {
   type WorkspaceDockRegion,
   type WorkspaceLayout,
   type WorkspacePanelDefinition,
+  type ExternalFloatingWindowHost,
   type StudioNavigationOptions,
   type KnowledgeGraphNavigationTarget,
   type ContinuityRepairTarget,
@@ -42,6 +43,7 @@ import {
   resetWorkspaceLayout,
   resizeDock,
   resizeFloatingPanel,
+  setFloatingPanelBounds,
   resizeNavigator,
   setDockCollapsed,
   setFloatingPanelMinimized,
@@ -56,6 +58,7 @@ import {
   createCommandRegistry,
   deriveWorkspaceStatus,
   getProjectSaveStatusSnapshot,
+  getPanelHostDocuments,
   resetProjectSaveStatus,
   subscribeProjectSaveStatus,
   parseRecentProjectIds,
@@ -262,6 +265,64 @@ export function App() {
     () => parseRecentProjectIds(localStorage.getItem(RECENT_PROJECTS_KEY)),
   );
   const [skin, setSkin] = useState<SkinId>(readSkinPreference);
+  const nativePanelWindowTokensRef = useRef(new Map<string, string>());
+  const externalFloatingWindows = useMemo<ExternalFloatingWindowHost | undefined>(() => {
+    const bridge = desktop;
+    if (!bridge?.nativePanelWindowFrameName) return undefined;
+    const leases = new Map<string, { popup: Window; count: number; token: string }>();
+    return {
+      open: (panelId, _label, bounds) => {
+        const current = leases.get(panelId);
+        if (current && !current.popup.closed) {
+          leases.set(panelId, { ...current, count: current.count + 1 });
+          nativePanelWindowTokensRef.current.set(panelId, current.token);
+          return current.popup;
+        }
+        if (current) leases.delete(panelId);
+
+        const token = globalThis.crypto.randomUUID();
+        const popup = window.open(
+          'about:blank',
+          bridge.nativePanelWindowFrameName(panelId, token),
+          [
+            'popup=yes',
+            `left=${Math.round(bounds.x)}`,
+            `top=${Math.round(bounds.y)}`,
+            `width=${Math.round(bounds.width)}`,
+            `height=${Math.round(bounds.height)}`,
+            'resizable=yes',
+            'scrollbars=no',
+          ].join(','),
+        );
+        if (popup) {
+          leases.set(panelId, { popup, count: 1, token });
+          nativePanelWindowTokensRef.current.set(panelId, token);
+        }
+        return popup;
+      },
+      release: (panelId) => {
+        const current = leases.get(panelId);
+        if (!current) return;
+        if (current && current.count > 1) {
+          leases.set(panelId, { ...current, count: current.count - 1 });
+          return;
+        }
+        leases.delete(panelId);
+        if (nativePanelWindowTokensRef.current.get(panelId) === current.token) {
+          nativePanelWindowTokensRef.current.delete(panelId);
+        }
+        void bridge.closeNativePanelWindow(panelId, current.token);
+      },
+      show: (panelId, activate) => {
+        const token = leases.get(panelId)?.token;
+        if (token) void bridge.showNativePanelWindow(panelId, token, activate);
+      },
+      focus: (panelId) => {
+        const token = leases.get(panelId)?.token;
+        if (token) void bridge.focusNativePanelWindow(panelId, token);
+      },
+    };
+  }, []);
   useEffect(() => { localStorage.setItem('lf.aiTab', aiTab); }, [aiTab]);
   useEffect(() => { writeSkinPreference(skin); }, [skin]);
   useEffect(() => {
@@ -363,6 +424,14 @@ export function App() {
       setPendingContinuityRepair(panelId === AI_PANEL_ID ? opts?.continuityRepair ?? null : null);
       if (panelId === AI_PANEL_ID && opts?.aiTool && AI_TOOL_KEYS.includes(opts.aiTool)) {
         setAiTab(opts.aiTool);
+      }
+      if (getPanelPlacement(workspaceLayoutRef.current, panelId)?.kind === 'floating') {
+        // Native child documents do not participate in the opener's DOM focus
+        // search. The host restores/focuses the one existing window instead.
+        const token = nativePanelWindowTokensRef.current.get(panelId);
+        if (token) void desktop?.focusNativePanelWindow(panelId, token);
+      } else {
+        window.focus();
       }
       return true;
     });
@@ -472,26 +541,30 @@ export function App() {
   // Every catalog shortcut uses the same save-aware navigation path as a tab
   // click. Existing floating panels are restored/raised by openPanel; closed
   // panels open in their preferred dock. AltGraph is rejected by the matcher.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!projectReadyRef.current) return;
-      if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
-      const panelId = panelIdForKeyboardShortcut(e);
-      const panelAvailable = panelId === AI_PANEL_ID
-        || visiblePanels.some((panel) => panel.id === panelId);
-      if (panelId && panelAvailable && workspaceHydrated) {
-        e.preventDefault();
-        void selectPanelAndFocus(panelId);
-      } else if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && !e.repeat && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
-        setPaletteOpen(true);
-      } else if (e.key === 'Escape' && workspaceLayoutRef.current.preset === 'focus' && !paletteOpen) {
-        void toggleFocus();
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+  const handleWorkspaceKeyDown = useCallback((e: KeyboardEvent) => {
+    if (!projectReadyRef.current) return;
+    if (getPanelHostDocuments().some(
+      (hostDocument) => hostDocument.querySelector('[role="dialog"][aria-modal="true"]'),
+    )) return;
+    const panelId = panelIdForKeyboardShortcut(e);
+    const panelAvailable = panelId === AI_PANEL_ID
+      || visiblePanels.some((panel) => panel.id === panelId);
+    if (panelId && panelAvailable && workspaceHydrated) {
+      e.preventDefault();
+      void selectPanelAndFocus(panelId);
+    } else if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && !e.repeat && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      window.focus();
+      setPaletteOpen(true);
+    } else if (e.key === 'Escape' && workspaceLayoutRef.current.preset === 'focus' && !paletteOpen) {
+      void toggleFocus();
+    }
   }, [paletteOpen, selectPanelAndFocus, toggleFocus, visiblePanels, workspaceHydrated]);
+
+  useEffect(() => {
+    window.addEventListener('keydown', handleWorkspaceKeyDown);
+    return () => window.removeEventListener('keydown', handleWorkspaceKeyDown);
+  }, [handleWorkspaceKeyDown]);
 
   useEffect(() => {
     if (!desktop) return;
@@ -915,7 +988,8 @@ export function App() {
   }, [applyWorkspaceLayout]);
 
   const changeFloatingPanelMinimized = useCallback((panelId: string, minimized: boolean) => {
-    return runWorkspaceMutation(
+    const token = nativePanelWindowTokensRef.current.get(panelId);
+    const task = runWorkspaceMutation(
       (layout) => minimized
         ? setFloatingPanelMinimized(layout, panelId, true)
         : focusWorkspacePanel(setFloatingPanelMinimized(layout, panelId, false), panelId),
@@ -923,6 +997,12 @@ export function App() {
         ? 'Panel minimize stopped; the floating panel remains open.'
         : 'Panel restore stopped; the panel remains minimized.',
     );
+    void task.then((changed) => {
+      if (!changed || !token) return;
+      if (minimized) void desktop?.minimizeNativePanelWindow(panelId, token);
+      else void desktop?.restoreNativePanelWindow(panelId, token);
+    });
+    return task;
   }, [runWorkspaceMutation]);
 
   const closeDockPanel = useCallback((panelId: string) => {
@@ -932,6 +1012,79 @@ export function App() {
       'Panel close stopped; the panel remains open.',
     );
   }, [runWorkspaceMutation]);
+
+  useEffect(() => {
+    const bridge = desktop;
+    if (!bridge?.onNativePanelWindowEvent) return;
+
+    const persistNativeBounds = (panelId: string, bounds: FloatingPanelBounds) => {
+      const current = workspaceLayoutRef.current.floatingPanels.find((entry) => entry.panelId === panelId);
+      if (!current) return;
+      if (
+        current.coordinateSpace === 'screen'
+        && current.x === bounds.x
+        && current.y === bounds.y
+        && current.width === bounds.width
+        && current.height === bounds.height
+      ) return;
+      applyWorkspaceLayout((layout) => setFloatingPanelBounds(layout, panelId, bounds, 'screen'));
+    };
+
+    return bridge.onNativePanelWindowEvent((event) => {
+      if (nativePanelWindowTokensRef.current.get(event.panelId) !== event.token) return;
+      const placement = getPanelPlacement(workspaceLayoutRef.current, event.panelId);
+      if (placement?.kind !== 'floating') return;
+      if ('bounds' in event) persistNativeBounds(event.panelId, event.bounds);
+
+      if (event.type === 'bounds-changed') return;
+      if (event.type === 'focused') {
+        const current = workspaceLayoutRef.current;
+        const floating = current.floatingPanels.find((entry) => entry.panelId === event.panelId);
+        const alreadyFront = floating?.zIndex === current.floatingPanels.length - 1
+          && current.focused?.zone === 'floating'
+          && current.focused.panelId === event.panelId;
+        if (!alreadyFront) {
+          applyWorkspaceLayout((layout) => bringFloatingPanelToFront(layout, event.panelId));
+        }
+        return;
+      }
+      if (event.type === 'minimized') {
+        if (workspaceLayoutRef.current.floatingPanels.find(
+          (entry) => entry.panelId === event.panelId,
+        )?.minimized) return;
+        void changeFloatingPanelMinimized(event.panelId, true).then((changed) => {
+          if (!changed) void bridge.restoreNativePanelWindow(event.panelId, event.token);
+        });
+        return;
+      }
+      if (event.type === 'restored') {
+        if (!workspaceLayoutRef.current.floatingPanels.find(
+          (entry) => entry.panelId === event.panelId,
+        )?.minimized) return;
+        void changeFloatingPanelMinimized(event.panelId, false).then((changed) => {
+          if (!changed) void bridge.minimizeNativePanelWindow(event.panelId, event.token);
+        });
+        return;
+      }
+      if (event.type === 'closed' && event.reason === 'renderer') return;
+      if (event.type !== 'close-requested' && event.type !== 'closed') return;
+
+      const permanent = event.panelId === 'manuscript' || event.panelId === AI_PANEL_ID;
+      const preferredRegion: WorkspaceDockRegion = event.panelId === AI_PANEL_ID ? 'right' : 'center';
+      void runWorkspaceMutation(
+        (layout) => permanent
+          ? placePanel(layout, event.panelId, {
+            kind: 'dock',
+            region: preferredRegion,
+            index: layout.docks[preferredRegion].panelIds.length,
+          })
+          : closeWorkspacePanel(layout, event.panelId),
+        permanent
+          ? 'Panel redock stopped; the native window remains open.'
+          : 'Panel close stopped; the native window remains open.',
+      );
+    });
+  }, [applyWorkspaceLayout, changeFloatingPanelMinimized, runWorkspaceMutation]);
 
   const changeDockCollapsed = useCallback((region: 'left' | 'right' | 'bottom') => {
     return runWorkspaceMutation(
@@ -1267,6 +1420,8 @@ export function App() {
                 onMinimizeFloating={changeFloatingPanelMinimized}
                 onFocusFloating={focusWorkspaceFloatingPanel}
                 onReset={restoreDefaultWorkspace}
+                externalFloatingWindows={externalFloatingWindows}
+                onExternalWindowKeyDown={handleWorkspaceKeyDown}
               />
             ) : (
               <div className="panel-host" role="status" aria-live="polite">

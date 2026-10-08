@@ -8,6 +8,29 @@ import type {
   OpenFileResult,
   SaveFileResult,
 } from './file-manager';
+import type {
+  NativePanelWindowChannels,
+  NativePanelWindowBounds,
+  NativePanelWindowEvent,
+  NativePanelWindowFramePrefix,
+} from './native-panel-windows';
+
+// Keep runtime values inline: sandboxed Electron preloads cannot require local
+// CommonJS modules unless the preload is first bundled into one file.
+const NATIVE_PANEL_WINDOW_CHANNELS = {
+  event: 'native-panel:event',
+  show: 'native-panel:show',
+  focus: 'native-panel:focus',
+  minimize: 'native-panel:minimize',
+  restore: 'native-panel:restore',
+  close: 'native-panel:close',
+  bounds: 'native-panel:bounds',
+} as const satisfies NativePanelWindowChannels;
+
+const NATIVE_PANEL_WINDOW_FRAME_PREFIX: NativePanelWindowFramePrefix = 'logosforge-panel:';
+const nativePanelWindowFrameName = (panelId: string, token: string): string => (
+  `${NATIVE_PANEL_WINDOW_FRAME_PREFIX}${panelId}:${token}`
+);
 
 /**
  * The `window.logosforge` surface exposed to the renderer. Every method is FLAT
@@ -34,6 +57,18 @@ export interface LogosForgeDesktop {
   onSaveBeforeClose(cb: (attemptId: number) => void): () => void;
   onCloseCancelled(cb: () => void): () => void;
   sendCloseResult(attemptId: number, saved: boolean): void;
+
+  /** Acquisition-specific frame name; main validates both id and token. */
+  nativePanelWindowFrameName(panelId: string, token: string): string;
+  /** Reveal only after the renderer has installed the portal and adopted styles. */
+  showNativePanelWindow(panelId: string, token: string, activate?: boolean): Promise<boolean>;
+  focusNativePanelWindow(panelId: string, token: string): Promise<boolean>;
+  minimizeNativePanelWindow(panelId: string, token: string): Promise<boolean>;
+  restoreNativePanelWindow(panelId: string, token: string): Promise<boolean>;
+  /** Authorize destruction after the renderer has committed its layout update. */
+  closeNativePanelWindow(panelId: string, token: string): Promise<boolean>;
+  getNativePanelWindowBounds(panelId: string, token: string): Promise<NativePanelWindowBounds | null>;
+  onNativePanelWindowEvent(cb: (event: NativePanelWindowEvent) => void): () => void;
 
   /** Menu → renderer commands (see electron/menu.ts for the grammar). */
   onMenuCommand(cb: (command: string) => void): () => void;
@@ -67,6 +102,33 @@ const api: LogosForgeDesktop = {
   onSaveBeforeClose: (cb) => subscribe<number>('app:save-before-close', cb),
   onCloseCancelled: (cb) => subscribe<void>('app:close-cancelled', () => cb()),
   sendCloseResult: (attemptId, saved) => ipcRenderer.send('app:close-result', attemptId, saved),
+
+  nativePanelWindowFrameName,
+  showNativePanelWindow: (panelId, token, activate = false) => ipcRenderer.invoke(
+    NATIVE_PANEL_WINDOW_CHANNELS.show,
+    { panelId, token, activate },
+  ),
+  focusNativePanelWindow: (panelId, token) => ipcRenderer.invoke(
+    NATIVE_PANEL_WINDOW_CHANNELS.focus,
+    { panelId, token },
+  ),
+  minimizeNativePanelWindow: (panelId, token) => ipcRenderer.invoke(
+    NATIVE_PANEL_WINDOW_CHANNELS.minimize,
+    { panelId, token },
+  ),
+  restoreNativePanelWindow: (panelId, token) => ipcRenderer.invoke(
+    NATIVE_PANEL_WINDOW_CHANNELS.restore,
+    { panelId, token },
+  ),
+  closeNativePanelWindow: (panelId, token) => ipcRenderer.invoke(
+    NATIVE_PANEL_WINDOW_CHANNELS.close,
+    { panelId, token },
+  ),
+  getNativePanelWindowBounds: (panelId, token) => ipcRenderer.invoke(
+    NATIVE_PANEL_WINDOW_CHANNELS.bounds,
+    { panelId, token },
+  ),
+  onNativePanelWindowEvent: (cb) => subscribe<NativePanelWindowEvent>(NATIVE_PANEL_WINDOW_CHANNELS.event, cb),
 
   onMenuCommand: (cb) => subscribe<string>('menu:command', cb),
 };

@@ -27,9 +27,17 @@ The canonical catalog describes 36 shared panels; hosts add the permanent AI
 Companions surface for a complete 37-panel Pro workspace. Every one of those
 panels can be placed in any of the four docks or detached as a modeless floating
 window, then moved, resized, minimized, restored, raised, and redocked without
-reparenting or remounting its React content. Manuscript and AI Companions are
-non-closable, but they follow the same placement and floating-window contract as
-the other panels.
+remounting its React content. Manuscript and AI Companions are non-closable, but
+they follow the same placement and floating-window contract as the other panels.
+
+Desktop hosts may provide the optional external-window host. The shared shell
+then keeps one stable React portal per panel while adopting its host element
+between the main document and an independent native window, allowing a float to
+leave the application frame and span multiple displays. Native bounds are
+persisted in screen DIP coordinates; the desktop host owns display-change and
+offscreen recovery. Hosts without that capability, including the browser
+preview and Pro Web, retain the contained in-workspace floating implementation
+and persist workspace-relative coordinates.
 
 Each catalog entry owns one unique panel shortcut. `Primary` means `Cmd` on
 macOS and `Ctrl` elsewhere; established direct bindings are retained, and the

@@ -440,19 +440,21 @@ function attachProcessDiagnostics(session) {
   });
 }
 
-function attachPageDiagnostics(session) {
-  session.page.on('console', (message) => {
+function attachPageDiagnostics(session, page = session.page, surface = 'renderer') {
+  if (!page || session.diagnosticPages.has(page)) return;
+  session.diagnosticPages.add(page);
+  page.on('console', (message) => {
     const location = message.location();
     const where = location?.url ? ` (${location.url}:${location.lineNumber ?? 0})` : '';
-    record(`${session.label}:renderer:${message.type()}`, `${message.text()}${where}`);
+    record(`${session.label}:${surface}:${message.type()}`, `${message.text()}${where}`);
   });
-  session.page.on('pageerror', (error) => {
+  page.on('pageerror', (error) => {
     session.pageErrors.push(errorText(error));
-    record(`${session.label}:pageerror`, errorText(error));
+    record(`${session.label}:${surface}:pageerror`, errorText(error));
   });
-  session.page.on('crash', () => {
-    session.pageErrors.push('renderer crashed');
-    record(`${session.label}:renderer`, 'page crashed');
+  page.on('crash', () => {
+    session.pageErrors.push(`${surface} crashed`);
+    record(`${session.label}:${surface}`, 'page crashed');
   });
 }
 
@@ -543,13 +545,15 @@ async function launchPackagedApp({ electron, exePath, root, label }) {
     root,
     runtime: null,
     pageErrors: [],
+    diagnosticPages: new Set(),
     closed: false,
   };
   activeSessions.add(session);
   attachProcessDiagnostics(session);
   try {
     session.page = await app.firstWindow({ timeout: STARTUP_TIMEOUT_MS });
-    attachPageDiagnostics(session);
+    attachPageDiagnostics(session, session.page, 'main-renderer');
+    app.on('window', (page) => attachPageDiagnostics(session, page, `panel-${session.diagnosticPages.size}`));
     await verifyPackagedRuntime(session, exePath);
     return session;
   } catch (error) {
@@ -1069,6 +1073,7 @@ async function exerciseIntelligenceShell(session) {
   return {
     projectId,
     openingSceneId: seeded.opening.id,
+    openingSceneTitle: seeded.opening.title,
     savedOpeningContent: expectedReply,
     graphCardId: graphCard.id,
     continuityCardId: continuityCard.id,
@@ -1478,15 +1483,6 @@ async function verifyPersistedTimelineRelationships(session, expected) {
   );
   assert.deepEqual(session.pageErrors, [], 'Renderer errors occurred while restoring Timeline relationships');
   record('journey', 'production Timeline relationship and exact identity survived graceful packaged relaunch');
-}
-
-async function numericInlineBounds(locator) {
-  return locator.evaluate((element) => ({
-    left: Number.parseFloat(element.style.left),
-    top: Number.parseFloat(element.style.top),
-    width: Number.parseFloat(element.style.width),
-    height: Number.parseFloat(element.style.height),
-  }));
 }
 
 async function pointerDragBy(page, locator, deltaX, deltaY, label, anchor = 'center') {
@@ -1993,9 +1989,145 @@ async function verifyPersistedCanvasPlot(session, expected) {
   record('journey', 'pointer-authored Canvas Plot content and viewport survived graceful packaged relaunch');
 }
 
-async function exercisePointerWorkspace(session) {
+async function probeLiveProseEditor(page, prose, expectedText, marker, label) {
+  await prose.focus();
+  await prose.press(process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End');
+  await page.keyboard.insertText(marker);
+  await waitFor(
+    async () => await prose.innerText() === `${expectedText}${marker}`,
+    `${label} ProseMirror edit`,
+  );
+  await prose.press(process.platform === 'darwin' ? 'Meta+Z' : 'Control+Z');
+  await waitFor(
+    async () => await prose.innerText() === expectedText,
+    `${label} ProseMirror undo`,
+  );
+  await prose.press(process.platform === 'darwin' ? 'Meta+S' : 'Control+S');
+}
+
+async function exerciseNativeManuscriptWindow(session, expected) {
+  const { page } = session;
+  const manuscriptSurface = await selectPanel(page, 'Manuscript', 'manuscript', 'Manuscript Editor');
+  const scene = manuscriptSurface.locator(`[data-scene-id="${expected.openingSceneId}"]`).first();
+  await scene.waitFor({ state: 'attached', timeout: UI_TIMEOUT_MS });
+  await scene.scrollIntoViewIfNeeded({ timeout: UI_TIMEOUT_MS });
+  const staticProse = scene.getByRole('button', {
+    name: `Activate prose editor for ${expected.openingSceneTitle}`,
+    exact: true,
+  });
+  if (await staticProse.count() > 0 && await staticProse.isVisible()) await staticProse.click();
+  const dockedProse = await waitVisible(scene.locator('[data-prose]'), 'docked live Manuscript editor');
+  await waitFor(
+    async () => await dockedProse.innerText() === expected.savedOpeningContent,
+    'current Manuscript content before native detach',
+  );
+
+  const manuscriptWindowPromise = session.app.waitForEvent('window', {
+    predicate: async (candidate) => {
+      try {
+        return await candidate.evaluate(() => (
+          /^logosforge-panel:manuscript:[A-Za-z0-9_-]{16,128}$/.test(window.name)
+        ));
+      } catch {
+        return false;
+      }
+    },
+    timeout: STARTUP_TIMEOUT_MS,
+  });
+  const floatManuscript = await waitVisible(
+    page.locator('[data-dock-drop-region="center"]')
+      .getByRole('button', { name: 'Float Manuscript', exact: true }),
+    'Float Manuscript control',
+  );
+  await floatManuscript.click();
+  const manuscriptWindow = await manuscriptWindowPromise;
+  attachPageDiagnostics(session, manuscriptWindow, 'manuscript-native-window');
+  const nativeSurface = manuscriptWindow.locator('section[data-panel-id="manuscript"]').first();
+  await waitFor(
+    async () => (await nativeSurface.getAttribute('data-native-floating-panel')) === 'true'
+      && await nativeSurface.isVisible(),
+    'native Manuscript window',
+  );
+  const nativeScene = nativeSurface.locator(`[data-scene-id="${expected.openingSceneId}"]`).first();
+  await nativeScene.scrollIntoViewIfNeeded({ timeout: UI_TIMEOUT_MS });
+  const nativeProse = await waitVisible(
+    nativeScene.locator('[data-prose]'),
+    'live Manuscript editor in native window',
+  );
+  await waitFor(
+    async () => await nativeProse.innerText() === expected.savedOpeningContent,
+    'preserved Manuscript state after native detach',
+  );
+  await probeLiveProseEditor(
+    manuscriptWindow,
+    nativeProse,
+    expected.savedOpeningContent,
+    'x',
+    'detached Manuscript',
+  );
+  await waitVisible(
+    nativeSurface.locator('[data-save-status="saved"]'),
+    'saved detached Manuscript probe',
+    SAVE_BARRIER_TIMEOUT_MS,
+  );
+  await waitFor(async () => {
+    const persisted = await packagedCoreJson(
+      session,
+      `/api/projects/${expected.projectId}/scenes/${expected.openingSceneId}`,
+    );
+    return persisted.content === expected.savedOpeningContent;
+  }, 'restored canonical prose after detached Manuscript probe', SAVE_BARRIER_TIMEOUT_MS);
+
+  const titlebar = await waitVisible(
+    manuscriptWindow.getByRole('toolbar', { name: 'Manuscript native window controls', exact: true }),
+    'Manuscript native window controls',
+  );
+  const manuscriptWindowClosed = manuscriptWindow.waitForEvent('close');
+  await titlebar.getByRole('button', { name: 'Dock Manuscript to center', exact: true }).click();
+  await withTimeout(manuscriptWindowClosed, UI_TIMEOUT_MS, 'Manuscript native window redock close');
+
+  const redockedSurface = page.locator(
+    'section[data-panel-id="manuscript"][data-dock-region="center"]',
+  ).first();
+  await waitVisible(redockedSurface, 'redocked Manuscript workspace surface');
+  const redockedScene = redockedSurface.locator(`[data-scene-id="${expected.openingSceneId}"]`).first();
+  await redockedScene.scrollIntoViewIfNeeded({ timeout: UI_TIMEOUT_MS });
+  const redockedProse = await waitVisible(
+    redockedScene.locator('[data-prose]'),
+    'live redocked Manuscript editor',
+  );
+  await waitFor(
+    async () => await redockedProse.innerText() === expected.savedOpeningContent,
+    'preserved Manuscript state after redock',
+  );
+  await probeLiveProseEditor(
+    page,
+    redockedProse,
+    expected.savedOpeningContent,
+    'y',
+    'redocked Manuscript',
+  );
+  await waitVisible(
+    redockedSurface.locator('[data-save-status="saved"]'),
+    'saved redocked Manuscript probe',
+    SAVE_BARRIER_TIMEOUT_MS,
+  );
+  await waitFor(async () => {
+    const persisted = await packagedCoreJson(
+      session,
+      `/api/projects/${expected.projectId}/scenes/${expected.openingSceneId}`,
+    );
+    return persisted.content === expected.savedOpeningContent;
+  }, 'restored canonical prose after redocked Manuscript probe', SAVE_BARRIER_TIMEOUT_MS);
+  assert.deepEqual(session.pageErrors, [], 'Renderer errors occurred during the native Manuscript editor exercise');
+  record('journey', 'live Manuscript editing survived native detach and redock without changing canonical prose');
+}
+
+async function exercisePointerWorkspace(session, manuscriptExpected) {
   const { page } = session;
   const { workspace, projectId } = await waitProReady(session);
+
+  await exerciseNativeManuscriptWindow(session, manuscriptExpected);
 
   const notesSurface = await selectPanel(page, 'Notes', 'notes', 'Notes Panel');
   assert.equal(await notesSurface.getAttribute('data-dock-region'), 'center');
@@ -2010,88 +2142,145 @@ async function exercisePointerWorkspace(session) {
     x: Math.max(260, Math.min(workspaceBounds.width - 260, Math.round(workspaceBounds.width * 0.42))),
     y: Math.max(120, Math.min(workspaceBounds.height - 220, Math.round(workspaceBounds.height * 0.28))),
   };
+  const notesWindowPromise = session.app.waitForEvent('window', {
+    predicate: async (candidate) => {
+      try {
+        return await candidate.evaluate(() => (
+          /^logosforge-panel:notes:[A-Za-z0-9_-]{16,128}$/.test(window.name)
+        ));
+      } catch {
+        return false;
+      }
+    },
+    timeout: STARTUP_TIMEOUT_MS,
+  });
   await notesTab.dragTo(workspace, { targetPosition });
+  const notesWindow = await notesWindowPromise;
+  attachPageDiagnostics(session, notesWindow, 'notes-native-window');
+  const nativeNotesSurface = notesWindow.locator('section[data-panel-id="notes"]').first();
   await waitFor(
-    async () => (await notesSurface.getAttribute('data-floating-panel')) === 'true'
-      && (await notesSurface.getAttribute('role')) === 'dialog'
-      && await notesSurface.isVisible(),
-    'pointer tear-off to create a modeless Notes panel',
+    async () => (await nativeNotesSurface.getAttribute('data-floating-panel')) === 'true'
+      && (await nativeNotesSurface.getAttribute('data-native-floating-panel')) === 'true'
+      && (await nativeNotesSurface.getAttribute('role')) === 'dialog'
+      && await nativeNotesSurface.isVisible(),
+    'pointer tear-off to create a native modeless Notes window',
   );
-  record('pointer', 'Notes tab torn off with a real drag gesture');
+  assert.match(
+    await notesWindow.evaluate(() => window.name),
+    /^logosforge-panel:notes:[A-Za-z0-9_-]{16,128}$/,
+    'Notes native window used an unexpected frame identity',
+  );
+  record('pointer', 'Notes tab torn off with a real drag gesture into an OS window');
 
   const titlebar = await waitVisible(
-    page.getByRole('toolbar', { name: 'Move Notes floating panel', exact: true }),
-    'Notes floating titlebar',
+    notesWindow.getByRole('toolbar', { name: 'Notes native window controls', exact: true }),
+    'Notes native window controls',
   );
-  const beforeMove = await numericInlineBounds(notesSurface);
-  assert.ok(Object.values(beforeMove).every(Number.isFinite));
-  const containedPosition = {
-    left: Math.max(0, Math.min(16, Math.floor(workspaceBounds.width - beforeMove.width))),
-    top: Math.max(0, Math.min(16, Math.floor(workspaceBounds.height - beforeMove.height))),
-  };
-  const moveDeltaX = containedPosition.left - beforeMove.left;
-  const moveDeltaY = containedPosition.top - beforeMove.top;
-  assert.ok(
-    Math.abs(moveDeltaX) >= 32 || Math.abs(moveDeltaY) >= 32,
-    'Tear-off did not leave enough distance for a meaningful pointer move',
+  const nativeGeometry = await session.app.evaluate(({ BrowserWindow, screen }) => {
+    const windows = BrowserWindow.getAllWindows();
+    const main = windows.find((candidate) => candidate.webContents.getURL() !== 'about:blank');
+    const panel = windows.find((candidate) => candidate.webContents.getURL() === 'about:blank');
+    if (!main || !panel) throw new Error('Could not resolve main and Notes BrowserWindows');
+    const preferences = panel.webContents.getLastWebPreferences();
+    const displays = screen.getAllDisplays();
+    const mainBounds = main.getBounds();
+    const mainDisplay = screen.getDisplayMatching(mainBounds);
+    const targetDisplay = displays.find((display) => display.id !== mainDisplay.id) ?? mainDisplay;
+    const work = targetDisplay.workArea;
+    const width = Math.min(760, Math.max(420, work.width - 32));
+    const height = Math.min(620, Math.max(320, work.height - 32));
+    const x = targetDisplay.id !== mainDisplay.id
+      ? work.x + 16
+      : Math.max(work.x, work.x + work.width - width - 16);
+    const y = work.y + 16;
+    panel.setBounds({ x, y, width, height });
+    panel.focus();
+    return {
+      windowCount: windows.length,
+      displayCount: displays.length,
+      mainDisplayId: mainDisplay.id,
+      targetDisplayId: targetDisplay.id,
+      parentIsNull: panel.getParentWindow() === null,
+      modal: panel.isModal(),
+      mainBounds,
+      targetBounds: { x, y, width, height },
+      preferences: {
+        contextIsolation: preferences.contextIsolation,
+        nodeIntegration: preferences.nodeIntegration,
+        sandbox: preferences.sandbox,
+      },
+    };
+  });
+  assert.equal(nativeGeometry.windowCount, 2, 'Notes tear-off did not create exactly one native panel window');
+  assert.deepEqual(
+    nativeGeometry.preferences,
+    { contextIsolation: true, nodeIntegration: false, sandbox: true },
+    'Notes native window security preferences changed',
   );
-  await pointerDragBy(
-    page,
-    titlebar,
-    moveDeltaX,
-    moveDeltaY,
-    'move Notes floating panel fully into the workspace',
-    'leading',
-  );
+  assert.equal(nativeGeometry.parentIsNull, true, 'Notes native window is still parent-constrained');
+  assert.equal(nativeGeometry.modal, false, 'Notes native window unexpectedly became modal');
+  let settledPanelBounds = null;
   await waitFor(async () => {
-    const current = await numericInlineBounds(notesSurface);
-    return Math.abs(current.left - containedPosition.left) <= 2
-      && Math.abs(current.top - containedPosition.top) <= 2;
-  }, 'pointer-moved Notes bounds fully inside the workspace');
-
-  const resizeHandle = await waitVisible(
-    page.getByRole('button', { name: 'Resize Notes floating panel', exact: true }),
-    'Notes floating resize handle',
+    settledPanelBounds = await session.app.evaluate(({ BrowserWindow }) => {
+      const panel = BrowserWindow.getAllWindows()
+        .find((candidate) => candidate.webContents.getURL() === 'about:blank');
+      return panel?.getBounds() ?? null;
+    });
+    if (!settledPanelBounds) return false;
+    return ['x', 'y', 'width', 'height'].every(
+      (key) => Math.abs(settledPanelBounds[key] - nativeGeometry.targetBounds[key]) <= 2,
+    );
+  }, 'native Notes window bounds to settle');
+  const mb = nativeGeometry.mainBounds;
+  const pb = settledPanelBounds;
+  const containedByMain = pb.x >= mb.x && pb.y >= mb.y
+    && pb.x + pb.width <= mb.x + mb.width
+    && pb.y + pb.height <= mb.y + mb.height;
+  if (nativeGeometry.displayCount > 1) {
+    const settledDisplayId = await session.app.evaluate(({ BrowserWindow, screen }) => {
+      const panel = BrowserWindow.getAllWindows()
+        .find((candidate) => candidate.webContents.getURL() === 'about:blank');
+      return panel ? screen.getDisplayMatching(panel.getBounds()).id : null;
+    });
+    assert.notEqual(
+      nativeGeometry.targetDisplayId,
+      nativeGeometry.mainDisplayId,
+      'Multi-display acceptance did not select a second display',
+    );
+    assert.equal(settledDisplayId, nativeGeometry.targetDisplayId, 'Notes did not settle on the selected display');
+  }
+  record(
+    'native-window',
+    `Notes is unparented/modeless and moved${nativeGeometry.displayCount > 1 ? ' onto another display' : containedByMain ? ' within the available single-display work area' : ' outside the main window'}: ${JSON.stringify(pb)}`,
   );
-  const resizeHandleBounds = await resizeHandle.boundingBox();
-  assert.ok(resizeHandleBounds, 'Notes floating resize handle has no pointer bounds');
-  assert.ok(
-    resizeHandleBounds.x >= workspaceBounds.x
-      && resizeHandleBounds.y >= workspaceBounds.y
-      && resizeHandleBounds.x + resizeHandleBounds.width <= workspaceBounds.x + workspaceBounds.width
-      && resizeHandleBounds.y + resizeHandleBounds.height <= workspaceBounds.y + workspaceBounds.height,
-    `Notes floating resize handle is outside the workspace: ${JSON.stringify({
-      resizeHandleBounds,
-      workspaceBounds,
-    })}`,
-  );
-  const beforeResize = await numericInlineBounds(notesSurface);
-  assert.ok(Number.isFinite(beforeResize.width) && Number.isFinite(beforeResize.height));
-  await pointerDragBy(page, resizeHandle, -72, -52, 'resize Notes floating panel');
-  await waitFor(async () => {
-    const current = await numericInlineBounds(notesSurface);
-    return current.width <= beforeResize.width - 48 && current.height <= beforeResize.height - 32;
-  }, 'pointer-resized Notes bounds');
 
-  await notesSurface.getByRole('button', { name: 'Minimize Notes', exact: true }).click();
+  await nativeNotesSurface.getByRole('button', { name: 'Minimize Notes', exact: true }).click();
   const restoreNotes = await waitVisible(
     page.getByRole('button', { name: 'Restore Notes', exact: true }),
     'minimized Notes restore control',
   );
-  assert.equal(await notesSurface.getAttribute('hidden'), '', 'Minimized Notes remained visible');
+  await waitFor(
+    () => session.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()
+      .some((candidate) => candidate.webContents.getURL() === 'about:blank' && candidate.isMinimized())),
+    'native Notes window to minimize',
+  );
   await restoreNotes.click();
   await waitFor(
-    async () => await notesSurface.isVisible()
-      && (await notesSurface.getAttribute('data-floating-panel')) === 'true',
-    'pointer-restored Notes floating panel',
+    async () => await nativeNotesSurface.isVisible()
+      && (await nativeNotesSurface.getAttribute('data-native-floating-panel')) === 'true'
+      && await session.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()
+        .some((candidate) => candidate.webContents.getURL() === 'about:blank' && !candidate.isMinimized())),
+    'pointer-restored Notes native window',
   );
 
-  await notesSurface.getByRole('button', { name: 'Dock Notes to left', exact: true }).click();
+  const notesWindowClosed = notesWindow.waitForEvent('close');
+  await titlebar.getByRole('button', { name: 'Dock Notes to left', exact: true }).click();
+  await withTimeout(notesWindowClosed, UI_TIMEOUT_MS, 'Notes native window redock close');
   await waitFor(
     async () => (await notesSurface.getAttribute('data-dock-region')) === 'left'
       && (await notesSurface.getAttribute('role')) === 'tabpanel'
       && await notesSurface.isVisible(),
-    'pointer-docked Notes in the left workspace region',
+    'redocked Notes in the left workspace region',
   );
 
   await page.getByRole('button', { name: 'Collapse right dock', exact: true }).click();
@@ -2213,13 +2402,24 @@ async function readSavedLayout(session, expected) {
 }
 
 async function captureScreenshot(session, name) {
-  if (!session?.page || session.page.isClosed()) return;
-  const output = path.join(diagnosticsDir, `${session.label}-${name}.png`);
-  try {
-    await session.page.screenshot({ path: output, fullPage: true, animations: 'disabled' });
-    record('diagnostics', `screenshot: ${output}`);
-  } catch (error) {
-    record('diagnostics', `screenshot failed: ${errorText(error)}`);
+  if (!session?.page) return;
+  const pages = [...session.diagnosticPages].filter((page) => !page.isClosed());
+  for (const [index, page] of pages.entries()) {
+    const suffix = index === 0 ? '' : `-panel-${index}`;
+    const output = path.join(diagnosticsDir, `${session.label}-${name}${suffix}.png`);
+    try {
+      const visible = await page.evaluate(() => document.visibilityState === 'visible');
+      if (!visible) continue;
+      await page.screenshot({
+        path: output,
+        fullPage: true,
+        animations: 'disabled',
+        timeout: 10_000,
+      });
+      record('diagnostics', `screenshot: ${output}`);
+    } catch (error) {
+      record('diagnostics', `screenshot failed: ${errorText(error)}`);
+    }
   }
 }
 
@@ -2297,14 +2497,13 @@ async function closeSession(session, { requireGraceful = true } = {}) {
     });
     await session.app.evaluate(({ app, BrowserWindow }) => {
       const windows = BrowserWindow.getAllWindows();
-      if (windows.length !== 1) {
-        throw new Error(`Expected one BrowserWindow before close; received ${windows.length}`);
-      }
-      // Closing the last window quits on Windows. macOS intentionally keeps an
-      // app alive with no windows, so request a real app quit there; both paths
-      // enter the same production save handshake in electron/main.ts.
+      const rootWindow = windows.find((candidate) => candidate.webContents.getURL() !== 'about:blank');
+      if (!rootWindow) throw new Error(`Could not resolve the root BrowserWindow among ${windows.length} windows`);
+      // Closing the root window invokes the production save handshake, which
+      // then owns child-panel teardown. macOS intentionally keeps an app alive
+      // with no windows, so request a real application quit there.
       if (process.platform === 'darwin') app.quit();
-      else windows[0].close();
+      else rootWindow.close();
     });
     await withTimeout(exited, CLOSE_TIMEOUT_MS, `${session.label} graceful close`);
     graceful = true;
@@ -2389,7 +2588,7 @@ async function main() {
     await captureScreenshot(first, 'timeline-relationships');
     const canvasExpected = await exerciseCanvasPlot(first);
     await captureScreenshot(first, 'canvas-plot');
-    const workspaceExpected = await exercisePointerWorkspace(first);
+    const workspaceExpected = await exercisePointerWorkspace(first, intelligenceExpected);
     assert.equal(
       workspaceExpected.projectId,
       intelligenceExpected.projectId,

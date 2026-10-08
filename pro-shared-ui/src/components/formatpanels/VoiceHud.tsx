@@ -10,6 +10,7 @@ import { useScenes } from "../../hooks";
 import { discardProjectSavePending, flushPendingProjectSaves, markProjectSavePending, registerProjectFlusher, trackProjectOperation, trackProjectWrite } from "../../adapters/projectSaveCoordinator";
 import { startMic, type MicRecorder } from "./mic";
 import { createLatestRequestGate, type RequestToken } from "../../hooks/latestRequest";
+import { usePanelHostWindow } from "../common/PanelHost";
 
 /**
  * Dexter's Room — the FULL headless voice facade (VoiceRoomService) over HTTP,
@@ -49,6 +50,7 @@ type PendingInsert = {
 
 export function VoiceHud(props: PanelProps) {
   const { api, projectId } = useStudio();
+  const ownerWindow = usePanelHostWindow();
   const projectIdRef = useRef(projectId);
   projectIdRef.current = projectId;
   const requests = useRef(createLatestRequestGate()).current;
@@ -72,7 +74,7 @@ export function VoiceHud(props: PanelProps) {
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const recorder = useRef<MicRecorder | null>(null);
-  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timer = useRef<{ ownerWindow: Window; handle: number } | null>(null);
   const recordingRef = useRef(recording);
   recordingRef.current = recording;
   const busyRef = useRef(busy);
@@ -102,7 +104,7 @@ export function VoiceHud(props: PanelProps) {
     projectIdRef.current === ownerProjectId && requests.isCurrent(token), [requests]);
 
   const stopTimer = useCallback(() => {
-    if (timer.current) clearInterval(timer.current);
+    if (timer.current) timer.current.ownerWindow.clearInterval(timer.current.handle);
     timer.current = null;
   }, []);
 
@@ -202,7 +204,7 @@ export function VoiceHud(props: PanelProps) {
     }
     const token = requests.begin("mic");
     setErr(null); setNote(null); setMicStarting(true);
-    const starting = trackProjectOperation(startMic(), { ownerFlusher: voiceFlusher });
+    const starting = trackProjectOperation(startMic(ownerWindow), { ownerFlusher: voiceFlusher });
     micStartRef.current = starting;
     try {
       const rec = await starting;
@@ -214,7 +216,12 @@ export function VoiceHud(props: PanelProps) {
       recordingRef.current = true;
       setRecording(true); setElapsed(0);
       stopTimer();
-      timer.current = setInterval(() => setElapsed((e) => e + 1), 1000);
+      if (ownerWindow) {
+        timer.current = {
+          ownerWindow,
+          handle: ownerWindow.setInterval(() => setElapsed((e) => e + 1), 1000),
+        };
+      }
     } catch (error) {
       if (isOwned(ownerProjectId, token)) {
         setErr(error instanceof Error ? `Mic blocked — ${error.message}` : String(error));
@@ -223,7 +230,7 @@ export function VoiceHud(props: PanelProps) {
       if (micStartRef.current === starting) micStartRef.current = null;
       if (isOwned(ownerProjectId, token)) setMicStarting(false);
     }
-  }, [available, isOwned, requests, stopTimer, voiceFlusher]);
+  }, [available, isOwned, ownerWindow, requests, stopTimer, voiceFlusher]);
 
   const stopRecord = useCallback((): Promise<void> | undefined => {
     const ownerProjectId = projectIdRef.current;

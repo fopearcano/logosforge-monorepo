@@ -1,4 +1,8 @@
 import type { PlatformAdapter } from '@logosforge/pro-shared-ui';
+import type {
+  NativePanelWindowBounds as HostNativePanelWindowBounds,
+  NativePanelWindowEvent as HostNativePanelWindowEvent,
+} from '../../electron/native-panel-windows';
 
 export type CoreStatus = {
   state: 'connecting' | 'connected' | 'error';
@@ -21,6 +25,10 @@ export type DesktopSessionState = {
   lastActiveProjectId: number | null;
 };
 
+/** Absolute outer-window screen bounds in Electron device-independent pixels (DIP). */
+export type NativePanelWindowBounds = HostNativePanelWindowBounds;
+export type NativePanelWindowEvent = HostNativePanelWindowEvent;
+
 /** The flat `window.logosforge` surface exposed by the Electron preload. */
 export interface DesktopBridge {
   coreBaseUrl(): Promise<string>;
@@ -39,6 +47,14 @@ export interface DesktopBridge {
   onSaveBeforeClose(cb: (attemptId: number) => void): () => void;
   onCloseCancelled(cb: () => void): () => void;
   sendCloseResult(attemptId: number, saved: boolean): void;
+  nativePanelWindowFrameName(panelId: string, token: string): string;
+  showNativePanelWindow(panelId: string, token: string, activate?: boolean): Promise<boolean>;
+  focusNativePanelWindow(panelId: string, token: string): Promise<boolean>;
+  minimizeNativePanelWindow(panelId: string, token: string): Promise<boolean>;
+  restoreNativePanelWindow(panelId: string, token: string): Promise<boolean>;
+  closeNativePanelWindow(panelId: string, token: string): Promise<boolean>;
+  getNativePanelWindowBounds(panelId: string, token: string): Promise<NativePanelWindowBounds | null>;
+  onNativePanelWindowEvent(cb: (event: NativePanelWindowEvent) => void): () => void;
   onMenuCommand(cb: (command: string) => void): () => void;
 }
 

@@ -15,6 +15,7 @@ import { flushPendingProjectSaves } from "../../adapters/projectSaveCoordinator"
 import { useSelection } from "../../adapters/selection";
 import { useNavigate, useStudio } from "../../adapters/StudioProvider";
 import { createLatestRequestGate } from "../../hooks/latestRequest";
+import { isPanelHostHTMLElement, usePanelHostDocument, usePanelHostWindow } from "../common/PanelHost";
 
 const resultButton: CSSProperties = {
   width: "100%",
@@ -56,8 +57,8 @@ const visuallyHidden: CSSProperties = {
   border: 0,
 };
 
-function isEditableTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
+function isEditableTarget(target: EventTarget | null, ownerDocument: Document | null): boolean {
+  if (!ownerDocument || !isPanelHostHTMLElement(target, ownerDocument)) return false;
   return target.matches("input, textarea, select, [contenteditable='true'], [contenteditable='plaintext-only']")
     || target.closest("[contenteditable='true'], [contenteditable='plaintext-only']") != null;
 }
@@ -73,6 +74,8 @@ function errorText(prefix: string, error: unknown): string {
  */
 export function PsykeConsole() {
   const { api, projectId } = useStudio();
+  const ownerDocument = usePanelHostDocument();
+  const ownerWindow = usePanelHostWindow();
   const navigate = useNavigate();
   const { selection } = useSelection();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -108,8 +111,8 @@ export function PsykeConsole() {
     setPlan(null);
     setPlanError("");
     setMessage(nextMessage);
-    window.requestAnimationFrame(() => inputRef.current?.focus());
-  }, [requests]);
+    ownerWindow?.requestAnimationFrame(() => inputRef.current?.focus());
+  }, [ownerWindow, requests]);
 
   useEffect(() => {
     requests.open();
@@ -157,15 +160,16 @@ export function PsykeConsole() {
   }, [requests, selection.sceneId]);
 
   useEffect(() => {
+    if (!ownerWindow) return undefined;
     const onGlobalKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
-      if (event.key !== "/" || isEditableTarget(event.target)) return;
+      if (event.key !== "/" || isEditableTarget(event.target, ownerDocument)) return;
       event.preventDefault();
       inputRef.current?.focus();
     };
-    window.addEventListener("keydown", onGlobalKey);
-    return () => window.removeEventListener("keydown", onGlobalKey);
-  }, []);
+    ownerWindow.addEventListener("keydown", onGlobalKey);
+    return () => ownerWindow.removeEventListener("keydown", onGlobalKey);
+  }, [ownerDocument, ownerWindow]);
 
   useEffect(() => {
     if (skipNextQuerySearch.current) {
@@ -196,7 +200,8 @@ export function PsykeConsole() {
     setExpanded(false);
     setLoading(true);
     setMessage("");
-    const timer = window.setTimeout(() => {
+    if (!ownerWindow) return;
+    const timer = ownerWindow.setTimeout(() => {
       searchTimerRef.current = null;
       const token = requests.begin("suggestions");
       const controller = new AbortController();
@@ -225,12 +230,12 @@ export function PsykeConsole() {
     }, 100);
     searchTimerRef.current = timer;
     return () => {
-      window.clearTimeout(timer);
+      ownerWindow.clearTimeout(timer);
       if (searchTimerRef.current === timer) searchTimerRef.current = null;
       searchAbortRef.current?.abort();
       searchAbortRef.current = null;
     };
-  }, [api, projectId, query, requests, selection.sceneId]);
+  }, [api, ownerWindow, projectId, query, requests, selection.sceneId]);
 
   const planCommand = useCallback((rawCommand: string) => {
     const command = rawCommand.trim();
@@ -243,7 +248,7 @@ export function PsykeConsole() {
       return;
     }
     if (searchTimerRef.current != null) {
-      window.clearTimeout(searchTimerRef.current);
+      ownerWindow?.clearTimeout(searchTimerRef.current);
       searchTimerRef.current = null;
     }
     searchAbortRef.current?.abort();
@@ -274,7 +279,7 @@ export function PsykeConsole() {
         setMessage(nextPlan.requires_confirmation ? "Review the project change before confirming." : "Review the resolved target before opening it.");
         if (query !== nextPlan.normalized_command) skipNextQuerySearch.current = true;
         setQuery(nextPlan.normalized_command);
-        window.requestAnimationFrame(() => runButtonRef.current?.focus());
+        ownerWindow?.requestAnimationFrame(() => runButtonRef.current?.focus());
       },
       (error) => {
         if (!requests.isCurrent(token)) return;
@@ -286,10 +291,10 @@ export function PsykeConsole() {
         const detail = errorText("Command preview failed.", error);
         setPlanError(detail);
         setMessage(detail);
-        window.requestAnimationFrame(() => inputRef.current?.focus());
+        ownerWindow?.requestAnimationFrame(() => inputRef.current?.focus());
       },
     );
-  }, [api, projectId, query, requests, selection.sceneId]);
+  }, [api, ownerWindow, projectId, query, requests, selection.sceneId]);
 
   const activate = useCallback((suggestion: PsykeConsoleSuggestionDTO) => {
     const opensEntry = suggestion.entry_id > 0
@@ -334,7 +339,7 @@ export function PsykeConsole() {
           const detail = errorText("Command not executed because pending edits could not be saved.", error);
           setPlanError(detail);
           setMessage(detail);
-          window.requestAnimationFrame(() => runButtonRef.current?.focus());
+          ownerWindow?.requestAnimationFrame(() => runButtonRef.current?.focus());
         }
         return;
       }
@@ -367,13 +372,13 @@ export function PsykeConsole() {
         const detail = errorText("Command execution failed; preview it again before retrying.", error);
         setPlanError(detail);
         setMessage(detail);
-        window.requestAnimationFrame(() => inputRef.current?.focus());
+        ownerWindow?.requestAnimationFrame(() => inputRef.current?.focus());
       }
     } finally {
       executingRef.current = false;
       setExecuting(false);
     }
-  }, [api, navigate, plan, projectId]);
+  }, [api, navigate, ownerWindow, plan, projectId]);
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
     if (event.key === "ArrowDown" && results.length) {
@@ -398,7 +403,7 @@ export function PsykeConsole() {
         return;
       }
       if (searchTimerRef.current != null) {
-        window.clearTimeout(searchTimerRef.current);
+        ownerWindow?.clearTimeout(searchTimerRef.current);
         searchTimerRef.current = null;
       }
       requests.invalidate("suggestions");

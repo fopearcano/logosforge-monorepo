@@ -11,6 +11,7 @@ import {
   trackProjectOperation,
   trackProjectWrite,
 } from '../src/adapters/projectSaveCoordinator';
+import { registerPanelHostDocument } from '../src/components/common/panelHostDocuments';
 
 let passed = 0;
 const failures: string[] = [];
@@ -179,24 +180,37 @@ const check = (label: string, condition: boolean): void => {
 }
 
 {
-  let blurred = false;
+  let ambientBlurred = false;
+  let hostBlurred = false;
   const originalDocument = globalThis.document;
   const originalHTMLElement = globalThis.HTMLElement;
   class FakeElement {
     matches(selector: string) { return selector.includes('input'); }
-    blur() { blurred = true; }
+    blur() { ambientBlurred = true; }
+  }
+  class HostElement {
+    matches(selector: string) { return selector.includes('textarea'); }
+    blur() { hostBlurred = true; }
   }
   Object.defineProperty(globalThis, 'HTMLElement', { value: FakeElement, configurable: true });
   Object.defineProperty(globalThis, 'document', {
     value: { activeElement: new FakeElement() }, configurable: true,
   });
+  const unregisterHost = registerPanelHostDocument({
+    activeElement: new HostElement(),
+    defaultView: { HTMLElement: HostElement },
+  } as unknown as Document);
   try {
     await flushPendingProjectSaves({ commitActiveField: true });
   } finally {
+    unregisterHost();
     Object.defineProperty(globalThis, 'document', { value: originalDocument, configurable: true });
     Object.defineProperty(globalThis, 'HTMLElement', { value: originalHTMLElement, configurable: true });
   }
-  check('handoff commits the active inline field through blur', blurred);
+  check(
+    'handoff commits active inline fields in ambient and cross-realm panel documents',
+    ambientBlurred && hostBlurred,
+  );
 }
 
 console.log(`Project save coordinator tests: ${passed} passed, ${failures.length} failed`);

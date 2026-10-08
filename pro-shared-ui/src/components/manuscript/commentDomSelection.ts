@@ -5,17 +5,17 @@ function stripDecorationWidgets(fragment: DocumentFragment): void {
 }
 
 function visibleTextLength(node: Node): number {
-  if (node instanceof Element && node.matches(".pm-comment-caret")) return 0;
+  if (node.nodeType === 1 && (node as Element).matches(".pm-comment-caret")) return 0;
   const clone = node.cloneNode(true);
-  if (clone instanceof DocumentFragment) stripDecorationWidgets(clone);
-  else if (clone instanceof Element) clone.querySelectorAll(".pm-comment-caret").forEach((element) => element.remove());
+  if (clone.nodeType === 11) stripDecorationWidgets(clone as DocumentFragment);
+  else if (clone.nodeType === 1) (clone as Element).querySelectorAll(".pm-comment-caret").forEach((element) => element.remove());
   return clone.textContent?.length ?? 0;
 }
 
 /** Return the ProseMirror content root containing a browser-selection endpoint. */
 export function proseRootForDomPoint(node: Node | null): HTMLElement | null {
   if (!node) return null;
-  const element = node instanceof Element ? node : node.parentElement;
+  const element = node.nodeType === 1 ? node as Element : node.parentElement;
   return element?.closest<HTMLElement>("[data-prose]") ?? null;
 }
 
@@ -76,16 +76,17 @@ export function proseDomPointToTextOffset(
 
   let directChild: Node | null = container;
   while (directChild?.parentNode && directChild.parentNode !== root) directChild = directChild.parentNode;
-  if (!(directChild instanceof Element)) return null;
-  const blockIndex = blocks.indexOf(directChild);
+  if (!directChild || directChild.nodeType !== 1) return null;
+  const directChildElement = directChild as Element;
+  const blockIndex = blocks.indexOf(directChildElement);
   if (blockIndex < 0) return null;
-  if (directChild.matches(".pm-comment-caret") || (container instanceof Element && container.closest(".pm-comment-caret"))) return null;
-  if (!(container instanceof Element) && container.parentElement?.closest(".pm-comment-caret")) return null;
+  if (directChildElement.matches(".pm-comment-caret") || (container.nodeType === 1 && (container as Element).closest(".pm-comment-caret"))) return null;
+  if (container.nodeType !== 1 && container.parentElement?.closest(".pm-comment-caret")) return null;
 
   let within = 0;
   try {
-    const range = document.createRange();
-    range.setStart(directChild, 0);
+    const range = root.ownerDocument.createRange();
+    range.setStart(directChildElement, 0);
     range.setEnd(container, offset);
     const fragment = range.cloneContents();
     stripDecorationWidgets(fragment);
