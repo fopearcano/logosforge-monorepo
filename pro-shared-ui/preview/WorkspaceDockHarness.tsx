@@ -64,9 +64,9 @@ export function WorkspaceDockHarness() {
     return initial;
   });
   const panels = useMemo<WorkspacePanelDefinition[]>(() => [
-    { id: "manuscript", label: "Manuscript", closable: false, movable: false, node: <PreviewPanel title="Manuscript" color="#e8443a" editable /> },
+    { id: "manuscript", label: "Manuscript", closable: false, node: <PreviewPanel title="Manuscript" color="#e8443a" editable /> },
     { id: "dashboard", label: "Dashboard", node: <PreviewPanel title="Dashboard" color="#4cc2ff" editable /> },
-    { id: "ai-companions", label: "AI Companions", node: <PreviewPanel title="AI Companions" color="#b07cff" /> },
+    { id: "ai-companions", label: "AI Companions", closable: false, node: <PreviewPanel title="AI Companions" color="#b07cff" /> },
     { id: "decision-radar", label: "Decision Radar", node: <PreviewPanel title="Decision Radar" color="#ffb454" /> },
     { id: "outline", label: "Outline", node: <PreviewPanel title="Outline" color="#62d99a" /> },
     { id: "health", label: "Health", node: <PreviewPanel title="Story Health" color="#f481a8" /> },
@@ -105,7 +105,7 @@ export function WorkspaceDockHarness() {
         <WorkspaceShell
           writingMode="novel"
           layout={layout.preset}
-          theme="dark"
+          skin="forge"
           showConsole={false}
           navSlot={navigator}
           rightSlot={<></>}

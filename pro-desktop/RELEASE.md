@@ -85,7 +85,7 @@ Actions download after hosted ingestion and is also retained in the runner's
 validation.
 
 ```bash
-git tag v0.1.2 && git push origin v0.1.2
+git tag v0.1.3 && git push origin v0.1.3
 ```
 
 The workflow assumes a **single monorepo checkout** containing `logosforge/`,

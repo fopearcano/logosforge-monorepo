@@ -1,5 +1,6 @@
 import type { CSSProperties, ReactNode } from "react";
 import { PanelShell, Corners, type PanelProps } from "../shell/PanelShell";
+import { formatStudioShortcut, STUDIO_PANEL_SHORTCUTS } from "../../workspace/panelShortcuts";
 
 /**
  * Help & Guide — an in-app user guide: quick start, the workspace map, the AI
@@ -11,7 +12,7 @@ import { PanelShell, Corners, type PanelProps } from "../shell/PanelShell";
 const panelBox: CSSProperties = {
   position: "relative", width: "100%", height: "100%",
   background: "linear-gradient(180deg,var(--panel),var(--base))", border: "1px solid var(--line)",
-  boxShadow: "0 16px 60px rgba(0,0,0,.6)", overflow: "hidden", display: "flex", flexDirection: "column",
+  boxShadow: "var(--page-shadow)", overflow: "hidden", display: "flex", flexDirection: "column",
 };
 
 // ── Keyboard shortcuts (verified against the app) ──────────────────────────
@@ -21,7 +22,7 @@ const SHORTCUTS: [string, string][] = [
   ["Enter  /  Space", "Activate the focused button, toggle or selectable card"],
   ["↑ ↓ · Enter · Esc", "In the palette: move · run the highlighted command · close"],
   ["⌘S  /  Ctrl+S", "Save now in the Manuscript (scenes also autosave as you type)"],
-  ["⌘⇧C  /  Ctrl+Shift+C", "Open the Comments panel"],
+  ["37 panel shortcuts", "Every panel has a direct open/focus shortcut; the complete key map appears below"],
   ["Alt+↑  /  Alt+↓", "In the Manuscript: cycle backward / forward through open anchored comments"],
   ["⌘/Ctrl + Enter (comment)", "Post a new comment or thread reply"],
   ["Enter", "Send your message to Billy   (Shift+Enter = new line)"],
@@ -35,7 +36,7 @@ const GUIDE: { title: string; items: [string, string][] }[] = [
   { title: "① Get started", items: [
     ["Projects", "Create a project — pick a project mode (novel · screenplay · graphic novel · stage · series) — or open one. The mode follows each project and locks once it contains work, preventing accidental reinterpretation. You can also ⇩ Import Whiteboard (.json) or ⇩ Import Project (.lfbundle)."],
     ["AI Settings", "Point Studio at your AI model — LM Studio, Ollama, OpenAI, Anthropic, OpenRouter or a custom endpoint. Use Save to accept credentials/configuration or Revert to discard them; Studio will stop navigation while this sensitive form is unsaved."],
-    ["Manuscript", "Write. Scenes autosave; panel changes, project changes, and app close wait for pending manuscript, Note and PSYKE saves. Create, delete, reorder and manual-save failures stay visible. If a scene changed elsewhere, your local draft is preserved and you choose Reload or an explicit Overwrite. In very long manuscripts, off-screen scenes remain readable but use a lightweight view; scrolling near them or clicking their prose activates the full editor. ＋ SCENE adds one; FOCUS hides everything but the page."],
+    ["Manuscript", "Write. Scenes autosave; panel changes, project changes, and app close wait for pending manuscript, Note and PSYKE saves. Create, delete, reorder and manual-save failures stay visible. If a scene changed elsewhere, your local draft is preserved and you choose Reload or an explicit Overwrite. In very long manuscripts, off-screen scenes remain readable but use a lightweight view; scrolling near them or clicking their prose activates the full editor. ＋ SCENE adds one; FOCUS temporarily projects Manuscript full-center without changing its saved placement."],
     ["Comments", "Select text in a scene title or prose, choose ＋ COMMENT, and write. Drag from prose in one scene into another to anchor one cross-scene thread. Saved passages stay visibly marked; activate a mark for its anchored thread popover, or open the full Comments panel with ⌘/Ctrl+Shift+C."],
     ["Comment threads", "Reply, edit the original comment, delete replies or whole threads, and Resolve/Reopen. ALL / OPEN is remembered and also controls resolved marks. Export the full review as Markdown. Mention @assistant or @counterpart in a reply for a project-aware AI answer in the thread."],
     ["Comment anchors", "Quote-and-context anchors relocate safely as prose moves, including imported Whiteboard ranges across title/content or scene boundaries. Imported source provenance remains visible; only a genuinely missing passage is cleaned up, after pending scene saves settle."],
@@ -44,10 +45,12 @@ const GUIDE: { title: string; items: [string, string][] }[] = [
   ] },
   { title: "② The workspace", items: [
     ["Left rail", "Browse and edit the core-owned Act → Chapter → Scene structure (or Act → Scene in chapter-less modes). The quiet +ACT, +CH, +SC, rename, detach, delete, and repair controls use revision-guarded transactions; Series container actions are scoped to one Episode (or No episode), detach preserves manuscript text, and delete always asks for confirmation. Disclosure controls keep large projects compact; filtering opens matching paths temporarily and tells you when the current scene is hidden. Opening a scene waits for pending manuscript saves before moving. Use Search project or press ⌘K for the full Omnibox."],
-    ["AI dock (right)", "Your AI companions, available in any section. Drag its left edge to resize (340–900px), or focus the divider and use Left/Right arrows (Shift = larger step; Home/End = limits). Click › to collapse it to a strip, ‹ AI to reopen."],
-    ["FOCUS / COCKPIT", "Top-right toggle: FOCUS is distraction-free (just the page — Esc to exit); COCKPIT shows the full workstation."],
+    ["Skins", "Choose Forge, Paper or Lamplit from the left rail, View → Skins, or the command palette. A Skin changes the workspace atmosphere only; it is remembered on this device and never changes project content, layout or writing-mode accents."],
+    ["Panels & floating windows", "Every panel—including Manuscript and AI Companions—can move to any dock or float above the workspace. Drag a tab between headers, click ◇, or drop it on the workspace to float it. Drag a floating title bar (or focus it and use Arrow keys) to move; use its corner handle or Arrow keys to resize; L · C · R · B redock it; — minimizes it to the FLOATS tray. × closes ordinary panels, while permanent Manuscript and AI Companions stay available. RESET restores the default layout. Placement, size, minimized state and stacking are remembered per project."],
+    ["AI Companions", "Billy, Logos, Quantum, Counterpart and Extraction remain mounted together while their parent panel moves, floats or minimizes, so conversations and in-progress work survive layout changes."],
+    ["FOCUS / COCKPIT", "Top-right toggle: FOCUS hides every other dock and float and projects Manuscript full-center; Esc returns to the exact Cockpit layout you left."],
   ] },
-  { title: "③ AI companions (right dock)", items: [
+  { title: "③ AI companions", items: [
     ["◇ Billy", "Project-aware chat — he reads your scenes, outline and bible. New Chat invalidates an unfinished response; stale replies from an earlier conversation or project are never inserted."],
     ["❖ Logos", "Targeted transforms and analyzers. Changing passage or section invalidates the previous run; catalog/proactive failures remain visible and can be retried."],
     ["ψ Quantum", "Enter a premise → fan out possibilities, inspect a branch and materialize it as a scene. Scoring changes are serialized; stale generations and double-click collapses are rejected."],
@@ -73,7 +76,7 @@ const GUIDE: { title: string; items: [string, string][] }[] = [
 ];
 
 const sectionTitle = (children: ReactNode) => (
-  <div style={{ fontFamily: "'Chakra Petch',sans-serif", fontWeight: 600, fontSize: 12, letterSpacing: ".1em", color: "var(--accent)", margin: "22px 0 10px" }}>{children}</div>
+  <div style={{ fontFamily: "var(--display-font)", fontWeight: 600, fontSize: 12, letterSpacing: ".1em", color: "var(--accent)", margin: "22px 0 10px" }}>{children}</div>
 );
 
 function Row({ k, v }: { k: string; v: string }) {
@@ -86,7 +89,7 @@ function Row({ k, v }: { k: string; v: string }) {
 }
 
 function Kbd({ children }: { children: ReactNode }) {
-  return <span style={{ flex: "0 0 152px", fontFamily: "'Chakra Petch',sans-serif", fontSize: 10.5, color: "var(--strong)", background: "rgba(76,194,255,.08)", border: "1px solid var(--line-cy,#2b6f8f)", borderRadius: 3, padding: "3px 7px", letterSpacing: ".03em", textAlign: "center" }}>{children}</span>;
+  return <span style={{ flex: "0 0 152px", fontFamily: "var(--display-font)", fontSize: 10.5, color: "var(--strong)", background: "color-mix(in srgb,var(--accent) 8%,transparent)", border: "1px solid var(--line-cy,#2b6f8f)", borderRadius: "var(--control-radius)", padding: "3px 7px", letterSpacing: ".03em", textAlign: "center" }}>{children}</span>;
 }
 
 export function HelpPanel(props: PanelProps) {
@@ -95,7 +98,7 @@ export function HelpPanel(props: PanelProps) {
       <div data-screen-label="Help & Guide" style={panelBox}>
         <Corners />
         <div style={{ height: 42, flex: "none", display: "flex", alignItems: "center", gap: 10, padding: "0 16px", borderBottom: "1px solid var(--line)" }}>
-          <span style={{ fontFamily: "'Chakra Petch',sans-serif", fontWeight: 600, fontSize: 13, letterSpacing: ".14em", color: "var(--strong)" }}>GUIDE</span>
+          <span style={{ fontFamily: "var(--display-font)", fontWeight: 600, fontSize: 13, letterSpacing: ".14em", color: "var(--strong)" }}>GUIDE</span>
           <span style={{ fontSize: 9, color: "var(--txt3)", letterSpacing: ".12em" }}>QUICK START · WORKSPACE · SHORTCUTS</span>
         </div>
 
@@ -117,6 +120,25 @@ export function HelpPanel(props: PanelProps) {
                 </div>
               ))}
             </div>
+
+            {sectionTitle("⇥  Open or focus a panel")}
+            <p style={{ fontSize: 11, color: "var(--txt2)", lineHeight: 1.55, margin: "0 0 10px" }}>
+              A panel shortcut opens a closed panel, selects a docked one, or restores and raises a minimized floating one. Navigation waits for pending saves. <span style={{ color: "var(--strong)" }}>⌘</span> is used on macOS and <span style={{ color: "var(--strong)" }}>Ctrl</span> on Windows/Linux.
+            </p>
+            {(["CORE", "PLAN", "STRUCTURE", "ANALYTICS", "BIBLE", "SYSTEM", "AI"] as const).map((group) => {
+              const definitions = STUDIO_PANEL_SHORTCUTS.filter((definition) => definition.group === group);
+              return (
+                <div key={group} style={{ marginBottom: 10, border: "1px solid var(--line2)", background: "var(--tint)", padding: "4px 12px 8px" }}>
+                  <div style={{ fontFamily: "var(--display-font)", color: "var(--accent)", fontSize: 9, letterSpacing: ".12em", padding: "7px 0 3px" }}>{group}</div>
+                  {definitions.map((definition) => (
+                    <div key={definition.id} style={{ display: "flex", gap: 12, padding: "6px 0", borderTop: "1px solid var(--tint2)", alignItems: "center" }}>
+                      <Kbd>{formatStudioShortcut(definition.shortcut)}</Kbd>
+                      <span style={{ flex: 1, fontSize: 11, color: "var(--txt2)" }}>{definition.label}</span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
 
             {GUIDE.map((sec) => (
               <div key={sec.title}>

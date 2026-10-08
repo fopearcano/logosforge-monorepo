@@ -396,12 +396,45 @@ function jsonClone<T>(value: T): T {
   check("allowed-ID restore repairs a valid active tab", restored.layout.docks.right.activePanelId === "ai-companions");
   check("allowed-ID restore reports reconciliation", restored.source === "current" && restored.diagnostics.length === 1);
 
+  let floatedManuscript = movePanel(createDefaultWorkspaceLayout(), "manuscript", {
+    kind: "floating",
+    bounds: { x: 91, y: 73, width: 812, height: 618 },
+  });
+  floatedManuscript = reconcileWorkspaceLayout(floatedManuscript, allowed);
+  const floatedPlacement = getPanelPlacement(floatedManuscript, "manuscript");
+  const floatedBounds = floatedPlacement?.kind === "floating" ? floatedPlacement.bounds : undefined;
+  check(
+    "reconciliation preserves a deliberately floated manuscript",
+    floatedPlacement?.kind === "floating"
+      && floatedBounds?.x === 91
+      && floatedBounds?.y === 73
+      && floatedBounds?.width === 812
+      && floatedBounds?.height === 618,
+  );
+  const floatedEncoded = serializeWorkspaceLayout(floatedManuscript);
+  const floatedRestored = restoreWorkspaceLayout(floatedEncoded, allowed);
+  check(
+    "a floated manuscript survives serialized restore with exact placement",
+    floatedRestored.source === "current"
+      && serializeWorkspaceLayout(floatedRestored.layout) === floatedEncoded,
+  );
+  const closedFloatedManuscript = closePanel(floatedRestored.layout, "manuscript");
+  check(
+    "closing the permanent manuscript is a no-op at its current floating placement",
+    serializeWorkspaceLayout(closedFloatedManuscript) === floatedEncoded
+      && getPanelPlacement(closedFloatedManuscript, "manuscript")?.kind === "floating",
+  );
+
   const withoutManuscript = createDefaultWorkspaceLayout();
   withoutManuscript.docks.center.panelIds = ["dashboard"];
   withoutManuscript.docks.center.activePanelId = "dashboard";
   withoutManuscript.focused = { zone: "center", panelId: "dashboard" };
   const reconciled = reconcileWorkspaceLayout(withoutManuscript, allowed);
-  check("reconciliation guarantees manuscript first in center", reconciled.docks.center.panelIds[0] === "manuscript");
+  check(
+    "reconciliation repairs a genuinely missing manuscript into center",
+    reconciled.docks.center.panelIds[0] === "manuscript"
+      && getPanelPlacement(reconciled, "manuscript")?.kind === "dock",
+  );
 
   let opened = closePanel(reconciled, "dashboard");
   check("close removes a non-permanent panel", getPanelPlacement(opened, "dashboard") === null);

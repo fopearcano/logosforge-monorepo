@@ -556,19 +556,15 @@ function reconcileRawCurrentLayout(
   let changed = false;
   const nextDocks: Record<string, unknown> = { ...value.docks };
   // Center wins duplicate ownership, then visible Cockpit docks, then the
-  // optional left dock. Manuscript is always repaired into center first.
+  // optional left dock. Manuscript keeps its first valid placement; only a
+  // genuinely missing Manuscript is repaired into center.
   const priority: DockRegionId[] = ["center", "right", "bottom", "left"];
   for (const region of priority) {
     const rawDock = value.docks[region];
     if (!isRecord(rawDock) || !Array.isArray(rawDock.panelIds)) continue;
     const panelIds: string[] = [];
-    if (region === "center") {
-      panelIds.push("manuscript");
-      seen.add("manuscript");
-      if (rawDock.panelIds[0] !== "manuscript") changed = true;
-    }
     for (const entry of rawDock.panelIds) {
-      if (!isPanelId(entry) || entry === "manuscript" || !allowed.has(entry) || seen.has(entry)) {
+      if (!isPanelId(entry) || !allowed.has(entry) || seen.has(entry)) {
         changed = true;
         continue;
       }
@@ -600,7 +596,31 @@ function reconcileRawCurrentLayout(
     nextFloating.push({ ...entry, zIndex });
   }
 
+  if (!seen.has("manuscript")) {
+    const rawCenter = nextDocks.center;
+    if (isRecord(rawCenter) && Array.isArray(rawCenter.panelIds)) {
+      nextDocks.center = {
+        ...rawCenter,
+        panelIds: ["manuscript", ...rawCenter.panelIds],
+        activePanelId: rawCenter.activePanelId ?? "manuscript",
+        collapsed: false,
+      };
+      seen.add("manuscript");
+      changed = true;
+    }
+  }
+
   let focused: WorkspacePanelFocus = { zone: "center", panelId: "manuscript" };
+  for (const region of priority) {
+    const dock = nextDocks[region];
+    if (isRecord(dock) && Array.isArray(dock.panelIds) && dock.panelIds.includes("manuscript")) {
+      focused = { zone: region, panelId: "manuscript" };
+      break;
+    }
+  }
+  if (nextFloating.some((entry) => isRecord(entry) && entry.panelId === "manuscript")) {
+    focused = { zone: "floating", panelId: "manuscript" };
+  }
   if (isRecord(value.focused) && isPanelId(value.focused.panelId)) {
     const zone = value.focused.zone;
     const focusedPanelId = value.focused.panelId;
@@ -657,7 +677,8 @@ function reconcileRawLegacyLayout(
 /**
  * Reconcile a previously decoded layout against the renderer's live panel
  * registry. Stale/plugin IDs and duplicates are dropped deterministically;
- * manuscript is repaired into center and focused as the safe home surface.
+ * Manuscript keeps a valid dock/floating placement and is repaired into center
+ * only when missing, because it remains the permanent safe writing surface.
  */
 export function reconcileWorkspaceLayout(
   layout: WorkspaceLayout,
@@ -673,7 +694,7 @@ export function resetWorkspaceLayout(allowedPanelIds?: Iterable<string>): Worksp
   if (allowedPanelIds === undefined) return layout;
   const reconciled = reconcileRawCurrentLayout(layout, allowedPanelSet(allowedPanelIds));
   const parsed = validateWorkspaceLayout(reconciled.value);
-  // The built-in fallback is structurally constant and manuscript is always
+  // The built-in fallback is structurally constant and Manuscript is always
   // allowed, so reaching this branch would signal a programming error.
   if (!parsed.ok) throw new WorkspaceLayoutValidationError(parsed.issues);
   return parsed.value;
@@ -840,10 +861,11 @@ function panelCount(layout: WorkspaceLayout): number {
 
 function firstAvailableFocus(layout: WorkspaceLayout): WorkspacePanelFocus | null {
   for (const region of ["center", "right", "bottom", "left"] as const) {
+    if (region !== "center" && layout.docks[region].collapsed) continue;
     const panelId = layout.docks[region].activePanelId;
     if (panelId !== null) return { zone: region, panelId };
   }
-  const floating = layout.floatingPanels.at(-1);
+  const floating = [...layout.floatingPanels].reverse().find((panel) => !panel.minimized);
   return floating === undefined ? null : { zone: "floating", panelId: floating.panelId };
 }
 
@@ -995,8 +1017,7 @@ export function setDockCollapsed(
     ? false
     : next.docks[region].panelIds.length === 0 || collapsed;
   if (next.docks[region].collapsed && next.focused?.zone === region) {
-    const centerPanelId = next.docks.center.activePanelId ?? "manuscript";
-    next.focused = { zone: "center", panelId: centerPanelId };
+    next.focused = firstAvailableFocus(next);
   } else if (!next.docks[region].collapsed && !collapsed && region !== "center") {
     const activePanelId = next.docks[region].activePanelId;
     if (activePanelId) next.focused = { zone: region, panelId: activePanelId };
@@ -1039,13 +1060,10 @@ export function setFloatingPanelMinimized(
   if (panel) {
     panel.minimized = minimized;
     // A minimized window must not remain the logical focus target: it is hidden
-    // from both pointer and keyboard users. Prefer the permanent center surface,
-    // then fall back to the first remaining workspace surface.
+    // from both pointer and keyboard users. Pick the first actually visible
+    // docked or floating surface; Manuscript may itself be floating.
     if (minimized && next.focused?.panelId === panelId) {
-      const centerPanelId = next.docks.center.activePanelId;
-      next.focused = centerPanelId === null
-        ? firstAvailableFocus(next)
-        : { zone: "center", panelId: centerPanelId };
+      next.focused = firstAvailableFocus(next);
     }
   }
   return next;

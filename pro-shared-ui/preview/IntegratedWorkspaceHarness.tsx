@@ -18,6 +18,7 @@ import {
   STUDIO_PANELS,
   STUDIO_WORKSPACE_PANEL_IDS,
   StudioProvider,
+  SKIN_OPTIONS,
   WorkspaceNavigator,
   WorkspaceShell,
   activateDockPanel,
@@ -33,7 +34,6 @@ import {
   moveFloatingPanel,
   movePanel,
   openPanel,
-  placePanel,
   prepareProjectHandoff,
   parseRecentProjectIds,
   rememberRecentProject,
@@ -46,6 +46,10 @@ import {
   setNavigatorCollapsed,
   setWorkspacePreset,
   studioPanelGroupsForMode,
+  studioPanelShortcut,
+  panelIdForKeyboardShortcut,
+  focusAfterWorkspaceAction,
+  workspacePanelDomToken,
   subscribeProjectSaveStatus,
   toggleDockCollapsed,
   toggleWorkspacePreset,
@@ -56,6 +60,7 @@ import {
   type StudioNavigationOptions,
   type KnowledgeGraphNavigationTarget,
   type ContinuityRepairTarget,
+  type SkinId,
 } from "../src";
 import {
   createPreviewLayoutPlatform,
@@ -137,7 +142,7 @@ export function IntegratedWorkspaceHarness({
   const [coreState, setCoreState] = useState<"connecting" | "connected" | "error">("connecting");
   const [coreDetail, setCoreDetail] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [theme, setTheme] = useState<"dark" | "light" | "warm">("dark");
+  const [skin, setSkin] = useState<SkinId>("forge");
   const [omniboxOpen, setOmniboxOpen] = useState(false);
   const omniboxRecentProjectsStorageKey = `${OMNIBOX_RECENT_PROJECTS_STORAGE_PREFIX}.${source}`;
   const [recentProjectIds, setRecentProjectIds] = useState<readonly number[]>(
@@ -356,7 +361,9 @@ export function IntegratedWorkspaceHarness({
       ? "right"
       : panel?.preferredRegion ?? "center";
     const selected = runWorkspaceMutation((current) => {
-      let next = openPanel(current, panelId, preferredRegion);
+      let next = current.preset === "focus" && panelId === "manuscript"
+        ? current
+        : openPanel(current, panelId, preferredRegion);
       if (next.preset === "focus" && panelId !== "manuscript") {
         next = setWorkspacePreset(next, "cockpit");
       }
@@ -379,6 +386,50 @@ export function IntegratedWorkspaceHarness({
       return true;
     });
   }, [runWorkspaceMutation]);
+
+  const panelFocusTarget = useCallback((panelId: string): HTMLElement | null => {
+    const current = layoutRef.current;
+    const placement = getPanelPlacement(current, panelId);
+    const token = workspacePanelDomToken(panelId);
+    const selector = current.preset === "focus" && panelId === "manuscript"
+      ? `#lf-tab-${token}`
+      : placement?.kind === "floating"
+        ? `#lf-floating-title-${token}`
+        : `#lf-tab-${token}`;
+    return document.querySelector<HTMLElement>(selector);
+  }, []);
+
+  const toggleFocus = useCallback((): Promise<boolean> => {
+    const enteringFocus = layoutRef.current.preset !== "focus";
+    const returnPanelId = layoutRef.current.focused?.panelId ?? "manuscript";
+    const task = runWorkspaceMutation(
+      toggleWorkspacePreset,
+      "Focus-mode change stopped; the current workspace remains visible.",
+    );
+    focusAfterWorkspaceAction(
+      task,
+      () => enteringFocus
+        ? document.querySelector<HTMLElement>(`#lf-tab-${workspacePanelDomToken("manuscript")}`)
+        : panelFocusTarget(returnPanelId),
+    );
+    return task;
+  }, [panelFocusTarget, runWorkspaceMutation]);
+
+  useEffect(() => {
+    const onPanelShortcut = (event: KeyboardEvent) => {
+      if (!projectReady || !hydrated || projectSwitching || externalTransitioning) return;
+      if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
+      const panelId = panelIdForKeyboardShortcut(event);
+      if (!panelId || (
+        panelId !== STUDIO_AI_COMPANIONS_PANEL_ID && !visiblePanelIds.has(panelId)
+      )) return;
+      event.preventDefault();
+      const task = selectPanel(panelId);
+      focusAfterWorkspaceAction(task, () => panelFocusTarget(panelId));
+    };
+    window.addEventListener("keydown", onPanelShortcut);
+    return () => window.removeEventListener("keydown", onPanelShortcut);
+  }, [externalTransitioning, hydrated, panelFocusTarget, projectReady, projectSwitching, selectPanel, visiblePanelIds]);
 
   const selectProject = useCallback((targetId: number): Promise<boolean> => {
     const target = targetId || undefined;
@@ -434,11 +485,13 @@ export function IntegratedWorkspaceHarness({
       id: panel.id,
       label: panel.label,
       keywords: group.group ? [group.group] : [],
+      shortcut: panel.shortcut,
     }))),
     {
       id: STUDIO_AI_COMPANIONS_PANEL_ID,
       label: "AI Companions",
       keywords: ["Billy", "assistant", "Logos", "Counterpart"],
+      shortcut: studioPanelShortcut(STUDIO_AI_COMPANIONS_PANEL_ID),
     },
   ], [visibleGroups]);
 
@@ -467,33 +520,15 @@ export function IntegratedWorkspaceHarness({
         "Workspace reset stopped; the previous layout is unchanged.",
       ),
     },
-    {
-      id: "appearance:dark",
-      label: "Use Dark Appearance",
-      category: "Appearance",
-      aliases: ["theme-dark", "dark-theme"],
-      keywords: ["theme", "appearance", "dark"],
+    ...SKIN_OPTIONS.map((skinOption) => ({
+      id: `skin:${skinOption.id}`,
+      label: `Use ${skinOption.label} skin`,
+      category: "Skins",
+      aliases: [`skin-${skinOption.id}`],
+      keywords: ["skin", skinOption.label, skinOption.description],
       enabled: !externalTransitioning,
-      run: () => { setTheme("dark"); return true; },
-    },
-    {
-      id: "appearance:light",
-      label: "Use Light Appearance",
-      category: "Appearance",
-      aliases: ["theme-light", "light-theme"],
-      keywords: ["theme", "appearance", "light"],
-      enabled: !externalTransitioning,
-      run: () => { setTheme("light"); return true; },
-    },
-    {
-      id: "appearance:warm",
-      label: "Use Warm Appearance",
-      category: "Appearance",
-      aliases: ["theme-warm", "warm-theme"],
-      keywords: ["theme", "appearance", "warm"],
-      enabled: !externalTransitioning,
-      run: () => { setTheme("warm"); return true; },
-    },
+      run: () => { setSkin(skinOption.id); return true; },
+    })),
   ]), [
     externalTransitioning,
     hydrated,
@@ -538,28 +573,18 @@ export function IntegratedWorkspaceHarness({
     return () => window.removeEventListener("beforeunload", confirmPendingSaves);
   }, [browserUnloadUnsafe]);
 
-  // Mode-ineligible panels cannot leak in from a saved layout. The preview also
-  // mirrors the desktop host's permanent AI-companion home in the right dock.
+  // Mode-ineligible panels cannot leak in from a saved layout. Every eligible
+  // panel keeps its saved dock/floating placement, matching the desktop host.
   useEffect(() => {
     if (!hydrated) return;
     const unavailable = STUDIO_PANELS
       .filter((panel) => !visiblePanelIds.has(panel.id))
       .map((panel) => panel.id);
     const invalidPanelOpen = unavailable.some((panelId) => getPanelPlacement(layout, panelId) !== null);
-    const aiPlacement = getPanelPlacement(layout, STUDIO_AI_COMPANIONS_PANEL_ID);
-    const aiNeedsHome = aiPlacement?.kind !== "dock" || aiPlacement.region !== "right";
-    if (!invalidPanelOpen && !aiNeedsHome) return;
+    if (!invalidPanelOpen) return;
     void runWorkspaceMutation((current) => {
       let next = current;
       unavailable.forEach((panelId) => { next = closePanel(next, panelId); });
-      const nextAiPlacement = getPanelPlacement(next, STUDIO_AI_COMPANIONS_PANEL_ID);
-      if (nextAiPlacement?.kind !== "dock" || nextAiPlacement.region !== "right") {
-        next = placePanel(next, STUDIO_AI_COMPANIONS_PANEL_ID, {
-          kind: "dock",
-          region: "right",
-          index: next.docks.right.panelIds.length,
-        });
-      }
       return next.focused === null ? openPanel(next, "manuscript", "center") : next;
     }, "Workspace normalization stopped; the saved layout remains visible.");
   }, [hydrated, layout, runWorkspaceMutation, visiblePanelIds]);
@@ -578,7 +603,6 @@ export function IntegratedWorkspaceHarness({
           id: panelId,
           label: "AI Companions",
           closable: false,
-          movable: false,
           flush: true,
           node: (
             <PanelErrorBoundary name="Billy Assistant preview" resetKey={`${projectId ?? "none"}:billy`}>
@@ -593,7 +617,6 @@ export function IntegratedWorkspaceHarness({
         id: panel.id,
         label: panel.label,
         closable: panel.id !== "manuscript",
-        movable: panel.id !== "manuscript",
         node: (
           <PanelErrorBoundary name={`${panel.label} preview panel`} resetKey={`${projectId ?? "none"}:${panel.id}`}>
             {panel.node}
@@ -647,17 +670,15 @@ export function IntegratedWorkspaceHarness({
           </select>
         </label>
         <label style={{ display: "grid", gap: 4, marginBottom: 12, color: "var(--txt3)", fontSize: 9 }}>
-          Appearance
+          Skins
           <select
-            aria-label="Integrated workspace appearance"
-            value={theme}
+            aria-label="Integrated workspace skin"
+            value={skin}
             disabled={externalTransitioning}
-            onChange={(event) => setTheme(event.target.value as typeof theme)}
+            onChange={(event) => setSkin(event.target.value as SkinId)}
             style={{ width: "100%", background: "var(--panel)", color: "var(--txt)", border: "1px solid var(--line2)", padding: 5 }}
           >
-            <option value="dark">Dark</option>
-            <option value="light">Light</option>
-            <option value="warm">Warm</option>
+            {SKIN_OPTIONS.map((skinOption) => <option key={skinOption.id} value={skinOption.id}>{skinOption.label}</option>)}
           </select>
         </label>
         {visibleGroups.map((group, groupIndex) => (
@@ -711,7 +732,7 @@ export function IntegratedWorkspaceHarness({
         <WorkspaceShell
           writingMode={mode}
           layout={layout.preset}
-          theme={theme}
+          skin={skin}
           showConsole
           runtimeStatus={runtimeStatus}
           coreState={coreState}
@@ -736,7 +757,7 @@ export function IntegratedWorkspaceHarness({
                 (current) => movePanel(current, panelId, { kind: "floating", bounds }),
                 "Panel tear-off stopped; the previous layout is unchanged.",
               )}
-              onClose={(panelId) => panelId === "manuscript"
+              onClose={(panelId) => panelId === "manuscript" || panelId === STUDIO_AI_COMPANIONS_PANEL_ID
                 ? Promise.resolve(false)
                 : runWorkspaceMutation(
                   (current) => closePanel(current, panelId),
@@ -766,10 +787,7 @@ export function IntegratedWorkspaceHarness({
               {projectReady ? "Loading this project's browser workspace…" : "Opening the browser workspace…"}
             </div>
           )}
-          onToggleFocus={() => { void runWorkspaceMutation(
-            toggleWorkspacePreset,
-            "Focus-mode change stopped; the current workspace remains visible.",
-          ); }}
+          onToggleFocus={() => { void toggleFocus(); }}
           onCommandPalette={omniboxAvailable ? requestOpenOmnibox : undefined}
         />
         <StudioOmnibox

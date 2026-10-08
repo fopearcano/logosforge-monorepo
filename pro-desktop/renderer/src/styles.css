@@ -1,28 +1,60 @@
-/* Theme palettes — the source of truth for host chrome (body, rail, dock,
-   command palette). data-theme is set on <html> by App.tsx. The pro-shared-ui
-   panels inside .lf-shell also read these (WorkspaceShell mirrors them inline
-   per writing-mode for --accent). Keep in sync with shellVars.ts THEME_SURFACES. */
-:root, :root[data-theme="dark"] {
+/* Skin palettes for host chrome (body, rail, dock, command palette).
+   data-skin is set on <html> by App.tsx. WorkspaceShell owns the matching
+   shared-panel variables and the writing-mode accent. Keep these semantic
+   surfaces in sync with the shared UI skin definitions. */
+:root, :root[data-skin="forge"] {
   --void: #000000; --base: #04060a; --panel: #080a0f; --panel2: #0b0e15; --raised: #11151e;
   --tint: rgba(11,14,21,.5); --tint2: rgba(255,255,255,.04);
   --txt: #e4e8ef; --txt2: #8b95a5; --txt3: #525c6b; --strong: #ffffff;
   --line: rgba(232,68,58,.28); --line2: rgba(150,162,180,.10); --line-cy: rgba(76,194,255,.30);
-  --on-accent: #04060a; --cyan: #4cc2ff; --crimson: #e8443a;
+  --on-accent: #04060a; --cyan: #4cc2ff; --crimson: #e8443a; --crimson-d: #7c211c;
+  --amber: #f5b133; --amber-b: #ffcf4a; --green: #62d99a; --violet: #b07cff; --pink: #ff7ac6;
+  --blocking: #ff5260; --warning: #ffb454; --suggestion: #4cc2ff; --opportunity: #62d99a; --info: #7a8694;
+  --c-char: #4cc2ff; --c-place: #f5b133; --c-obj: #b07cff; --c-lore: #62d99a; --c-theme: #ff7ac6;
+  --page-shadow: 0 16px 60px rgba(0,0,0,.6);
+  --ui-font: 'JetBrains Mono', 'SFMono-Regular', monospace;
+  --display-font: 'Chakra Petch', sans-serif;
+  --ui-tracking: .02em; --brand-tracking: .16em;
+  --label-tracking: .12em;
+  --control-radius: 2px; --panel-radius: 0px;
+  --chrome-shadow: 0 12px 36px rgba(0,0,0,.48); --signal-glow: 0 0 8px currentColor;
+  --overlay: rgba(2, 4, 8, .5);
+  --overlay-shadow: 0 24px 80px rgba(0, 0, 0, .35);
 }
-:root[data-theme="light"] {
-  --void: #dce1e8; --base: #eaeef3; --panel: #f7f9fc; --panel2: #eef2f7; --raised: #ffffff;
-  --tint: rgba(30,42,60,.05); --tint2: rgba(30,42,60,.03);
-  --txt: #1a222c; --txt2: #54606f; --txt3: #8b97a6; --strong: #0d141c;
-  --line: rgba(30,42,60,.16); --line2: rgba(30,42,60,.10); --line-cy: rgba(40,120,190,.35);
-  --on-accent: #0a0f16; --cyan: #2b83c9; --crimson: #d1362c;
+:root[data-skin="paper"] {
+  --void: #e7e6e1; --base: #f2f2f0; --panel: #f8f8f6; --panel2: #ffffff; --raised: #ffffff;
+  --tint: rgba(43,42,46,.035); --tint2: rgba(43,42,46,.055);
+  --txt: #36353a; --txt2: #706e69; --txt3: #99968e; --strong: #242328;
+  --line: rgba(176,101,63,.25); --line2: rgba(54,53,58,.12); --line-cy: rgba(81,129,168,.34);
+  --on-accent: #ffffff; --cyan: #276f9d; --crimson: #b44339; --crimson-d: #7c211c;
+  --amber: #8a5f18; --amber-b: #8a5f18; --green: #28734c; --violet: #7046a3; --pink: #9b3c72;
+  --blocking: #b72f3c; --warning: #8a5f18; --suggestion: #276f9d; --opportunity: #28734c; --info: #59636f;
+  --c-char: #276f9d; --c-place: #8a5f18; --c-obj: #7046a3; --c-lore: #28734c; --c-theme: #9b3c72;
+  --page-shadow: 0 24px 60px -30px rgba(40,38,34,.30);
+  --ui-font: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --display-font: Georgia, 'Times New Roman', serif;
+  --ui-tracking: 0; --brand-tracking: .08em;
+  --label-tracking: .075em;
+  --control-radius: 6px; --panel-radius: 8px;
+  --chrome-shadow: 0 12px 34px rgba(40,38,34,.16); --signal-glow: none;
+  --overlay: rgba(49, 43, 35, .32);
+  --overlay-shadow: 0 20px 60px rgba(58, 48, 36, .22);
 }
-:root[data-theme="warm"] {
-  /* "lamplit study": DARK aged wood, warm cream ink, amber hairlines (see shellVars.ts warm) */
+:root[data-skin="lamplit"] {
+  /* A lamplit study: dark aged wood, warm cream ink, amber hairlines. */
   --void: #140f08; --base: #1d1610; --panel: #241b12; --panel2: #2b2016; --raised: #362819;
   --tint: rgba(247,224,168,.06); --tint2: rgba(247,224,168,.035);
   --txt: #f0e3c8; --txt2: #c8b087; --txt3: #9c8760; --strong: #fdf4dc;
   --line: rgba(201,150,80,.30); --line2: rgba(240,226,198,.11); --line-cy: rgba(120,160,205,.32);
-  --on-accent: #1d1610; --cyan: #6db2e0; --crimson: #e0705a;
+  --on-accent: #1d1610; --cyan: #4cc2ff; --crimson: #e8443a; --page-shadow: 0 16px 50px rgba(0,0,0,.5);
+  --ui-font: 'JetBrains Mono', 'SFMono-Regular', monospace;
+  --display-font: 'Chakra Petch', sans-serif;
+  --ui-tracking: .02em; --brand-tracking: .14em;
+  --label-tracking: .1em;
+  --control-radius: 3px; --panel-radius: 2px;
+  --chrome-shadow: 0 12px 36px rgba(0,0,0,.44); --signal-glow: 0 0 7px currentColor;
+  --overlay: rgba(20, 15, 8, .58);
+  --overlay-shadow: 0 24px 80px rgba(8, 5, 2, .5);
 }
 
 * { box-sizing: border-box; }
@@ -30,8 +62,9 @@ html, body, #root { height: 100%; margin: 0; }
 body {
   background: var(--base);
   color: var(--txt);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--ui-font);
   font-size: 12px;
+  letter-spacing: var(--ui-tracking);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -41,21 +74,21 @@ body {
 .app { display: flex; height: 100vh; }
 
 .rail { width: 232px; flex: none; border-right: 1px solid var(--line2); background: var(--panel2); overflow-y: auto; display: flex; flex-direction: column; }
-.brand { padding: 14px 16px; font-family: 'Chakra Petch', sans-serif; font-weight: 700; font-size: 14px; letter-spacing: .12em; color: var(--strong); border-bottom: 1px solid var(--line2); }
+.brand { padding: 14px 16px; font-family: var(--display-font); font-weight: 700; font-size: 14px; letter-spacing: var(--brand-tracking); color: var(--strong); border-bottom: 1px solid var(--line2); }
 .brand span { color: var(--crimson); }
 
-.badge { margin: 10px 14px 4px; padding: 6px 9px; border: 1px solid var(--line2); font-size: 8px; letter-spacing: .12em; display: flex; align-items: center; gap: 7px; color: var(--txt2); }
+.badge { margin: 10px 14px 4px; padding: 6px 9px; border: 1px solid var(--line2); border-radius: var(--control-radius); font-size: 8px; letter-spacing: var(--label-tracking); display: flex; align-items: center; gap: 7px; color: var(--txt2); }
 .badge .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
 
-.field { display: block; padding: 6px 14px; font-size: 8.5px; letter-spacing: .12em; color: var(--txt3); text-transform: uppercase; }
-.field select, .field input { width: 100%; margin-top: 4px; background: var(--raised); color: var(--txt); border: 1px solid var(--line2); font-size: 11px; padding: 4px 6px; font-family: inherit; }
+.field { display: block; padding: 6px 14px; font-size: 8.5px; letter-spacing: var(--label-tracking); color: var(--txt3); text-transform: uppercase; }
+.field select, .field input { width: 100%; margin-top: 4px; background: var(--raised); color: var(--txt); border: 1px solid var(--line2); border-radius: var(--control-radius); font-size: 11px; padding: 4px 6px; font-family: inherit; }
 
 nav { display: flex; flex-direction: column; padding: 8px 0 16px; }
 nav button { text-align: left; padding: 7px 16px; font-size: 11px; cursor: pointer; color: var(--txt2); background: none; border: none; border-left: 2px solid transparent; font-family: inherit; }
 nav button:hover { color: var(--txt); }
 nav button.on { color: var(--cyan); background: color-mix(in srgb, var(--cyan) 10%, transparent); border-left-color: var(--cyan); }
 .nav-group { display: flex; flex-direction: column; }
-.nav-group-label { font-size: 8px; letter-spacing: .22em; color: var(--txt3); padding: 12px 16px 4px; }
+.nav-group-label { font-size: 8px; letter-spacing: calc(var(--label-tracking) + .1em); color: var(--txt3); padding: 12px 16px 4px; }
 
 /* The whole app is now the cockpit shell (WorkspaceShell) filling the viewport;
    the sections rail, active section, and AI dock ride in its slots. */
@@ -72,7 +105,7 @@ nav button.on { color: var(--cyan); background: color-mix(in srgb, var(--cyan) 1
 /* always-visible grip so the drag-to-resize affordance is discoverable */
 .ai-resize::after { content: ""; width: 3px; height: 40px; border-radius: 3px; background: var(--line-cy); box-shadow: 0 0 0 1px rgba(0,0,0,.2); transition: background .12s, box-shadow .12s; }
 .ai-resize:hover { background: color-mix(in srgb, var(--cyan) 12%, transparent); }
-.ai-resize:hover::after { background: var(--cyan); box-shadow: 0 0 8px color-mix(in srgb, var(--cyan) 60%, transparent); }
+.ai-resize:hover::after { background: var(--cyan); box-shadow: var(--signal-glow); color: var(--cyan); }
 .ai-tabs { display: flex; align-items: stretch; height: 34px; flex: none; border-bottom: 1px solid var(--line2); background: var(--panel); }
 .ai-tabs button { background: none; border: none; color: var(--txt2); font: inherit; font-size: 10px; padding: 0 8px; cursor: pointer; display: flex; align-items: center; gap: 4px; border-bottom: 2px solid transparent; white-space: nowrap; }
 .ai-tabs button:hover { color: var(--txt); }
@@ -82,17 +115,17 @@ nav button.on { color: var(--cyan); background: color-mix(in srgb, var(--cyan) 1
 .ai-body { flex: 1; position: relative; min-height: 0; }
 .ai-strip { width: 44px; flex: none; border-left: 1px solid var(--line2); background: var(--panel2); display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 8px 0; }
 .ai-strip-toggle { writing-mode: vertical-rl; background: none; border: none; color: var(--cyan); font: inherit; font-size: 10px; cursor: pointer; letter-spacing: .12em; padding: 6px 0; }
-.ai-strip-btn { background: none; border: 1px solid var(--line2); color: var(--txt2); width: 30px; height: 30px; cursor: pointer; font-size: 13px; border-radius: 2px; }
+.ai-strip-btn { background: none; border: 1px solid var(--line2); color: var(--txt2); width: 30px; height: 30px; cursor: pointer; font-size: 13px; border-radius: var(--control-radius); }
 .ai-strip-btn:hover { color: var(--cyan); border-color: var(--line-cy); }
 
 /* --- Command palette (⌘K) --- */
-.cmdk-backdrop { position: fixed; inset: 0; z-index: 9999; display: flex; align-items: flex-start; justify-content: center; padding-top: 13vh; background: rgba(2, 4, 8, .5); backdrop-filter: blur(2px); }
-.cmdk { width: min(620px, 92vw); background: var(--raised); border: 1px solid var(--line-cy); border-radius: 4px; box-shadow: 0 24px 80px rgba(0, 0, 0, .35); overflow: hidden; }
+.cmdk-backdrop { position: fixed; inset: 0; z-index: 9999; display: flex; align-items: flex-start; justify-content: center; padding-top: 13vh; background: var(--overlay); backdrop-filter: blur(2px); }
+.cmdk { width: min(620px, 92vw); background: var(--raised); border: 1px solid var(--line-cy); border-radius: calc(var(--control-radius) + 2px); box-shadow: var(--overlay-shadow); overflow: hidden; }
 .cmdk input { width: 100%; padding: 14px 16px; background: transparent; border: none; border-bottom: 1px solid var(--line2); color: var(--txt); font: inherit; font-size: 14px; letter-spacing: .02em; outline: none; }
 .cmdk input::placeholder { color: var(--txt3); }
 .cmdk-list { max-height: 46vh; overflow: auto; padding: 6px; }
-.cmdk-list button { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; padding: 9px 12px; background: transparent; border: none; border-radius: 3px; color: var(--txt); font: inherit; font-size: 12.5px; letter-spacing: .02em; cursor: pointer; }
+.cmdk-list button { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; padding: 9px 12px; background: transparent; border: none; border-radius: var(--control-radius); color: var(--txt); font: inherit; font-size: 12.5px; letter-spacing: .02em; cursor: pointer; }
 .cmdk-list button.on { background: color-mix(in srgb, var(--cyan) 16%, transparent); color: var(--strong); }
-.cmdk-kind { flex: none; min-width: 38px; font-size: 8.5px; letter-spacing: .18em; color: var(--cyan); border: 1px solid var(--line-cy); border-radius: 2px; padding: 2px 5px; text-align: center; text-transform: uppercase; }
+.cmdk-kind { flex: none; min-width: 38px; font-size: 8.5px; letter-spacing: .18em; color: var(--cyan); border: 1px solid var(--line-cy); border-radius: var(--control-radius); padding: 2px 5px; text-align: center; text-transform: uppercase; }
 .cmdk-list button.on .cmdk-kind { border-color: var(--cyan); }
 .cmdk-empty { padding: 20px 16px; color: var(--txt3); font-size: 12px; text-align: center; }

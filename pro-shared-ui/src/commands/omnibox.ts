@@ -60,6 +60,7 @@ export interface OmniboxPanel {
   readonly id: string;
   readonly label: string;
   readonly keywords?: readonly string[];
+  readonly shortcut?: string;
 }
 
 export interface OmniboxSources {
@@ -136,6 +137,7 @@ export function buildOmniboxItems(sources: OmniboxSources): readonly OmniboxItem
       label: panel.label,
       detail: "Open workspace panel",
       keywords: uniqueText([panel.id, ...(panel.keywords ?? []), "workspace", "panel"]),
+      shortcut: panel.shortcut,
       disabled: false,
       showWhenEmpty: true,
       priority: 0,

@@ -80,7 +80,7 @@ for (const marker of [
 }
 
 const modalPortal = fs.readFileSync(path.join(root, "common", "ModalPortal.tsx"), "utf8");
-for (const marker of ["lf-shell lf-modal-portal", "panelScopeVars(mode)", "createPortal("]) {
+for (const marker of ["lf-shell lf-modal-portal", "shellSkinVars(mode, skin)", "data-skin={skin}", "createPortal("]) {
   if (!modalPortal.includes(marker)) violations.push(`ModalPortal is missing ${marker}`);
 }
 

@@ -7,13 +7,16 @@ import { ShellStyles } from "./ShellStyles";
 import { Navigator } from "./Navigator";
 import { TopBar, PsykeConsole, StatusBar } from "./Chrome";
 import { ManuscriptRegion, IntelligenceDock, BottomDock } from "./regions";
+import { SkinProvider } from "./SkinContext";
 import {
-  shellThemeVars,
+  shellSkinVars,
   resolveMode,
+  resolveSkin,
   MODE_NAMES,
   MODE_SPINES,
   MODE_FORMATS,
   type ShellLayout,
+  type SkinId,
   type AppearanceTheme,
 } from "./shellVars";
 
@@ -23,7 +26,9 @@ export interface WorkspaceShellProps {
   writingMode?: WritingMode | string;
   /** 'cockpit' shows all docks; 'focus' hides nav/right/bottom (editor only). */
   layout?: ShellLayout;
-  /** Visual theme: 'dark' | 'light' | 'warm'. Drives the whole surface palette. */
+  /** Workspace skin. This is a device preference, independent of project data. */
+  skin?: SkinId;
+  /** @deprecated Use skin. Legacy values are migrated to the matching skin. */
   theme?: AppearanceTheme;
   /** Active project name shown in the top-bar switcher. */
   projectTitle?: string;
@@ -55,13 +60,13 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
   const ctxMode = useWritingMode();
   const mode = resolveMode(props.writingMode ?? ctxMode);
   const layout: ShellLayout = props.layout ?? "cockpit";
-  const theme: AppearanceTheme = props.theme ?? "dark";
+  const skin = resolveSkin(props.skin ?? props.theme);
 
   const showDocks = layout !== "focus";
   // A calm, clean surface (the old HUD grid/scanlines/rulers/brackets are gone).
-  // On dark, a soft edge vignette adds depth; on light/warm it would muddy the
-  // paper, so it's dark-only and gentle.
-  const isDark = theme === "dark";
+  // Forge alone carries the cinematic vignette. Paper and Lamplit deliberately
+  // keep their surfaces clean so a skin changes atmosphere, not functionality.
+  const isForge = skin === "forge";
 
   // Real current-project title from the core (falls back to the prop, then a
   // neutral default — never the old "NULL HORIZON" mock).
@@ -81,43 +86,45 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
     flexDirection: "column",
     background: "var(--void)",
     color: "var(--txt)",
-    fontFamily: "'JetBrains Mono','SFMono-Regular',monospace",
+    fontFamily: "var(--ui-font)",
     fontSize: 12,
     lineHeight: 1.45,
-    letterSpacing: ".02em",
-    ...shellThemeVars(mode, theme),
+    letterSpacing: "var(--ui-tracking)",
+    ...shellSkinVars(mode, skin),
   };
 
   return (
-    <div className="lf-shell" data-screen-label="Workspace Shell — Cockpit" style={root}>
-      <ShellStyles />
+    <SkinProvider skin={skin}>
+      <div className="lf-shell" data-skin={skin} data-screen-label="Workspace Shell — Cockpit" style={root}>
+        <ShellStyles />
 
-      {/* a single soft edge vignette for depth — DARK only; on light/warm it would
-          muddy the paper, so those stay clean. (The old HUD grid/scanlines/rulers/
+      {/* a single soft edge vignette for depth — FORGE only; the calmer skins stay
+          clean. (The old HUD grid/scanlines/rulers/
           corner-brackets were removed — they added noise without meaning.) */}
-      {isDark && <div style={ambient({ background: "radial-gradient(130% 120% at 50% 50%,transparent 66%,rgba(0,0,0,.42))", zIndex: 1 })} />}
+        {isForge && <div style={ambient({ background: "radial-gradient(130% 120% at 50% 50%,transparent 66%,rgba(0,0,0,.42))", zIndex: 1 })} />}
 
       {/* top bar */}
-      <TopBar formatBadge={MODE_FORMATS[mode]} layout={layout} runtimeStatus={props.runtimeStatus} onCommandPalette={props.onCommandPalette} onToggleFocus={props.onToggleFocus} />
+        <TopBar formatBadge={MODE_FORMATS[mode]} layout={layout} runtimeStatus={props.runtimeStatus} onCommandPalette={props.onCommandPalette} onToggleFocus={props.onToggleFocus} />
 
       {/* body row */}
-      <div style={{ position: "relative", zIndex: 20, display: "flex", flex: 1, minHeight: 0 }}>
-        {showDocks && (props.navSlot ?? <Navigator projectTitle={projectTitle} modeName={MODE_NAMES[mode]} spineLabel={MODE_SPINES[mode]} />)}
-        {/* center column: editor + PSYKE console */}
-        <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-          <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-            {props.centerSlot ?? <ManuscriptRegion />}
+        <div style={{ position: "relative", zIndex: 20, display: "flex", flex: 1, minHeight: 0 }}>
+          {showDocks && (props.navSlot ?? <Navigator projectTitle={projectTitle} modeName={MODE_NAMES[mode]} spineLabel={MODE_SPINES[mode]} />)}
+          {/* center column: editor + PSYKE console */}
+          <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+            <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+              {props.centerSlot ?? <ManuscriptRegion />}
+            </div>
+            {(props.showConsole ?? true) && <PsykeConsole />}
           </div>
-          {(props.showConsole ?? true) && <PsykeConsole />}
+          {showDocks && (props.rightSlot ?? <IntelligenceDock />)}
         </div>
-        {showDocks && (props.rightSlot ?? <IntelligenceDock />)}
+
+        {/* bottom analysis dock */}
+        {showDocks && (props.bottomSlot ?? <BottomDock />)}
+
+        {/* status bar */}
+        <StatusBar runtimeStatus={props.runtimeStatus} coreState={props.coreState} statusCenter={statusCenter} />
       </div>
-
-      {/* bottom analysis dock */}
-      {showDocks && (props.bottomSlot ?? <BottomDock />)}
-
-      {/* status bar */}
-      <StatusBar runtimeStatus={props.runtimeStatus} coreState={props.coreState} statusCenter={statusCenter} />
-    </div>
+    </SkinProvider>
   );
 }

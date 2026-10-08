@@ -19,6 +19,7 @@ import {
   moveFloatingPanel,
   placePanel,
   resizeFloatingPanel,
+  serializeWorkspaceLayout,
   setFloatingPanelMinimized,
   setWorkspacePreset,
   type WorkspaceLayout,
@@ -81,6 +82,18 @@ function StatefulProbe() {
     return () => { unmounts += 1; };
   }, []);
   return <input aria-label="Stateful draft" data-probe-token={token} defaultValue="unsaved draft" />;
+}
+
+let manuscriptMounts = 0;
+let manuscriptUnmounts = 0;
+let nextManuscriptToken = 0;
+function StatefulManuscriptProbe() {
+  const [token] = useState(() => `manuscript-${++nextManuscriptToken}`);
+  useEffect(() => {
+    manuscriptMounts += 1;
+    return () => { manuscriptUnmounts += 1; };
+  }, []);
+  return <textarea aria-label="Stateful manuscript draft" data-manuscript-token={token} defaultValue="Uncommitted prose" />;
 }
 
 const panel: WorkspacePanelDefinition = {
@@ -176,49 +189,53 @@ act(() => { renderer.update(renderWorkspace(layout, [])); });
 check(unmounts === 1, "closing a panel should unmount it exactly once");
 
 const immovablePanel: WorkspacePanelDefinition = {
-  id: "ai-companions",
-  label: "AI Companions",
+  id: "locked-utility",
+  label: "Locked Utility",
   movable: false,
   closable: false,
-  node: <div>Permanent AI surface</div>,
+  node: <div>Deliberately fixed utility surface</div>,
 };
-layout = placePanel(createDefaultWorkspaceLayout(), "ai-companions", {
+layout = placePanel(createDefaultWorkspaceLayout(), "locked-utility", {
   kind: "floating",
   bounds: { x: 30, y: 30, width: 480, height: 320 },
 });
 act(() => { renderer.update(renderWorkspace(layout, [immovablePanel])); });
 check(
-  renderer.root.findByProps({ "aria-label": "Move AI Companions floating panel" }).props.tabIndex === -1,
+  renderer.root.findByProps({ "aria-label": "Move Locked Utility floating panel" }).props.tabIndex === -1,
   "non-movable floating surfaces must not expose the drag handle to keyboard users",
 );
 check(
-  renderer.root.findByProps({ "aria-label": "Dock AI Companions to left" }).props.disabled === true
-    && renderer.root.findByProps({ "aria-label": "Minimize AI Companions" }).props.disabled === true
-    && renderer.root.findByProps({ "aria-label": "Resize AI Companions floating panel" }).props.tabIndex === -1,
+  renderer.root.findByProps({ "aria-label": "Dock Locked Utility to left" }).props.disabled === true
+    && renderer.root.findByProps({ "aria-label": "Minimize Locked Utility" }).props.disabled === true
+    && renderer.root.findByProps({ "aria-label": "Resize Locked Utility floating panel" }).props.tabIndex === -1,
   "non-movable floating surfaces must disable dock, minimize, and resize controls",
 );
 
 // Mounted ARIA relationships: every dock tab owns one tabpanel, with a single
 // roving tab stop and a visibility state matching the selected tab.
 const relationshipPanels: readonly WorkspacePanelDefinition[] = [
-  { id: "manuscript", label: "Manuscript", movable: false, closable: false, node: <div>Manuscript body</div> },
+  { id: "manuscript", label: "Manuscript", closable: false, node: <StatefulManuscriptProbe /> },
   { id: "dashboard", label: "Dashboard", node: <div>Dashboard body</div> },
-  { id: "ai-companions", label: "AI Companions", movable: false, closable: false, node: <div>AI body</div> },
+  { id: "ai-companions", label: "AI Companions", closable: false, node: <div>AI body</div> },
   { id: "decision-radar", label: "Decision Radar", node: <div>Radar body</div> },
   { id: "outline", label: "Outline", node: <div>Outline body</div> },
   { id: "health", label: "Health", node: <div>Health body</div> },
 ];
 const activationCalls: Array<[string, string]> = [];
+const panelMoveCalls: Array<[string, string, number]> = [];
 const resizeDockCalls: Array<[string, number]> = [];
 const moveFloatingCalls: Array<[string, number, number]> = [];
 const resizeFloatingCalls: Array<[string, number, number]> = [];
+const minimizeFloatingCalls: Array<[string, boolean]> = [];
 const focusedFloatingPanels: string[] = [];
 const interactiveProps: Omit<DockWorkspaceProps, "layout" | "panels"> = {
   ...staticProps,
   onActivate: (panelId, region) => { activationCalls.push([panelId, region]); return true; },
+  onMove: (panelId, region, index) => { panelMoveCalls.push([panelId, region, index]); return true; },
   onResizeDock: (region, size) => { resizeDockCalls.push([region, size]); },
   onMoveFloating: (panelId, x, y) => { moveFloatingCalls.push([panelId, x, y]); },
   onResizeFloating: (panelId, width, height) => { resizeFloatingCalls.push([panelId, width, height]); },
+  onMinimizeFloating: (panelId, minimized) => { minimizeFloatingCalls.push([panelId, minimized]); return true; },
   onFocusFloating: (panelId) => { focusedFloatingPanels.push(panelId); },
 };
 let accessibleLayout = createDefaultWorkspaceLayout();
@@ -229,6 +246,20 @@ act(() => {
     { createNodeMock },
   );
 });
+check(manuscriptMounts === 1 && manuscriptUnmounts === 0, "manuscript should mount once in its default dock");
+const manuscriptToken = accessibleRenderer.root
+  .findByProps({ "aria-label": "Stateful manuscript draft" })
+  .props["data-manuscript-token"];
+check(
+  accessibleRenderer.root.findByProps({ "aria-label": "Float Manuscript" }).props.disabled === false
+    && accessibleRenderer.root.findByProps({ "aria-label": "Float AI Companions" }).props.disabled === false,
+  "Manuscript and AI Companions should both expose enabled tear-off controls",
+);
+check(
+  accessibleRenderer.root.findByProps({ id: `lf-tab-${workspacePanelDomToken("manuscript")}` }).props.draggable === true
+    && accessibleRenderer.root.findByProps({ id: `lf-tab-${workspacePanelDomToken("ai-companions")}` }).props.draggable === true,
+  "Manuscript and AI Companions dock tabs should both support pointer movement",
+);
 
 const dockTabs = accessibleRenderer.root.findAllByProps({ role: "tab" });
 const dockTabPanels = accessibleRenderer.root.findAllByProps({ role: "tabpanel" });
@@ -373,6 +404,144 @@ check(
   focusedFloatingPanels.at(-1) === "dashboard"
     && JSON.stringify(resizeFloatingCalls.at(-1)) === JSON.stringify(["dashboard", 520, 372]),
   "ArrowDown should focus and grow the floating panel height by one step",
+);
+
+// Manuscript and the composite AI surface are ordinary movable workspace
+// panels. They retain the permanent/nonclosable policy, but expose the same
+// modeless movement, sizing, minimization, and redocking affordances as every
+// other float.
+accessibleLayout = placePanel(accessibleLayout, "manuscript", {
+  kind: "floating",
+  bounds: { x: 96, y: 88, width: 840, height: 620 },
+});
+accessibleLayout = placePanel(accessibleLayout, "ai-companions", {
+  kind: "floating",
+  bounds: { x: 248, y: 126, width: 610, height: 490 },
+});
+const floatingCockpitSnapshot = serializeWorkspaceLayout(accessibleLayout);
+act(() => {
+  accessibleRenderer.update(
+    <DockWorkspace {...interactiveProps} layout={accessibleLayout} panels={relationshipPanels} />,
+  );
+});
+
+for (const panelLabel of ["Manuscript", "AI Companions"] as const) {
+  const titlebar = accessibleRenderer.root.findByProps({ "aria-label": `Move ${panelLabel} floating panel` });
+  const resizer = accessibleRenderer.root.findByProps({ "aria-label": `Resize ${panelLabel} floating panel` });
+  const minimize = accessibleRenderer.root.findByProps({ "aria-label": `Minimize ${panelLabel}` });
+  check(
+    titlebar.props.tabIndex === 0 && resizer.props.tabIndex === 0 && minimize.props.disabled === false,
+    `${panelLabel} should expose keyboard move, resize, and minimize controls while floating`,
+  );
+  check(
+    ["left", "center", "right", "bottom"].every((region) => (
+      accessibleRenderer.root.findByProps({ "aria-label": `Dock ${panelLabel} to ${region}` }).props.disabled === false
+    )),
+    `${panelLabel} should be redockable into every workspace region`,
+  );
+}
+
+const manuscriptFloatingTitle = accessibleRenderer.root.findByProps({ "aria-label": "Move Manuscript floating panel" });
+const manuscriptMoveEvent = keyboardEvent("ArrowLeft", manuscriptFloatingTitle);
+act(() => { manuscriptFloatingTitle.props.onKeyDown(manuscriptMoveEvent); });
+check(
+  manuscriptMoveEvent.prevented
+    && focusedFloatingPanels.at(-1) === "manuscript"
+    && JSON.stringify(moveFloatingCalls.at(-1)) === JSON.stringify(["manuscript", 84, 88]),
+  "Manuscript floating movement should use the shared keyboard path",
+);
+const manuscriptFloatingResizer = accessibleRenderer.root.findByProps({ "aria-label": "Resize Manuscript floating panel" });
+const manuscriptResizeEvent = keyboardEvent("ArrowUp", manuscriptFloatingResizer);
+act(() => { manuscriptFloatingResizer.props.onKeyDown(manuscriptResizeEvent); });
+check(
+  manuscriptResizeEvent.prevented
+    && JSON.stringify(resizeFloatingCalls.at(-1)) === JSON.stringify(["manuscript", 840, 608]),
+  "Manuscript floating resize should use the shared keyboard path",
+);
+await settleWorkspaceAction(() => {
+  accessibleRenderer.root.findByProps({ "aria-label": "Minimize AI Companions" }).props.onClick();
+});
+check(
+  JSON.stringify(minimizeFloatingCalls.at(-1)) === JSON.stringify(["ai-companions", true]),
+  "AI Companions should use the shared floating minimize callback",
+);
+await settleWorkspaceAction(() => {
+  accessibleRenderer.root.findByProps({ "aria-label": "Dock Manuscript to left" }).props.onClick();
+});
+check(
+  panelMoveCalls.at(-1)?.[0] === "manuscript" && panelMoveCalls.at(-1)?.[1] === "left",
+  "Manuscript should use the shared redock callback for a non-center destination",
+);
+
+// Focus is a visual projection, not a destructive layout mutation. A floated
+// manuscript becomes the sole center tabpanel while focused and returns to the
+// exact saved floating geometry afterward without remounting its editor state.
+const focusWithFloatedManuscript = setWorkspacePreset(accessibleLayout, "focus");
+check(
+  serializeWorkspaceLayout(accessibleLayout) === floatingCockpitSnapshot,
+  "creating the Focus projection must not mutate the Cockpit layout",
+);
+act(() => {
+  accessibleRenderer.update(
+    <DockWorkspace {...interactiveProps} layout={focusWithFloatedManuscript} panels={relationshipPanels} />,
+  );
+});
+const projectedManuscript = accessibleRenderer.root.findByProps({ "data-panel-id": "manuscript" });
+check(
+  projectedManuscript.props.role === "tabpanel"
+    && projectedManuscript.props.hidden === false
+    && projectedManuscript.props["data-dock-region"] === "center"
+    && projectedManuscript.props["data-floating-panel"] === undefined,
+  "Focus should visually project a floated Manuscript into the center work surface",
+);
+const projectedManuscriptTab = accessibleRenderer.root.findByProps({
+  id: `lf-tab-${workspacePanelDomToken("manuscript")}`,
+});
+check(
+  projectedManuscriptTab.props.draggable === false
+    && accessibleRenderer.root.findAllByProps({ "aria-label": "Float Manuscript" }).length === 0
+    && accessibleRenderer.root.findAll((node) => (
+      typeof node.props?.["aria-label"] === "string"
+      && node.props["aria-label"].startsWith("Move Manuscript to ")
+    )).length === 0,
+  "the temporary Focus projection must not expose controls that rewrite the saved Cockpit placement",
+);
+check(
+  accessibleRenderer.root.findByProps({ "data-panel-id": "ai-companions" }).props.hidden === true,
+  "Focus should continue hiding non-Manuscript floating panels",
+);
+check(
+  manuscriptMounts === 1
+    && manuscriptUnmounts === 0
+    && accessibleRenderer.root.findByProps({ "aria-label": "Stateful manuscript draft" }).props["data-manuscript-token"] === manuscriptToken,
+  "Focus projection must preserve the mounted Manuscript editor instance and draft state",
+);
+
+accessibleLayout = setWorkspacePreset(focusWithFloatedManuscript, "cockpit");
+check(
+  serializeWorkspaceLayout(accessibleLayout) === floatingCockpitSnapshot,
+  "leaving Focus should restore the byte-identical Cockpit placement",
+);
+act(() => {
+  accessibleRenderer.update(
+    <DockWorkspace {...interactiveProps} layout={accessibleLayout} panels={relationshipPanels} />,
+  );
+});
+const restoredFloatingManuscript = accessibleRenderer.root.findByProps({ "data-panel-id": "manuscript" });
+check(
+  restoredFloatingManuscript.props.role === "dialog"
+    && restoredFloatingManuscript.props["data-floating-panel"] === "true"
+    && restoredFloatingManuscript.props.style.left === 96
+    && restoredFloatingManuscript.props.style.top === 88
+    && restoredFloatingManuscript.props.style.width === 840
+    && restoredFloatingManuscript.props.style.height === 620,
+  "Cockpit should restore the Manuscript floating dialog at its exact saved bounds",
+);
+check(
+  manuscriptMounts === 1
+    && manuscriptUnmounts === 0
+    && accessibleRenderer.root.findByProps({ "aria-label": "Stateful manuscript draft" }).props["data-manuscript-token"] === manuscriptToken,
+  "Focus round-trip must not remount the Manuscript editor",
 );
 
 // The Focus/Cockpit segmented control must expose its selected state, not only

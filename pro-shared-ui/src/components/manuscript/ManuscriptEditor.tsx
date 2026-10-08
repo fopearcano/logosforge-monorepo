@@ -75,8 +75,9 @@ const SCRIPT_MODES = new Set(["screenplay", "stage_script", "stage", "series"]);
 const panelBox: CSSProperties = {
   position: "relative", width: "100%", height: "100%",
   background: "radial-gradient(120% 70% at 50% 0%,var(--panel),var(--base))",
-  border: "1px solid var(--line)", boxShadow: "0 16px 60px rgba(0,0,0,.6)",
+  border: "1px solid var(--line)", boxShadow: "var(--page-shadow)",
   overflow: "hidden", display: "flex", flexDirection: "column",
+  containerType: "inline-size",
 };
 
 const wordCount = (t: string) => (t.trim() ? t.trim().split(/\s+/).length : 0);
@@ -1813,28 +1814,42 @@ export function ManuscriptEditor(props: PanelProps) {
 
   return (
     <PanelShell {...props}>
-      <div data-screen-label="Manuscript Editor" style={panelBox} onKeyDown={onKeyDown}>
+      <div className="lf-manuscript-panel" data-screen-label="Manuscript Editor" style={panelBox} onKeyDown={onKeyDown}>
         <Corners br />
-        <div style={{ height: 44, flex: "none", display: "flex", alignItems: "center", gap: 14, padding: "0 18px", borderBottom: "1px solid var(--line)", background: "var(--tint)" }}>
-          <span style={{ fontFamily: "'Chakra Petch'", fontWeight: 600, fontSize: 14, letterSpacing: ".14em", color: "var(--strong)" }}>MANUSCRIPT</span>
-          <span style={{ fontSize: 10, color: "var(--txt2)" }}>{total.toLocaleString()} <span style={{ color: "var(--txt3)" }}>WORDS</span> · {ordered.length} SCENES</span>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, height: 20, padding: "0 9px", border: `1px solid ${saveColor}`, color: saveColor, fontSize: 9, letterSpacing: ".14em" }}>
-            <span style={{ width: 5, height: 5, borderRadius: "50%", background: saveColor }} />{saveLabel}
+        <div className="lf-manuscript-toolbar" style={{ height: 44, flex: "none", display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", alignItems: "center", gap: 14, padding: "0 18px", borderBottom: "1px solid var(--line)", background: "var(--tint)" }}>
+          <div className="lf-manuscript-toolbar-identity" style={{ minWidth: 0, display: "flex", alignItems: "center", gap: 14 }}>
+            <span className="lf-manuscript-toolbar-title" style={{ flex: "none", fontFamily: "var(--display-font)", fontWeight: 600, fontSize: 14, letterSpacing: ".14em", color: "var(--strong)" }}>MANUSCRIPT</span>
+            <span className="lf-manuscript-toolbar-meta" style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 10, color: "var(--txt2)" }}>{total.toLocaleString()} <span style={{ color: "var(--txt3)" }}>WORDS</span> · {ordered.length} SCENES</span>
+            <div
+              className="lf-manuscript-save-status"
+              data-save-status={saveLabel === "ALL SAVED" ? "saved" : saveLabel === "SAVING…" ? "saving" : "unsaved"}
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+              aria-label={`Manuscript save status: ${saveLabel}`}
+              title={saveLabel}
+              style={{ flex: "none", display: "flex", alignItems: "center", gap: 6, height: 20, padding: "0 9px", border: `1px solid ${saveColor}`, borderRadius: "var(--control-radius)", color: saveColor, fontSize: 9, letterSpacing: ".14em", whiteSpace: "nowrap" }}
+            >
+              <span className="lf-manuscript-save-dot" aria-hidden="true" style={{ flex: "none", width: 5, height: 5, borderRadius: "50%", background: saveColor }} />
+              <span className="lf-manuscript-save-copy" aria-hidden="true">{saveLabel}</span>
+            </div>
           </div>
-          <div style={{ flex: 1 }} />
+          <div className="lf-manuscript-toolbar-actions" style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 14, whiteSpace: "nowrap" }}>
           <button
             type="button"
+            className="lf-manuscript-toolbar-action"
             aria-label={hideResolvedComments ? "Show all comment marks" : "Show open comment marks"}
             aria-pressed={hideResolvedComments}
             title={hideResolvedComments ? "Resolved comment marks are hidden" : "Resolved comment marks are visible"}
             onClick={() => setHideResolvedComments(!hideResolvedComments)}
             style={{ ...linkBtn, color: hideResolvedComments ? "var(--amber)" : "var(--txt2)" }}
           >
-            ◈ {hideResolvedComments ? "OPEN MARKS" : "ALL MARKS"}
+            <span aria-hidden="true">◈</span> <span className="lf-manuscript-action-copy">{hideResolvedComments ? "OPEN MARKS" : "ALL MARKS"}</span>
           </button>
-          {isScript && <button type="button" onClick={() => setFormat((f) => !f)} disabled={focus} aria-pressed={format} title="Live screenplay-format preview of the scene you're editing" style={{ ...linkBtn, color: format ? "var(--accent)" : "var(--txt2)", opacity: focus ? 0.4 : 1 }}>❏ FORMAT</button>}
-          <button type="button" onClick={addScene} disabled={busy || projectId == null} style={{ ...linkBtn, color: "var(--txt2)", opacity: busy || projectId == null ? 0.5 : 1 }}>＋ SCENE</button>
-          <button type="button" onClick={() => setFocus((f) => !f)} aria-pressed={focus} style={{ ...linkBtn, color: focus ? "var(--accent)" : "var(--txt2)" }}>⊹ FOCUS</button>
+          {isScript && <button type="button" className="lf-manuscript-toolbar-action" aria-label="Toggle screenplay format preview" onClick={() => setFormat((f) => !f)} disabled={focus} aria-pressed={format} title="Live screenplay-format preview of the scene you're editing" style={{ ...linkBtn, color: format ? "var(--accent)" : "var(--txt2)", opacity: focus ? 0.4 : 1 }}><span aria-hidden="true">❏</span> <span className="lf-manuscript-action-copy">FORMAT</span></button>}
+          <button type="button" className="lf-manuscript-toolbar-action" aria-label="Add scene" onClick={addScene} disabled={busy || projectId == null} style={{ ...linkBtn, color: "var(--txt2)", opacity: busy || projectId == null ? 0.5 : 1 }}><span aria-hidden="true">＋</span> <span className="lf-manuscript-action-copy">SCENE</span></button>
+          <button type="button" className="lf-manuscript-toolbar-action" aria-label={focus ? "Exit focus view" : "Enter focus view"} onClick={() => setFocus((f) => !f)} aria-pressed={focus} style={{ ...linkBtn, color: focus ? "var(--accent)" : "var(--txt2)" }}><span aria-hidden="true">⊹</span> <span className="lf-manuscript-action-copy">FOCUS</span></button>
+          </div>
         </div>
         {actionError && <button type="button" role="alert" title="Dismiss" onClick={() => setActionError(null)} style={{ flex: "none", width: "100%", textAlign: "left", border: "none", borderBottom: "1px solid var(--crimson)", background: "rgba(255,82,96,.08)", color: "var(--crimson)", padding: "7px 18px", font: "inherit", fontSize: 9.5, cursor: "pointer" }}>{actionError}</button>}
         {commentsError && (

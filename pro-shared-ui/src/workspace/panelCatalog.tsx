@@ -37,6 +37,7 @@ import { CharacterLinks, PsykeBible, ThemeScenes } from "../components/bible";
 import { CanvasPlot, KnowledgeGraph, TimelinePanel } from "../components/spatialcanvas";
 import { HelpPanel } from "../components/help";
 import type { DockRegionId } from "./layoutModel";
+import { studioPanelShortcut } from "./panelShortcuts";
 
 /**
  * Stable ID reserved for the host-composed AI companions surface.
@@ -51,6 +52,8 @@ export interface StudioPanelCatalogEntry {
   /** Durable workspace-layout key. Persist this value, never the display label. */
   readonly id: string;
   readonly label: string;
+  /** Canonical global shortcut used by every Pro host and the Help guide. */
+  readonly shortcut: string;
   readonly node: ReactElement;
   readonly preferredRegion?: DockRegionId;
   /** Omitted means the panel is available in every writing mode. */
@@ -61,6 +64,14 @@ export interface StudioPanelGroup {
   /** Empty groups are intentionally rendered without a heading by host rails. */
   readonly group: string;
   readonly panels: readonly StudioPanelCatalogEntry[];
+}
+
+function panel(
+  entry: Omit<StudioPanelCatalogEntry, "shortcut">,
+): StudioPanelCatalogEntry {
+  const shortcut = studioPanelShortcut(entry.id);
+  if (!shortcut) throw new Error(`Missing keyboard shortcut for Studio panel: ${entry.id}`);
+  return { ...entry, shortcut };
 }
 
 /**
@@ -75,67 +86,67 @@ export const STUDIO_PANEL_GROUPS: readonly StudioPanelGroup[] = [
   {
     group: "",
     panels: [
-      { id: "projects", label: "Projects", node: <ProjectsPanel /> },
-      { id: "dashboard", label: "Dashboard", node: <NarrativeDashboard /> },
-      { id: "manuscript", label: "Manuscript", node: <ManuscriptEditor /> },
-      { id: "notes", label: "Notes", node: <NotesPanel /> },
-      { id: "comments", label: "Comments", node: <CommentsPanel /> },
-      { id: "dexters-room", label: "Dexter's Room", node: <VoiceHud /> },
+      panel({ id: "projects", label: "Projects", node: <ProjectsPanel /> }),
+      panel({ id: "dashboard", label: "Dashboard", node: <NarrativeDashboard /> }),
+      panel({ id: "manuscript", label: "Manuscript", node: <ManuscriptEditor /> }),
+      panel({ id: "notes", label: "Notes", node: <NotesPanel /> }),
+      panel({ id: "comments", label: "Comments", node: <CommentsPanel /> }),
+      panel({ id: "dexters-room", label: "Dexter's Room", node: <VoiceHud /> }),
     ],
   },
   {
     group: "PLAN",
     panels: [
-      { id: "outline", label: "Outline", node: <OutlinePanel />, preferredRegion: "bottom" },
-      { id: "story-grid", label: "Story Grid", node: <StoryGrid /> },
-      { id: "timeline", label: "Timeline", node: <TimelinePanel /> },
-      { id: "canvas-plot", label: "Canvas Plot", node: <CanvasPlot /> },
-      { id: "series", label: "Series", node: <SeriesNavigator />, modes: ["series"] },
+      panel({ id: "outline", label: "Outline", node: <OutlinePanel />, preferredRegion: "bottom" }),
+      panel({ id: "story-grid", label: "Story Grid", node: <StoryGrid /> }),
+      panel({ id: "timeline", label: "Timeline", node: <TimelinePanel /> }),
+      panel({ id: "canvas-plot", label: "Canvas Plot", node: <CanvasPlot /> }),
+      panel({ id: "series", label: "Series", node: <SeriesNavigator />, modes: ["series"] }),
     ],
   },
   {
     group: "STRUCTURE",
     panels: [
-      { id: "structure", label: "Structure", node: <StructurePanel /> },
-      { id: "acts", label: "Acts", node: <ActsView /> },
-      { id: "beats", label: "Beats", node: <BeatsView /> },
-      { id: "chapters", label: "Chapters", node: <ChaptersView />, modes: ["novel"] },
-      { id: "structure-analysis", label: "Structure Analysis", node: <CoverageAnalysis /> },
-      { id: "format-studio", label: "Format Studio", node: <FormatStructure /> },
+      panel({ id: "structure", label: "Structure", node: <StructurePanel /> }),
+      panel({ id: "acts", label: "Acts", node: <ActsView /> }),
+      panel({ id: "beats", label: "Beats", node: <BeatsView /> }),
+      panel({ id: "chapters", label: "Chapters", node: <ChaptersView />, modes: ["novel"] }),
+      panel({ id: "structure-analysis", label: "Structure Analysis", node: <CoverageAnalysis /> }),
+      panel({ id: "format-studio", label: "Format Studio", node: <FormatStructure /> }),
     ],
   },
   {
     group: "ANALYTICS",
     panels: [
-      { id: "health", label: "Health", node: <StoryHealthHud />, preferredRegion: "bottom" },
-      { id: "pacing", label: "Pacing", node: <PacingInsights /> },
-      { id: "balance", label: "Balance", node: <CharacterBalance /> },
-      { id: "tags", label: "Tags", node: <TagsView /> },
-      { id: "continuity", label: "Continuity", node: <ContinuityPanel /> },
-      { id: "decision-radar", label: "Decision Radar", node: <DecisionRadar />, preferredRegion: "right" },
-      { id: "guided-workflows", label: "Guided Workflows", node: <GuidedWorkflowStepper />, preferredRegion: "right" },
-      { id: "adapt", label: "Adapt", node: <AdaptView /> },
-      { id: "review", label: "Review", node: <ReviewDashboard /> },
+      panel({ id: "health", label: "Health", node: <StoryHealthHud />, preferredRegion: "bottom" }),
+      panel({ id: "pacing", label: "Pacing", node: <PacingInsights /> }),
+      panel({ id: "balance", label: "Balance", node: <CharacterBalance /> }),
+      panel({ id: "tags", label: "Tags", node: <TagsView /> }),
+      panel({ id: "continuity", label: "Continuity", node: <ContinuityPanel /> }),
+      panel({ id: "decision-radar", label: "Decision Radar", node: <DecisionRadar />, preferredRegion: "right" }),
+      panel({ id: "guided-workflows", label: "Guided Workflows", node: <GuidedWorkflowStepper />, preferredRegion: "right" }),
+      panel({ id: "adapt", label: "Adapt", node: <AdaptView /> }),
+      panel({ id: "review", label: "Review", node: <ReviewDashboard /> }),
     ],
   },
   {
     group: "BIBLE",
     panels: [
-      { id: "psyke", label: "PSYKE", node: <PsykeBible /> },
-      { id: "characters", label: "Characters", node: <CharacterLinks /> },
-      { id: "theme-scenes", label: "Theme Scenes", node: <ThemeScenes /> },
-      { id: "graph", label: "Graph", node: <KnowledgeGraph /> },
+      panel({ id: "psyke", label: "PSYKE", node: <PsykeBible /> }),
+      panel({ id: "characters", label: "Characters", node: <CharacterLinks /> }),
+      panel({ id: "theme-scenes", label: "Theme Scenes", node: <ThemeScenes /> }),
+      panel({ id: "graph", label: "Graph", node: <KnowledgeGraph /> }),
     ],
   },
   {
     group: "",
     panels: [
-      { id: "plugins", label: "Plugins", node: <PluginsPanel /> },
-      { id: "connector", label: "Connector", node: <ConnectorPanel /> },
-      { id: "export", label: "Export", node: <ExportDialog /> },
-      { id: "ai-settings", label: "AI Settings", node: <AiSettingsPanel /> },
-      { id: "settings", label: "Settings", node: <CrossCutting /> },
-      { id: "help", label: "Help", node: <HelpPanel /> },
+      panel({ id: "plugins", label: "Plugins", node: <PluginsPanel /> }),
+      panel({ id: "connector", label: "Connector", node: <ConnectorPanel /> }),
+      panel({ id: "export", label: "Export", node: <ExportDialog /> }),
+      panel({ id: "ai-settings", label: "AI Settings", node: <AiSettingsPanel /> }),
+      panel({ id: "settings", label: "Settings", node: <CrossCutting /> }),
+      panel({ id: "help", label: "Help", node: <HelpPanel /> }),
     ],
   },
 ];

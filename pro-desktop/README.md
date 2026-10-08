@@ -50,13 +50,14 @@ removing a scene from the non-destructive Timeline remain immediate.
 
 Interactive cards, filters, toggles and authoring commands use native controls
 (or a keyboard-complete ARIA button for spatial cards), with visible
-`:focus-visible` styling and accessible names for every form field. The AI dock
-divider is an adjustable separator: Left/Right resize it, Shift changes the step,
-and Home/End jump to its limits. Pointer cancellation restores drag state, and
-the shell honors the operating system's reduced-motion preference. The command
-palette and Controlled Apply are true modal dialogs: focus stays inside while
-open, the workspace behind them is inert, Escape closes when safe, and focus
-returns to the originating control.
+`:focus-visible` styling and accessible names for every form field. Dock
+separators and floating-panel title bars/resizers are keyboard operable: arrow
+keys move or resize, Shift changes the step, and Home/End reach the relevant
+limits. Pointer cancellation restores drag state, and the shell honors the
+operating system's reduced-motion preference. The command palette and
+Controlled Apply are true modal dialogs: focus stays inside while open, the
+workspace behind them is inert, Escape closes when safe, and focus returns to
+the originating control.
 
 Runtime rendering faults are isolated at the workspace, active-panel and
 individual-AI-tool levels. A failed area shows its actual error and a local Retry
@@ -139,18 +140,32 @@ mode changes only while a project is an empty scaffold. The workspace is also
 remounted at the project boundary, so drafts, chat results and loading-state data
 from one project can never appear inside another.
 
-Each project also owns a versioned workspace layout. Left, center, right and
-bottom docks keep independently active tab stacks; panels can be moved by
-drag/drop or keyboard-accessible controls, torn into modeless floating windows,
-resized, minimized, collapsed, restored and docked again. Focus is a
-non-destructive manuscript-only projection of the saved Cockpit arrangement.
-Layout writes use the same project handoff/close barrier as editor drafts and an
-atomic host-side file replacement. Each normal replacement retains the prior
-generation; shared UI validates primary and backup separately, repairs from a
-known-good backup without rotating corruption over it, and leaves newer-schema
-layouts untouched. Moving a panel changes its grid placement under one stable
-React parent, so editor and AI session state does not remount during workspace
-rearrangement.
+Each project also owns a versioned workspace layout. All 37 Pro panels,
+including Manuscript and the host-composed AI Companions panel, can move among
+the left, center, right and bottom tab stacks or detach into modeless floating
+windows. A float can be moved, resized, minimized, restored, raised and docked
+again; Manuscript and AI Companions remain non-closable so the two permanent
+work surfaces are always recoverable. Every panel has one unique `Primary`
+shortcut (`Cmd` on macOS, `Ctrl` elsewhere). The established direct bindings
+remain—Projects `Primary+O`, Manuscript `Primary+1`, Dashboard `Primary+2`,
+Outline `Primary+3`, Timeline `Primary+4`, Comments `Primary+Shift+C`, Export
+`Primary+E`, Settings `Primary+,`, and AI Companions `Primary+J`—while the
+remaining panels use unique `Primary+Alt+Shift+letter/digit` bindings from the
+canonical panel catalog. A shortcut opens a closed panel, activates a docked
+panel, or restores and raises its existing float rather than creating a duplicate.
+
+Focus is a non-destructive Manuscript-only projection: it hides the Cockpit
+docks and floating windows without rewriting their placement, then restores the
+exact saved arrangement on exit. Panel shortcuts, tab controls, drag/drop, and
+cross-panel navigation all use the same project save barrier, so an active field
+is committed and pending Manuscript, Note, PSYKE, Outline, and Structure work is
+drained before context changes. Layout writes use that project handoff/close
+barrier and an atomic host-side file replacement. Each normal replacement
+retains the prior generation; shared UI validates primary and backup separately,
+repairs from a known-good backup without rotating corruption over it, and leaves
+newer-schema layouts untouched. Moving a panel changes its placement under one
+stable React parent, so editor and AI session state does not remount during
+workspace rearrangement.
 
 The packaged Windows, Intel macOS and Linux release gates also launch the
 unpacked native app through Playwright's Electron transport with an isolated
@@ -310,10 +325,13 @@ Codex configuration and the proposal/review/apply safety model.
 
 ## Status
 
-- **Workspace** is a dockable, keyboard-accessible four-region shell with
-  modeless floating panels, per-project versioned persistence, Focus/Cockpit
-  projections and safe reset. Window bounds, z-order, minimization and every
-  dock's active/collapsed state survive project changes and application restarts.
+- **Workspace** is a dockable, keyboard-accessible four-region shell in which
+  all 37 panels—including Manuscript and AI Companions—can be docked, detached,
+  moved, resized and minimized. Every panel has a unique open/focus shortcut;
+  Manuscript and AI Companions remain non-closable. Per-project versioned
+  persistence, a non-destructive Manuscript-only Focus projection, and safe reset
+  preserve window bounds, z-order, minimization, and every dock's active/collapsed
+  state across project changes and application restarts.
   At the supported 1024 px minimum window width, the Studio chrome reflows into
   two rows so the command palette, Adaptive mode, Focus/Cockpit controls and
   local-save status all remain visible and operable.

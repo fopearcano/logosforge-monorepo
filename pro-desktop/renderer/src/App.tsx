@@ -4,6 +4,9 @@ import {
   createHttpApiClient,
   type ApiClient,
   type PlatformAdapter,
+  type SkinId,
+  SKIN_OPTIONS,
+  resolveSkin,
   WorkspaceShell,
   DockWorkspace,
   WorkspaceNavigator,
@@ -19,6 +22,9 @@ import {
   STUDIO_WORKSPACE_PANEL_IDS,
   findStudioPanel,
   studioPanelGroupsForMode,
+  studioPanelShortcut,
+  panelIdForKeyboardShortcut,
+  formatStudioShortcut,
   flushPendingProjectSaves,
   prepareProjectHandoff,
   trackProjectWrite,
@@ -66,6 +72,7 @@ import {
   projectIdFromSessionState,
   selectStartupProjectId,
 } from './projectResume';
+import { applySkinPreference, readSkinPreference, writeSkinPreference } from './skinPreference';
 
 // Shared UI owns the platform-neutral panel catalog. The desktop host retains
 // the AI companion container plus project/bootstrap and lifecycle orchestration.
@@ -73,9 +80,13 @@ const PANELS = STUDIO_PANELS;
 const AI_PANEL_ID = STUDIO_AI_COMPANIONS_PANEL_ID;
 const ALL_PANEL_IDS = STUDIO_WORKSPACE_PANEL_IDS;
 const MANUSCRIPT_TAB_SELECTOR = `#lf-tab-${workspacePanelDomToken('manuscript')}`;
-const ACTIVE_RIGHT_TAB_SELECTOR = '[data-dock-drop-region="right"] [role="tab"][aria-selected="true"]';
 const EXPAND_RIGHT_DOCK_SELECTOR = '[aria-label="Expand right dock"]';
 const RECENT_PROJECTS_KEY = 'lf.omnibox.recent-projects.v1';
+const LEGACY_THEME_FOR_SKIN: Record<SkinId, 'dark' | 'light' | 'warm'> = {
+  forge: 'dark',
+  paper: 'light',
+  lamplit: 'warm',
+};
 
 const resolvePanel = findStudioPanel;
 
@@ -243,19 +254,16 @@ export function App() {
     workspaceLayoutRef.current = workspaceLayout;
   }, [projectId, workspaceHydrated, workspaceLayout]);
 
-  // Companion choice and visual theme remain app preferences. Dock placement,
+  // Companion choice and visual skin remain app preferences. Dock placement,
   // visibility, dimensions, and Focus/Cockpit are versioned per project above.
   const [aiTab, setAiTab] = useState<string>(() => localStorage.getItem('lf.aiTab') || AI_TOOL_KEYS[0] || 'Billy');
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [recentProjectIds, setRecentProjectIds] = useState<readonly number[]>(
     () => parseRecentProjectIds(localStorage.getItem(RECENT_PROJECTS_KEY)),
   );
-  const [ambiance, setAmbiance] = useState<'dark' | 'light' | 'warm'>(() => {
-    const v = localStorage.getItem('lf.theme');
-    return v === 'dark' || v === 'light' || v === 'warm' ? v : 'dark';
-  });
+  const [skin, setSkin] = useState<SkinId>(readSkinPreference);
   useEffect(() => { localStorage.setItem('lf.aiTab', aiTab); }, [aiTab]);
-  useEffect(() => { localStorage.setItem('lf.theme', ambiance); }, [ambiance]);
+  useEffect(() => { writeSkinPreference(skin); }, [skin]);
   useEffect(() => {
     if (projectId == null) return;
     setRecentProjectIds((current) => {
@@ -264,8 +272,8 @@ export function App() {
       return next;
     });
   }, [projectId]);
-  // Drive the global CSS palette (body + command palette live outside the shell).
-  useEffect(() => { document.documentElement.dataset.theme = ambiance; }, [ambiance]);
+  // Drive the global skin (body + command palette live outside the shared shell).
+  useLayoutEffect(() => { applySkinPreference(skin); }, [skin]);
   useEffect(() => {
     appMountedRef.current = true;
     return () => {
@@ -324,7 +332,12 @@ export function App() {
     if (!panelId) return Promise.resolve(false);
     const preferredRegion = panelId === AI_PANEL_ID ? 'right' : panel?.preferredRegion ?? 'center';
     const task = runWorkspaceMutation((layout) => {
-      let next = openWorkspacePanel(layout, panelId, preferredRegion);
+      // The Focus Manuscript is a visual projection. Selecting it may publish
+      // a scene target, but must not unminimize/raise/reorder its hidden saved
+      // Cockpit placement.
+      let next = layout.preset === 'focus' && panelId === 'manuscript'
+        ? layout
+        : openWorkspacePanel(layout, panelId, preferredRegion);
       if (next.preset === 'focus' && panelId !== 'manuscript') {
         next = setWorkspacePreset(next, 'cockpit');
       }
@@ -355,6 +368,29 @@ export function App() {
     });
   }, [runWorkspaceMutation]);
 
+  const panelFocusTarget = useCallback((panelId: string): HTMLElement | null => {
+    const layout = workspaceLayoutRef.current;
+    if (layout.preset === 'focus' && panelId === 'manuscript') {
+      return document.querySelector<HTMLElement>(MANUSCRIPT_TAB_SELECTOR);
+    }
+    const placement = getPanelPlacement(layout, panelId);
+    const selector = placement?.kind === 'floating'
+      ? `#lf-floating-title-${workspacePanelDomToken(panelId)}`
+      : `#lf-tab-${workspacePanelDomToken(panelId)}`;
+    return document.querySelector<HTMLElement>(selector);
+  }, []);
+
+  const selectPanelAndFocus = useCallback((panelId: string): Promise<boolean> => {
+    // A true modal owns the interaction until it closes. Modeless floating
+    // panels use aria-modal=false and therefore do not block navigation.
+    if (document.querySelector('[role="dialog"][aria-modal="true"]')) {
+      return Promise.resolve(false);
+    }
+    const task = selectPanel(panelId);
+    focusAfterWorkspaceAction(task, () => panelFocusTarget(panelId));
+    return task;
+  }, [panelFocusTarget, selectPanel]);
+
   // Cross-panel navigation: any panel can switch panels / open a scene, but no
   // panel unmounts a dirty editor until its save barrier succeeds.
   const navigate = useCallback((panel: string, opts?: StudioNavigationOptions) => {
@@ -370,12 +406,13 @@ export function App() {
     });
     focusAfterWorkspaceAction(
       task,
-      () => document.querySelector<HTMLElement>(ACTIVE_RIGHT_TAB_SELECTOR),
+      () => panelFocusTarget(AI_PANEL_ID),
     );
     return task;
-  }, [selectPanel]);
+  }, [panelFocusTarget, selectPanel]);
   const toggleFocus = useCallback((): Promise<boolean> => {
     const enteringFocus = workspaceLayoutRef.current.preset !== 'focus';
+    const returnPanelId = workspaceLayoutRef.current.focused?.panelId ?? 'manuscript';
     const task = runWorkspaceMutation(
       toggleWorkspacePreset,
       'Focus-mode change stopped; the current workspace remains visible.',
@@ -385,9 +422,11 @@ export function App() {
         task,
         () => document.querySelector<HTMLElement>(MANUSCRIPT_TAB_SELECTOR),
       );
+    } else {
+      focusAfterWorkspaceAction(task, () => panelFocusTarget(returnPanelId));
     }
     return task;
-  }, [runWorkspaceMutation]);
+  }, [panelFocusTarget, runWorkspaceMutation]);
 
   // Mode-aware nav: mode-specific panels (Chapters=novel, Series=series) appear
   // only in their writing mode — mirroring the Python core's per-mode gating.
@@ -401,17 +440,18 @@ export function App() {
       id: panel.id,
       label: panel.label,
       keywords: [panel.id],
+      shortcut: panel.shortcut,
     })),
     {
       id: AI_PANEL_ID,
       label: 'AI Companions',
       keywords: ['Billy', 'Logos', 'Counterpart', 'assistant'],
+      shortcut: studioPanelShortcut(AI_PANEL_ID),
     },
   ], [visiblePanels]);
 
-  // Normalize mode-ineligible panels and keep the permanent AI surface in its
-  // right-hand home. Left docks and floating windows are first-class rendered
-  // placements and must survive hydration unchanged.
+  // Normalize only mode-ineligible panels. Every eligible surface, including
+  // Manuscript and AI Companions, keeps its saved dock/floating placement.
   useEffect(() => {
     if (!workspaceHydrated) return;
     const unavailable = new Set(PANELS
@@ -419,44 +459,29 @@ export function App() {
       .map((panel) => panel.id));
     const unavailableIsOpen = [...unavailable]
       .some((panelId) => getPanelPlacement(workspaceLayout, panelId) !== null);
-    const aiPlacement = getPanelPlacement(workspaceLayout, AI_PANEL_ID);
-    const aiNeedsHome = aiPlacement?.kind !== 'dock' || aiPlacement.region !== 'right';
-    if (!unavailableIsOpen && !aiNeedsHome) return;
+    if (!unavailableIsOpen) return;
     void runWorkspaceMutation((layout) => {
       let next = layout;
       unavailable.forEach((panelId) => {
         if (getPanelPlacement(next, panelId) !== null) next = closeWorkspacePanel(next, panelId);
       });
-      const previouslyFocused = next.focused?.panelId;
-      const nextAiPlacement = getPanelPlacement(next, AI_PANEL_ID);
-      if (nextAiPlacement?.kind !== 'dock' || nextAiPlacement.region !== 'right') {
-        next = placePanel(next, AI_PANEL_ID, {
-          kind: 'dock',
-          region: 'right',
-          index: next.docks.right.panelIds.length,
-        });
-      }
-      if (previouslyFocused) {
-        const placement = getPanelPlacement(next, previouslyFocused);
-        if (placement?.kind === 'dock') {
-          next.docks[placement.region].activePanelId = previouslyFocused;
-          next.focused = { zone: placement.region, panelId: previouslyFocused };
-        } else if (placement?.kind === 'floating') {
-          next = focusWorkspacePanel(next, previouslyFocused);
-        }
-      }
       return next.focused === null ? openWorkspacePanel(next, 'manuscript', 'center') : next;
     }, 'Workspace normalization stopped; the previous layout remains open.');
   }, [mode, runWorkspaceMutation, workspaceHydrated, workspaceLayout]);
 
-  // ⌘K / Ctrl+K idempotently opens the command palette anywhere; Escape leaves focus mode
-  // (when the palette isn't the one consuming the keystroke).
+  // Every catalog shortcut uses the same save-aware navigation path as a tab
+  // click. Existing floating panels are restored/raised by openPanel; closed
+  // panels open in their preferred dock. AltGraph is rejected by the matcher.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!projectReadyRef.current) return;
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'c') {
+      if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
+      const panelId = panelIdForKeyboardShortcut(e);
+      const panelAvailable = panelId === AI_PANEL_ID
+        || visiblePanels.some((panel) => panel.id === panelId);
+      if (panelId && panelAvailable && workspaceHydrated) {
         e.preventDefault();
-        void selectPanel('Comments');
+        void selectPanelAndFocus(panelId);
       } else if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && !e.repeat && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         setPaletteOpen(true);
@@ -466,7 +491,7 @@ export function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [paletteOpen, selectPanel, toggleFocus]);
+  }, [paletteOpen, selectPanelAndFocus, toggleFocus, visiblePanels, workspaceHydrated]);
 
   useEffect(() => {
     if (!desktop) return;
@@ -859,8 +884,6 @@ export function App() {
   }, [selectPanel]);
 
   const moveDockPanel = useCallback((panelId: string, region: WorkspaceDockRegion, index: number) => {
-    if (panelId === 'manuscript' && region !== 'center') return Promise.resolve(false);
-    if (panelId === AI_PANEL_ID && region !== 'right') return Promise.resolve(false);
     return runWorkspaceMutation(
       (layout) => placePanel(layout, panelId, { kind: 'dock', region, index }),
       'Panel move stopped; the previous dock layout is unchanged.',
@@ -868,7 +891,6 @@ export function App() {
   }, [runWorkspaceMutation]);
 
   const floatWorkspacePanel = useCallback((panelId: string, bounds?: Partial<FloatingPanelBounds>) => {
-    if (panelId === 'manuscript' || panelId === AI_PANEL_ID) return Promise.resolve(false);
     return runWorkspaceMutation(
       (layout) => placePanel(layout, panelId, { kind: 'floating', bounds }),
       'Panel tear-off stopped; the previous workspace layout is unchanged.',
@@ -876,12 +898,10 @@ export function App() {
   }, [runWorkspaceMutation]);
 
   const moveWorkspaceFloatingPanel = useCallback((panelId: string, x: number, y: number) => {
-    if (panelId === 'manuscript' || panelId === AI_PANEL_ID) return;
     applyWorkspaceLayout((layout) => moveFloatingPanel(layout, panelId, x, y));
   }, [applyWorkspaceLayout]);
 
   const resizeWorkspaceFloatingPanel = useCallback((panelId: string, width: number, height: number) => {
-    if (panelId === 'manuscript' || panelId === AI_PANEL_ID) return;
     applyWorkspaceLayout((layout) => resizeFloatingPanel(layout, panelId, width, height));
   }, [applyWorkspaceLayout]);
 
@@ -895,7 +915,6 @@ export function App() {
   }, [applyWorkspaceLayout]);
 
   const changeFloatingPanelMinimized = useCallback((panelId: string, minimized: boolean) => {
-    if (panelId === 'manuscript' || panelId === AI_PANEL_ID) return Promise.resolve(false);
     return runWorkspaceMutation(
       (layout) => minimized
         ? setFloatingPanelMinimized(layout, panelId, true)
@@ -907,7 +926,7 @@ export function App() {
   }, [runWorkspaceMutation]);
 
   const closeDockPanel = useCallback((panelId: string) => {
-    if (panelId === 'manuscript') return Promise.resolve(false);
+    if (panelId === 'manuscript' || panelId === AI_PANEL_ID) return Promise.resolve(false);
     return runWorkspaceMutation(
       (layout) => closeWorkspacePanel(layout, panelId),
       'Panel close stopped; the panel remains open.',
@@ -950,15 +969,6 @@ export function App() {
     );
   }, [runWorkspaceMutation]);
 
-  const toggleAiDock = useCallback((): Promise<boolean> => {
-    const layout = workspaceLayoutRef.current;
-    const placement = getPanelPlacement(layout, AI_PANEL_ID);
-    if (placement?.kind === 'dock' && placement.region === 'right' && !layout.docks.right.collapsed) {
-      return collapseAiDock();
-    }
-    return openAi(aiTab);
-  }, [aiTab, collapseAiDock, openAi]);
-
   const openedPanels = useMemo<WorkspacePanelDefinition[]>(() => {
     const openedIds = [...new Set([
       ...workspaceLayout.docks.left.panelIds,
@@ -973,7 +983,6 @@ export function App() {
           id: AI_PANEL_ID,
           label: 'AI Companions',
           closable: false,
-          movable: false,
           flush: true,
           node: (
             <AiDock
@@ -994,7 +1003,6 @@ export function App() {
         id: panel.id,
         label: panel.label,
         closable: panel.id !== 'manuscript',
-        movable: panel.id !== 'manuscript',
         node: (
           <PanelErrorBoundary name={`${panel.label} panel`} resetKey={`${projectId ?? 'none'}:${panel.id}`}>
             {panel.node}
@@ -1013,16 +1021,30 @@ export function App() {
       enabled: () => projectReadyRef.current && !busy && !projectSwitchingRef.current && !closingRef.current,
       run: newProject,
     },
-    ...visiblePanels.map((panel) => ({
+    ...PANELS.map((panel) => ({
       id: `nav:${panel.id}`,
       kind: 'Go' as const,
       label: panel.label,
       aliases: [`nav:${panel.label}`, `go-${panel.label}`],
       keywords: ['panel', 'workspace', panel.id],
+      shortcut: panel.shortcut,
       showInOmnibox: false,
       enabled: () => projectReadyRef.current && workspaceHydrated && !projectSwitchingRef.current && !closingRef.current,
-      run: () => selectPanel(panel.id),
+      run: () => !panel.modes || panel.modes.includes(mode)
+        ? selectPanelAndFocus(panel.id)
+        : Promise.resolve(false),
     })),
+    {
+      id: `nav:${AI_PANEL_ID}`,
+      kind: 'Go',
+      label: 'AI Companions',
+      aliases: ['nav:AI Companions', 'go-AI Companions'],
+      keywords: ['panel', 'workspace', 'Billy', 'Logos', 'Counterpart'],
+      shortcut: studioPanelShortcut(AI_PANEL_ID),
+      showInOmnibox: false,
+      enabled: () => projectReadyRef.current && workspaceHydrated && !projectSwitchingRef.current && !closingRef.current,
+      run: () => selectPanelAndFocus(AI_PANEL_ID),
+    },
     ...AI_TOOL_KEYS.map((key) => ({
       id: `ai:${key}`,
       kind: 'AI' as const,
@@ -1041,10 +1063,10 @@ export function App() {
       run: toggleFocus,
     },
     {
-      id: 'ai-dock', kind: 'View', label: 'Toggle AI dock',
-      aliases: ['workspace.ai-dock'], shortcut: 'Primary+J',
+      id: 'ai-dock', kind: 'View', label: 'Open / focus AI Companions',
+      aliases: ['workspace.ai-dock'],
       enabled: () => projectReadyRef.current && !projectSwitchingRef.current && !closingRef.current,
-      run: toggleAiDock,
+      run: () => selectPanelAndFocus(AI_PANEL_ID),
     },
     {
       id: 'reset-workspace', kind: 'View', label: 'Reset workspace layout',
@@ -1052,14 +1074,19 @@ export function App() {
       enabled: () => projectReadyRef.current && !projectSwitchingRef.current && !closingRef.current,
       run: restoreDefaultWorkspace,
     },
-    ...(['dark', 'light', 'warm'] as const).map((theme) => ({
-      id: `theme:${theme}`,
-      kind: 'Appearance' as const,
-      label: `Use ${theme} appearance`,
-      aliases: [`appearance.${theme}`],
-      run: () => setAmbiance(theme),
+    ...SKIN_OPTIONS.map((skinOption) => ({
+      id: `skin:${skinOption.id}`,
+      kind: 'Skin' as const,
+      label: `Use ${skinOption.label} skin`,
+      aliases: [
+        `theme:${LEGACY_THEME_FOR_SKIN[skinOption.id]}`,
+        `appearance.${LEGACY_THEME_FOR_SKIN[skinOption.id]}`,
+        `appearance.${skinOption.id}`,
+      ],
+      keywords: ['skin', skinOption.label, skinOption.description],
+      run: () => setSkin(skinOption.id),
     })),
-  ], [busy, newProject, openAi, restoreDefaultWorkspace, selectPanel, toggleAiDock, toggleFocus, visiblePanels, workspaceHydrated, workspaceLayout.preset]);
+  ], [busy, mode, newProject, openAi, restoreDefaultWorkspace, selectPanelAndFocus, toggleFocus, workspaceHydrated, workspaceLayout.preset]);
   const commandRegistry = useMemo(() => createCommandRegistry(commands), [commands]);
 
   // Native menu (electron/menu.ts) → the same handlers the sidebar / palette use.
@@ -1146,11 +1173,11 @@ export function App() {
         onSearch={() => setPaletteOpen(true)}
       />
       <label className="field">
-        appearance
-        <select value={ambiance} onChange={(e) => setAmbiance(e.target.value as typeof ambiance)}>
-          <option value="dark">Dark</option>
-          <option value="light">Light</option>
-          <option value="warm">Warm</option>
+        skins
+        <select value={skin} onChange={(e) => setSkin(resolveSkin(e.target.value))}>
+          {SKIN_OPTIONS.map((skinOption) => (
+            <option key={skinOption.id} value={skinOption.id}>{skinOption.label}</option>
+          ))}
         </select>
       </label>
       <nav>
@@ -1158,7 +1185,7 @@ export function App() {
           <div key={g.group || `top-${gi}`} className="nav-group">
             {g.group && <div className="nav-group-label">{g.group}</div>}
             {g.panels.map((p) => (
-              <button type="button" key={p.id} disabled={!workspaceHydrated || projectSwitching || closePending} className={focusedPanelId === p.id ? 'on' : ''} aria-current={focusedPanelId === p.id ? 'page' : undefined} onClick={() => { void selectPanel(p.id); }}>
+              <button type="button" key={p.id} title={`${p.label} — ${formatStudioShortcut(p.shortcut)}`} disabled={!workspaceHydrated || projectSwitching || closePending} className={focusedPanelId === p.id ? 'on' : ''} aria-current={focusedPanelId === p.id ? 'page' : undefined} onClick={() => { void selectPanel(p.id); }}>
                 {p.label}
               </button>
             ))}
@@ -1215,7 +1242,7 @@ export function App() {
         <WorkspaceShell
           writingMode={mode}
           layout={workspaceLayout.preset}
-          theme={ambiance}
+          skin={skin}
           showConsole
           bottomSlot={<></>}
           rightSlot={<></>}

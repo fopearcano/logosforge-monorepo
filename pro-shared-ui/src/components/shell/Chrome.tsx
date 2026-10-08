@@ -18,7 +18,7 @@ export function CommandPalette({ onOpen }: { onOpen?: () => void }) {
         aria-label={available ? "Open command palette" : "Command palette is available in the desktop host"}
         title={available ? "Open command palette" : "The browser preview does not host desktop commands"}
         className="lf-cmd"
-        style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", maxWidth: 560, minWidth: 0, height: 30, padding: "0 12px", background: "var(--tint)", border: "1px solid var(--line2)", borderRadius: 2, color: "var(--txt3)", transition: ".15s", cursor: available ? "text" : "not-allowed", font: "inherit", textAlign: "left", opacity: available ? 1 : 0.62 }}
+        style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", maxWidth: 560, minWidth: 0, height: 30, padding: "0 12px", background: "var(--tint)", border: "1px solid var(--line2)", borderRadius: "var(--control-radius)", color: "var(--txt3)", transition: ".15s", cursor: available ? "text" : "not-allowed", font: "inherit", textAlign: "left", opacity: available ? 1 : 0.62 }}
       >
         <span className="lf-topbar-command-shortcut" style={{ display: "grid", placeItems: "center", minWidth: 46, height: 16, border: "1px solid var(--line2)", fontSize: 8, color: "var(--txt2)", whiteSpace: "nowrap" }}>Ctrl/⌘ K</span>
         <span style={{ color: "var(--accent)" }}>❯</span>
@@ -110,9 +110,9 @@ export function ModeStrip() {
     ? `Adaptive AI coaching mode — ${override ? `forced to ${override}` : `auto: ${adapt.mode} (from stage ${adapt.stage} × health ${adapt.health})`}. ${adapt.description}`
     : "Adaptive AI coaching mode — auto from stage × health, or override it.";
   return (
-    <div className="lf-topbar-adaptive" title={error ? `Adaptive mode failed: ${error}` : tip} style={{ display: "flex", alignItems: "center", gap: 7, height: 26, padding: "0 8px", border: `1px solid ${error ? "var(--blocking)" : "var(--line2)"}`, background: "var(--tint)" }}>
+    <div className="lf-topbar-adaptive" title={error ? `Adaptive mode failed: ${error}` : tip} style={{ display: "flex", alignItems: "center", gap: 7, height: 26, padding: "0 8px", border: `1px solid ${error ? "var(--blocking)" : "var(--line2)"}`, borderRadius: "var(--control-radius)", background: "var(--tint)" }}>
       <span style={{ fontSize: 8, letterSpacing: ".2em", color: "var(--txt3)" }}>ADAPTIVE</span>
-      <span style={{ width: 7, height: 7, borderRadius: "50%", background: col, boxShadow: `0 0 8px ${col}`, animation: "lf-pulse 2.6s ease-in-out infinite" }} />
+      <span style={{ width: 7, height: 7, borderRadius: "50%", background: col, boxShadow: "var(--signal-glow)", color: col, animation: "lf-pulse 2.6s ease-in-out infinite" }} />
       <select
         value={override || "Auto"}
         disabled={busy || adapt == null}
@@ -183,13 +183,13 @@ function SyncHud({ status = UNKNOWN_STATUS }: { status?: WorkspaceStatusModel })
         {status.copy}. {status.detail}
       </span>
       <details className="lf-topbar-status" style={{ position: "relative", height: 26 }}>
-        <summary aria-label={`Workspace status: ${status.copy}`} style={{ listStyle: "none", display: "flex", alignItems: "center", gap: 9, height: 26, padding: "0 11px", border: `1px solid color-mix(in srgb, ${color} 38%, transparent)`, background: "var(--tint)", cursor: "pointer" }}>
-          <span aria-hidden="true" style={{ width: 7, height: 7, borderRadius: "50%", background: color, boxShadow: `0 0 8px ${color}` }} />
-          <span style={{ fontSize: 9, letterSpacing: ".13em", color }}>{status.copy}</span>
-          <span aria-hidden="true" style={{ width: 1, height: 13, background: "var(--line2)" }} />
-          <span style={{ fontSize: 8, color: "var(--txt3)", letterSpacing: ".12em" }}>{status.storageCopy}</span>
+        <summary className="lf-topbar-status-summary" aria-label={`Workspace status: ${status.copy}`} style={{ listStyle: "none", display: "flex", alignItems: "center", gap: 9, height: 26, padding: "0 11px", border: `1px solid color-mix(in srgb, ${color} 38%, transparent)`, borderRadius: "var(--control-radius)", background: "var(--tint)", cursor: "pointer" }}>
+          <span className="lf-topbar-status-dot" aria-hidden="true" style={{ width: 7, height: 7, borderRadius: "50%", background: color, boxShadow: "var(--signal-glow)", color }} />
+          <span className="lf-topbar-status-copy" style={{ fontSize: 9, letterSpacing: ".13em", color }}>{status.copy}</span>
+          <span className="lf-topbar-status-separator" aria-hidden="true" style={{ width: 1, height: 13, background: "var(--line2)" }} />
+          <span className="lf-topbar-status-storage" style={{ fontSize: 8, color: "var(--txt3)", letterSpacing: ".12em" }}>{status.storageCopy}</span>
         </summary>
-        <div style={{ position: "absolute", top: 32, right: 0, zIndex: 70, width: 320, padding: "11px 12px", border: "1px solid var(--line)", borderTop: `2px solid ${color}`, background: "var(--raised)", boxShadow: "0 14px 38px rgba(0,0,0,.48)", fontSize: 9, lineHeight: 1.5 }}>
+        <div className="lf-topbar-status-popover" style={{ position: "absolute", top: 32, right: 0, zIndex: 70, width: 320, padding: "11px 12px", border: "1px solid var(--line)", borderTop: `2px solid ${color}`, borderRadius: "var(--control-radius)", background: "var(--raised)", boxShadow: "var(--chrome-shadow)", fontSize: 9, lineHeight: 1.5 }}>
           <div style={{ color, letterSpacing: ".14em", marginBottom: 5 }}>{status.copy}</div>
           <div style={{ color: "var(--txt2)" }}>{status.detail}</div>
           <div style={{ color: "var(--txt3)", marginTop: 7 }}>{saved} · storage: this device</div>
@@ -216,20 +216,20 @@ export function TopBar({
     <div className="lf-topbar">
       {/* brand */}
       <div className="lf-topbar-brand" style={{ display: "flex", alignItems: "center", gap: 9, paddingRight: 14, borderRight: "1px solid var(--line2)" }}>
-        <div style={{ position: "relative", width: 22, height: 22, display: "grid", placeItems: "center", border: "1px solid var(--crimson)", boxShadow: "0 0 10px rgba(232,68,58,.5) inset,0 0 8px rgba(232,68,58,.35)" }}>
-          <div style={{ width: 8, height: 8, background: "var(--crimson)", boxShadow: "0 0 8px var(--crimson)" }} />
-          <div style={{ position: "absolute", top: -1, left: -1, width: 5, height: 5, borderTop: "1px solid var(--crimson)", borderLeft: "1px solid var(--crimson)" }} />
-          <div style={{ position: "absolute", bottom: -1, right: -1, width: 5, height: 5, borderBottom: "1px solid var(--crimson)", borderRight: "1px solid var(--crimson)" }} />
+        <div className="lf-brand-mark" style={{ position: "relative", width: 22, height: 22, display: "grid", placeItems: "center", border: "1px solid var(--crimson)", boxShadow: "var(--signal-glow)", color: "var(--crimson)", borderRadius: "var(--control-radius)" }}>
+          <div className="lf-brand-mark-core" style={{ width: 8, height: 8, background: "var(--crimson)", boxShadow: "var(--signal-glow)" }} />
+          <div className="lf-brand-corner" style={{ position: "absolute", top: -1, left: -1, width: 5, height: 5, borderTop: "1px solid var(--crimson)", borderLeft: "1px solid var(--crimson)" }} />
+          <div className="lf-brand-corner" style={{ position: "absolute", bottom: -1, right: -1, width: 5, height: 5, borderBottom: "1px solid var(--crimson)", borderRight: "1px solid var(--crimson)" }} />
         </div>
         <div style={{ lineHeight: 1 }}>
-          <div style={{ fontFamily: "'Chakra Petch',sans-serif", fontWeight: 700, fontSize: 15, letterSpacing: ".16em", color: "var(--strong)" }}>LOGOSFORGE</div>
-          <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 8, letterSpacing: ".5em", color: "var(--crimson)", marginTop: 2 }}>STUDIO · PRO</div>
+          <div className="lf-brand-wordmark" style={{ fontFamily: "var(--display-font)", fontWeight: 700, fontSize: 15, letterSpacing: "var(--brand-tracking)", color: "var(--strong)" }}>LOGOSFORGE</div>
+          <div className="lf-brand-subtitle" style={{ fontFamily: "var(--ui-font)", fontSize: 8, letterSpacing: ".5em", color: "var(--crimson)", marginTop: 2 }}>STUDIO · PRO</div>
         </div>
       </div>
 
       {/* active writing format */}
-      <div className="lf-topbar-format" style={{ display: "flex", alignItems: "center", gap: 6, height: 20, padding: "0 9px", border: "1px solid var(--accent)", background: "linear-gradient(180deg,rgba(76,194,255,.10),transparent)", color: "var(--accent)", fontSize: 9.5, letterSpacing: ".18em", boxShadow: "0 0 10px rgba(76,194,255,.18)" }}>
-        <span style={{ width: 5, height: 5, background: "var(--accent)", boxShadow: "0 0 6px var(--accent)" }} />{formatBadge}
+      <div className="lf-topbar-format" style={{ display: "flex", alignItems: "center", gap: 6, height: 20, padding: "0 9px", border: "1px solid var(--accent)", borderRadius: "var(--control-radius)", background: "color-mix(in srgb,var(--accent) 9%,transparent)", color: "var(--accent)", fontSize: 9.5, letterSpacing: ".18em", boxShadow: "var(--signal-glow)" }}>
+        <span className="lf-topbar-format-dot" style={{ width: 5, height: 5, background: "var(--accent)", boxShadow: "var(--signal-glow)" }} />{formatBadge}
       </div>
 
       <CommandPalette onOpen={onCommandPalette} />

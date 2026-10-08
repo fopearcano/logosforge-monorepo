@@ -19,6 +19,11 @@ import {
   studioPanelGroupsForMode,
   studioPanelsForMode,
 } from "../src/workspace/panelCatalog";
+import {
+  STUDIO_PANEL_SHORTCUTS,
+  panelIdForKeyboardShortcut,
+  studioPanelShortcut,
+} from "../src/workspace/panelShortcuts";
 
 let assertions = 0;
 function check(condition: unknown, message: string): asserts condition {
@@ -65,6 +70,18 @@ const EXPECTED_PANEL_IDS = [
   "help",
 ] as const;
 
+const RESERVED_DIRECT_SHORTCUTS = [
+  ["projects", "Primary+O"],
+  ["dashboard", "Primary+2"],
+  ["manuscript", "Primary+1"],
+  ["comments", "Primary+Shift+C"],
+  ["outline", "Primary+3"],
+  ["timeline", "Primary+4"],
+  ["export", "Primary+E"],
+  ["settings", "Primary+Comma"],
+  [STUDIO_AI_COMPANIONS_PANEL_ID, "Primary+J"],
+] as const;
+
 const flattened = STUDIO_PANEL_GROUPS.flatMap((group) => group.panels);
 check(
   STUDIO_PANELS.length === flattened.length
@@ -89,6 +106,103 @@ check(
     && STUDIO_WORKSPACE_PANEL_IDS.at(-1) === STUDIO_AI_COMPANIONS_PANEL_ID
     && STUDIO_WORKSPACE_PANEL_IDS.filter((id) => id === STUDIO_AI_COMPANIONS_PANEL_ID).length === 1,
   "workspace IDs must add the host-owned AI companion surface exactly once",
+);
+check(STUDIO_PANELS.length === 36, "the shared catalog must expose all 36 shared Pro panels");
+check(
+  STUDIO_PANEL_SHORTCUTS.length === 37
+    && STUDIO_PANEL_SHORTCUTS.map((definition) => definition.id).join("\n")
+      === STUDIO_WORKSPACE_PANEL_IDS.join("\n"),
+  "canonical shortcuts must cover the 36 shared panels plus AI Companions exactly once",
+);
+check(
+  STUDIO_PANELS.every((panel) => {
+    const definition = STUDIO_PANEL_SHORTCUTS.find((candidate) => candidate.id === panel.id);
+    return definition?.label === panel.label
+      && definition.shortcut === panel.shortcut
+      && studioPanelShortcut(panel.id) === panel.shortcut;
+  }),
+  "every shared panel must expose its matching canonical shortcut",
+);
+const aiShortcut = STUDIO_PANEL_SHORTCUTS.find(
+  (definition) => definition.id === STUDIO_AI_COMPANIONS_PANEL_ID,
+);
+check(
+  aiShortcut?.label === "AI Companions"
+    && aiShortcut.shortcut === "Primary+J"
+    && studioPanelShortcut(STUDIO_AI_COMPANIONS_PANEL_ID) === aiShortcut.shortcut,
+  "AI Companions must complete the 37-panel shortcut catalog",
+);
+for (const [field, values] of [
+  ["ids", STUDIO_PANEL_SHORTCUTS.map((definition) => definition.id.toLowerCase())],
+  ["labels", STUDIO_PANEL_SHORTCUTS.map((definition) => definition.label.toLowerCase())],
+  ["shortcuts", STUDIO_PANEL_SHORTCUTS.map((definition) => definition.shortcut.toLowerCase())],
+] as const) {
+  check(
+    new Set(values).size === values.length,
+    `canonical panel shortcut ${field} must be unique`,
+  );
+}
+check(
+  new Set(RESERVED_DIRECT_SHORTCUTS.map(([, shortcut]) => shortcut.toLowerCase())).size
+    === RESERVED_DIRECT_SHORTCUTS.length,
+  "reserved direct panel shortcuts must not duplicate one another",
+);
+check(
+  RESERVED_DIRECT_SHORTCUTS.every(([id, shortcut]) => (
+    STUDIO_PANEL_SHORTCUTS.some((definition) => (
+      definition.id === id && definition.shortcut === shortcut
+    ))
+  )),
+  "reserved direct panel shortcuts must retain their established assignments",
+);
+const reservedDirectIds = new Set(RESERVED_DIRECT_SHORTCUTS.map(([id]) => id));
+check(
+  STUDIO_PANEL_SHORTCUTS
+    .filter((definition) => !reservedDirectIds.has(definition.id))
+    .every((definition) => /^Primary\+Alt\+Shift\+[A-Z0-9]$/.test(definition.shortcut)),
+  "non-reserved panel shortcuts must stay in the canonical modifier family",
+);
+
+const shortcutEvent = (overrides: Partial<KeyboardEvent> = {}) => ({
+  key: "",
+  code: "",
+  ctrlKey: false,
+  metaKey: false,
+  altKey: false,
+  shiftKey: false,
+  repeat: false,
+  defaultPrevented: false,
+  isComposing: false,
+  getModifierState: () => false,
+  ...overrides,
+});
+check(
+  panelIdForKeyboardShortcut(shortcutEvent({ key: "c", ctrlKey: true, shiftKey: true })) === "comments",
+  "Control panel shortcuts must resolve on Windows/Linux",
+);
+check(
+  panelIdForKeyboardShortcut(shortcutEvent({ key: "J", metaKey: true })) === STUDIO_AI_COMPANIONS_PANEL_ID,
+  "Command panel shortcuts must resolve on macOS",
+);
+check(
+  panelIdForKeyboardShortcut(shortcutEvent({ key: "%", code: "Digit5", ctrlKey: true, altKey: true, shiftKey: true })) === "guided-workflows",
+  "shifted digit shortcuts must match their physical Digit code",
+);
+check(
+  panelIdForKeyboardShortcut(shortcutEvent({ key: "˜", code: "KeyN", metaKey: true, altKey: true, shiftKey: true })) === "notes",
+  "Option-modified macOS letters must match their physical Key code",
+);
+check(
+  panelIdForKeyboardShortcut(shortcutEvent({ key: "N", ctrlKey: true, altKey: true, shiftKey: true, getModifierState: (key) => key === "AltGraph" })) === null,
+  "AltGraph text entry must never trigger panel navigation",
+);
+check(
+  panelIdForKeyboardShortcut(shortcutEvent({ key: "n", ctrlKey: true, altKey: true, shiftKey: true, repeat: true })) === null,
+  "held panel shortcuts must not repeat navigation",
+);
+check(
+  panelIdForKeyboardShortcut(shortcutEvent({ key: "c", ctrlKey: true, altKey: true, shiftKey: false })) === null,
+  "panel shortcut matching must require exact modifiers",
 );
 
 check(findStudioPanel("manuscript")?.label === "Manuscript", "catalog lookup by durable id failed");

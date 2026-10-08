@@ -81,6 +81,14 @@ requireMarkers("components/shell/DockWorkspace.tsx", [
   "focusAfterWorkspaceAction(",
   'event.target.getAttribute("role") !== "tab"',
 ]);
+requireMarkers("components/help/HelpPanel.tsx", [
+  'import { formatStudioShortcut, STUDIO_PANEL_SHORTCUTS } from "../../workspace/panelShortcuts"',
+  "STUDIO_PANEL_SHORTCUTS.filter((definition) => definition.group === group)",
+  "<Kbd>{formatStudioShortcut(definition.shortcut)}</Kbd>",
+  '"Panels & floating windows"',
+  "Every panel—including Manuscript and AI Companions—can move to any dock or float above the workspace.",
+  "A panel shortcut opens a closed panel, selects a docked one, or restores and raises a minimized floating one.",
+]);
 const manuscript = requireMarkers("components/manuscript/ManuscriptEditor.tsx", [
   "new IntersectionObserver", "observer.disconnect()", "data-prose-static", "data-scene-prose", "touchWarmSceneIds", "contentVisibility",
   "beginCrossScenePointerSelection", "finishCrossScenePointerSelection", "proseDomPointFromViewport",
@@ -100,11 +108,25 @@ const manuscript = requireMarkers("components/manuscript/ManuscriptEditor.tsx", 
   "planAppendSceneCommand(",
   "api.executeStoryStructureCommand(",
   "STRUCTURE EDITS LIVE IN THE NAVIGATOR",
+  'className="lf-manuscript-toolbar"',
+  'className="lf-manuscript-save-status"',
+  'role="status"',
+  'aria-label={`Manuscript save status: ${saveLabel}`}',
+  'className="lf-manuscript-toolbar-actions"',
 ]);
 if (manuscript.includes("useScenes()") || manuscript.includes("api.listScenes")) failures.push("ManuscriptEditor bypasses the canonical manuscript snapshot");
 if (manuscript.includes("api.createScene(") || manuscript.includes("api.deleteScene(")) failures.push("ManuscriptEditor bypasses transactional structure commands for create/delete");
 if ((manuscript.match(/<ProseEditor/g) ?? []).length !== 1) failures.push("ManuscriptEditor must keep one conditional ProseEditor render site");
 if (manuscript.includes("contentById")) failures.push("ManuscriptEditor duplicates the whole manuscript in parent content state");
+const shellStyles = requireMarkers("components/shell/ShellStyles.tsx", [
+  "@container (max-width:720px)",
+  "@container (max-width:480px)",
+  ".lf-manuscript-save-copy",
+  '.lf-shell[data-skin="paper"]',
+]);
+if (!shellStyles.includes(".lf-manuscript-toolbar-meta,.lf-manuscript-save-copy,.lf-manuscript-action-copy{display:none;}")) {
+  failures.push("Compact manuscript toolbar does not suppress overflowing visual labels");
+}
 requireMarkers("components/manuscript/ManuscriptEditor.tsx", ["sceneObserverRef.current !== observer", "status === \"dirty\"", "status === \"saving\"", "status === \"error\""]);
 const storyGrid = requireMarkers("components/manuscript/StoryGrid.tsx", [
   "useManuscriptSnapshot()",

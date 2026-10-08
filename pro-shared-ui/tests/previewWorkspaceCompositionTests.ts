@@ -80,6 +80,10 @@ for (const marker of [
   'setPendingContinuityRepair(panelId === STUDIO_AI_COMPANIONS_PANEL_ID ? options?.continuityRepair ?? null : null)',
   "setPendingNote(null)",
   "setPendingComment(null)",
+  "const toggleFocus = useCallback((): Promise<boolean> => {",
+  "const returnPanelId = layoutRef.current.focused?.panelId ?? \"manuscript\"",
+  ": panelFocusTarget(returnPanelId)",
+  "onToggleFocus={() => { void toggleFocus(); }}",
   "noteTargetId: pendingNote",
   "clearNoteTarget: (noteId) => setPendingNote",
   "commentTargetId: pendingComment",
@@ -104,7 +108,7 @@ for (const marker of [
 }
 const registryOffset = integrated.lastIndexOf("createCommandRegistry([");
 const registrySource = registryOffset < 0 ? "" : integrated.slice(registryOffset, registryOffset + 6_000);
-for (const marker of ["toggleWorkspacePreset", "resetWorkspaceLayout", 'setTheme("dark")', 'setTheme("light")', 'setTheme("warm")']) {
+for (const marker of ["toggleWorkspacePreset", "resetWorkspaceLayout", "...SKIN_OPTIONS.map", "setSkin(skinOption.id)", 'category: "Skins"']) {
   if (!registrySource.includes(marker)) failures.push(`Integrated browser omnibox registry is missing ${marker}`);
 }
 

@@ -8,7 +8,12 @@ const readSource = (...segments) => fs
 const app = readSource('renderer', 'src', 'App.tsx');
 const palette = readSource('renderer', 'src', 'CommandPalette.tsx');
 const main = readSource('electron', 'main.ts');
+const menu = readSource('electron', 'menu.ts');
 const preload = readSource('electron', 'preload.ts');
+const styles = readSource('renderer', 'src', 'styles.css');
+const mainRenderer = readSource('renderer', 'src', 'main.tsx');
+const skinPreference = readSource('renderer', 'src', 'skinPreference.ts');
+const panelShortcuts = readSource('..', 'pro-shared-ui', 'src', 'workspace', 'panelShortcuts.ts');
 const failures = [];
 for (const marker of [
   'bootstrapRetryTimerRef',
@@ -177,6 +182,46 @@ if (!/<StudioSceneNavigator[\s\S]{0,500}?onSearch=\{\(\)\s*=>\s*setPaletteOpen\(
 for (const forbidden of ["cmd.startsWith('nav:')", "cmd.startsWith('ai:')", "cmd.startsWith('theme:')"]) {
   if (app.includes(forbidden)) failures.push(`App still uses the native-menu command switch: ${forbidden}`);
 }
+for (const marker of [
+  'readSkinPreference',
+  'writeSkinPreference(skin)',
+  'applySkinPreference(skin)',
+  'id: `skin:${skinOption.id}`',
+  '`theme:${LEGACY_THEME_FOR_SKIN[skinOption.id]}`',
+  '`appearance.${LEGACY_THEME_FOR_SKIN[skinOption.id]}`',
+  '<WorkspaceShell',
+  'skin={skin}',
+]) {
+  if (!app.includes(marker)) failures.push(`App skin integration missing ${marker}`);
+}
+for (const marker of [
+  "SKIN_STORAGE_KEY = 'lf.skin.v1'",
+  "LEGACY_THEME_STORAGE_KEY = 'lf.theme'",
+  'resolveSkin(',
+  'root.dataset.skin = skin',
+  "return 'forge'",
+]) {
+  if (!skinPreference.includes(marker)) failures.push(`Skin preference helper missing ${marker}`);
+}
+if (!mainRenderer.includes('applySkinPreference(readSkinPreference())')) {
+  failures.push('Renderer does not apply the persisted skin before React mounts');
+}
+for (const marker of [
+  "label: 'Skins'",
+  "send('skin:forge')",
+  "send('skin:paper')",
+  "send('skin:lamplit')",
+]) {
+  if (!menu.includes(marker)) failures.push(`Native Skins menu missing ${marker}`);
+}
+for (const marker of [
+  ':root[data-skin="forge"]',
+  ':root[data-skin="paper"]',
+  ':root[data-skin="lamplit"]',
+  'font-family: var(--ui-font)',
+]) {
+  if (!styles.includes(marker)) failures.push(`Desktop skin CSS missing ${marker}`);
+}
 if (!palette.includes('<StudioOmnibox')) {
   failures.push('Desktop CommandPalette does not delegate to the shared StudioOmnibox');
 }
@@ -207,6 +252,101 @@ if (!/aliases:\s*\[\s*`nav:\$\{panel\.label\}`,\s*`go-\$\{panel\.label\}`\s*\]/s
 }
 if (!/id:\s*`nav:\$\{panel\.id\}`[\s\S]{0,600}?showInOmnibox:\s*false/.test(app)) {
   failures.push('Panel commands are not hidden from duplicate omnibox command results');
+}
+for (const marker of [
+  'panelIdForKeyboardShortcut,',
+  'const panelId = panelIdForKeyboardShortcut(e)',
+  'visiblePanels.some((panel) => panel.id === panelId)',
+  'void selectPanelAndFocus(panelId)',
+]) {
+  if (!app.includes(marker)) failures.push(`App generic panel-shortcut routing missing ${marker}`);
+}
+const panelShortcutEffect = app.match(/\/\/ Every catalog shortcut[\s\S]*?window\.removeEventListener\('keydown', onKey\);[\s\S]*?\}, \[[^\]]+\]\);/)?.[0] ?? '';
+if (!panelShortcutEffect.includes('panelIdForKeyboardShortcut(e)')
+    || !panelShortcutEffect.includes('workspaceHydrated')
+    || !panelShortcutEffect.includes('selectPanelAndFocus(panelId)')) {
+  failures.push('Global panel shortcuts do not use the canonical matcher and hydrated save-aware navigation path');
+}
+const selectPanelBlock = app.match(/const selectPanel = useCallback[\s\S]*?const panelFocusTarget = useCallback/)?.[0] ?? '';
+const selectPanelAndFocusBlock = app.match(/const selectPanelAndFocus = useCallback[\s\S]*?\/\/ Cross-panel navigation/)?.[0] ?? '';
+const workspaceMutationBlock = app.match(/const runWorkspaceMutation = useCallback[\s\S]*?const selectPanel = useCallback/)?.[0] ?? '';
+if (!selectPanelAndFocusBlock.includes('const task = selectPanel(panelId)')
+    || !selectPanelAndFocusBlock.includes('focusAfterWorkspaceAction(task')) {
+  failures.push('Panel shortcut/menu navigation does not restore focus through selectPanelAndFocus');
+}
+if (!selectPanelBlock.includes('runWorkspaceMutation((layout) =>')
+    || !workspaceMutationBlock.includes('await flushPendingProjectSaves({ commitActiveField: true })')) {
+  failures.push('Panel shortcut/menu navigation bypasses the pending-save workspace barrier');
+}
+const panelCommandBlock = app.match(/\.\.\.PANELS\.map\(\(panel\) => \(\{[\s\S]*?\}\)\),\s*\{\s*id: `nav:\$\{AI_PANEL_ID\}`/)?.[0] ?? '';
+if (!panelCommandBlock.includes('shortcut: panel.shortcut')
+    || !panelCommandBlock.includes('? selectPanelAndFocus(panel.id)')
+    || !panelCommandBlock.includes('!panel.modes || panel.modes.includes(mode)')
+    || !panelCommandBlock.includes(': Promise.resolve(false)')) {
+  failures.push('Catalog panel commands do not carry their canonical shortcut into the focus-aware command path');
+}
+const omniboxPanelsBlock = app.match(/const omniboxPanels = useMemo\([\s\S]*?\/\/ Normalize only mode-ineligible panels/)?.[0] ?? '';
+if (!omniboxPanelsBlock.includes('...visiblePanels.map((panel) => ({')
+    || omniboxPanelsBlock.includes('...PANELS.map((panel) => ({')) {
+  failures.push('Omnibox panels are not restricted to the active writing mode');
+}
+const aiPanelCommandBlock = app.match(/id: `nav:\$\{AI_PANEL_ID\}`[\s\S]*?\n\s*\},\s*\.\.\.AI_TOOL_KEYS/)?.[0] ?? '';
+if (!aiPanelCommandBlock.includes('shortcut: studioPanelShortcut(AI_PANEL_ID)')
+    || !aiPanelCommandBlock.includes('run: () => selectPanelAndFocus(AI_PANEL_ID)')) {
+  failures.push('AI Companions navigation command is missing its canonical direct shortcut/focus path');
+}
+
+const panelMovementBlock = app.match(/const moveDockPanel = useCallback[\s\S]*?const closeDockPanel = useCallback/)?.[0] ?? '';
+for (const forbidden of [
+  "panelId === 'manuscript'",
+  'panelId === AI_PANEL_ID',
+]) {
+  if (panelMovementBlock.includes(forbidden)) {
+    failures.push(`Panel move/float/resize/minimize path still blocks a detachable surface: ${forbidden}`);
+  }
+}
+const openedPanelsBlock = app.match(/const openedPanels = useMemo[\s\S]*?\/\/ One runtime registry/)?.[0] ?? '';
+for (const forbidden of [
+  'movable: false',
+  "movable: panel.id !== 'manuscript'",
+]) {
+  if (openedPanelsBlock.includes(forbidden)) failures.push(`Opened panel metadata still prevents detachment: ${forbidden}`);
+}
+const workspaceNormalizationBlock = app.match(/\/\/ Normalize only mode-ineligible panels[\s\S]*?\}, \[mode, runWorkspaceMutation, workspaceHydrated, workspaceLayout\]\);/)?.[0] ?? '';
+for (const forbidden of ['aiNeedsHome', 'nextAiPlacement', 'placePanel(next, AI_PANEL_ID']) {
+  if (workspaceNormalizationBlock.includes(forbidden)) failures.push(`Workspace normalization still rehomes AI Companions: ${forbidden}`);
+}
+
+const shortcutDefinitions = [...panelShortcuts.matchAll(
+  /\{ id: "([^"]+)", label: "[^"]+", group: "[^"]+", shortcut: "([^"]+)" \}/g,
+)].map((match) => ({
+  panelId: match[1],
+  accelerator: match[2].replace(/^Primary/, 'CmdOrCtrl').replace('Comma', ','),
+}));
+const nativeNavEntries = [...menu.matchAll(
+  /accelerator: '([^']+)', click: \(\) => send\('nav:([^']+)'\)/g,
+)].map((match) => ({ accelerator: match[1], panelId: match[2] }));
+if (shortcutDefinitions.length !== 37) {
+  failures.push(`Canonical panel shortcut catalog has ${shortcutDefinitions.length} entries instead of 37`);
+}
+if (nativeNavEntries.length !== 37) {
+  failures.push(`Native menu has ${nativeNavEntries.length} accelerated panel entries instead of 37`);
+}
+if (new Set(nativeNavEntries.map((entry) => entry.accelerator)).size !== 37) {
+  failures.push('Native panel accelerators are not unique');
+}
+if (new Set(nativeNavEntries.map((entry) => entry.panelId)).size !== 37) {
+  failures.push('Native menu does not target 37 unique panel ids');
+}
+const nativeByPanelId = new Map(nativeNavEntries.map((entry) => [entry.panelId, entry.accelerator]));
+for (const expected of shortcutDefinitions) {
+  if (nativeByPanelId.get(expected.panelId) !== expected.accelerator) {
+    failures.push(`Native menu shortcut drift for ${expected.panelId}: expected ${expected.accelerator}`);
+  }
+}
+if (nativeByPanelId.get('ai-companions') !== 'CmdOrCtrl+J'
+    || /accelerator: 'CmdOrCtrl\+J'[^\n]+send\('ai-dock'\)/.test(menu)) {
+  failures.push('Cmd/Ctrl+J does not directly open/focus AI Companions');
 }
 if (!/!e\.repeat[\s\S]{0,180}?e\.key\.toLowerCase\(\) === ['"]k['"][\s\S]{0,180}?setPaletteOpen\(true\)/.test(app)) {
   failures.push('Ctrl/Cmd+K is not an idempotent, repeat-safe omnibox opener');

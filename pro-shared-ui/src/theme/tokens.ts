@@ -1,9 +1,8 @@
 /**
- * Studio design tokens — dark-first, cinematic, "minimal-cyber / terminal".
- * Distinct from the Whiteboard (Free) identity. These are starting values for
- * Claude Design to refine; the design owns the final palette. Severity and
- * confidence grammar is shared across HUD surfaces (Decision Radar, Continuity,
- * Knowledge Graph). Per-mode bands re-skin the workspace by writing mode.
+ * Studio fallback design tokens. Runtime workspace Skins live in
+ * components/shell/shellVars.ts; this module remains the canonical source for
+ * writing-mode accents and shared semantic grammar. Pro does not import
+ * Whiteboard UI—the Paper Skin implements its own neutral Pro presentation.
  */
 export const tokens = {
   color: {

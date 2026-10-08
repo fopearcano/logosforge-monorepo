@@ -1,6 +1,6 @@
 {
   "name": "@logosforge/pro-desktop",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "engines": { "node": ">=22.12.0" },
   "description": "LogosForge Studio (Pro) — Electron desktop shell. Spawns the logosforge core API and composes the @logosforge/pro-shared-ui panels into a workspace.",
@@ -14,7 +14,8 @@
     "build": "npm run build:renderer && npm run build:electron",
     "build:renderer": "vite build renderer",
     "build:electron": "tsc -p tsconfig.electron.json",
-    "test": "npm run typecheck && npm run test:security && npm run test:live-context && npm run test:packaging && npm run test:lifecycle && npm run test:project-resume && npm run test:core-generation && npm run test:accessibility",
+    "test": "npm run typecheck && npm run test:skin-preference && npm run test:security && npm run test:live-context && npm run test:packaging && npm run test:lifecycle && npm run test:project-resume && npm run test:core-generation && npm run test:accessibility",
+    "test:skin-preference": "node tests/skin-preference.test.cjs",
     "test:security": "npm run build:electron && node tests/security.test.cjs && node tests/port-selection.test.cjs && node tests/layout-persistence.test.cjs",
     "test:layout-persistence": "npm run build:electron && node tests/layout-persistence.test.cjs",
     "test:live-context": "npm run build:electron && node tests/live-context-bridge.test.cjs",

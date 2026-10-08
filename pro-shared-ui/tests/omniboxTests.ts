@@ -53,7 +53,12 @@ const commands: CommandDescriptor[] = [
 const registry = createCommandRegistry(commands);
 const sources = {
   commands: registry.list(),
-  panels: [{ id: "manuscript", label: "Alpha Manuscript", keywords: ["editor"] }],
+  panels: [{
+    id: "manuscript",
+    label: "Alpha Manuscript",
+    keywords: ["editor"],
+    shortcut: "Primary+1",
+  }],
   projects: [project(1, "Alpha Current"), project(2, "Alpha Recent"), project(3, "Alpha Archive")],
   recentProjectIds: [2, 1],
   activeProjectId: 1,
@@ -77,8 +82,15 @@ check("recent project is marked for empty-query display", items.find((item) => i
 check("non-recent project is hidden from empty-query display", items.find((item) => item.key === "project:3")?.showWhenEmpty === false);
 const noteItem = items.find((item) => item.key === "note:30");
 const commentItem = items.find((item) => item.key === "comment:40");
+const panelItem = items.find((item) => item.key === "panel:manuscript");
 check("note results expose their direct target id", noteItem?.kind === "note" && noteItem.noteId === 30);
 check("comment results expose their direct target id", commentItem?.kind === "comment" && commentItem.commentId === 40);
+check(
+  "panel results propagate their canonical shortcut",
+  panelItem?.kind === "panel"
+    && panelItem.panelId === "manuscript"
+    && panelItem.shortcut === "Primary+1",
+);
 
 const alphaSections = searchOmniboxItems(items, "alpha");
 check("groups use canonical order", alphaSections.map((section) => section.group).join(",") === OMNIBOX_GROUP_ORDER.join(","));

@@ -35,9 +35,9 @@ export interface WorkspacePanelDefinition {
   id: string;
   label: string;
   node: ReactNode;
-  /** The manuscript is intentionally non-closable; other panels default true. */
+  /** Permanent surfaces such as Manuscript can opt out of close; others default true. */
   closable?: boolean;
-  /** Permanent surfaces can opt out of drag and keyboard movement. */
+  /** Specialized hosts may opt out; standard Pro panels are all movable. */
   movable?: boolean;
   /** Removes the standard content inset for a panel that supplies its own chrome. */
   flush?: boolean;
@@ -106,6 +106,21 @@ export function projectFloatingBounds(
   };
 }
 
+function findWorkspaceFocusControl(root: HTMLDivElement | null): HTMLElement | undefined {
+  if (!root) return undefined;
+  const focusedSurface = root.querySelector<HTMLElement>(
+    '[data-panel-focused="true"]:not([hidden])',
+  );
+  const labelledBy = focusedSurface?.getAttribute("aria-labelledby");
+  if (labelledBy) {
+    const labelledControl = root.querySelector<HTMLElement>(`#${labelledBy}`);
+    if (labelledControl) return labelledControl;
+  }
+  return root.querySelector<HTMLElement>(
+    '.lf-floating-panel-active:not([hidden]) .lf-floating-panel-titlebar',
+  ) ?? root.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? undefined;
+}
+
 function DockHeader({
   region,
   layout,
@@ -133,7 +148,7 @@ function DockHeader({
 }) {
   const dock = layout.docks[region];
   const visiblePanelIds = layout.preset === "focus" && region === "center"
-    ? dock.panelIds.filter((id) => id === "manuscript")
+    ? panelById.has("manuscript") ? ["manuscript"] : []
     : dock.panelIds;
   const activePanelId = layout.preset === "focus" && region === "center"
     ? "manuscript"
@@ -181,8 +196,21 @@ function DockHeader({
     event.stopPropagation();
     const panelId = event.dataTransfer.getData(DRAG_MIME)
       || event.dataTransfer.getData("text/plain");
-    if (panelId && panelById.has(panelId)) onMove(panelId, region, dock.panelIds.length);
-  }, [dock.panelIds.length, onMove, panelById, region]);
+    if (panelId && panelById.has(panelId)) {
+      const previousPanelId = dock.activePanelId;
+      focusAfterWorkspaceAction(
+        onMove(panelId, region, dock.panelIds.length),
+        () => workspaceRef.current?.querySelector<HTMLElement>(
+          `#lf-tab-${workspacePanelDomToken(panelId)}`,
+        ),
+        () => previousPanelId
+          ? workspaceRef.current?.querySelector<HTMLElement>(
+            `#lf-tab-${workspacePanelDomToken(previousPanelId)}`,
+          )
+          : undefined,
+      );
+    }
+  }, [dock.activePanelId, dock.panelIds.length, onMove, panelById, region, workspaceRef]);
 
   return (
     <div
@@ -204,6 +232,10 @@ function DockHeader({
       >
         {entries.map((panel) => {
           const active = activePanelId === panel.id;
+          const focusProjection = layout.preset === "focus"
+            && region === "center"
+            && panel.id === "manuscript";
+          const movable = panel.movable !== false && !focusProjection;
           const nextRegion = WORKSPACE_DOCK_REGIONS[
             (WORKSPACE_DOCK_REGIONS.indexOf(region) + 1) % WORKSPACE_DOCK_REGIONS.length
           ]!;
@@ -217,7 +249,7 @@ function DockHeader({
                 aria-selected={active}
                 aria-controls={`lf-panel-${workspacePanelDomToken(panel.id)}`}
                 tabIndex={active ? 0 : -1}
-                draggable={!disabled && panel.movable !== false}
+                draggable={!disabled && movable}
                 disabled={disabled}
                 onDragStart={(event) => {
                   event.dataTransfer.effectAllowed = "move";
@@ -241,7 +273,7 @@ function DockHeader({
               >
                 {panel.label}
               </button>
-              {panel.movable !== false && (
+              {movable && (
                 <>
                   <button
                     type="button"
@@ -304,11 +336,7 @@ function DockHeader({
                   onClick={() => {
                     focusAfterWorkspaceAction(
                       onClose(panel.id),
-                      () => workspaceRef.current?.querySelector<HTMLElement>(
-                        `[data-dock-drop-region="${region}"] [role="tab"][aria-selected="true"]`,
-                      ) ?? workspaceRef.current?.querySelector<HTMLElement>(
-                        '[data-dock-drop-region="center"] [role="tab"][aria-selected="true"]',
-                      ),
+                      () => findWorkspaceFocusControl(workspaceRef.current),
                     );
                   }}
                 >
@@ -759,6 +787,7 @@ function WorkspacePanelSurface({
       hidden={!visible}
       data-panel-id={panel.id}
       data-panel-active={active || undefined}
+      data-panel-focused={layout.focused?.panelId === panel.id || undefined}
       data-dock-region={region ?? undefined}
       data-floating-panel={floating ? "true" : undefined}
       style={surfaceStyle}
@@ -816,7 +845,7 @@ function WorkspacePanelSurface({
             <button
               key={destination}
               type="button"
-              disabled={!floating || interactionDisabled || (panel.id === "manuscript" && destination !== "center")}
+              disabled={!floating || interactionDisabled}
               aria-label={`Dock ${panel.label} to ${destination}`}
               title={`Dock to ${destination}`}
               onClick={() => {
@@ -856,9 +885,7 @@ function WorkspacePanelSurface({
               onClick={() => {
                 focusAfterWorkspaceAction(
                   onClose(panel.id),
-                  () => workspaceRef.current?.querySelector<HTMLElement>(
-                    '[data-dock-drop-region="center"] [role="tab"][aria-selected="true"]',
-                  ),
+                  () => findWorkspaceFocusControl(workspaceRef.current),
                 );
               }}
             >
@@ -1051,10 +1078,15 @@ export function DockWorkspace({
         if (!panelId || panelById.get(panelId)?.movable === false) return;
         event.preventDefault();
         const bounds = event.currentTarget.getBoundingClientRect();
-        void onFloat(panelId, {
-          x: event.clientX - bounds.left - 80,
-          y: event.clientY - bounds.top - 16,
-        });
+        focusAfterWorkspaceAction(
+          onFloat(panelId, {
+            x: event.clientX - bounds.left - 80,
+            y: event.clientY - bounds.top - 16,
+          }),
+          () => workspaceRef.current?.querySelector<HTMLElement>(
+            `#lf-floating-title-${workspacePanelDomToken(panelId)}`,
+          ),
+        );
       }}
     >
       {leftVisible && (
@@ -1205,16 +1237,24 @@ export function DockWorkspace({
         {panels.map((panel) => {
           const placement = getPanelPlacement(layout, panel.id);
           if (placement === null) return null;
-          const region = placement.kind === "dock" ? placement.region : null;
-          const floating = placement.kind === "floating"
+          // Focus is a visual projection, not a layout mutation. Manuscript is
+          // rendered full-center while its real dock/floating placement remains
+          // byte-for-byte available for the return to Cockpit.
+          const focusProjection = focus && panel.id === "manuscript";
+          const region = focusProjection
+            ? "center"
+            : placement.kind === "dock" ? placement.region : null;
+          const floating = !focusProjection && placement.kind === "floating"
             ? layout.floatingPanels.find((entry) => entry.panelId === panel.id)
             : undefined;
-          const active = region === null
+          const active = focusProjection
+            ? true
+            : region === null
             ? layout.focused?.zone === "floating" && layout.focused.panelId === panel.id
-            : focus && region === "center"
-              ? panel.id === "manuscript"
-              : layout.docks[region].activePanelId === panel.id;
-          const visible = floating
+            : layout.docks[region].activePanelId === panel.id;
+          const visible = focusProjection
+            ? true
+            : floating
             ? visibility.floatingPanelIds.includes(panel.id)
             : region !== null && active && visibility.docks[region];
           return (

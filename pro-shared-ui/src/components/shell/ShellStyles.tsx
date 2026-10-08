@@ -7,10 +7,10 @@
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:ital,wght@0,400;0,500;0,600;0,700;1,500;1,600&family=JetBrains+Mono:ital,wght@0,400;0,500;0,700;1,400&family=Courier+Prime:ital,wght@0,400;0,700;1,400&display=swap');
 .lf-shell, .lf-shell *{box-sizing:border-box;}
-.lf-shell ::selection{background:rgba(76,194,255,.28);color:var(--strong);}
+.lf-shell ::selection{background:color-mix(in srgb,var(--accent) 24%,transparent);color:var(--strong);}
 .lf-shell ::-webkit-scrollbar{width:7px;height:7px;}
-.lf-shell ::-webkit-scrollbar-thumb{background:rgba(232,68,58,.32);}
-.lf-shell ::-webkit-scrollbar-thumb:hover{background:rgba(232,68,58,.55);}
+.lf-shell ::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--txt3) 52%,transparent);border-radius:999px;}
+.lf-shell ::-webkit-scrollbar-thumb:hover{background:color-mix(in srgb,var(--txt2) 68%,transparent);}
 .lf-shell ::-webkit-scrollbar-track{background:transparent;}
 .lf-shell :is(button,[role="button"],[role="separator"],input,textarea,select):focus-visible{outline:2px solid var(--accent)!important;outline-offset:2px;}
 @keyframes lf-sweep{to{transform:rotate(360deg);}}
@@ -30,7 +30,7 @@ const CSS = `
 .lf-shell .lf-nav:hover{background:rgba(76,194,255,.05);color:var(--txt);}
 .lf-shell .lf-nav-q:hover{background:rgba(176,124,255,.07);color:var(--txt);}
 .lf-shell .lf-hov:hover{color:var(--txt);}
-.lf-shell .lf-cmd:hover{border-color:rgba(76,194,255,.4);box-shadow:0 0 16px rgba(76,194,255,.12);}
+.lf-shell .lf-cmd:hover{border-color:var(--line-cy);box-shadow:0 0 16px color-mix(in srgb,var(--accent) 12%,transparent);}
 .lf-shell .lf-chip:hover{border-color:var(--accent);color:var(--txt2);}
 .lf-shell .lf-block:hover{background:rgba(255,82,96,.12);}
 .lf-shell .lf-warn:hover{background:rgba(255,180,84,.12);}
@@ -46,6 +46,19 @@ const CSS = `
 .lf-topbar-command{min-width:0;}
 .lf-topbar-command .lf-cmd{min-width:0;}
 .lf-topbar-command-copy{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.lf-topbar-status-popover{max-width:calc(100vw - 20px);}
+/* Paper is intentionally calm: shared structure and behaviour, different
+   typography/shape/effects. It is implemented here rather than importing any
+   Whiteboard UI, so the two product lines remain independent. */
+.lf-shell[data-skin="paper"] .lf-topbar{background:var(--panel);}
+.lf-shell[data-skin="paper"] .lf-brand-mark{border-color:var(--accent)!important;color:var(--accent)!important;box-shadow:none!important;}
+.lf-shell[data-skin="paper"] .lf-brand-mark-core{background:var(--accent)!important;box-shadow:none!important;border-radius:50%;}
+.lf-shell[data-skin="paper"] .lf-brand-corner,.lf-shell[data-skin="paper"] .lf-panel-corner{display:none;}
+.lf-shell[data-skin="paper"] .lf-brand-subtitle{color:var(--txt2)!important;letter-spacing:.22em!important;}
+.lf-shell[data-skin="paper"] :is(.lf-topbar-format,.lf-topbar-adaptive,.lf-topbar-layout,.lf-topbar-status-summary,.lf-cmd){box-shadow:none!important;}
+.lf-shell[data-skin="paper"] :is(.lf-dock-panel,.lf-floating-panel,.lf-studio-scene-navigator){background-image:none;}
+.lf-shell[data-skin="paper"] .lf-floating-panel{border-radius:var(--panel-radius);box-shadow:var(--chrome-shadow);}
+.lf-shell[data-skin="paper"] :is(.lf-floating-panel-active,.lf-floating-panel:focus-within){box-shadow:var(--chrome-shadow);}
 /* Real Studio dock workspace. The panel layer uses display:contents so every
    opened panel keeps one stable DOM/React parent while its grid coordinates move. */
 .lf-dock-workspace{position:relative;isolation:isolate;display:grid;flex:1;min-width:0;min-height:0;overflow:hidden;background:var(--base);}
@@ -87,7 +100,7 @@ const CSS = `
 .lf-dock-collapsed:hover{background:var(--tint2);color:var(--strong);}
 /* Modeless tear-off panels remain in the stable panel layer. Bounds and stack
    order are supplied as inline layout state; these classes own their chrome. */
-.lf-floating-panel{position:absolute!important;display:flex;flex-direction:column;min-width:220px;min-height:132px;max-width:calc(100% - 16px);max-height:calc(100% - 16px);padding:0;overflow:hidden;border:1px solid var(--line2);background:var(--panel);box-shadow:0 12px 36px rgba(0,0,0,.48),0 0 0 1px color-mix(in srgb,var(--accent) 8%,transparent);z-index:var(--lf-floating-z,20);}
+.lf-floating-panel{position:absolute!important;display:flex;flex-direction:column;min-width:220px;min-height:132px;max-width:calc(100% - 16px);max-height:calc(100% - 16px);padding:0;overflow:hidden;border:1px solid var(--line2);border-radius:var(--panel-radius);background:var(--panel);box-shadow:var(--chrome-shadow),0 0 0 1px color-mix(in srgb,var(--accent) 8%,transparent);z-index:var(--lf-floating-z,20);}
 .lf-floating-panel[hidden]{display:none!important;}
 .lf-floating-panel-active,.lf-floating-panel:focus-within{border-color:color-mix(in srgb,var(--accent) 68%,var(--line2));box-shadow:0 14px 42px rgba(0,0,0,.56),0 0 14px color-mix(in srgb,var(--accent) 18%,transparent);}
 .lf-floating-panel-minimized{display:none!important;}
@@ -208,6 +221,23 @@ const CSS = `
 .lf-studio-scene-filter-notice{display:flex;align-items:center;gap:6px;border-bottom:1px solid var(--line2);background:var(--tint2);text-align:left;}
 .lf-studio-scene-filter-notice span{min-width:0;flex:1;}
 .lf-studio-scene-filter-notice button{padding:2px 4px;border:1px solid var(--line2);background:transparent;color:var(--accent);font:inherit;font-size:7px;cursor:pointer;}
+/* The manuscript can be narrower than the window because docks and floating
+   panels resize independently. Container queries keep its status and controls
+   collision-free at the real 280px minimum center width. */
+.lf-manuscript-toolbar-identity,.lf-manuscript-toolbar-actions,.lf-manuscript-toolbar-action,.lf-manuscript-save-status{min-width:0;}
+.lf-manuscript-toolbar-action,.lf-manuscript-save-status{flex:none;white-space:nowrap;}
+@container (max-width:720px){
+  .lf-manuscript-toolbar{height:auto!important;min-height:72px;grid-template-columns:minmax(0,1fr)!important;grid-template-rows:auto auto;gap:6px!important;padding:7px 12px!important;}
+  .lf-manuscript-toolbar-actions{justify-content:flex-end!important;}
+}
+@container (max-width:480px){
+  .lf-manuscript-toolbar{min-height:68px;padding-inline:9px!important;}
+  .lf-manuscript-toolbar-identity{gap:8px!important;}
+  .lf-manuscript-toolbar-meta,.lf-manuscript-save-copy,.lf-manuscript-action-copy{display:none;}
+  .lf-manuscript-save-status{width:24px;padding:0!important;justify-content:center;}
+  .lf-manuscript-toolbar-actions{justify-content:space-between!important;gap:4px!important;}
+  .lf-manuscript-toolbar-action{display:grid;min-width:32px;min-height:26px;place-items:center;padding:0 6px!important;border:1px solid var(--line2)!important;border-radius:var(--control-radius);font-size:12px!important;}
+}
 @media (max-width:1280px){
   .lf-topbar{height:78px;display:grid;grid-template-columns:max-content max-content minmax(0,1fr);grid-template-rows:39px 39px;grid-template-areas:"brand format command" "adaptive layout status";column-gap:10px;row-gap:0;padding:0 10px;}
   .lf-topbar-brand{grid-area:brand;}
