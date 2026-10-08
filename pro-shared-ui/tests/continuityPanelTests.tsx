@@ -97,6 +97,29 @@ const navigation: Array<{ panel: string; options?: StudioNavigationOptions }> = 
 let clears = 0;
 let focused = 0;
 let scrolled = 0;
+const focusDocument = { activeElement: null as unknown };
+const focusThief = {};
+const focusFrames = new Map<number, FrameRequestCallback>();
+let nextFocusFrame = 1;
+const previousFocusWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+Object.defineProperty(globalThis, "window", {
+  configurable: true,
+  value: {
+    requestAnimationFrame: (callback: FrameRequestCallback) => {
+      const id = nextFocusFrame;
+      nextFocusFrame += 1;
+      focusFrames.set(id, callback);
+      return id;
+    },
+    cancelAnimationFrame: (id: number) => { focusFrames.delete(id); },
+  },
+});
+
+function runFocusFrame() {
+  const scheduled = [...focusFrames.values()];
+  focusFrames.clear();
+  for (const callback of scheduled) callback(0);
+}
 
 function tree(
   issueKey: string | null,
@@ -125,21 +148,36 @@ async function flush() {
 let renderer!: ReactTestRenderer;
 await act(async () => {
   renderer = create(tree("0123456789abcdef"), {
-    createNodeMock: (element) => element.props["data-continuity-issue-id"]
-      ? {
-          focus: () => { focused += 1; },
-          scrollIntoView: () => { scrolled += 1; },
-        }
-      : {},
+    createNodeMock: (element) => {
+      if (!element.props["data-continuity-issue-id"]) return {};
+      const node = {
+        ownerDocument: focusDocument,
+        focus: () => {
+          focused += 1;
+          focusDocument.activeElement = node;
+        },
+        scrollIntoView: () => { scrolled += 1; },
+      };
+      return node;
+    },
   });
   await flush();
 });
+
+check(clears === 0 && focused === 0, "a continuity target must remain pending until its issue card is focusable");
+await act(async () => { runFocusFrame(); await Promise.resolve(); });
+check(clears === 0 && focused === 1, "calling focus must not immediately consume the continuity target");
+focusDocument.activeElement = focusThief;
+await act(async () => { runFocusFrame(); await Promise.resolve(); });
+check(clears === 0, "a first focus stolen before the confirmation frame must keep the target pending");
+await act(async () => { runFocusFrame(); await Promise.resolve(); });
+await act(async () => { runFocusFrame(); await Promise.resolve(); });
 
 const focusedIssue = renderer.root.findByProps({
   "data-continuity-issue-id": "0123456789abcdef",
 });
 check(focusedIssue.props.style.border.includes("var(--cyan)"), "the exact continuity issue must be visibly focused");
-check(clears === 1 && focused === 1 && scrolled === 1, "an authoritative issue target must focus, scroll, and consume exactly once");
+check(clears === 1 && focused === 2 && scrolled === 2, "an authoritative issue target must retry stolen focus and consume exactly once after stable focus");
 
 await act(async () => {
   renderer.update(tree("0123456789abcdef"));
@@ -157,14 +195,34 @@ check(
 );
 
 await act(async () => {
+  renderer.update(tree(null));
+  await flush();
+  renderer.update(tree("0123456789abcdef"));
+  await flush();
+});
+await act(async () => { runFocusFrame(); await Promise.resolve(); });
+check(focusFrames.size === 1, "the stable-focus confirmation frame must remain cancellable");
+await act(async () => {
   renderer.update(tree("ffffffffffffffff"));
   await flush();
 });
 check(clears === 2, "a stale continuity target must be consumed instead of remaining pending");
+check(focusFrames.size === 0, "a new continuity target must cancel the prior target's pending focus confirmation");
 const stale = renderer.root.findByProps({ role: "status" });
 check(text(stale).includes("no longer present"), "a stale continuity target must be reported truthfully");
 
+await act(async () => {
+  renderer.update(tree(null));
+  await flush();
+  renderer.update(tree("0123456789abcdef"));
+  await flush();
+});
+await act(async () => { runFocusFrame(); await Promise.resolve(); });
+check(focusFrames.size === 1, "a mounted target should have one pending full-frame focus confirmation");
 act(() => renderer.unmount());
+check(focusFrames.size === 0 && clears === 2, "unmount must cancel pending focus work without consuming its target");
+if (previousFocusWindow) Object.defineProperty(globalThis, "window", previousFocusWindow);
+else delete (globalThis as unknown as { window?: unknown }).window;
 
 let resolvePostBarrier!: (value: ContinuityReportDTO) => void;
 const postBarrierReport = new Promise<ContinuityReportDTO>((resolve) => {

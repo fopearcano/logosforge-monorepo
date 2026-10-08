@@ -206,6 +206,22 @@ check('packaged workspace acceptance covers the real Graph, Radar, Continuity, a
   packagedWorkspaceScript.includes("'restored right dock after Continuity decision review'") &&
   packagedWorkspaceScript.includes("'Confirmed Controlled Apply mutation did not survive relaunch'") &&
   packagedWorkspaceScript.includes("'Durable Continuity review state did not survive packaged relaunch'"));
+check('packaged workspace acceptance gives the manuscript save barrier a named 90-second Cockpit budget with UI diagnostics',
+  packagedWorkspaceScript.includes('const SAVE_BARRIER_TIMEOUT_MS = 90_000;') &&
+  packagedWorkspaceScript.includes('timeoutMs: SAVE_BARRIER_TIMEOUT_MS') &&
+  packagedWorkspaceScript.includes("waitLabel: 'COCKPIT workspace mode after the manuscript save barrier'") &&
+  packagedWorkspaceScript.includes("workspaceStatus: await safely(() => workspaceStatus.getAttribute('aria-label'))") &&
+  packagedWorkspaceScript.includes("page.getByRole('alert').evaluateAll"));
+check('packaged Timeline adds require an observed command response and retry only before any POST is dispatched',
+  packagedWorkspaceScript.includes('addTimelineSceneThroughObservedCommand({') &&
+  packagedWorkspaceScript.includes("page.on('request', onRequest)") &&
+  packagedWorkspaceScript.includes("page.on('response', onResponse)") &&
+  packagedWorkspaceScript.includes('requests.length > requestCountBeforeClick') &&
+  packagedWorkspaceScript.includes('attempt < TIMELINE_ADD_MAX_ATTEMPTS && addEnabled') &&
+  packagedWorkspaceScript.includes("assert.equal(command?.kind, 'place_event'") &&
+  packagedWorkspaceScript.includes('responses.has(dispatched)') &&
+  packagedWorkspaceScript.includes('response.ok()') &&
+  packagedWorkspaceScript.includes('(candidate) => candidate.events.some((event) => event.id === scene.id)'));
 check('packaged Windows CI runs and preserves diagnostics for the Pro pointer journey',
   packagedWindowsWorkflow.includes('npm run test:packaged-workspace') &&
   packagedWindowsWorkflow.includes('LOGOSFORGE_PRO_WORKSPACE_ACCEPTANCE_ROOT') &&

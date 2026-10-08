@@ -45,6 +45,10 @@ const DEFAULT_LINUX_EXE = path.join(
 
 const STARTUP_TIMEOUT_MS = 90_000;
 const UI_TIMEOUT_MS = 30_000;
+const SAVE_BARRIER_TIMEOUT_MS = 90_000;
+const TIMELINE_COMMAND_DISPATCH_TIMEOUT_MS = 20_000;
+const TIMELINE_COMMAND_RESPONSE_TIMEOUT_MS = 90_000;
+const TIMELINE_ADD_MAX_ATTEMPTS = 2;
 const CLOSE_TIMEOUT_MS = 20_000;
 const PORT_CLOSE_TIMEOUT_MS = 12_000;
 const activeSessions = new Set();
@@ -268,6 +272,43 @@ async function waitVisible(locator, label, timeoutMs = UI_TIMEOUT_MS) {
   await target.waitFor({ state: 'visible', timeout: timeoutMs });
   record('ui', `visible: ${label}`);
   return target;
+}
+
+function compactUiText(value) {
+  return String(value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+async function releaseGateUiDiagnostics(page, extra = {}) {
+  const safely = async (read, fallback = null) => {
+    try {
+      return await read();
+    } catch (error) {
+      return fallback ?? `<unavailable: ${compactUiText(errorText(error))}>`;
+    }
+  };
+  const workspace = page.locator('[data-screen-label="Studio Dock Workspace"]').first();
+  const workspaceStatus = page.locator('summary[aria-label^="Workspace status:"]').first();
+  const statuses = await safely(
+    () => page.getByRole('status').evaluateAll((nodes) => nodes
+      .map((node) => (node.textContent || '').replace(/\s+/g, ' ').trim())
+      .filter(Boolean)
+      .slice(0, 8)),
+    [],
+  );
+  const alerts = await safely(
+    () => page.getByRole('alert').evaluateAll((nodes) => nodes
+      .map((node) => (node.textContent || '').replace(/\s+/g, ' ').trim())
+      .filter(Boolean)
+      .slice(0, 8)),
+    [],
+  );
+  return {
+    workspacePreset: await safely(() => workspace.getAttribute('data-workspace-preset')),
+    workspaceStatus: await safely(() => workspaceStatus.getAttribute('aria-label')),
+    saveStatuses: statuses,
+    alerts,
+    ...extra,
+  };
 }
 
 async function allocateStrictPort() {
@@ -565,7 +606,12 @@ async function selectPanel(page, name, panelId, screenLabel) {
   return surface;
 }
 
-async function setWorkspaceMode(page, name, preset) {
+async function setWorkspaceMode(
+  page,
+  name,
+  preset,
+  { timeoutMs = UI_TIMEOUT_MS, waitLabel = `${name} workspace mode` } = {},
+) {
   const mode = page
     .getByRole('group', { name: 'Workspace mode', exact: true })
     .getByRole('button', { name, exact: true });
@@ -576,11 +622,21 @@ async function setWorkspaceMode(page, name, preset) {
   );
   if (await mode.getAttribute('aria-pressed') !== 'true') await mode.click();
   const workspace = page.locator('[data-screen-label="Studio Dock Workspace"]');
-  await waitFor(
-    async () => await workspace.getAttribute('data-workspace-preset') === preset
-      && await mode.getAttribute('aria-pressed') === 'true',
-    `${name} workspace mode`,
-  );
+  try {
+    await waitFor(
+      async () => await workspace.getAttribute('data-workspace-preset') === preset
+        && await mode.getAttribute('aria-pressed') === 'true',
+      waitLabel,
+      timeoutMs,
+    );
+  } catch (error) {
+    const diagnostics = await releaseGateUiDiagnostics(page, {
+      requestedMode: name,
+      requestedPreset: preset,
+      requestedModePressed: await mode.getAttribute('aria-pressed').catch(() => null),
+    });
+    throw new Error(`${errorText(error)} UI diagnostics: ${JSON.stringify(diagnostics)}`);
+  }
   record('ui', `workspace mode: ${name}`);
 }
 
@@ -705,7 +761,10 @@ async function exerciseIntelligenceShell(session) {
   const prose = await waitVisible(openingHost.locator('[data-prose]'), 'live seeded prose editor');
   const barrierText = `${seeded.opening.content}\n\nPackaged shell save barrier ${Date.now()}.`;
   await prose.fill(barrierText);
-  await setWorkspaceMode(page, 'COCKPIT', 'cockpit');
+  await setWorkspaceMode(page, 'COCKPIT', 'cockpit', {
+    timeoutMs: SAVE_BARRIER_TIMEOUT_MS,
+    waitLabel: 'COCKPIT workspace mode after the manuscript save barrier',
+  });
 
   let radarSurface = await selectPanel(page, 'Decision Radar', 'decision-radar', 'Decision Radar');
   const savedOpening = await packagedCoreJson(
@@ -1002,6 +1061,122 @@ async function waitForTimelineSnapshot(session, projectId, predicate, label) {
   return snapshot;
 }
 
+async function addTimelineSceneThroughObservedCommand({
+  page,
+  projectId,
+  scene,
+  scenePicker,
+  addEvent,
+}) {
+  const commandPath = `/api/projects/${projectId}/timeline/commands`;
+  const requests = [];
+  const responses = new Map();
+  const isCommandRequest = (request) => {
+    if (request.method() !== 'POST') return false;
+    try {
+      return new URL(request.url()).pathname === commandPath;
+    } catch {
+      return false;
+    }
+  };
+  const onRequest = (request) => {
+    if (isCommandRequest(request)) requests.push(request);
+  };
+  const onResponse = (response) => {
+    const request = response.request();
+    if (isCommandRequest(request)) responses.set(request, response);
+  };
+  page.on('request', onRequest);
+  page.on('response', onResponse);
+
+  try {
+    for (let attempt = 1; attempt <= TIMELINE_ADD_MAX_ATTEMPTS; attempt += 1) {
+      await scenePicker.selectOption(String(scene.id));
+      await waitFor(
+        async () => await addEvent.isEnabled(),
+        `enabled Timeline add for ${scene.title} (attempt ${attempt})`,
+      );
+      const requestCountBeforeClick = requests.length;
+      await addEvent.click();
+
+      let dispatched = null;
+      try {
+        await waitFor(
+          async () => requests.length > requestCountBeforeClick,
+          `Timeline command dispatch for ${scene.title} (attempt ${attempt})`,
+          TIMELINE_COMMAND_DISPATCH_TIMEOUT_MS,
+        );
+        dispatched = requests[requestCountBeforeClick];
+      } catch (dispatchError) {
+        // Resolve the boundary race before deciding whether a second click is
+        // safe. Once any POST left the renderer, only the production
+        // idempotency/receipt path may recover it; this harness must not invent
+        // a new proposal by clicking again.
+        dispatched = requests[requestCountBeforeClick] ?? null;
+        if (!dispatched) {
+          const addEnabled = await addEvent.isEnabled().catch(() => false);
+          if (attempt < TIMELINE_ADD_MAX_ATTEMPTS && addEnabled) {
+            record(
+              'ui',
+              `Timeline add for ${scene.title} dispatched no POST; safely retrying the still-enabled control once`,
+            );
+            continue;
+          }
+          const diagnostics = await releaseGateUiDiagnostics(page, {
+            timelineScene: { id: scene.id, title: scene.title },
+            attempt,
+            selectedSceneId: await scenePicker.inputValue().catch(() => null),
+            addEnabled,
+            observedTimelineCommandPosts: requests.length,
+          });
+          throw new Error(`${errorText(dispatchError)} UI diagnostics: ${JSON.stringify(diagnostics)}`);
+        }
+      }
+
+      assert.ok(dispatched, `No Timeline command request was captured for ${scene.title}`);
+      const command = dispatched.postDataJSON();
+      assert.equal(command?.kind, 'place_event', `Timeline add for ${scene.title} dispatched the wrong command`);
+      assert.equal(command?.scene_id, scene.id, `Timeline add for ${scene.title} dispatched the wrong scene identity`);
+      assert.equal(command?.lane_id, null, `Timeline add for ${scene.title} did not target the Unassigned lane`);
+
+      try {
+        await waitFor(
+          async () => responses.has(dispatched),
+          `Timeline command response for ${scene.title}`,
+          TIMELINE_COMMAND_RESPONSE_TIMEOUT_MS,
+        );
+      } catch (responseError) {
+        const diagnostics = await releaseGateUiDiagnostics(page, {
+          timelineScene: { id: scene.id, title: scene.title },
+          request: {
+            method: dispatched.method(),
+            url: dispatched.url(),
+            command,
+          },
+          observedTimelineCommandPosts: requests.length,
+        });
+        throw new Error(`${errorText(responseError)} UI diagnostics: ${JSON.stringify(diagnostics)}`);
+      }
+      const response = responses.get(dispatched);
+      assert.ok(response, `No Timeline command response was captured for ${scene.title}`);
+      assert.ok(
+        response.ok(),
+        `Timeline add for ${scene.title} returned HTTP ${response.status()} ${response.statusText()}`,
+      );
+      record(
+        'network',
+        `observed Timeline place_event POST/response for ${scene.title} (HTTP ${response.status()}, attempt ${attempt})`,
+      );
+      return;
+    }
+  } finally {
+    page.off('request', onRequest);
+    page.off('response', onResponse);
+  }
+
+  throw new Error(`Timeline add for ${scene.title} exhausted its bounded UI attempts`);
+}
+
 async function exerciseTimelineRelationships(session, expectedProjectId) {
   const { page } = session;
   const { projectId } = await waitProReady(session);
@@ -1030,8 +1205,13 @@ async function exerciseTimelineRelationships(session, expectedProjectId) {
       scenePicker.locator('..').getByRole('button', { name: 'ADD', exact: true }),
       `add ${scene.title} to Timeline`,
     );
-    await waitFor(async () => await addEvent.isEnabled(), `enabled Timeline add for ${scene.title}`);
-    await addEvent.click();
+    await addTimelineSceneThroughObservedCommand({
+      page,
+      projectId,
+      scene,
+      scenePicker,
+      addEvent,
+    });
     timeline = await waitForTimelineSnapshot(
       session,
       projectId,

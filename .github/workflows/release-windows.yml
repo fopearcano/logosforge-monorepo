@@ -36,7 +36,7 @@ on:
         description: "Existing Pro tag to publish (must equal v<package version>)"
         type: string
         required: false
-        default: "v0.1.0"
+        default: "v0.1.1"
 
 permissions:
   contents: read

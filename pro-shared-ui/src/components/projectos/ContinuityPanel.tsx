@@ -259,6 +259,12 @@ export function ContinuityPanel(props: PanelProps) {
   const issueRefs = useRef(new Map<string, HTMLDivElement>());
   const consumedTargetRef = useRef("");
   const targetRequestRef = useRef<{ token: string; requestId: number } | null>(null);
+  const focusingTargetRef = useRef("");
+  const exhaustedFocusTargetRef = useRef("");
+  const focusFrameRef = useRef<number | null>(null);
+  const clearTargetRef = useRef(clearContinuityTarget);
+  const renderedTargetToken = targetIssueKey ? `${projectId ?? ""}:${targetIssueKey}` : "";
+  const renderedTargetTokenRef = useRef(renderedTargetToken);
   const [focusedIssueKey, setFocusedIssueKey] = useState<string | null>(null);
   const [targetNotice, setTargetNotice] = useState("");
   const [review, setReview] = useState<ContinuityReviewProposal | null>(null);
@@ -274,6 +280,8 @@ export function ContinuityPanel(props: PanelProps) {
   const [actionNotice, setActionNotice] = useState("");
   projectIdRef.current = projectId;
   apiRef.current = api;
+  clearTargetRef.current = clearContinuityTarget;
+  renderedTargetTokenRef.current = renderedTargetToken;
   const report: ContinuityReportDTO | undefined = data;
   const issues = report?.issues ?? [];
   const total = issues.length;
@@ -288,13 +296,69 @@ export function ContinuityPanel(props: PanelProps) {
     setReview(next);
   }, []);
 
+  const cancelIssueFocus = useCallback(() => {
+    if (focusFrameRef.current != null && typeof window !== "undefined") {
+      window.cancelAnimationFrame(focusFrameRef.current);
+    }
+    focusFrameRef.current = null;
+    focusingTargetRef.current = "";
+  }, []);
+
+  const scheduleIssueFocus = useCallback((token: string, issueId: string, afterFocus: (focused: boolean) => void) => {
+    cancelIssueFocus();
+    if (typeof window === "undefined") {
+      afterFocus(false);
+      return;
+    }
+    focusingTargetRef.current = token;
+    let remainingAttempts = 120;
+    const attempt = () => {
+      if (focusingTargetRef.current !== token || renderedTargetTokenRef.current !== token) return;
+      if (remainingAttempts <= 0) {
+        focusingTargetRef.current = "";
+        afterFocus(false);
+        return;
+      }
+      remainingAttempts -= 1;
+      focusFrameRef.current = window.requestAnimationFrame(() => {
+        focusFrameRef.current = null;
+        if (focusingTargetRef.current !== token || renderedTargetTokenRef.current !== token) return;
+        const node = issueRefs.current.get(issueId);
+        if (!node) {
+          attempt();
+          return;
+        }
+        node.scrollIntoView?.({ block: "center", behavior: "smooth" });
+        node.focus?.({ preventScroll: true });
+        // Workspace commits and modal teardown can reclaim focus in the same
+        // frame. Consume the one-shot target only when the issue card remains
+        // active for a complete animation frame.
+        focusFrameRef.current = window.requestAnimationFrame(() => {
+          focusFrameRef.current = null;
+          if (focusingTargetRef.current !== token || renderedTargetTokenRef.current !== token) return;
+          if (node.ownerDocument.activeElement === node) {
+            focusingTargetRef.current = "";
+            afterFocus(true);
+          } else {
+            attempt();
+          }
+        });
+      });
+    };
+    attempt();
+  }, [cancelIssueFocus]);
+
   useEffect(() => {
     mountedRef.current = true;
     return () => { mountedRef.current = false; };
   }, []);
 
+  useEffect(() => () => cancelIssueFocus(), [cancelIssueFocus]);
+
   useEffect(() => {
+    cancelIssueFocus();
     consumedTargetRef.current = "";
+    exhaustedFocusTargetRef.current = "";
     targetRequestRef.current = null;
     setFocusedIssueKey(null);
     setTargetNotice("");
@@ -305,17 +369,21 @@ export function ContinuityPanel(props: PanelProps) {
     setReviewError("");
     setReviewStatus("");
     setActionNotice("");
-  }, [api, projectId, replaceReview]);
+  }, [api, cancelIssueFocus, projectId, replaceReview]);
 
   useEffect(() => {
     if (!targetIssueKey) {
+      cancelIssueFocus();
       consumedTargetRef.current = "";
+      exhaustedFocusTargetRef.current = "";
       targetRequestRef.current = null;
       return;
     }
     const token = `${projectId ?? ""}:${targetIssueKey}`;
     if (consumedTargetRef.current === token) return;
     if (targetRequestRef.current?.token !== token) {
+      cancelIssueFocus();
+      exhaustedFocusTargetRef.current = "";
       targetRequestRef.current = { token, requestId: refetch() };
       setTargetNotice("");
       return;
@@ -328,28 +396,37 @@ export function ContinuityPanel(props: PanelProps) {
       setTargetNotice(
         `Continuity could not refresh this issue safely${error ? ` — ${error}` : ""}. Open it again to retry.`,
       );
-      clearContinuityTarget();
+      clearTargetRef.current();
       return;
     }
     if (!report) return;
-    consumedTargetRef.current = token;
     const issue = issues.find((candidate) => candidate.id === targetIssueKey);
     if (!issue) {
+      consumedTargetRef.current = token;
       setFocusedIssueKey(null);
       setTargetNotice(
         "This continuity issue is no longer present in the current report. It may have been resolved or changed.",
       );
-      clearContinuityTarget();
+      clearTargetRef.current();
       return;
     }
+    if (focusingTargetRef.current === token || exhaustedFocusTargetRef.current === token) return;
     setTargetNotice("");
     setFocusedIssueKey(issue.id);
-    const node = issueRefs.current.get(issue.id);
-    node?.scrollIntoView?.({ block: "center", behavior: "smooth" });
-    node?.focus?.({ preventScroll: true });
-    clearContinuityTarget();
+    scheduleIssueFocus(token, issue.id, (focused) => {
+      if (!focused) {
+        exhaustedFocusTargetRef.current = token;
+        setTargetNotice(
+          "Continuity opened this issue, but its card could not retain focus. Open it again to retry.",
+        );
+        return;
+      }
+      exhaustedFocusTargetRef.current = "";
+      consumedTargetRef.current = token;
+      clearTargetRef.current();
+    });
   }, [
-    clearContinuityTarget,
+    cancelIssueFocus,
     error,
     issues,
     lastSettledRequest,
@@ -358,6 +435,7 @@ export function ContinuityPanel(props: PanelProps) {
     projectId,
     refetch,
     report,
+    scheduleIssueFocus,
     targetIssueKey,
   ]);
 
