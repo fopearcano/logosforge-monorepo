@@ -84,7 +84,7 @@ check('release revokes an exact pending creation without touching a newer reserv
     && closeHandler.includes('pendingNativePanelWindows.delete(panelId)')
     && closeHandler.includes('clearTimeout(pending.timer)'));
 const didCreateHandler = mainSource.match(
-  /win\.webContents\.on\('did-create-window'[\s\S]*?\n  \}\);\n\}/,
+  /win\.webContents\.on\('did-create-window'[\s\S]*?\r?\n  \}\);\r?\n\}/,
 )?.[0] ?? '';
 check('late child registration requires its exact live reservation',
   didCreateHandler.includes('pending?.token === token')
@@ -109,7 +109,7 @@ check('renderer acquisitions and releases carry one generation token end to end'
     && appSource.includes('bridge.closeNativePanelWindow(panelId, current.token)')
     && appSource.includes('event.panelId) !== event.token'));
 const restoredHandler = appSource.match(
-  /if \(event\.type === 'restored'\)[\s\S]*?\n        return;/,
+  /if \(event\.type === 'restored'\)[\s\S]*?\r?\n        return;/,
 )?.[0] ?? '';
 check('a rejected native restore is rolled back to minimized state',
   restoredHandler.includes('.then((changed) =>')

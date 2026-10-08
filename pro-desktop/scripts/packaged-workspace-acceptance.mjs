@@ -267,6 +267,17 @@ async function withTimeout(promise, timeoutMs, label) {
   }
 }
 
+async function clickAndWaitForNativeWindowClose(locator, closePromise, label) {
+  const click = locator.click({ timeout: UI_TIMEOUT_MS }).catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.includes('Target page, context or browser has been closed')) throw error;
+  });
+  await Promise.all([
+    click,
+    withTimeout(closePromise, UI_TIMEOUT_MS, `${label} close`),
+  ]);
+}
+
 async function waitVisible(locator, label, timeoutMs = UI_TIMEOUT_MS) {
   const target = locator.first();
   await target.waitFor({ state: 'visible', timeout: timeoutMs });
@@ -2083,8 +2094,11 @@ async function exerciseNativeManuscriptWindow(session, expected) {
     'Manuscript native window controls',
   );
   const manuscriptWindowClosed = manuscriptWindow.waitForEvent('close');
-  await titlebar.getByRole('button', { name: 'Dock Manuscript to center', exact: true }).click();
-  await withTimeout(manuscriptWindowClosed, UI_TIMEOUT_MS, 'Manuscript native window redock close');
+  await clickAndWaitForNativeWindowClose(
+    titlebar.getByRole('button', { name: 'Dock Manuscript to center', exact: true }),
+    manuscriptWindowClosed,
+    'Manuscript native window redock',
+  );
 
   const redockedSurface = page.locator(
     'section[data-panel-id="manuscript"][data-dock-region="center"]',
@@ -2274,8 +2288,11 @@ async function exercisePointerWorkspace(session, manuscriptExpected) {
   );
 
   const notesWindowClosed = notesWindow.waitForEvent('close');
-  await titlebar.getByRole('button', { name: 'Dock Notes to left', exact: true }).click();
-  await withTimeout(notesWindowClosed, UI_TIMEOUT_MS, 'Notes native window redock close');
+  await clickAndWaitForNativeWindowClose(
+    titlebar.getByRole('button', { name: 'Dock Notes to left', exact: true }),
+    notesWindowClosed,
+    'Notes native window redock',
+  );
   await waitFor(
     async () => (await notesSurface.getAttribute('data-dock-region')) === 'left'
       && (await notesSurface.getAttribute('role')) === 'tabpanel'
