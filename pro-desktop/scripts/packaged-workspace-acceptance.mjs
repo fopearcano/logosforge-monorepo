@@ -2055,7 +2055,7 @@ async function exerciseNativeManuscriptWindow(session, expected) {
   const manuscriptSurface = await selectPanel(page, 'Manuscript', 'manuscript', 'Manuscript Editor');
   const manuscriptWorkspace = await prepareCanvasPointerWorkspace(
     page,
-    manuscriptSurface.locator('[data-manuscript-scroll]'),
+    manuscriptSurface,
     'Manuscript editor',
   );
   const scene = manuscriptSurface.locator(`[data-scene-id="${expected.openingSceneId}"]`).first();
