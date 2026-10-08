@@ -187,6 +187,10 @@ check('packaged workspace acceptance covers production Timeline relationship CRU
   packagedWorkspaceScript.includes('Edit relationship ${firstLinkId}') &&
   packagedWorkspaceScript.includes('Delete relationship ${firstLinkId}') &&
   packagedWorkspaceScript.includes('Confirm deletion of relationship ${firstLinkId}') &&
+  packagedWorkspaceScript.includes('const deleteDispatch = page.waitForRequest') &&
+  packagedWorkspaceScript.includes("command?.kind === 'delete_link' && command?.link_id === firstLinkId") &&
+  packagedWorkspaceScript.includes('delete confirmation dispatched no delete_link POST') &&
+  packagedWorkspaceScript.includes('observed Timeline delete_link POST for relationship ${firstLinkId}') &&
   packagedWorkspaceScript.includes('Packaged UI relationship survived relaunch') &&
   packagedWorkspaceScript.includes('verifyPersistedTimelineRelationships(second, expected.timeline)') &&
   packagedWorkspaceScript.includes('production Timeline relationship and exact identity survived graceful packaged relaunch'));
@@ -273,6 +277,10 @@ check('Linux release candidates pass the same unpacked packaged pointer journey 
   linuxAcceptanceStep.includes('test ! -e "$LOGOSFORGE_PRO_WORKSPACE_ACCEPTANCE_ROOT"') &&
   linuxAcceptanceStep.includes('--server-args="-screen 0 1600x1000x24"') &&
   (linuxAcceptanceStep.match(/xvfb-run/g) || []).length === 1 &&
+  linuxJob.includes('openbox x11-utils') &&
+  linuxAcceptanceStep.includes('openbox --sm-disable') &&
+  linuxAcceptanceStep.includes('^_NET_SUPPORTING_WM_CHECK\\\\(WINDOW\\\\): window id # 0x[0-9A-Fa-f]+$') &&
+  linuxAcceptanceStep.includes('trap cleanup_wm EXIT') &&
   linuxAcceptanceStep.includes('npm --prefix pro-desktop run test:packaged-workspace'));
 check('Linux packaged-workspace diagnostics upload only on failure',
   linuxDiagnosticsStepStart > 0 && linuxDiagnosticsStepEnd > linuxDiagnosticsStepStart &&

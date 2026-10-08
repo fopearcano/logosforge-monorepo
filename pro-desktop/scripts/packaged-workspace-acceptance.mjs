@@ -1371,11 +1371,45 @@ async function exerciseTimelineRelationships(session, expectedProjectId) {
     }),
     'Timeline relationship delete control',
   );
+  const commandPath = `/api/projects/${projectId}/timeline/commands`;
+  const deleteDispatch = page.waitForRequest((request) => {
+    if (request.method() !== 'POST') return false;
+    try {
+      if (new URL(request.url()).pathname !== commandPath) return false;
+      const command = request.postDataJSON();
+      return command?.kind === 'delete_link' && command?.link_id === firstLinkId;
+    } catch {
+      return false;
+    }
+  }, { timeout: TIMELINE_COMMAND_DISPATCH_TIMEOUT_MS }).then(
+    (request) => ({ request, error: null }),
+    (error) => ({ request: null, error }),
+  );
   await deleteRelationship.click();
-  await relationshipEditor.getByRole('button', {
-    name: `Confirm deletion of relationship ${firstLinkId}`,
-    exact: true,
-  }).click();
+  const confirmDeleteRelationship = await waitVisible(
+    relationshipEditor.getByRole('button', {
+      name: `Confirm deletion of relationship ${firstLinkId}`,
+      exact: true,
+    }),
+    'Timeline relationship delete confirmation',
+  );
+  await confirmDeleteRelationship.click();
+  const deleteDispatchResult = await deleteDispatch;
+  if (!deleteDispatchResult.request) {
+    const diagnostics = await releaseGateUiDiagnostics(page, {
+      timelineRelationship: { id: firstLinkId },
+      deleteControlVisible: await deleteRelationship.isVisible().catch(() => false),
+      confirmControlVisible: await confirmDeleteRelationship.isVisible().catch(() => false),
+    });
+    throw new Error(
+      `Timeline relationship delete confirmation dispatched no delete_link POST within ${TIMELINE_COMMAND_DISPATCH_TIMEOUT_MS}ms. ${errorText(deleteDispatchResult.error)} UI diagnostics: ${JSON.stringify(diagnostics)}`,
+    );
+  }
+  const dispatchedDelete = deleteDispatchResult.request;
+  const dispatchedDeleteCommand = dispatchedDelete.postDataJSON();
+  assert.equal(dispatchedDeleteCommand?.kind, 'delete_link', 'Timeline relationship deletion dispatched the wrong command');
+  assert.equal(dispatchedDeleteCommand?.link_id, firstLinkId, 'Timeline relationship deletion dispatched the wrong identity');
+  record('network', `observed Timeline delete_link POST for relationship ${firstLinkId}`);
   timeline = await waitForTimelineSnapshot(
     session,
     projectId,
@@ -2019,6 +2053,11 @@ async function probeLiveProseEditor(page, prose, expectedText, marker, label) {
 async function exerciseNativeManuscriptWindow(session, expected) {
   const { page } = session;
   const manuscriptSurface = await selectPanel(page, 'Manuscript', 'manuscript', 'Manuscript Editor');
+  const manuscriptWorkspace = await prepareCanvasPointerWorkspace(
+    page,
+    manuscriptSurface.locator('[data-manuscript-scroll]'),
+    'Manuscript editor',
+  );
   const scene = manuscriptSurface.locator(`[data-scene-id="${expected.openingSceneId}"]`).first();
   await scene.waitFor({ state: 'attached', timeout: UI_TIMEOUT_MS });
   await scene.scrollIntoViewIfNeeded({ timeout: UI_TIMEOUT_MS });
@@ -2133,6 +2172,11 @@ async function exerciseNativeManuscriptWindow(session, expected) {
     );
     return persisted.content === expected.savedOpeningContent;
   }, 'restored canonical prose after redocked Manuscript probe', SAVE_BARRIER_TIMEOUT_MS);
+  await restoreCanvasPointerWorkspace(
+    page,
+    manuscriptWorkspace.collapsedRegions,
+    'Manuscript editor',
+  );
   assert.deepEqual(session.pageErrors, [], 'Renderer errors occurred during the native Manuscript editor exercise');
   record('journey', 'live Manuscript editing survived native detach and redock without changing canonical prose');
 }

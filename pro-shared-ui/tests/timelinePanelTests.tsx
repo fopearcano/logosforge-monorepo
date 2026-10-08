@@ -448,6 +448,80 @@ act(() => {
 });
 check(renderer.root.findByProps({ "aria-label": "Edit relationship 502" }), "the all-relationships view must keep dormant off-Timeline links editable");
 check(renderedText(renderer.root).includes("Aftermath → Foreshadow"), "dormant relationship rows must preserve their directed endpoints");
+
+act(() => {
+  renderer.root.findByProps({ "aria-label": "Delete relationship 502" }).props.onClick();
+});
+check(
+  renderer.root.findByProps({ "aria-label": "Confirm deletion of relationship 502" }),
+  "the first destructive click must expose an explicit relationship confirmation",
+);
+const sameRevisionReads = timelineReads;
+serverSnapshot = structuredClone(serverSnapshot);
+serverSnapshot.off_timeline[0].title = "Aftermath refreshed";
+act(() => {
+  listeners.forEach((listener) => listener({
+    id: 50,
+    event: "timeline_changed",
+    project_id: 7,
+    data: {},
+    ts: Date.now(),
+  }));
+});
+await act(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 140));
+  await Promise.resolve();
+  await Promise.resolve();
+});
+check(timelineReads === sameRevisionReads + 1, "the confirmation regression must exercise a real Timeline refetch");
+check(
+  renderedText(renderer.root).includes("Aftermath refreshed → Foreshadow"),
+  "a same-revision Timeline refetch must still publish refreshed scene metadata",
+);
+check(
+  renderer.root.findByProps({ "aria-label": "Confirm deletion of relationship 502" }),
+  "a same-project, same-revision Timeline refetch must preserve destructive confirmation",
+);
+
+serverSnapshot = { ...structuredClone(serverSnapshot), revision: "n".repeat(64) };
+act(() => {
+  listeners.forEach((listener) => listener({
+    id: 51,
+    event: "timeline_changed",
+    project_id: 7,
+    data: {},
+    ts: Date.now(),
+  }));
+});
+await act(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 140));
+  await Promise.resolve();
+  await Promise.resolve();
+});
+check(
+  renderer.root.findAllByProps({ "aria-label": "Confirm deletion of relationship 502" }).length === 0
+    && renderer.root.findByProps({ "aria-label": "Delete relationship 502" }),
+  "a genuinely newer Timeline revision must cancel stale destructive confirmation",
+);
+
+// Restore the baseline revision expected by the transaction/retry assertions
+// below; this remains an authoritative newer publication from the test panel's
+// point of view and leaves the cancelled confirmation closed.
+serverSnapshot = snapshot("a");
+act(() => {
+  listeners.forEach((listener) => listener({
+    id: 52,
+    event: "timeline_changed",
+    project_id: 7,
+    data: {},
+    ts: Date.now(),
+  }));
+});
+await act(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 140));
+  await Promise.resolve();
+  await Promise.resolve();
+});
 act(() => {
   renderer.root.findAllByType("button").find((button) => renderedText(button) === "CLOSE")?.props.onClick();
 });

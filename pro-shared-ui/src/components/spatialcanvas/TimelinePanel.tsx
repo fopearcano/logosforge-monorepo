@@ -304,11 +304,18 @@ export function TimelinePanel(props: PanelProps) {
         ? current
         : next;
     });
+  }, [timeline]);
+
+  useEffect(() => {
+    if (!timeline) return;
+    // Reconciliation can publish fresh display metadata without changing the
+    // structural revision. Keep an armed destructive confirmation across that
+    // harmless refresh, but cancel it for every authoritative revision change.
     setConfirmLaneId(null);
     setConfirmRemoveId(null);
     setConfirmLinkId(null);
     setConfirmStructureLinkId(null);
-  }, [timeline]);
+  }, [timeline?.project_id, timeline?.revision]);
 
   useEffect(() => {
     if (!timeline) return;

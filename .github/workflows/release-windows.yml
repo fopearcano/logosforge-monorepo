@@ -626,7 +626,7 @@ jobs:
       - name: Install Linux package and smoke-test runtimes
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends file libasound2 libatk-bridge2.0-0 libatk1.0-0 libcups2 libdrm2 libfuse2 libgbm1 libgtk-3-0 libnss3 libportaudio2 libx11-xcb1 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libxss1 libxtst6 xauth xdg-utils xvfb
+          sudo apt-get install -y --no-install-recommends file libasound2 libatk-bridge2.0-0 libatk1.0-0 libcups2 libdrm2 libfuse2 libgbm1 libgtk-3-0 libnss3 libportaudio2 libx11-xcb1 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libxss1 libxtst6 openbox x11-utils xauth xdg-utils xvfb
 
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0 (Node 24)
@@ -786,7 +786,42 @@ jobs:
           esac
           test ! -e "$LOGOSFORGE_PRO_WORKSPACE_ACCEPTANCE_ROOT"
           xvfb-run --auto-servernum --server-args="-screen 0 1600x1000x24" \
-            npm --prefix pro-desktop run test:packaged-workspace
+            bash -c '
+              set -euo pipefail
+              wm_log="${RUNNER_TEMP:?}/logosforge-pro-openbox.log"
+              openbox --sm-disable >"$wm_log" 2>&1 &
+              wm_pid=$!
+
+              cleanup_wm() {
+                kill "$wm_pid" 2>/dev/null || true
+                wait "$wm_pid" 2>/dev/null || true
+              }
+              trap cleanup_wm EXIT
+              trap "exit 130" INT
+              trap "exit 143" TERM
+
+              wm_ready=false
+              for _ in $(seq 1 100); do
+                if ! kill -0 "$wm_pid" 2>/dev/null; then
+                  echo "::error::Openbox exited before becoming ready."
+                  cat "$wm_log"
+                  exit 1
+                fi
+                if xprop -root _NET_SUPPORTING_WM_CHECK 2>/dev/null \
+                    | grep -Eq "^_NET_SUPPORTING_WM_CHECK\\(WINDOW\\): window id # 0x[0-9A-Fa-f]+$"; then
+                  wm_ready=true
+                  break
+                fi
+                sleep 0.1
+              done
+              if [ "$wm_ready" != true ]; then
+                echo "::error::Openbox did not publish _NET_SUPPORTING_WM_CHECK."
+                cat "$wm_log"
+                exit 1
+              fi
+
+              npm --prefix pro-desktop run test:packaged-workspace
+            '
 
       - name: Upload Linux packaged-workspace failure diagnostics
         if: failure()
