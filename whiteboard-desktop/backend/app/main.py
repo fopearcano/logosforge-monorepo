@@ -36,6 +36,7 @@ from app.routers import (
     export,
     littleboy,
     outline,
+    progressions,
     psyke,
     settings,
     whiteboard,
@@ -162,6 +163,7 @@ app.add_middleware(
 app.include_router(writing_modes.router)
 app.include_router(documents.router)
 app.include_router(psyke.router)
+app.include_router(progressions.router)
 app.include_router(whiteboard.router)
 app.include_router(outline.router)
 app.include_router(drafter.router)

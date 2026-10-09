@@ -65,6 +65,10 @@ const PSYKE_PROGRESSION_TEXTS = [
   'Mara vows to expose the archive.',
   'Mara risks the archive to reveal the truth.',
 ];
+const PROGRESSION_TRACK_TITLE = 'Mara Acceptance · Archive Reckoning';
+const PROGRESSION_TRACK_DESCRIPTION = 'A legacy character arc enriched through canonical Progressions metadata.';
+const PROGRESSION_TRACK_COLOR = 'amber';
+const PROGRESSION_DOCUMENT_ANCHOR_LABEL = 'Opening archive block';
 const OPEN_COMMENT_BODY = 'Tighten this opening image before the next draft.';
 const OPEN_COMMENT_REPLY = 'Keep the concrete image; remove the explanatory clause.';
 const RESOLVED_COMMENT_BODY = 'Chapter promise checked against the outline.';
@@ -1275,6 +1279,12 @@ function assertRevisionToken(value, label) {
   return value;
 }
 
+function assertProgressionRevision(value, label) {
+  assert.equal(typeof value, 'string', `${label} is not a string`);
+  assert.match(value, /^[0-9a-f]{64}$/, `${label} is not a Progressions revision`);
+  return value;
+}
+
 function timestampMillis(value, label) {
   assert.equal(typeof value, 'string', `${label} is not a string`);
   const parsed = Date.parse(value);
@@ -1421,7 +1431,122 @@ async function addWhiteboardPsykeGraph(session) {
     );
   }
 
-  const [entryList, relationList, progressionList] = await Promise.all([
+  // Keep the legacy per-entry writes above as a compatibility fixture, then
+  // enrich their canonical backing track. The .lfbundle must carry this richer
+  // metadata and document-only anchor even though the legacy projection cannot.
+  const canonicalRead = await localServiceRequest(
+    session,
+    `/api/progressions?${documentQuery}`,
+    { headers: identityHeaders },
+  );
+  const canonicalSnapshot = canonicalRead.data;
+  assert.equal(canonicalSnapshot?.project_id, Number(document.id), 'Whiteboard Progressions project changed');
+  assertProgressionRevision(canonicalSnapshot?.revision, 'Whiteboard initial Progressions revision');
+  assert.equal(canonicalSnapshot?.tracks?.length, 1, 'Legacy writes did not create one canonical track');
+  const compatibilityTrack = canonicalSnapshot.tracks[0];
+  assert.equal(compatibilityTrack?.legacy_compatibility, true, 'Legacy writes lost their compatibility track');
+  assert.equal(compatibilityTrack?.primary_psyke_entry_id, primaryId, 'Compatibility subject changed');
+  assert.deepEqual(
+    compatibilityTrack?.beats?.map((beat) => beat.text),
+    PSYKE_PROGRESSION_TEXTS,
+    'Canonical compatibility beat order changed before enrichment',
+  );
+
+  const manuscript = await localServiceRequest(
+    session,
+    `/api/whiteboard?${documentQuery}`,
+    { headers: identityHeaders },
+  );
+  const anchorBlock = manuscript.data?.blocks?.find((block) => block?.text === FIRST_SCENE_BODY);
+  assert.match(String(anchorBlock?.id), /^[A-Za-z0-9_-]+$/, 'Whiteboard anchor block id is invalid');
+
+  const executeCanonicalCommand = async (
+    command,
+    label,
+    expectedTrackIds,
+    expectedBeatIds,
+  ) => {
+    const result = await localServiceRequest(
+      session,
+      `/api/progressions/commands?${documentQuery}`,
+      {
+        method: 'POST',
+        headers: {
+          ...identityHeaders,
+          'Idempotency-Key': nextAcceptanceMutationId(label),
+        },
+        body: command,
+      },
+    );
+    assert.equal(result.status, 200, `${label} returned an unexpected status`);
+    assert.equal(result.data?.changed, true, `${label} was unexpectedly a no-op`);
+    assert.equal(result.data?.replayed, false, `${label} unexpectedly replayed another command`);
+    assert.equal(result.data?.created_track_id, null, `${label} unexpectedly created a track`);
+    assert.equal(result.data?.created_beat_id, null, `${label} unexpectedly created a beat`);
+    assert.deepEqual(result.data?.affected_track_ids, expectedTrackIds, `${label} affected the wrong track`);
+    assert.deepEqual(result.data?.affected_beat_ids, expectedBeatIds, `${label} affected the wrong beat`);
+    assertProgressionRevision(result.data?.applied_revision, `${label} applied revision`);
+    assert.equal(
+      result.data?.applied_revision,
+      result.data?.progressions?.revision,
+      `${label} response did not expose its committed revision`,
+    );
+    return result.data.progressions;
+  };
+
+  let enrichedSnapshot = await executeCanonicalCommand({
+    kind: 'update_track',
+    expected_revision: canonicalSnapshot.revision,
+    track_id: compatibilityTrack.id,
+    title: PROGRESSION_TRACK_TITLE,
+    description: PROGRESSION_TRACK_DESCRIPTION,
+    color_label: PROGRESSION_TRACK_COLOR,
+  }, 'enrich-progression-track', [compatibilityTrack.id], []);
+  const metadataTrack = enrichedSnapshot.tracks.find((track) => track.id === compatibilityTrack.id);
+  assert.equal(metadataTrack?.title, PROGRESSION_TRACK_TITLE, 'Whiteboard canonical track title enrichment failed');
+  assert.equal(
+    metadataTrack?.description,
+    PROGRESSION_TRACK_DESCRIPTION,
+    'Whiteboard canonical track description enrichment failed',
+  );
+  assert.equal(metadataTrack?.color_label, PROGRESSION_TRACK_COLOR, 'Whiteboard canonical track color enrichment failed');
+  const firstBeatId = compatibilityTrack.beats[0]?.id;
+  assert.ok(Number.isSafeInteger(firstBeatId) && firstBeatId > 0, 'Canonical anchor beat id is invalid');
+  enrichedSnapshot = await executeCanonicalCommand({
+    kind: 'update_beat',
+    expected_revision: enrichedSnapshot.revision,
+    beat_id: firstBeatId,
+    anchor_kind: 'document_block',
+    scene_id: null,
+    anchor_ref: anchorBlock.id,
+    anchor_label: PROGRESSION_DOCUMENT_ANCHOR_LABEL,
+  }, 'anchor-progression-beat', [compatibilityTrack.id], [firstBeatId]);
+  const enrichedTrack = enrichedSnapshot.tracks.find((track) => track.id === compatibilityTrack.id);
+  assert.deepEqual(
+    enrichedTrack?.beats?.map((beat) => ({
+      text: beat.text,
+      sort_order: beat.sort_order,
+      anchor_kind: beat.anchor_kind,
+      scene_id: beat.scene_id,
+      anchor_ref: beat.anchor_ref,
+      anchor_label: beat.anchor_label,
+    })),
+    [
+      {
+        text: PSYKE_PROGRESSION_TEXTS[0], sort_order: 0,
+        anchor_kind: 'document_block', scene_id: null,
+        anchor_ref: anchorBlock.id, anchor_label: PROGRESSION_DOCUMENT_ANCHOR_LABEL,
+      },
+      {
+        text: PSYKE_PROGRESSION_TEXTS[1], sort_order: 1,
+        anchor_kind: 'unanchored', scene_id: null,
+        anchor_ref: null, anchor_label: '',
+      },
+    ],
+    'Whiteboard canonical Progressions anchor/order enrichment failed',
+  );
+
+  const [entryList, relationList, progressionList, finalCanonicalRead] = await Promise.all([
     localServiceRequest(
       session,
       `/api/psyke/search?q=&${documentQuery}`,
@@ -1435,6 +1560,11 @@ async function addWhiteboardPsykeGraph(session) {
     localServiceRequest(
       session,
       `/api/psyke/progressions?${documentQuery}`,
+      { headers: identityHeaders },
+    ),
+    localServiceRequest(
+      session,
+      `/api/progressions?${documentQuery}`,
       { headers: identityHeaders },
     ),
   ]);
@@ -1482,7 +1612,12 @@ async function addWhiteboardPsykeGraph(session) {
     progressions.every((item) => item.scene_id === null && item.scene_title === ''),
     'Whiteboard wrapper unexpectedly anchored a progression to a core scene',
   );
-  record('journey', 'Whiteboard authenticated relation/progression setup and wrapper reads verified');
+  assert.deepEqual(
+    finalCanonicalRead.data,
+    enrichedSnapshot,
+    'Whiteboard canonical Progressions state changed after compatibility reads',
+  );
+  record('journey', 'Whiteboard legacy progression projection and enriched canonical track verified');
   return {
     documentId: String(document.id),
     incarnation: document.incarnation,
@@ -1645,10 +1780,74 @@ function assertBundlePsykeGraph(bundle) {
     progressions.every((item) => item.scene_id === null && item.scene_title === ''),
     'Whiteboard bundle unexpectedly contains a progression scene anchor',
   );
+
+  const progressionTracks = bundle?.project?.progression_tracks;
+  assert.ok(Array.isArray(progressionTracks), 'Whiteboard bundle has no canonical Progressions section');
+  assert.equal(progressionTracks.length, 1, 'Whiteboard bundle should contain exactly one canonical track');
+  const canonicalTrack = progressionTracks[0];
+  assert.ok(
+    Number.isSafeInteger(canonicalTrack?.id) && canonicalTrack.id > 0,
+    'Whiteboard bundle canonical track id is invalid',
+  );
+  assert.equal(canonicalTrack.kind, 'character', 'Whiteboard bundle canonical track kind changed');
+  assert.equal(canonicalTrack.title, PROGRESSION_TRACK_TITLE, 'Whiteboard bundle canonical track title changed');
+  assert.equal(
+    canonicalTrack.description,
+    PROGRESSION_TRACK_DESCRIPTION,
+    'Whiteboard bundle canonical track description changed',
+  );
+  assert.equal(canonicalTrack.color_label, PROGRESSION_TRACK_COLOR, 'Whiteboard bundle canonical track color changed');
+  assert.equal(canonicalTrack.sort_order, 0, 'Whiteboard bundle canonical track order changed');
+  assert.equal(canonicalTrack.legacy_compatibility, true, 'Whiteboard bundle lost the compatibility marker');
+  assert.equal(canonicalTrack.primary_psyke_entry_id, primaryId, 'Whiteboard bundle canonical subject id changed');
+  assert.equal(canonicalTrack.primary_psyke_entry_name, PSYKE_NAME, 'Whiteboard bundle canonical subject name changed');
+  assert.equal(canonicalTrack.primary_psyke_entry_type, 'character', 'Whiteboard bundle canonical subject type changed');
+  assert.equal(canonicalTrack.secondary_psyke_entry_id, null, 'Whiteboard bundle gained a secondary subject');
+  assert.equal(canonicalTrack.secondary_psyke_entry_name, '', 'Whiteboard bundle gained a secondary subject name');
+  assert.equal(canonicalTrack.secondary_psyke_entry_type, '', 'Whiteboard bundle gained a secondary subject type');
+  assert.equal(canonicalTrack.beats?.length, 2, 'Whiteboard bundle canonical track should contain two beats');
+  assert.deepEqual(
+    canonicalTrack.beats.map((beat) => beat.id),
+    progressions.map((beat) => beat.id),
+    'Whiteboard bundle canonical and legacy beat identities diverged',
+  );
+  assert.ok(
+    canonicalTrack.beats.every((beat) => beat.track_id === canonicalTrack.id),
+    'Whiteboard bundle canonical beat ownership changed',
+  );
+  const anchorBlock = bundle?.project?.manuscript?.blocks?.find((block) => block?.text === FIRST_SCENE_BODY);
+  assert.match(String(anchorBlock?.id), /^[A-Za-z0-9_-]+$/, 'Whiteboard bundle lost the anchor block id');
+  assert.deepEqual(
+    canonicalTrack.beats.map((beat) => ({
+      text: beat.text,
+      sort_order: beat.sort_order,
+      anchor_kind: beat.anchor_kind,
+      scene_id: beat.scene_id,
+      scene_title: beat.scene_title,
+      anchor_ref: beat.anchor_ref,
+      anchor_label: beat.anchor_label,
+    })),
+    [
+      {
+        text: PSYKE_PROGRESSION_TEXTS[0], sort_order: 0,
+        anchor_kind: 'document_block', scene_id: null, scene_title: '',
+        anchor_ref: anchorBlock.id, anchor_label: PROGRESSION_DOCUMENT_ANCHOR_LABEL,
+      },
+      {
+        text: PSYKE_PROGRESSION_TEXTS[1], sort_order: 1,
+        anchor_kind: 'unanchored', scene_id: null, scene_title: '',
+        anchor_ref: null, anchor_label: '',
+      },
+    ],
+    'Whiteboard bundle canonical beat order or anchors changed',
+  );
   return {
     primaryId,
     secondaryId,
     sourceIds: new Set([primaryId, secondaryId]),
+    canonicalTrackId: canonicalTrack.id,
+    canonicalBeatIds: canonicalTrack.beats.map((beat) => beat.id),
+    documentAnchorRef: anchorBlock.id,
   };
 }
 
@@ -2793,6 +2992,133 @@ async function verifyProPsykeApi(session, projectId, bundle, expectedDestination
   return { projectId, primaryId, secondaryId };
 }
 
+async function verifyProProgressionsApi(
+  session,
+  projectId,
+  bundle,
+  destinationPsyke,
+  expectedDestination = null,
+) {
+  const source = assertBundlePsykeGraph(bundle);
+  const result = await localServiceRequest(session, `/api/projects/${projectId}/progressions`);
+  const snapshot = result.data;
+  assert.equal(snapshot?.project_id, projectId, 'Imported Pro Progressions project changed');
+  const progressionRevision = assertProgressionRevision(
+    snapshot?.revision,
+    'Imported Pro Progressions revision',
+  );
+  assert.equal(snapshot?.tracks?.length, 1, 'Imported Pro project should contain exactly one Progressions track');
+  const track = snapshot.tracks[0];
+  const progressionTrackId = Number(track?.id);
+  assert.ok(
+    Number.isSafeInteger(progressionTrackId) && progressionTrackId > 0,
+    'Imported Pro canonical track id is invalid',
+  );
+  assert.equal(track.project_id, projectId, 'Imported Pro canonical track escaped its project');
+  assert.equal(track.kind, 'character', 'Imported Pro canonical track kind changed');
+  assert.equal(track.title, PROGRESSION_TRACK_TITLE, 'Imported Pro canonical track title changed');
+  assert.equal(
+    track.description,
+    PROGRESSION_TRACK_DESCRIPTION,
+    'Imported Pro canonical track description changed',
+  );
+  assert.equal(track.color_label, PROGRESSION_TRACK_COLOR, 'Imported Pro canonical track color changed');
+  assert.equal(track.sort_order, 0, 'Imported Pro canonical track order changed');
+  assert.equal(track.legacy_compatibility, true, 'Imported Pro canonical compatibility marker changed');
+  assert.equal(
+    track.primary_psyke_entry_id,
+    destinationPsyke.primaryId,
+    'Imported Pro canonical track did not remap its PSYKE subject',
+  );
+  assert.equal(track.primary_psyke_entry_name, PSYKE_NAME, 'Imported Pro canonical subject name changed');
+  assert.equal(track.primary_psyke_entry_type, 'character', 'Imported Pro canonical subject type changed');
+  assert.equal(track.secondary_psyke_entry_id, null, 'Imported Pro canonical track gained a secondary subject');
+  assert.equal(track.secondary_psyke_entry_name, '', 'Imported Pro canonical track gained a secondary subject name');
+  assert.equal(track.secondary_psyke_entry_type, '', 'Imported Pro canonical track gained a secondary subject type');
+
+  assert.equal(track.beats?.length, 2, 'Imported Pro canonical track should contain exactly two beats');
+  const progressionBeatIds = track.beats.map((beat) => Number(beat.id));
+  assert.ok(
+    progressionBeatIds.every((id) => Number.isSafeInteger(id) && id > 0),
+    'Imported Pro canonical beat id is invalid',
+  );
+  assert.equal(new Set(progressionBeatIds).size, 2, 'Imported Pro canonical beat identities collapsed');
+  assert.ok(
+    track.beats.every((beat) => beat.track_id === progressionTrackId),
+    'Imported Pro canonical beat ownership changed',
+  );
+  assert.deepEqual(
+    track.beats.map((beat) => ({
+      text: beat.text,
+      sort_order: beat.sort_order,
+      anchor_kind: beat.anchor_kind,
+      scene_id: beat.scene_id,
+      scene_title: beat.scene_title,
+      anchor_ref: beat.anchor_ref,
+      anchor_label: beat.anchor_label,
+    })),
+    [
+      {
+        text: PSYKE_PROGRESSION_TEXTS[0], sort_order: 0,
+        anchor_kind: 'document_block', scene_id: null, scene_title: '',
+        anchor_ref: source.documentAnchorRef, anchor_label: PROGRESSION_DOCUMENT_ANCHOR_LABEL,
+      },
+      {
+        text: PSYKE_PROGRESSION_TEXTS[1], sort_order: 1,
+        anchor_kind: 'unanchored', scene_id: null, scene_title: '',
+        anchor_ref: null, anchor_label: '',
+      },
+    ],
+    'Imported Pro canonical beat order or anchors changed',
+  );
+  assert.deepEqual(
+    track.coverage,
+    {
+      total_beats: 2,
+      anchored_beats: 1,
+      unanchored_beats: 1,
+      scene_anchored_beats: 0,
+      document_anchored_beats: 1,
+      coverage_percent: 50,
+      status: 'partial',
+      out_of_order_beat_ids: [],
+    },
+    'Imported Pro canonical track coverage changed',
+  );
+  assert.deepEqual(
+    snapshot.summary,
+    {
+      total_tracks: 1,
+      total_beats: 2,
+      anchored_beats: 1,
+      unanchored_beats: 1,
+      coverage_percent: 50,
+      by_kind: { story: 0, character: 1, relationship: 0, theme: 0, world: 0, custom: 0 },
+      by_status: { empty: 0, unanchored: 0, partial: 1, complete: 0 },
+    },
+    'Imported Pro canonical Progressions summary changed',
+  );
+  if (expectedDestination) {
+    assert.equal(
+      progressionRevision,
+      expectedDestination.progressionRevision,
+      'Canonical Progressions revision changed across Pro restart',
+    );
+    assert.equal(
+      progressionTrackId,
+      expectedDestination.progressionTrackId,
+      'Canonical Progressions track id changed across Pro restart',
+    );
+    assert.deepEqual(
+      progressionBeatIds,
+      expectedDestination.progressionBeatIds,
+      'Canonical Progressions beat ids changed across Pro restart',
+    );
+  }
+  record('journey', `Pro API verified canonical Progressions import for project ${projectId}`);
+  return { progressionRevision, progressionTrackId, progressionBeatIds };
+}
+
 async function verifyProCommentsApi(session, projectId, bundle, bodyMarker, expectedDestination = null) {
   const source = assertBundleComments(bundle, bodyMarker);
   const result = await localServiceRequest(session, `/api/projects/${projectId}/comments`);
@@ -2904,6 +3230,91 @@ async function verifyProPsykeUi(page) {
   record('journey', 'Pro PSYKE relation/progression UI verified');
 }
 
+async function verifyProProgressionsUi(page, expectedDestination) {
+  const progressions = await selectProPanel(page, 'Progressions', 'BIBLE · PROGRESSIONS');
+  const coverage = await waitVisible(
+    progressions.getByLabel('Progressions coverage', { exact: true }),
+    'Pro canonical Progressions coverage',
+  );
+  await waitFor(async () => (
+    ((await coverage.textContent()) ?? '').replace(/\s+/g, ' ').trim()
+      === '50% ANCHOR COVERAGE 1 TRACKS · 2 BEATS'
+  ), 'exact Pro canonical Progressions coverage');
+
+  const trackButtons = progressions.locator('[data-progression-track-id]');
+  await waitFor(
+    async () => (await trackButtons.count()) === 1,
+    'exact imported Progressions track count',
+  );
+  const trackButton = await waitVisible(
+    progressions.getByRole('button', {
+      name: `Open progression track ${PROGRESSION_TRACK_TITLE}`,
+      exact: true,
+    }),
+    'imported canonical Progressions track',
+  );
+  assert.equal(
+    Number(await trackButton.getAttribute('data-progression-track-id')),
+    expectedDestination.progressionTrackId,
+    'Progressions panel rendered the wrong canonical track identity',
+  );
+  await waitText(trackButton, '2 beats · partial', 'imported canonical track coverage');
+  await trackButton.click();
+  await waitVisible(
+    progressions.getByRole('heading', { name: PROGRESSION_TRACK_TITLE, exact: true }),
+    'imported canonical Progressions title',
+  );
+  await waitText(
+    progressions,
+    PROGRESSION_TRACK_DESCRIPTION,
+    'imported canonical Progressions description',
+  );
+  await waitVisible(
+    progressions.getByRole('button', { name: `◆ ${PSYKE_NAME}`, exact: true }),
+    'imported canonical Progressions subject',
+  );
+
+  const beatButtons = progressions.locator('[data-progression-beat-id]');
+  await waitFor(
+    async () => (await beatButtons.count()) === PSYKE_PROGRESSION_TEXTS.length,
+    'exact imported canonical beat count',
+  );
+  assert.deepEqual(
+    await beatButtons.evaluateAll((nodes) => nodes.map((node) => Number(node.dataset.progressionBeatId))),
+    expectedDestination.progressionBeatIds,
+    'Progressions panel rendered canonical beats in the wrong identity/order',
+  );
+  const expectedAnchors = [
+    `DOCUMENT BLOCK · ${PROGRESSION_DOCUMENT_ANCHOR_LABEL}`,
+    'UNANCHORED · Unanchored',
+  ];
+  for (let index = 0; index < PSYKE_PROGRESSION_TEXTS.length; index += 1) {
+    const beat = beatButtons.nth(index);
+    await waitVisible(beat, `imported canonical Progressions beat ${index + 1}`);
+    assert.equal(
+      await beat.getAttribute('aria-label'),
+      `Open progression beat ${index + 1}: ${PSYKE_PROGRESSION_TEXTS[index]}`,
+      `Progressions panel beat ${index + 1} accessible label changed`,
+    );
+    assert.equal(
+      (await beat.locator('span').nth(0).textContent())?.trim(),
+      PSYKE_PROGRESSION_TEXTS[index],
+      `Progressions panel beat ${index + 1} text changed`,
+    );
+    assert.equal(
+      (await beat.locator('span').nth(1).textContent())?.trim(),
+      expectedAnchors[index],
+      `Progressions panel beat ${index + 1} anchor changed`,
+    );
+  }
+  assert.equal(
+    await progressions.getByRole('button', { name: 'OPEN SCENE', exact: true }).count(),
+    0,
+    'Progressions panel invented a Pro scene link for a document/unanchored beat',
+  );
+  record('journey', 'Pro Progressions panel exact track, beat order, metadata, and anchors verified');
+}
+
 async function verifyProCommentsUi(
   page,
   bodyMarker,
@@ -2983,7 +3394,8 @@ async function importAndVerifyInPro(session, bundlePath, bundle, bodyMarker) {
   }).last();
   await waitText(importReport, '2 bible entries', 'Pro import report bible-entry count');
   await waitText(importReport, '1 bible relationship', 'Pro import report relationship count');
-  await waitText(importReport, '2 progression beats', 'Pro import report progression count');
+  await waitText(importReport, '1 Progressions track', 'Pro import report canonical-track count');
+  await waitText(importReport, '2 tracked beats', 'Pro import report canonical-beat count');
   await waitText(importReport, '2 comment threads', 'Pro import report comment count');
   await waitText(importReport, '1 comment reply', 'Pro import report comment-reply count');
   const reportText = (await importReport.textContent()) ?? '';
@@ -2991,7 +3403,18 @@ async function importAndVerifyInPro(session, bundlePath, bundle, bodyMarker) {
     !reportText.includes('progression scene link') && !reportText.includes('progression scene anchor'),
     'Pro import report unexpectedly claimed a progression scene link',
   );
+  assert.equal(
+    reportText.includes('progression beat'),
+    false,
+    'Pro import report double-counted canonical compatibility beats as legacy progression beats',
+  );
   const destination = await verifyProPsykeApi(session, projectId, bundle);
+  const progressionDestination = await verifyProProgressionsApi(
+    session,
+    projectId,
+    bundle,
+    destination,
+  );
   const commentDestination = await verifyProCommentsApi(session, projectId, bundle, bodyMarker);
 
   // GitHub's hosted Windows desktop is limited to a 1024px-wide work area.
@@ -3006,6 +3429,7 @@ async function importAndVerifyInPro(session, bundlePath, bundle, bodyMarker) {
   await waitText(outline, OUTLINE_TITLE, 'Pro imported Outline item');
 
   await verifyProPsykeUi(page);
+  await verifyProProgressionsUi(page, progressionDestination);
   await verifyProCommentsUi(page, bodyMarker, {
     exerciseWrites: true,
     expectedSceneId: commentDestination.openCommentSceneId,
@@ -3015,7 +3439,7 @@ async function importAndVerifyInPro(session, bundlePath, bundle, bodyMarker) {
   assert.equal(dialogState.usedOpen.length, 1, 'Pro consumed an unexpected number of open-dialog paths');
   assert.equal(dialogState.save, 1, 'Pro consumed the Markdown save path before export');
   record('journey', `Pro imported and verified ${bundlePath}`);
-  return { ...destination, ...commentDestination };
+  return { ...destination, ...progressionDestination, ...commentDestination };
 }
 
 async function verifyProSceneNavigator(session, importedProjectId, bodyMarker) {
@@ -4405,10 +4829,17 @@ async function verifyProRestart(
     'Chapter One',
     'Pro scene title changed across restart',
   );
-  await verifyProPsykeApi(
+  const restartedPsyke = await verifyProPsykeApi(
     session,
     expectedDestination.projectId,
     bundle,
+    expectedDestination,
+  );
+  await verifyProProgressionsApi(
+    session,
+    expectedDestination.projectId,
+    bundle,
+    restartedPsyke,
     expectedDestination,
   );
   await verifyProCommentsApi(
@@ -4419,6 +4850,7 @@ async function verifyProRestart(
     expectedDestination,
   );
   await verifyProPsykeUi(page);
+  await verifyProProgressionsUi(page, expectedDestination);
   await verifyProCommentsUi(page, bodyMarker, {
     expectedSceneId: expectedDestination.openCommentSceneId,
   });

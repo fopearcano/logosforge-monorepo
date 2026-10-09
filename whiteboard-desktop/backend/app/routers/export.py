@@ -46,6 +46,7 @@ def build_project_bundle(
     *,
     psyke_relations: list[dict[str, Any]] | None = None,
     psyke_progressions: list[dict[str, Any]] | None = None,
+    progression_tracks: list[dict[str, Any]] | None = None,
     drafter_pages: list[DrafterPage] | None = None,
 ) -> dict[str, Any]:
     """Assemble the bundle dict from already-fetched pieces. Pure + testable.
@@ -80,6 +81,9 @@ def build_project_bundle(
                 "relations": list(psyke_relations or []),
                 "progressions": list(psyke_progressions or []),
             },
+            # Additive v1.0 section: legacy readers ignore unknown project keys;
+            # Pro readers can remap source PSYKE ids and retain document anchors.
+            "progression_tracks": list(progression_tracks or []),
         },
     }
 
@@ -135,6 +139,10 @@ async def _list_psyke(core, pid: int) -> list[dict[str, Any]]:
 
 def _positive_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _nonnegative_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
 async def _list_psyke_relations(core, pid: int) -> list[dict[str, Any]]:
@@ -230,6 +238,126 @@ async def _list_psyke_progressions(core, pid: int) -> list[dict[str, Any]]:
     )
 
 
+async def _list_progression_tracks(core, pid: int) -> list[dict[str, Any]]:
+    """Read and strip the canonical Progressions snapshot for portable export."""
+    try:
+        snapshot = (
+            await core.request("GET", f"/api/projects/{pid}/progressions")
+        ).json()
+    except httpx.HTTPStatusError as exc:
+        detail = core_error_message(exc, fallback="Progressions could not be read")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Project bundle export aborted: {detail}",
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Project bundle export aborted because Progressions could not be read.",
+        ) from exc
+
+    if (
+        not isinstance(snapshot, dict)
+        or snapshot.get("project_id") != pid
+        or not isinstance(snapshot.get("revision"), str)
+        or len(snapshot["revision"]) != 64
+        or any(char not in "0123456789abcdef" for char in snapshot["revision"])
+        or not isinstance(snapshot.get("tracks"), list)
+        or not isinstance(snapshot.get("summary"), dict)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Project bundle export aborted: the Progressions response was invalid.",
+        )
+
+    allowed_kinds = {"story", "character", "relationship", "theme", "world", "custom"}
+    allowed_anchors = {"unanchored", "scene", "document_block"}
+    result: list[dict[str, Any]] = []
+    track_ids: set[int] = set()
+    beat_ids: set[int] = set()
+    for track in snapshot["tracks"]:
+        if not isinstance(track, dict):
+            raise HTTPException(status_code=502, detail="Project bundle export aborted: the Progressions response was invalid.")
+        track_id = track.get("id")
+        primary_id = track.get("primary_psyke_entry_id")
+        secondary_id = track.get("secondary_psyke_entry_id")
+        if (
+            not _positive_int(track_id)
+            or track_id in track_ids
+            or track.get("project_id") != pid
+            or track.get("kind") not in allowed_kinds
+            or not isinstance(track.get("title"), str)
+            or not track["title"].strip()
+            or not isinstance(track.get("description"), str)
+            or not isinstance(track.get("color_label"), str)
+            or not _nonnegative_int(track.get("sort_order"))
+            or not isinstance(track.get("legacy_compatibility"), bool)
+            or (primary_id is not None and not _positive_int(primary_id))
+            or (secondary_id is not None and not _positive_int(secondary_id))
+            or not isinstance(track.get("primary_psyke_entry_name"), str)
+            or not isinstance(track.get("primary_psyke_entry_type"), str)
+            or not isinstance(track.get("secondary_psyke_entry_name"), str)
+            or not isinstance(track.get("secondary_psyke_entry_type"), str)
+            or not isinstance(track.get("beats"), list)
+        ):
+            raise HTTPException(status_code=502, detail="Project bundle export aborted: the Progressions response was invalid.")
+        track_ids.add(track_id)
+        beats: list[dict[str, Any]] = []
+        for beat in track["beats"]:
+            if not isinstance(beat, dict):
+                raise HTTPException(status_code=502, detail="Project bundle export aborted: the Progressions response was invalid.")
+            beat_id = beat.get("id")
+            anchor_kind = beat.get("anchor_kind")
+            scene_id = beat.get("scene_id")
+            anchor_ref = beat.get("anchor_ref")
+            if (
+                not _positive_int(beat_id)
+                or beat_id in beat_ids
+                or beat.get("track_id") != track_id
+                or not isinstance(beat.get("text"), str)
+                or not _nonnegative_int(beat.get("sort_order"))
+                or anchor_kind not in allowed_anchors
+                or (scene_id is not None and not _positive_int(scene_id))
+                or not isinstance(beat.get("scene_title"), str)
+                or (anchor_ref is not None and not isinstance(anchor_ref, str))
+                or not isinstance(beat.get("anchor_label"), str)
+                or (anchor_kind == "document_block" and (scene_id is not None or not isinstance(anchor_ref, str) or not anchor_ref.strip()))
+                or (anchor_kind == "scene" and not _positive_int(scene_id))
+                or (anchor_kind == "unanchored" and (scene_id is not None or anchor_ref is not None))
+            ):
+                raise HTTPException(status_code=502, detail="Project bundle export aborted: the Progressions response was invalid.")
+            beat_ids.add(beat_id)
+            beats.append({
+                "id": beat_id,
+                "track_id": track_id,
+                "text": beat["text"],
+                "sort_order": beat["sort_order"],
+                "anchor_kind": anchor_kind,
+                "scene_id": scene_id,
+                "scene_title": beat["scene_title"],
+                "anchor_ref": anchor_ref,
+                "anchor_label": beat["anchor_label"],
+            })
+        beats.sort(key=lambda beat: (beat["sort_order"], beat["id"]))
+        result.append({
+            "id": track_id,
+            "kind": track["kind"],
+            "title": track["title"],
+            "description": track["description"],
+            "color_label": track["color_label"],
+            "sort_order": track["sort_order"],
+            "legacy_compatibility": track["legacy_compatibility"],
+            "primary_psyke_entry_id": primary_id,
+            "primary_psyke_entry_name": track["primary_psyke_entry_name"],
+            "primary_psyke_entry_type": track["primary_psyke_entry_type"],
+            "secondary_psyke_entry_id": secondary_id,
+            "secondary_psyke_entry_name": track["secondary_psyke_entry_name"],
+            "secondary_psyke_entry_type": track["secondary_psyke_entry_type"],
+            "beats": beats,
+        })
+    return sorted(result, key=lambda track: (track["sort_order"], track["id"]))
+
+
 @router.get("/api/export/project")
 async def export_project(request: Request, doc: int | None = Query(None)) -> dict[str, Any]:
     """Return the complete ``.lfbundle`` for the given document (default doc when
@@ -247,6 +375,7 @@ async def export_project(request: Request, doc: int | None = Query(None)) -> dic
         psyke_progressions = await _list_psyke_progressions(
             core, locked.project_id
         )
+        progression_tracks = await _list_progression_tracks(core, locked.project_id)
         exported_at = datetime.now(timezone.utc).isoformat()
         return build_project_bundle(
             locked.project_id,
@@ -257,5 +386,6 @@ async def export_project(request: Request, doc: int | None = Query(None)) -> dic
             exported_at,
             psyke_relations=psyke_relations,
             psyke_progressions=psyke_progressions,
+            progression_tracks=progression_tracks,
             drafter_pages=drafter_pages,
         )

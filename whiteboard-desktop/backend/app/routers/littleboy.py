@@ -53,6 +53,9 @@ _NO_PROVIDER_NOTE = (
 
 MANUAL_OUTLINE_MAX_NODES = 80
 MANUAL_OUTLINE_MAX_CHARS = 2600
+PROGRESSIONS_CONTEXT_MAX_CHARS = 1200
+PROGRESSIONS_CONTEXT_MAX_TRACKS = 6
+PROGRESSIONS_CONTEXT_MAX_BEATS = 12
 LOGOS_NEARBY_MAX_CHARS = 600  # mirrors logosforge.logos.context._EXCERPT_LIMIT
 LOGOS_DRAFTER_OUTLINE_MAX_CHARS = 220
 LOGOS_DRAFTER_COMMENTS_MAX_CHARS = 130
@@ -172,6 +175,77 @@ def _manual_outline_context(pid: int) -> str:
         return ""
 
 
+async def _progressions_context(core, pid: int, query_text: str = "") -> str:
+    """Return a bounded, relevance-first view of canonical progression tracks."""
+    try:
+        snapshot = (
+            await core.request("GET", f"/api/projects/{pid}/progressions")
+        ).json()
+    except Exception:
+        return ""
+    tracks = snapshot.get("tracks") if isinstance(snapshot, dict) else None
+    if not isinstance(tracks, list):
+        return ""
+
+    terms = {
+        word.casefold()
+        for word in re.findall(r"[\w'-]{3,}", query_text or "", flags=re.UNICODE)
+    }
+
+    def searchable(track: dict) -> str:
+        beats = track.get("beats") if isinstance(track.get("beats"), list) else []
+        return " ".join([
+            str(track.get("title") or ""),
+            str(track.get("description") or ""),
+            str(track.get("primary_psyke_entry_name") or ""),
+            str(track.get("secondary_psyke_entry_name") or ""),
+            *(str(beat.get("text") or "") for beat in beats if isinstance(beat, dict)),
+        ]).casefold()
+
+    valid = [track for track in tracks if isinstance(track, dict)]
+    ordered = sorted(
+        valid,
+        key=lambda track: (
+            -sum(1 for term in terms if term in searchable(track)),
+            int(track.get("sort_order") or 0),
+            int(track.get("id") or 0),
+        ),
+    )[:PROGRESSIONS_CONTEXT_MAX_TRACKS]
+    if not ordered:
+        return ""
+
+    lines = ["[Canonical Progressions — respect established arcs and intended change]"]
+    beat_count = 0
+    for track in ordered:
+        subjects = " ↔ ".join(
+            name for name in (
+                str(track.get("primary_psyke_entry_name") or "").strip(),
+                str(track.get("secondary_psyke_entry_name") or "").strip(),
+            ) if name
+        )
+        subject_suffix = f" ({subjects})" if subjects else ""
+        lines.append(
+            f"- [{track.get('kind') or 'custom'}] "
+            f"{str(track.get('title') or 'Untitled').strip()[:160]}{subject_suffix}"
+        )
+        beats = track.get("beats") if isinstance(track.get("beats"), list) else []
+        for beat in beats:
+            if beat_count >= PROGRESSIONS_CONTEXT_MAX_BEATS or not isinstance(beat, dict):
+                break
+            text = str(beat.get("text") or "").replace("\n", " ").strip()
+            if not text:
+                continue
+            anchor = str(beat.get("anchor_label") or "").replace("\n", " ").strip()
+            anchor_suffix = f" @ {anchor[:90]}" if anchor else ""
+            lines.append(f"  {beat_count + 1}. {text[:220]}{anchor_suffix}")
+            beat_count += 1
+    value = "\n".join(lines)
+    if len(value) > PROGRESSIONS_CONTEXT_MAX_CHARS:
+        suffix = "\n[…progressions truncated]"
+        value = value[: PROGRESSIONS_CONTEXT_MAX_CHARS - len(suffix)].rstrip() + suffix
+    return value
+
+
 def _clip_head(text: str, limit: int) -> str:
     value = (text or "").strip()
     if len(value) <= limit:
@@ -212,7 +286,12 @@ def _logos_drafter_surface_context(nearby: str) -> tuple[str, str]:
     return label, without_surface
 
 
-def _logos_nearby_context(pid: int, nearby: str = "", comments: str = "") -> str:
+def _logos_nearby_context(
+    pid: int,
+    nearby: str = "",
+    comments: str = "",
+    progressions: str = "",
+) -> str:
     """Fit all Whiteboard-only grounding into Logos's 600-char excerpt.
 
     An active Drafter identity is an invariant: it must survive even when the
@@ -223,11 +302,15 @@ def _logos_nearby_context(pid: int, nearby: str = "", comments: str = "") -> str
     manuscript text while still keeping cursor-nearest grounding.
     """
     surface, nearby_without_surface = _logos_drafter_surface_context(nearby)
-    outline_limit = LOGOS_DRAFTER_OUTLINE_MAX_CHARS if surface else 300
-    comments_limit = LOGOS_DRAFTER_COMMENTS_MAX_CHARS if surface else 140
+    outline_limit = LOGOS_DRAFTER_OUTLINE_MAX_CHARS if surface else 220
+    comments_limit = LOGOS_DRAFTER_COMMENTS_MAX_CHARS if surface else 100
+    progressions_limit = 180 if surface else 220
     outline = _clip_head(_manual_outline_context(pid), outline_limit)
     comment_text = _clip_head(comments, comments_limit)
-    fixed = "\n\n".join(p for p in (surface, outline, comment_text) if p)
+    progression_text = _clip_head(progressions, progressions_limit)
+    fixed = "\n\n".join(
+        p for p in (surface, outline, progression_text, comment_text) if p
+    )
     remaining = max(
         0,
         LOGOS_NEARBY_MAX_CHARS
@@ -302,6 +385,9 @@ async def _core_chat(core, pid: int, system_prompt: str, message: str,
         "selected_text": selected_text,
         "nearby_text": nearby_text,
         "document_title": document_title,
+        # Core chat_context adds its own bounded canonical Progressions section.
+        # Whiteboard contributes only its local manual Outline here so tracks
+        # are not duplicated in Billy's context budget.
         "planning_outline": _manual_outline_context(pid),
     }
     r = await core.request("POST", f"/api/projects/{pid}/assistant/chat", json=body)
@@ -525,10 +611,16 @@ async def logos_inline(request: Request, body: LogosRequest, doc: int | None = Q
         selected = (body.selected_text or "").strip()
 
         comments_ctx = _comments_context(pid)
+        progressions_ctx = await _progressions_context(
+            core,
+            pid,
+            "\n".join((selected, body.instruction or "", body.nearby_context or "")),
+        )
         nearby = _logos_nearby_context(
             pid,
             (body.nearby_context or "").strip(),
             comments_ctx,
+            progressions_ctx,
         )
         run_body = {
             "action": core_action,

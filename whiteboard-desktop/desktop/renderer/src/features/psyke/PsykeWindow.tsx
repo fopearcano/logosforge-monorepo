@@ -13,6 +13,8 @@ import {
 } from '../../components/PanelTransparencyControl';
 import { useFloatingPanel } from '../../components/useFloatingPanel';
 import { getCurrentDocId, subscribeCurrentDoc } from '../../state/currentDocument';
+import { ProgressionsPanel } from '../progressions/ProgressionsPanel';
+import type { ManuscriptProgressionAnchor } from '../progressions/types';
 import { PsykeCreateForm } from './PsykeCreateForm';
 import { deletePsykeElement } from './psykeApi';
 import { PsykeSearch } from './PsykeSearch';
@@ -23,20 +25,29 @@ interface Props {
   baseUrl: string;
   initialQuery: string;
   onClose: () => void;
+  manuscriptAnchor: ManuscriptProgressionAnchor | null;
+  manuscriptBlockIds: readonly string[] | null;
 }
 
 const TRANSPARENCY_STORAGE_KEY = 'logosforge-psyke-transparency';
 
-export function PsykeWindow({ baseUrl, initialQuery, onClose }: Props) {
+export function PsykeWindow({
+  baseUrl,
+  initialQuery,
+  onClose,
+  manuscriptAnchor,
+  manuscriptBlockIds,
+}: Props) {
   const floating = useFloatingPanel({
     storageKey: 'logosforge-psyke-panel-position',
-    width: 320,
+    width: 420,
     defaultSide: 'left',
     defaultTop: 70,
   });
   const panelTransparency = usePanelTransparency(TRANSPARENCY_STORAGE_KEY);
   const { query, setQuery, results, loading, error, refresh } = usePsykeSearch({ baseUrl, initialQuery });
   const [selected, setSelected] = useState<PsykeEntry | null>(null);
+  const [detailTab, setDetailTab] = useState<'overview' | 'progressions'>('overview');
   const [view, setView] = useState<'search' | 'create' | 'edit'>('search');
   const [added, setAdded] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -72,6 +83,7 @@ export function PsykeWindow({ baseUrl, initialQuery, onClose }: Props) {
     () =>
       subscribeCurrentDoc(() => {
         setSelected(null);
+        setDetailTab('overview');
         setPendingDelete(null);
         setDeleting(false);
         setView('search');
@@ -120,7 +132,7 @@ export function PsykeWindow({ baseUrl, initialQuery, onClose }: Props) {
 
   return (
     <aside
-      className={`psyke-window floating-panel has-panel-transparency${floating.dragging ? ' is-dragging' : ''}`}
+      className={`psyke-window floating-panel has-panel-transparency${detailTab === 'progressions' ? ' is-progressions' : ''}${floating.dragging ? ' is-dragging' : ''}`}
       style={{
         left: floating.position.x,
         top: floating.position.y,
@@ -200,41 +212,60 @@ export function PsykeWindow({ baseUrl, initialQuery, onClose }: Props) {
                 </button>
                 <h3 className="psyke-detail-name">{selected.name}</h3>
                 <div className="psyke-detail-type">{selected.entry_type}</div>
-                {selected.description ? <p className="psyke-detail-text">{selected.description}</p> : null}
-                {selected.notes ? (
-                  <div className="psyke-detail-aliases">
-                    <span className="psyke-detail-label">Notes</span>
-                    {selected.notes}
-                  </div>
-                ) : null}
-                {selected.aliases.length > 0 && (
-                  <div className="psyke-detail-aliases">
-                    <span className="psyke-detail-label">Aliases</span>
-                    {selected.aliases.join(', ')}
-                  </div>
-                )}
-                {actionError && <p className="psyke-hint psyke-error">{actionError}</p>}
-                <div className="psyke-detail-actions">
-                  <button
-                    type="button"
-                    className="psyke-btn"
-                    onClick={() => {
-                      setActionError(null);
-                      setView('edit');
-                    }}
-                    disabled={deleting}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    type="button"
-                    className="psyke-btn psyke-btn-danger"
-                    onClick={() => setPendingDelete(selected)}
-                    disabled={deleting}
-                  >
-                    {deleting ? 'Deleting…' : 'Delete'}
-                  </button>
+                <div className="psyke-detail-tabs" role="tablist" aria-label="PSYKE entry sections">
+                  <button type="button" role="tab" aria-selected={detailTab === 'overview'}
+                    className={detailTab === 'overview' ? 'is-active' : ''}
+                    onClick={() => setDetailTab('overview')}>Overview</button>
+                  <button type="button" role="tab" aria-selected={detailTab === 'progressions'}
+                    className={detailTab === 'progressions' ? 'is-active' : ''}
+                    onClick={() => setDetailTab('progressions')}>Progressions</button>
                 </div>
+                {detailTab === 'overview' ? (
+                  <>
+                    {selected.description ? <p className="psyke-detail-text">{selected.description}</p> : null}
+                    {selected.notes ? (
+                      <div className="psyke-detail-aliases">
+                        <span className="psyke-detail-label">Notes</span>
+                        {selected.notes}
+                      </div>
+                    ) : null}
+                    {selected.aliases.length > 0 && (
+                      <div className="psyke-detail-aliases">
+                        <span className="psyke-detail-label">Aliases</span>
+                        {selected.aliases.join(', ')}
+                      </div>
+                    )}
+                    {actionError && <p className="psyke-hint psyke-error">{actionError}</p>}
+                    <div className="psyke-detail-actions">
+                      <button
+                        type="button"
+                        className="psyke-btn"
+                        onClick={() => {
+                          setActionError(null);
+                          setView('edit');
+                        }}
+                        disabled={deleting}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        className="psyke-btn psyke-btn-danger"
+                        onClick={() => setPendingDelete(selected)}
+                        disabled={deleting}
+                      >
+                        {deleting ? 'Deleting…' : 'Delete'}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <ProgressionsPanel
+                    baseUrl={baseUrl}
+                    entry={selected}
+                    manuscriptAnchor={manuscriptAnchor}
+                    manuscriptBlockIds={manuscriptBlockIds}
+                  />
+                )}
               </div>
             ) : !trimmed ? (
               <p className="psyke-hint">Type to search the story bible, or + Add a new element.</p>
@@ -253,7 +284,10 @@ export function PsykeWindow({ baseUrl, initialQuery, onClose }: Props) {
               <ul className="psyke-results">
                 {results.map((entry) => (
                   <li key={entry.id}>
-                    <button type="button" className="psyke-result" onClick={() => setSelected(entry)}>
+                    <button type="button" className="psyke-result" onClick={() => {
+                      setDetailTab('overview');
+                      setSelected(entry);
+                    }}>
                       <span className="psyke-result-name">{entry.name}</span>
                       <span className="psyke-badge">{entry.entry_type}</span>
                     </button>

@@ -606,6 +606,7 @@ export interface ProjectBundleSnapshot {
     outline: JsonRecord[];
     comments: Comment[];
     drafter: { pages: DrafterPage[] };
+    progression_tracks?: JsonRecord[];
     psyke: {
       elements: PsykeEntry[];
       relations: JsonRecord[];
@@ -633,6 +634,53 @@ function psykeProgression(value: unknown, path: string): JsonRecord {
   nullable(requireField(dto, 'scene_id', path), fieldPath(path, 'scene_id'), positiveInteger);
   stringValue(requireField(dto, 'scene_title', path), fieldPath(path, 'scene_title'));
   nonNegativeInteger(requireField(dto, 'sort_order', path), fieldPath(path, 'sort_order'));
+  return dto;
+}
+
+function exportedProgressionBeat(value: unknown, path: string, trackId: number): JsonRecord {
+  const dto = record(value, path);
+  positiveInteger(requireField(dto, 'id', path), fieldPath(path, 'id'));
+  const actualTrackId = positiveInteger(requireField(dto, 'track_id', path), fieldPath(path, 'track_id'));
+  if (actualTrackId !== trackId) fail(fieldPath(path, 'track_id'), `the containing track id ${trackId}`, actualTrackId);
+  nonEmptyString(requireField(dto, 'text', path), fieldPath(path, 'text'));
+  nonNegativeInteger(requireField(dto, 'sort_order', path), fieldPath(path, 'sort_order'));
+  const anchorKind = literal(
+    requireField(dto, 'anchor_kind', path),
+    fieldPath(path, 'anchor_kind'),
+    ['unanchored', 'scene', 'document_block'],
+  );
+  const sceneId = nullable(requireField(dto, 'scene_id', path), fieldPath(path, 'scene_id'), positiveInteger);
+  stringValue(requireField(dto, 'scene_title', path), fieldPath(path, 'scene_title'));
+  const anchorRef = nullable(requireField(dto, 'anchor_ref', path), fieldPath(path, 'anchor_ref'), stringValue);
+  stringValue(requireField(dto, 'anchor_label', path), fieldPath(path, 'anchor_label'));
+  if (anchorKind === 'scene' && sceneId === null) fail(fieldPath(path, 'scene_id'), 'a positive scene id for a scene anchor', sceneId);
+  if (anchorKind === 'document_block' && (!anchorRef?.trim() || sceneId !== null)) {
+    fail(fieldPath(path, 'anchor_ref'), 'a non-empty block id with no scene id', anchorRef);
+  }
+  if (anchorKind === 'unanchored' && (sceneId !== null || anchorRef !== null)) {
+    fail(path, 'an unanchored beat with null scene_id and anchor_ref', value);
+  }
+  return dto;
+}
+
+function exportedProgressionTrack(value: unknown, path: string): JsonRecord {
+  const dto = record(value, path);
+  const id = positiveInteger(requireField(dto, 'id', path), fieldPath(path, 'id'));
+  literal(requireField(dto, 'kind', path), fieldPath(path, 'kind'), [
+    'story', 'character', 'relationship', 'theme', 'world', 'custom',
+  ]);
+  nonEmptyString(requireField(dto, 'title', path), fieldPath(path, 'title'));
+  stringValue(requireField(dto, 'description', path), fieldPath(path, 'description'));
+  stringValue(requireField(dto, 'color_label', path), fieldPath(path, 'color_label'));
+  nonNegativeInteger(requireField(dto, 'sort_order', path), fieldPath(path, 'sort_order'));
+  nullable(requireField(dto, 'primary_psyke_entry_id', path), fieldPath(path, 'primary_psyke_entry_id'), positiveInteger);
+  stringValue(requireField(dto, 'primary_psyke_entry_name', path), fieldPath(path, 'primary_psyke_entry_name'));
+  stringValue(requireField(dto, 'primary_psyke_entry_type', path), fieldPath(path, 'primary_psyke_entry_type'));
+  nullable(requireField(dto, 'secondary_psyke_entry_id', path), fieldPath(path, 'secondary_psyke_entry_id'), positiveInteger);
+  stringValue(requireField(dto, 'secondary_psyke_entry_name', path), fieldPath(path, 'secondary_psyke_entry_name'));
+  stringValue(requireField(dto, 'secondary_psyke_entry_type', path), fieldPath(path, 'secondary_psyke_entry_type'));
+  arrayOf(requireField(dto, 'beats', path), fieldPath(path, 'beats'), (beat, beatPath) =>
+    exportedProgressionBeat(beat, beatPath, id));
   return dto;
 }
 
@@ -679,6 +727,11 @@ export const validateProjectBundleSnapshot: RuntimeDtoValidator<ProjectBundleSna
     '$.project.psyke.progressions',
     psykeProgression,
   );
+  // Optional keeps historical v1.0 bundles importable. New Whiteboard exports
+  // always include this additive canonical section, including when it is empty.
+  if (project.progression_tracks !== undefined) {
+    arrayOf(project.progression_tracks, '$.project.progression_tracks', exportedProgressionTrack);
+  }
   return value as ProjectBundleSnapshot;
 };
 

@@ -21,12 +21,12 @@ const BASICS: [string, string][] = [
   ['Three surfaces', 'Editor (centre) to write, Outline (left) for structure, Story Map (bottom) for a visual overview.'],
   ['Outline', '+ Add ▾ inserts typed items or templates. A row’s ⋯ → Link to cursor position creates a stable manuscript anchor and live breadcrumb. Shift+Enter opens all item details.'],
   ['Narrative voice', 'Settings ⚙ → Narrative voice sets this document’s person, style, register, and slang guidance for Billy and Logos.'],
-  ['PSYKE', 'Your per-project story bible — characters, places, objects, lore, themes. Isolated per document.'],
+  ['PSYKE', 'Your per-project story bible — characters, places, objects, lore, themes, and ordered Progressions. Open an entry, then choose Progressions to build its arcs.'],
   ['Comments', 'On the Manuscript or any Drafter page, highlight text and click Comment to leave a threaded note pinned to that writing page.'],
   ['Find & Replace', 'Edit → Find and Replace… (Ctrl/Cmd+F) searches the active Manuscript or Drafter page without covering your prose. It supports case-sensitive and whole-word searches, Replace, and Replace all.'],
   ['Editor typefaces', 'Editor Settings → Typeface includes serif, sans, mono, typewriter, and handwritten presets. Choose Installed system font… to load or enter a family installed on this computer.'],
   ['AI — Billy & Logos', 'Billy is a chat assistant; Logos works inline. Point them at your provider in Settings ⚙.'],
-  ['Export & backup', 'Export Project (.lfbundle) saves manuscript, Drafter pages, document settings, outline, comments, and PSYKE. Incomplete exports are blocked.'],
+  ['Export & backup', 'Export Project (.lfbundle) saves manuscript, Drafter pages, document settings, outline, comments, PSYKE, and Progression tracks. Incomplete exports are blocked.'],
 ];
 
 interface Guide {
@@ -35,6 +35,16 @@ interface Guide {
 }
 
 const GUIDES: Guide[] = [
+  {
+    title: 'Progressions',
+    rows: [
+      ['Open a track', 'Open PSYKE, select a bible entry, then choose its Progressions tab. Tracks can describe story, character, relationship, theme, world, or custom change.'],
+      ['Add beats', 'Add ordered changes inside a track; edit, delete, or move tracks and beats with the arrow controls.'],
+      ['Anchor a beat', 'Place the caret in the main Manuscript, then choose Anchor here. The beat stores that stable manuscript block id and its readable heading.'],
+      ['Drafter boundary', 'Drafter pages share project knowledge, but they are provisional and cannot become canonical Progression anchors.'],
+      ['AI and Pro', 'Billy and Logos receive a bounded relevant Progressions summary. Project export carries canonical tracks one-way into Pro.'],
+    ],
+  },
   {
     title: 'Find & Replace',
     rows: [

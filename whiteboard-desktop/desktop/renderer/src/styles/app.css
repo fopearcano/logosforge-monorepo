@@ -978,7 +978,7 @@ body.is-col-resizing * { cursor: col-resize !important; }
 /* =============================================================================
  * PSYKE
  * ========================================================================== */
-.psyke-window { width: 320px; height: min(640px, calc(100vh - 92px)); z-index: 20; display: flex; flex-direction: column; background: var(--panel); }
+.psyke-window { width: min(420px, calc(100vw - 24px)); height: min(720px, calc(100vh - 92px)); z-index: 20; display: flex; flex-direction: column; background: var(--panel); }
 .psyke-header { height: 40px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid var(--border-soft); }
 .psyke-title { font: 600 10px/1 var(--font-mono); letter-spacing: .2em; color: var(--text); }
 .psyke-header-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
@@ -1018,6 +1018,45 @@ body.is-col-resizing * { cursor: col-resize !important; }
 .psyke-btn-danger { border-color: color-mix(in srgb, #d64545 55%, var(--border)); color: #d64545; }
 .psyke-btn-danger:not(:disabled):hover { border-color: #d64545; background: color-mix(in srgb, #d64545 14%, transparent); }
 .psyke-detail-actions { display: flex; gap: 8px; margin-top: 18px; }
+.psyke-detail-tabs { display: flex; gap: 4px; margin: 12px 0 10px; padding-bottom: 5px; border-bottom: 1px solid var(--border-soft); }
+.psyke-detail-tabs button { border: 0; border-radius: var(--r-sm); background: transparent; color: var(--muted); padding: 5px 8px; font: 600 10px/1 var(--font-ui); }
+.psyke-detail-tabs button:hover, .psyke-detail-tabs button.is-active { background: var(--accent-soft); color: var(--accent); }
+.progressions-panel { display: flex; flex-direction: column; gap: 8px; }
+.progressions-toolbar { display: flex; align-items: center; gap: 6px; color: var(--muted); font: 500 10px/1 var(--font-mono); }
+.progressions-toolbar span { margin-right: auto; }
+.progressions-toolbar button, .progression-mini-actions button, .progression-beat-actions button, .progression-form-actions button, .progression-add-beat > button { border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg); color: var(--text); padding: 5px 7px; font: 500 9.5px/1 var(--font-ui); }
+.progressions-toolbar button:hover:not(:disabled), .progression-mini-actions button:hover:not(:disabled), .progression-beat-actions button:hover:not(:disabled), .progression-form-actions button:hover:not(:disabled), .progression-add-beat > button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.progressions-panel button:disabled { opacity: .45; cursor: default; }
+.progression-location { margin: 0; padding: 6px 8px; border-radius: var(--r-sm); background: var(--accent-soft); color: var(--muted); font: 400 9.5px/1.35 var(--font-ui); overflow-wrap: anywhere; }
+.progression-form { display: flex; flex-direction: column; gap: 7px; padding: 9px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--panel-2); }
+.progression-form label { display: flex; flex-direction: column; gap: 3px; color: var(--muted); font: 500 9px/1 var(--font-mono); }
+.progression-form :is(input, textarea, select), .progression-add-beat textarea, .progression-beat textarea { box-sizing: border-box; width: 100%; resize: vertical; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg); color: var(--text); padding: 6px 7px; font: 400 11px/1.4 var(--font-ui); }
+.progression-form :is(input, textarea, select):focus, .progression-add-beat textarea:focus, .progression-beat textarea:focus { outline: 0; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.progression-form-actions { display: flex; gap: 6px; }
+.progression-track-list { display: flex; flex-direction: column; gap: 9px; }
+.progression-track { border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; background: color-mix(in oklab, var(--panel) 88%, transparent); }
+.progression-track-header { display: flex; align-items: flex-start; gap: 8px; padding: 8px; border-bottom: 1px solid var(--border-soft); }
+.progression-track-header > div:first-child { min-width: 0; flex: 1; }
+.progression-track-header strong { display: block; color: var(--text); font: 600 11.5px/1.25 var(--font-ui); overflow-wrap: anywhere; }
+.progression-track-header span { display: block; margin-top: 3px; color: var(--muted); font: 500 8.5px/1 var(--font-mono); }
+.progression-mini-actions { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; gap: 3px; }
+.progression-description { margin: 8px 9px 3px; color: var(--muted); font: 400 10.5px/1.4 var(--font-ui); white-space: pre-wrap; }
+.progression-beats { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 8px 8px 2px 29px; }
+.progression-beat { padding: 7px; border: 1px solid var(--border-soft); border-radius: var(--r-sm); background: var(--panel-2); }
+.progression-beat-meta { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 4px; color: var(--muted); font: 500 8.5px/1.25 var(--font-mono); }
+.progression-beat-meta > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.progression-anchor-missing { color: var(--error); }
+.progression-beat-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.progression-beat-actions .is-danger, .progression-track-header .is-danger { color: var(--error); }
+.progression-add-beat { display: flex; flex-direction: column; gap: 6px; padding: 8px; }
+.progression-anchor-choice { display: flex; align-items: center; gap: 5px; color: var(--muted); font: 400 9.5px/1.3 var(--font-ui); }
+.progression-anchor-choice input { accent-color: var(--accent); }
+.progression-recovery { padding: 8px; border: 1px solid color-mix(in srgb, var(--error) 55%, var(--border)); border-radius: var(--r-md); background: color-mix(in srgb, var(--error) 8%, var(--panel-2)); color: var(--text); font: 400 9.5px/1.4 var(--font-ui); }
+.progression-recovery p { margin: 0 0 7px; }
+.progression-recovery > div { display: flex; flex-wrap: wrap; gap: 5px; }
+.progression-recovery button { border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg); color: var(--text); padding: 5px 7px; font: 500 9.5px/1 var(--font-ui); }
+.progression-recovery button.is-danger { color: var(--error); }
+.progression-saving { position: sticky; bottom: 0; margin: 0; padding: 5px 8px; border-radius: var(--r-sm); background: var(--accent); color: var(--on-accent); font: 600 9px/1 var(--font-mono); text-align: center; }
 
 /* =============================================================================
  * LITTLEBOY — Billy (chat) + Logos (inline)

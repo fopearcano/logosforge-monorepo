@@ -288,6 +288,30 @@ assert.match(
   'Backend PID cleanup must re-check the live instance identity and nonce',
 );
 
+const crossProductHarnessSource = await readFile(
+  path.join(DESKTOP_DIR, 'scripts', 'packaged-acceptance.mjs'),
+  'utf8',
+);
+for (const required of [
+  'bundle?.project?.progression_tracks',
+  '1 Progressions track',
+  '2 tracked beats',
+  'verifyProProgressionsApi',
+  'verifyProProgressionsUi',
+  'DOCUMENT BLOCK ·',
+]) {
+  assert.equal(
+    crossProductHarnessSource.includes(required),
+    true,
+    `Cross-product packaged acceptance must retain canonical Progressions coverage: ${required}`,
+  );
+}
+assert.doesNotMatch(
+  crossProductHarnessSource,
+  /waitText\(importReport,\s*['"]2 progression beats['"]/,
+  'Cross-product packaged acceptance must not report canonical beats through the legacy counter',
+);
+
 const packagedWindowsWorkflow = await readFile(
   path.resolve(DESKTOP_DIR, '..', '..', '.github', 'workflows', 'ci-packaged-windows.yml'),
   'utf8',

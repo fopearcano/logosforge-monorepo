@@ -41,11 +41,12 @@ backend; only the venv (now has `logosforge`) and the wrapped routes differ.
 | `/api/documents` | ✅ | core project CRUD; document id = core project id |
 | `/api/writing-modes` | ✅ | imports core `logosforge.writing_modes` |
 | `/api/psyke/search`, `/elements`, `/relations`, `/progressions` | ✅ | wraps project-scoped core PSYKE routes; all reads publish one aggregate revision and MCP writes use conditional create/patch |
+| `/api/progressions`, `/commands`, `/command-receipt` | ✅ | canonical track/beat Progressions; optimistic revision commands and durable idempotency recovery remain core-owned |
 | `/api/littleboy/billy/chat`, `/logos/inline` | ✅ | prompt orchestration → core Assistant/Logos; manual Whiteboard outline added to AI grounding |
 | `/api/settings/ai`, `/test` | ✅ | global provider settings passthrough + actionable connection test |
 | `/api/whiteboard`, `/api/outline/items`, `/api/drafter/pages`, `/api/comments` | ✅ | per-document atomic JSON with fsync, transaction-wide locks, two rotating backups, quarantine + recovery; manuscript, outline, Drafter pages, and comment collaboration writes support conditional resource revisions |
 | `/api/drafter/page-index`, `/api/drafter/pages/{page_id}`, `/api/drafter/search` | ✅ | bounded Drafter metadata, resumable single-page reads, server-side search, and conditional page create/patch without collection round trips |
-| `/api/export/project` | ✅ | complete-or-failed `.lfbundle` (manuscript + document settings + outline + Drafter pages + comments + PSYKE entries, relations, and progressions) |
+| `/api/export/project` | ✅ | complete-or-failed `.lfbundle` (manuscript + document settings + outline + Drafter pages + comments + PSYKE entries/relations plus canonical Progression tracks) |
 | `/api/recovery/notices` | ✅ | one-shot notices when a local state backup was restored |
 
 ## Verification
@@ -161,6 +162,15 @@ importer recreates entries, then restores relationships and ordered progression
 beats through source-to-destination entry-ID remapping. A progression's scene
 anchor is restored only when its scene title has one unique imported match;
 missing or ambiguous matches remain safely unlinked and are reported.
+
+Canonical tracks are exported separately in additive
+`project.progression_tracks`. Each track retains its source identity, kind,
+labels, mapped PSYKE subject metadata, ordering, and ordered beats. Whiteboard
+beats use `anchor_kind=document_block` with the manuscript's durable block id
+in `anchor_ref`; they never invent Pro scene ids. Bundle version 1.0 is retained
+so older forward-compatible readers can ignore the additive section, while
+historical v1.0 bundles without it remain valid. Whiteboard intentionally has
+no `.lfbundle` import path.
 
 `GET /api/comments` returns `{comments, revision}` and publishes the comment
 collection's strong ETag. Existing comment mutations carrying neither

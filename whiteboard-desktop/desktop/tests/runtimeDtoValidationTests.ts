@@ -378,6 +378,31 @@ const PROJECT_BUNDLE = {
       created_at: '2026-10-07T10:00:00+00:00',
       updated_at: '2026-10-07T10:01:00+00:00',
     }] },
+    progression_tracks: [{
+      id: 21,
+      kind: 'character',
+      title: 'Mara accepts command',
+      description: 'From concealment to responsibility.',
+      color_label: 'amber',
+      sort_order: 0,
+      primary_psyke_entry_id: 12,
+      primary_psyke_entry_name: 'Mara',
+      primary_psyke_entry_type: 'character',
+      secondary_psyke_entry_id: null,
+      secondary_psyke_entry_name: '',
+      secondary_psyke_entry_type: '',
+      beats: [{
+        id: 31,
+        track_id: 21,
+        text: 'Mara takes command.',
+        sort_order: 0,
+        anchor_kind: 'document_block',
+        scene_id: null,
+        scene_title: '',
+        anchor_ref: 'block-1',
+        anchor_label: 'Chapter One',
+      }],
+    }],
     psyke: {
       elements: [PSYKE_ENTRY],
       relations: [{
@@ -397,6 +422,14 @@ test('project-bundle decoder accepts the complete backend export shape', () => {
   if (bundle.project.drafter.pages[0]?.id !== 'draft-1') {
     throw new Error('valid project bundle was not preserved');
   }
+  if (bundle.project.progression_tracks?.[0]?.beats === undefined) {
+    throw new Error('canonical progression tracks were not preserved');
+  }
+});
+
+test('project-bundle decoder keeps historical v1.0 bundles without canonical tracks compatible', () => {
+  const { progression_tracks: _omitted, ...legacyProject } = PROJECT_BUNDLE.project;
+  accepts(validateProjectBundleSnapshot, { ...PROJECT_BUNDLE, project: legacyProject });
 });
 
 test('project-bundle decoder rejects a different requested project identity', () => {
@@ -429,6 +462,20 @@ test('project-bundle decoder rejects incomplete and malformed nested snapshots',
       },
     },
   }, '$.project.psyke.relations[0].source_id');
+  rejects(validateProjectBundleSnapshot, {
+    ...PROJECT_BUNDLE,
+    project: {
+      ...PROJECT_BUNDLE.project,
+      progression_tracks: [{
+        ...PROJECT_BUNDLE.project.progression_tracks[0],
+        beats: [{
+          ...PROJECT_BUNDLE.project.progression_tracks[0].beats[0],
+          anchor_kind: 'document_block',
+          anchor_ref: null,
+        }],
+      }],
+    },
+  }, '$.project.progression_tracks[0].beats[0].anchor_ref');
 });
 
 function sourceFiles(directory: string): string[] {

@@ -93,6 +93,32 @@ def test_build_bundle_pure() -> None:
         "scene_title": "",
         "sort_order": 1,
     }]
+    progression_tracks = [{
+        "id": 21,
+        "kind": "character",
+        "title": "Mara accepts command",
+        "description": "From concealment to responsibility.",
+        "color_label": "amber",
+        "sort_order": 0,
+        "legacy_compatibility": False,
+        "primary_psyke_entry_id": 1,
+        "primary_psyke_entry_name": "Mara",
+        "primary_psyke_entry_type": "character",
+        "secondary_psyke_entry_id": None,
+        "secondary_psyke_entry_name": "",
+        "secondary_psyke_entry_type": "",
+        "beats": [{
+            "id": 31,
+            "track_id": 21,
+            "text": "Mara stops hiding the signal.",
+            "sort_order": 0,
+            "anchor_kind": "document_block",
+            "scene_id": None,
+            "scene_title": "",
+            "anchor_ref": "b1",
+            "anchor_label": "Chapter One",
+        }],
+    }]
     drafter_pages = [DrafterPage(
         id="draft-one",
         title="Alternate arrival",
@@ -115,6 +141,7 @@ def test_build_bundle_pure() -> None:
         "2026-01-01T00:00:00Z",
         psyke_relations=relations,
         psyke_progressions=progressions,
+        progression_tracks=progression_tracks,
         drafter_pages=drafter_pages,
     )
 
@@ -150,6 +177,10 @@ def test_build_bundle_pure() -> None:
     check(
         "psyke progressions carried",
         b["project"]["psyke"]["progressions"] == progressions,
+    )
+    check(
+        "canonical progression tracks carried",
+        b["project"]["progression_tracks"] == progression_tracks,
     )
     assert not failures, "\n".join(failures)
 
@@ -221,8 +252,38 @@ def test_export_route_integration() -> None:
                     "text": "Mara stops hiding the signal.",
                 },
             )
+            canonical = core_client.get(
+                f"/api/projects/{document_id}/progressions"
+            ).json()
+            track_response = core_client.post(
+                f"/api/projects/{document_id}/progressions/commands",
+                headers={"Idempotency-Key": "test-export-track-command-0001"},
+                json={
+                    "kind": "create_track",
+                    "expected_revision": canonical["revision"],
+                    "track_kind": "character",
+                    "title": "Mara accepts command",
+                    "primary_psyke_entry_id": mara_id,
+                },
+            )
+            track_result = track_response.json()
+            beat_response = core_client.post(
+                f"/api/projects/{document_id}/progressions/commands",
+                headers={"Idempotency-Key": "test-export-beat-command-0001"},
+                json={
+                    "kind": "create_beat",
+                    "expected_revision": track_result["progressions"]["revision"],
+                    "track_id": track_result["created_track_id"],
+                    "text": "Mara stops hiding the signal.",
+                    "anchor_kind": "document_block",
+                    "anchor_ref": "b1",
+                    "anchor_label": "Act I",
+                },
+            )
         check("route seed: relation created", relation_response.status_code == 201)
         check("route seed: progression created", progression_response.status_code == 201)
+        check("route seed: canonical track created", track_response.status_code == 200)
+        check("route seed: document-anchored beat created", beat_response.status_code == 200)
 
         resp = client.get("/api/export/project")
         check("route 200", resp.status_code == 200)
@@ -280,7 +341,19 @@ def test_export_route_integration() -> None:
             and exported_progressions[0]["text"]
             == "Mara stops hiding the signal."
             and exported_progressions[0]["scene_id"] is None
-            and exported_progressions[0]["sort_order"] == 1,
+            and exported_progressions[0]["sort_order"] == 0,
+        )
+        exported_tracks = proj.get("progression_tracks", [])
+        canonical_track = next(
+            (track for track in exported_tracks if track.get("title") == "Mara accepts command"),
+            {},
+        )
+        check(
+            "route: canonical progression track present",
+            canonical_track.get("kind") == "character"
+            and canonical_track.get("primary_psyke_entry_id") == mara_id
+            and canonical_track.get("beats", [{}])[0].get("anchor_kind") == "document_block"
+            and canonical_track.get("beats", [{}])[0].get("anchor_ref") == "b1",
         )
     assert not failures, "\n".join(failures)
 
@@ -354,6 +427,65 @@ def test_export_aborts_when_psyke_graph_collection_is_unavailable(
         asyncio.run(helper(core, 7))
     assert caught.value.status_code == 502
     assert f"{resource} unavailable" in str(caught.value.detail)
+
+
+def test_canonical_progression_export_preserves_blank_legacy_beat() -> None:
+    from app.routers import export as export_router
+
+    snapshot = {
+        "project_id": 7,
+        "revision": "a" * 64,
+        "tracks": [{
+            "id": 11,
+            "project_id": 7,
+            "kind": "custom",
+            "title": "Legacy note",
+            "description": "",
+            "color_label": "",
+            "sort_order": 0,
+            "legacy_compatibility": True,
+            "primary_psyke_entry_id": 5,
+            "primary_psyke_entry_name": "Unclassified",
+            "primary_psyke_entry_type": "other",
+            "secondary_psyke_entry_id": None,
+            "secondary_psyke_entry_name": "",
+            "secondary_psyke_entry_type": "",
+            "beats": [{
+                "id": 21,
+                "track_id": 11,
+                "text": "",
+                "sort_order": 0,
+                "anchor_kind": "unanchored",
+                "scene_id": None,
+                "scene_title": "",
+                "anchor_ref": None,
+                "anchor_label": "",
+            }],
+            "coverage": {
+                "total_beats": 1,
+                "anchored_beats": 0,
+                "unanchored_beats": 1,
+                "scene_anchored_beats": 0,
+                "document_anchored_beats": 0,
+                "coverage_percent": 0,
+                "status": "unanchored",
+                "out_of_order_beat_ids": [],
+            },
+        }],
+        "summary": {
+            "total_tracks": 1,
+            "total_beats": 1,
+            "anchored_beats": 0,
+            "unanchored_beats": 1,
+            "coverage_percent": 0,
+            "by_kind": {"custom": 1},
+            "by_status": {"unanchored": 1},
+        },
+    }
+    core = _CollectionCore({"progressions": snapshot})
+    exported = asyncio.run(export_router._list_progression_tracks(core, 7))
+    assert exported[0]["beats"][0]["text"] == ""
+    assert exported[0]["legacy_compatibility"] is True
 
 
 if __name__ == "__main__":

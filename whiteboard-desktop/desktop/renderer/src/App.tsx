@@ -18,6 +18,7 @@ import { onMenuView } from './features/files/fileApi';
 import { OutlinePanel } from './features/outline/OutlinePanel';
 import type { OutlineItem } from './features/outline/types';
 import { PsykeWindow } from './features/psyke/PsykeWindow';
+import type { ManuscriptProgressionAnchor } from './features/progressions/types';
 import { HelpDialog } from './features/help/HelpDialog';
 import {
   toggleCommentsPanel,
@@ -375,6 +376,21 @@ export function App() {
   const baseUrl = status.baseUrl || DEFAULT_BASE_URL;
   const ready = status.state === 'connected';
   const appClass = `app${ui.topPanelVisible ? '' : ' is-top-hidden'}${ui.storyMapVisible ? '' : ' is-map-hidden'}${ui.focusModeActive ? ' is-focus' : ''}`;
+  const progressionAnchor: ManuscriptProgressionAnchor | null =
+    editorCaret !== null
+    && editorBlockTextsDocId === currentDocId
+    && typeof editorBlockIds[editorCaret] === 'string'
+    && editorBlockIds[editorCaret].trim()
+      ? {
+          anchor_kind: 'document_block',
+          anchor_ref: editorBlockIds[editorCaret],
+          anchor_label: (
+            (ui.outlineVisible ? activePath[activePath.length - 1]?.trim() : '')
+            || editorBlockTexts[editorCaret]?.trim().slice(0, 180)
+            || `Block ${editorCaret + 1}`
+          ).slice(0, 500),
+        }
+      : null;
 
   return (
     <div className={appClass}>
@@ -595,7 +611,15 @@ export function App() {
           resetKey={currentDocId || 'none'}
           className="wb-overlay-boundary"
         >
-          <PsykeWindow baseUrl={baseUrl} initialQuery={psykeQuery} onClose={() => setPsykeOpen(false)} />
+          <PsykeWindow
+            baseUrl={baseUrl}
+            initialQuery={psykeQuery}
+            manuscriptAnchor={progressionAnchor}
+            manuscriptBlockIds={
+              editorBlockTextsDocId === currentDocId ? editorBlockIds : null
+            }
+            onClose={() => setPsykeOpen(false)}
+          />
         </RenderErrorBoundary>
       )}
       <HelpDialog open={helpOpen} onClose={() => setHelpOpen(false)} />
