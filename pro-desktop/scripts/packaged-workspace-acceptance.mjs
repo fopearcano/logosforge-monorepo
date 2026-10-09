@@ -502,11 +502,12 @@ function attachPageDiagnostics(session, page = session.page, surface = 'renderer
   });
 }
 
-async function verifyPackagedRuntime(session, exePath) {
+async function verifyPackagedRuntime(session, exePath, allowedWindowCounts = [1]) {
   const expectedResources = packagedResourcesPath(exePath);
   const runtime = await session.app.evaluate(({ app, BrowserWindow }) => {
     const windows = BrowserWindow.getAllWindows();
-    const preferences = windows[0]?.webContents.getLastWebPreferences() ?? {};
+    const rootWindow = windows.find((candidate) => candidate.webContents.getURL() !== 'about:blank');
+    const preferences = rootWindow?.webContents.getLastWebPreferences() ?? {};
     return {
       isPackaged: app.isPackaged,
       appName: app.getName(),
@@ -526,7 +527,10 @@ async function verifyPackagedRuntime(session, exePath) {
   });
   assert.equal(runtime.isPackaged, true, `${session.label} did not report app.isPackaged`);
   assert.equal(runtime.appName, 'LogosForge Pro', `${session.label} exposed the wrong app name`);
-  assert.equal(runtime.windowCount, 1, `${session.label} must expose exactly one BrowserWindow`);
+  assert.ok(
+    allowedWindowCounts.includes(runtime.windowCount),
+    `${session.label} exposed ${runtime.windowCount} BrowserWindows; expected ${allowedWindowCounts.join(' or ')}`,
+  );
   assertSamePath(runtime.execPath, exePath, `${session.label} process.execPath`);
   assertSamePath(runtime.resourcesPath, expectedResources, `${session.label} resourcesPath`);
   assertSamePath(runtime.appPath, path.join(expectedResources, 'app.asar'), `${session.label} appPath`);
@@ -556,7 +560,7 @@ async function verifyPackagedRuntime(session, exePath) {
   record('runtime', `${session.label} verified packaged runtime at ${runtime.execPath}`);
 }
 
-async function launchPackagedApp({ electron, exePath, root, label }) {
+async function launchPackagedApp({ electron, exePath, root, label, allowedWindowCounts = [1] }) {
   assert.ok(playwrightElectronLoader && path.isAbsolute(playwrightElectronLoader));
   const port = await allocateStrictPort();
   const { env, dirs } = await prepareEnvironment(root, port);
@@ -598,7 +602,7 @@ async function launchPackagedApp({ electron, exePath, root, label }) {
     session.page = await app.firstWindow({ timeout: STARTUP_TIMEOUT_MS });
     attachPageDiagnostics(session, session.page, 'main-renderer');
     app.on('window', (page) => attachPageDiagnostics(session, page, `panel-${session.diagnosticPages.size}`));
-    await verifyPackagedRuntime(session, exePath);
+    await verifyPackagedRuntime(session, exePath, allowedWindowCounts);
     return session;
   } catch (error) {
     record(label, `launch verification failed: ${errorText(error)}`);
@@ -702,6 +706,84 @@ async function activateBillyDock(page) {
   if (await billyTab.getAttribute('aria-pressed') !== 'true') await billyTab.click();
   await waitVisible(surface.locator('[data-screen-label="Billy Assistant"]'), 'Billy Assistant');
   return surface;
+}
+
+async function waitForNativePanelWindow(session, panelId, label) {
+  const prefix = `logosforge-panel:${panelId}:`;
+  let panelWindow = null;
+  await waitFor(async () => {
+    for (const candidate of session.app.windows()) {
+      if (candidate.isClosed()) continue;
+      try {
+        const name = await candidate.evaluate(() => window.name);
+        const token = name.startsWith(prefix) ? name.slice(prefix.length) : '';
+        if (/^[A-Za-z0-9_-]{16,128}$/.test(token)) {
+          panelWindow = candidate;
+          return true;
+        }
+      } catch {
+        // A candidate can close while the Electron window list is sampled.
+      }
+    }
+    return false;
+  }, label, STARTUP_TIMEOUT_MS);
+  attachPageDiagnostics(session, panelWindow, `${panelId}-native-window`);
+  return panelWindow;
+}
+
+async function settleRendererFrames(page) {
+  await page.evaluate(() => new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  }));
+}
+
+async function assertNoRuntimeFaults(session, pages, label) {
+  const livePages = [...new Set([session.page, ...pages])]
+    .filter((page) => page && !page.isClosed());
+  await Promise.all(livePages.map((page) => settleRendererFrames(page)));
+  for (const page of livePages) {
+    assert.equal(
+      await page.locator('[data-runtime-fault]').count(),
+      0,
+      `${label} displayed a runtime-fault banner`,
+    );
+  }
+  assert.deepEqual(session.pageErrors, [], `${label} emitted a renderer pageerror`);
+}
+
+async function verifyBillyNativePanel(session, panelWindow, label) {
+  const nativeSurface = panelWindow.locator('section[data-panel-id="ai-companions"]').first();
+  await waitFor(
+    async () => (await nativeSurface.getAttribute('data-floating-panel')) === 'true'
+      && (await nativeSurface.getAttribute('data-native-floating-panel')) === 'true'
+      && await nativeSurface.isVisible(),
+    label,
+    STARTUP_TIMEOUT_MS,
+  );
+  const billyTab = await waitVisible(
+    nativeSurface.getByTitle('Billy', { exact: true }),
+    `${label} Billy companion tab`,
+  );
+  await waitFor(
+    async () => await billyTab.getAttribute('aria-pressed') === 'true',
+    `${label} persisted Billy selection`,
+  );
+  await waitVisible(
+    nativeSurface.locator('[data-screen-label="Billy Assistant"]'),
+    `${label} Billy Assistant`,
+  );
+  const hiddenQuantum = nativeSurface.locator('[data-screen-label="Quantum Outliner"]');
+  await waitFor(
+    async () => (await hiddenQuantum.count()) === 1,
+    `${label} mounted hidden Quantum companion`,
+  );
+  assert.equal(
+    await hiddenQuantum.isVisible(),
+    false,
+    `${label} unexpectedly selected Quantum instead of Billy`,
+  );
+  await assertNoRuntimeFaults(session, [panelWindow], label);
+  return nativeSurface;
 }
 
 async function packagedCoreJson(session, route, init = {}) {
@@ -3293,6 +3375,66 @@ async function exerciseNativeManuscriptWindow(session, expected) {
   record('journey', 'live Manuscript editing survived native detach and redock without changing canonical prose');
 }
 
+async function leaveBillyDetachedForRelaunch(session) {
+  const { page } = session;
+  const dockedSurface = await activateBillyDock(page);
+  const billyTab = await waitVisible(
+    dockedSurface.getByTitle('Billy', { exact: true }),
+    'Billy companion tab before native detach',
+  );
+  await waitFor(
+    async () => await billyTab.getAttribute('aria-pressed') === 'true',
+    'Billy selection before native detach',
+  );
+  const floatBilly = await waitVisible(
+    page.getByRole('button', { name: 'Float AI Companions', exact: true }),
+    'Float AI Companions control',
+  );
+  await floatBilly.click();
+  const panelWindow = await waitForNativePanelWindow(
+    session,
+    'ai-companions',
+    'detached AI Companions native window',
+  );
+  await verifyBillyNativePanel(session, panelWindow, 'detached AI Companions native window');
+  record('journey', 'Billy remained selected while AI Companions was left detached for relaunch');
+}
+
+async function verifyPersistedBillyNativeWindow(session) {
+  const [ready, panelWindow] = await Promise.all([
+    waitProReady(session),
+    waitForNativePanelWindow(
+      session,
+      'ai-companions',
+      'restored AI Companions native window',
+    ),
+  ]);
+  await verifyBillyNativePanel(session, panelWindow, 'restored AI Companions native window');
+  record('journey', 'persisted detached AI Companions restored with Billy selected and no runtime fault');
+  return { panelWindow, projectId: ready.projectId };
+}
+
+async function redockPersistedBillyNativeWindow(session, panelWindow) {
+  const titlebar = await waitVisible(
+    panelWindow.getByRole('toolbar', { name: 'AI Companions native window controls', exact: true }),
+    'restored AI Companions native window controls',
+  );
+  const panelWindowClosed = panelWindow.waitForEvent('close');
+  await clickAndWaitForNativeWindowClose(
+    titlebar.getByRole('button', { name: 'Dock AI Companions to right', exact: true }),
+    panelWindowClosed,
+    'AI Companions native window redock',
+  );
+  const redocked = session.page.locator(
+    'section[data-panel-id="ai-companions"][data-dock-region="right"]',
+  ).first();
+  await waitFor(
+    async () => (await redocked.count()) === 1
+      && await redocked.getAttribute('data-floating-panel') === null,
+    'redocked AI Companions in the right workspace region',
+  );
+}
+
 async function exercisePointerWorkspace(session, manuscriptExpected) {
   const { page } = session;
   const { workspace, projectId } = await waitProReady(session);
@@ -3456,6 +3598,8 @@ async function exercisePointerWorkspace(session, manuscriptExpected) {
     'redocked Notes in the left workspace region',
   );
 
+  await leaveBillyDetachedForRelaunch(session);
+
   await page.getByRole('button', { name: 'Collapse right dock', exact: true }).click();
   await waitVisible(
     page.getByRole('button', { name: 'Expand right dock', exact: true }),
@@ -3489,7 +3633,7 @@ async function exercisePointerWorkspace(session, manuscriptExpected) {
     'journey',
     `pointer workspace mutations complete (project=${projectId}, leftDockSize=${leftDockSizePx})`,
   );
-  return { projectId, leftDockSizePx };
+  return { projectId, leftDockSizePx, detachedAiCompanions: true };
 }
 
 async function verifyPersistedWorkspace(session, expected) {
@@ -4312,6 +4456,17 @@ async function readSavedLayout(session, expected) {
   assert.equal(layout.docks?.left?.sizePx, expected.leftDockSizePx, 'Saved left dock width changed');
   assert.ok(layout.docks?.left?.panelIds?.includes('notes'), 'Saved left dock lost Notes');
   assert.equal(layout.floatingPanels?.some((entry) => entry?.panelId === 'notes'), false);
+  assert.equal(expected.detachedAiCompanions, true, 'AI Companions relaunch fixture was not staged');
+  const detachedAiCompanions = layout.floatingPanels?.find(
+    (entry) => entry?.panelId === 'ai-companions',
+  );
+  assert.ok(detachedAiCompanions, 'Saved workspace layout lost detached AI Companions');
+  assert.equal(
+    detachedAiCompanions.coordinateSpace,
+    'screen',
+    'Saved AI Companions did not retain native-window coordinates',
+  );
+  assert.equal(detachedAiCompanions.minimized, false, 'Saved AI Companions became minimized');
   record('file', `verified saved project layout: ${layoutPath}`);
 }
 
@@ -4543,12 +4698,22 @@ async function main() {
       exePath,
       root: productRoot,
       label: 'pro-pointer-2',
+      // The persisted AI Companions window can be created before or just after
+      // the root-runtime probe, depending on renderer/layout hydration timing.
+      allowedWindowCounts: [1, 2],
     });
+    const restoredBilly = await verifyPersistedBillyNativeWindow(second);
+    assert.equal(
+      restoredBilly.projectId,
+      expected.projectId,
+      'Detached AI Companions restored for the wrong project',
+    );
     await verifyPersistedIntelligence(second, expected.intelligence);
     // Assert the saved collapsed-dock state before any domain verification
     // activates a panel in those docks. Selecting Radar below intentionally
     // expands the right dock and must not invalidate this persistence check.
     await verifyPersistedWorkspace(second, expected);
+    await redockPersistedBillyNativeWindow(second, restoredBilly.panelWindow);
     await verifyPersistedProgressions(second, expected.progressions);
     await captureScreenshot(second, 'restored-progressions');
     await verifyPersistedTimelineRelationships(second, expected.timeline);

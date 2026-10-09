@@ -4,6 +4,7 @@ import { PanelShell, type PanelProps } from "../shell/PanelShell";
 import { useQuantum } from "../../hooks";
 import { useStudio, useNavigate } from "../../adapters/StudioProvider";
 import { createLatestRequestGate } from "../../hooks/latestRequest";
+import { usePanelHostWindow } from "../common/PanelHost";
 
 const STRUCTURE_MODES = ["auto", "classical", "quantum", "hybrid"];
 
@@ -67,6 +68,7 @@ const message = (text: ReactNode): ReactNode => (
 export function QuantumOutliner(props: PanelProps) {
   const { generate, running, result, error } = useQuantum();
   const { api, projectId } = useStudio();
+  const ownerWindow = usePanelHostWindow();
   const projectIdRef = useRef(projectId);
   projectIdRef.current = projectId;
   const navigate = useNavigate();
@@ -201,33 +203,61 @@ export function QuantumOutliner(props: PanelProps) {
   // oscillates. Below this width the radial is unreadable → show the branch list.
   useLayoutEffect(() => {
     const el = panelRef.current;
-    if (!el) return;
-    const ResizeObserverConstructor = (el.ownerDocument.defaultView as (Window & {
+    if (!el || !ownerWindow) return;
+    const ResizeObserverConstructor = (ownerWindow as Window & {
       ResizeObserver?: typeof ResizeObserver;
-    }) | null)?.ResizeObserver;
+    }).ResizeObserver;
     if (!ResizeObserverConstructor) return;
-    const measure = () => { const w = el.clientWidth; if (w > 0) setPanelW(w); };
-    measure();
-    const ro = new ResizeObserverConstructor(measure);
+    let frame: number | null = null;
+    const publish = () => {
+      frame = null;
+      if (el.ownerDocument.defaultView !== ownerWindow) return;
+      const width = el.clientWidth;
+      if (width > 0) setPanelW((current) => current === width ? current : width);
+    };
+    const schedule = () => {
+      if (frame === null) frame = ownerWindow.requestAnimationFrame(publish);
+    };
+    publish();
+    const ro = new ResizeObserverConstructor(schedule);
     ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
+    return () => {
+      ro.disconnect();
+      if (frame !== null) ownerWindow.cancelAnimationFrame(frame);
+    };
+  }, [ownerWindow]);
   const compact = panelW > 0 && panelW < 720;
   // Radial fit (wide layout only). Scaling via CSS transform never changes the
   // observed box size, so measuring the field for SCALE is loop-safe.
   useLayoutEffect(() => {
     const el = fieldRef.current;
-    if (!el) return;
-    const ResizeObserverConstructor = (el.ownerDocument.defaultView as (Window & {
+    if (!el || !ownerWindow) return;
+    const ResizeObserverConstructor = (ownerWindow as Window & {
       ResizeObserver?: typeof ResizeObserver;
-    }) | null)?.ResizeObserver;
+    }).ResizeObserver;
     if (!ResizeObserverConstructor) return;
-    const measure = () => { const w = el.clientWidth, h = el.clientHeight; if (w > 0 && h > 0) setFieldScale(Math.min(w / FIELD_W, h / FIELD_H, 1)); };
-    measure();
-    const ro = new ResizeObserverConstructor(measure);
+    let frame: number | null = null;
+    const publish = () => {
+      frame = null;
+      if (el.ownerDocument.defaultView !== ownerWindow) return;
+      const width = el.clientWidth;
+      const height = el.clientHeight;
+      if (width > 0 && height > 0) {
+        const next = Math.min(width / FIELD_W, height / FIELD_H, 1);
+        setFieldScale((current) => current === next ? current : next);
+      }
+    };
+    const schedule = () => {
+      if (frame === null) frame = ownerWindow.requestAnimationFrame(publish);
+    };
+    publish();
+    const ro = new ResizeObserverConstructor(schedule);
     ro.observe(el);
-    return () => ro.disconnect();
-  }, [compact]);
+    return () => {
+      ro.disconnect();
+      if (frame !== null) ownerWindow.cancelAnimationFrame(frame);
+    };
+  }, [compact, ownerWindow]);
 
   return (
     <PanelShell {...props} style={ACCENT}>

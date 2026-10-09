@@ -15,6 +15,10 @@ export interface PreviousRuntimeFault {
 }
 
 const handledErrors = new WeakSet<object>();
+const BENIGN_RESIZE_OBSERVER_MESSAGES = new Set([
+  "ResizeObserver loop limit exceeded",
+  "ResizeObserver loop completed with undelivered notifications.",
+]);
 
 function isWeakKey(value: unknown): value is object {
   return (typeof value === "object" && value !== null) || typeof value === "function";
@@ -63,6 +67,21 @@ export function isExpectedCancellation(reason: unknown): boolean {
   const name = reason instanceof Error ? reason.name : stringField(reason, "name");
   const code = stringField(reason, "code");
   return name === "AbortError" || code === "ABORT_ERR";
+}
+
+/** Browser-generated notification for deferred ResizeObserver delivery.
+ *
+ * The platform dispatches this as a window `ErrorEvent` even though no
+ * application exception was thrown. Match the complete event shape: a genuine
+ * Error object with the same message must still reach the runtime-fault banner.
+ */
+export function isResizeObserverLoopNotification(
+  event: Pick<ErrorEvent, "message" | "error">,
+): boolean {
+  const message = event.message;
+  if (!BENIGN_RESIZE_OBSERVER_MESSAGES.has(message)) return false;
+  return event.error == null
+    || (typeof event.error === "string" && event.error === message);
 }
 
 export function createRuntimeFault(

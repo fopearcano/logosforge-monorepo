@@ -9,7 +9,15 @@ const requireMarkers = (file: string, markers: string[]) => {
   return source;
 };
 
-const quantum = requireMarkers("components/aipanels/QuantumOutliner.tsx", ["new ResizeObserverConstructor", "ro.disconnect()"]);
+const quantum = requireMarkers("components/aipanels/QuantumOutliner.tsx", [
+  "usePanelHostWindow()",
+  "new ResizeObserverConstructor",
+  "ownerWindow.requestAnimationFrame(publish)",
+  "ownerWindow.cancelAnimationFrame(frame)",
+  "ro.disconnect()",
+  "}, [ownerWindow]);",
+  "}, [compact, ownerWindow]);",
+]);
 if ((quantum.match(/new ResizeObserverConstructor/g) ?? []).length !== (quantum.match(/ro\.disconnect\(\)/g) ?? []).length) {
   failures.push("QuantumOutliner ResizeObserver creation/cleanup count differs");
 }

@@ -1,6 +1,7 @@
 import {
   createRuntimeFault,
   isExpectedCancellation,
+  isResizeObserverLoopNotification,
   markRuntimeFaultHandled,
   shouldReportRuntimeFault,
   wasRuntimeFaultHandled,
@@ -33,6 +34,53 @@ abort.name = "AbortError";
 check("AbortError is an expected cancellation", isExpectedCancellation(abort));
 check("ABORT_ERR code is an expected cancellation", isExpectedCancellation({ code: "ABORT_ERR" }));
 check("an ordinary error mentioning abort is still reported", !isExpectedCancellation(new Error("request aborted unexpectedly")));
+
+check(
+  "spec ResizeObserver notification without an error payload is ignored",
+  isResizeObserverLoopNotification({
+    message: "ResizeObserver loop completed with undelivered notifications.",
+    error: null,
+  }),
+);
+check(
+  "matching primitive ResizeObserver payload is ignored",
+  isResizeObserverLoopNotification({
+    message: "ResizeObserver loop completed with undelivered notifications.",
+    error: "ResizeObserver loop completed with undelivered notifications.",
+  }),
+);
+check(
+  "legacy Chromium ResizeObserver notification is ignored",
+  isResizeObserverLoopNotification({ message: "ResizeObserver loop limit exceeded", error: undefined }),
+);
+check(
+  "a genuine Error object with the browser message remains reportable",
+  !isResizeObserverLoopNotification({
+    message: "ResizeObserver loop completed with undelivered notifications.",
+    error: new Error("ResizeObserver loop completed with undelivered notifications."),
+  }),
+);
+check(
+  "near-match observer failures are not hidden",
+  !isResizeObserverLoopNotification({
+    message: "ResizeObserver loop limit exceeded while updating the manuscript",
+    error: null,
+  }),
+);
+check(
+  "whitespace variants are not treated as browser notifications",
+  !isResizeObserverLoopNotification({
+    message: " ResizeObserver loop limit exceeded",
+    error: null,
+  }),
+);
+check(
+  "different primitive error payloads are not hidden",
+  !isResizeObserverLoopNotification({
+    message: "ResizeObserver loop limit exceeded",
+    error: "real callback failure",
+  }),
+);
 
 check("first occurrence is reportable", shouldReportRuntimeFault(null, fault));
 check("same occurrence is deduplicated inside the window", !shouldReportRuntimeFault({ key: fault.key, occurredAt: 1000 }, { ...fault, occurredAt: 5999 }));

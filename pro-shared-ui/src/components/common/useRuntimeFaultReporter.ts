@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createRuntimeFault,
   isExpectedCancellation,
+  isResizeObserverLoopNotification,
   shouldReportRuntimeFault,
   wasRuntimeFaultHandled,
   type RuntimeFault,
@@ -33,7 +34,10 @@ export function useRuntimeFaultReporter(): {
       }, 0);
       pending.add(timer);
     };
-    const onError = (event: ErrorEvent) => schedule("event", event.error ?? event.message);
+    const onError = (event: ErrorEvent) => {
+      if (isResizeObserverLoopNotification(event)) return;
+      schedule("event", event.error ?? event.message);
+    };
     const onUnhandledRejection = (event: PromiseRejectionEvent) => schedule("promise", event.reason);
     ownerWindow.addEventListener("error", onError);
     ownerWindow.addEventListener("unhandledrejection", onUnhandledRejection);

@@ -152,6 +152,16 @@ check('packaged workspace acceptance drives real pointer interactions and relaun
   packagedWorkspaceScript.includes('page.mouse.down()') &&
   packagedWorkspaceScript.includes('Resize left workspace dock') &&
   packagedWorkspaceScript.includes('pointer-authored project layout survived graceful packaged relaunch'));
+check('packaged workspace acceptance guards detached Billy startup against ResizeObserver regressions',
+  packagedWorkspaceScript.includes('leaveBillyDetachedForRelaunch(session)') &&
+  packagedWorkspaceScript.includes('verifyPersistedBillyNativeWindow(second)') &&
+  packagedWorkspaceScript.includes("entry?.panelId === 'ai-companions'") &&
+  packagedWorkspaceScript.includes("coordinateSpace") &&
+  packagedWorkspaceScript.includes("'screen'") &&
+  packagedWorkspaceScript.includes("[data-screen-label=\"Quantum Outliner\"]") &&
+  packagedWorkspaceScript.includes("page.locator('[data-runtime-fault]').count()") &&
+  packagedWorkspaceScript.includes('persisted detached AI Companions restored with Billy selected and no runtime fault') &&
+  packagedWorkspaceScript.includes('redockPersistedBillyNativeWindow(second, restoredBilly.panelWindow)'));
 check('packaged workspace acceptance covers Canvas Plot pointer authoring and persistence',
   packagedWorkspaceScript.includes("selectPanel(page, 'Canvas Plot', 'canvas-plot'") &&
   packagedWorkspaceScript.includes("name: 'Add Canvas Plot block', exact: true") &&
