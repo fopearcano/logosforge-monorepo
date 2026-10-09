@@ -22,7 +22,7 @@ const SHORTCUTS: [string, string][] = [
   ["Enter  /  Space", "Activate the focused button, toggle or selectable card"],
   ["↑ ↓ · Enter · Esc", "In the palette: move · run the highlighted command · close"],
   ["⌘S  /  Ctrl+S", "Save now in the Manuscript (scenes also autosave as you type)"],
-  ["37 panel shortcuts", "Every panel has a direct open/focus shortcut; the complete key map appears below"],
+  ["38 panel shortcuts", "Every panel has a direct open/focus shortcut; the complete key map appears below"],
   ["Alt+↑  /  Alt+↓", "In the Manuscript: cycle backward / forward through open anchored comments"],
   ["⌘/Ctrl + Enter (comment)", "Post a new comment or thread reply"],
   ["Enter", "Send your message to Billy   (Shift+Enter = new line)"],
@@ -60,17 +60,18 @@ const GUIDE: { title: string; items: [string, string][] }[] = [
   { title: "④ Plan & structure", items: [
     ["Outline", "Acts → Chapters → Scenes. Build it by hand (＋ ACT), or ✨ AI GENERATE a full outline. Inline renames and Structure fields finish saving before navigation; stale background loads are ignored and failures stay visible for retry. Delete is always a two-step confirm."],
     ["PSYKE bible", "Characters, places, objects, lore and themes — each with WANT · NEED · LIE · WOUND and role. Existing-entry drafts save safely during navigation; an unfinished new entry asks you to Save or Discard before leaving. Destructive deletes require a second explicit click."],
+    ["Progressions", "Map story, character, relationship, theme, world and custom arcs as ordered tracks. Each beat can stay unanchored, point to an exact scene, or retain a document-block reference. Anchor coverage reports placement only—not story quality. Track subjects follow the selected kind; imported legacy PSYKE tracks keep their protected kind/subject linkage while presentation and anchors remain editable. Every edit crosses the project save barrier and uses a durable command receipt; after an uncertain write, CHECK RECEIPT never repeats the command, while ABANDON only releases the local barrier. ⌘/Ctrl+Alt+Shift+P opens the detachable panel."],
     ["Timeline · Canvas Plot · Story Grid", "See the same story as a timeline, plot lanes, or a scene grid."],
   ] },
   { title: "⑤ Story intelligence", items: [
     ["Dashboard · Health", "A live read on structure, characters, arc cover and scene density."],
     ["Pacing · Balance · Continuity", "Tension flow across scenes, cast balance, and continuity checks."],
-    ["Decision Radar", "Ranked, advisory signals — unpaid setups, drifting acts, promotable motifs — each links to the section to fix it. Nothing changes without you."],
+    ["Decision Radar", "Ranked, advisory signals — unpaid setups, drifting acts, promotable motifs, and empty, unanchored or out-of-order Progressions. Expand traceable evidence; graph-backed Progressions cards preserve both OPEN GRAPH EVIDENCE and OPEN PROGRESSION. The latter opens and focuses the exact canonical track or beat in the detachable panel. Nothing changes without you."],
     ["Review · Adapt", "A format-aware readiness dashboard, plus adaptive-mode suggestions."],
   ] },
   { title: "⑥ Voice, import & export", items: [
     ["Voice — Dexter's Room", "Dictate with local faster-whisper, then clean a transcript, ask Billy, or commit it to the active scene, a Note or PSYKE. Voice history is project-isolated; finish or dismiss a preview before navigating. If newer scene text blocks an insertion, the returned text is preserved for Retry or explicit Discard without rerunning Billy. Stop, cancel, setup failure and leaving the panel all release the microphone."],
-    ["Import", "From Projects: bring a Free Whiteboard draft (.json) or a whole project bundle (.lfbundle — manuscript, bible entries and relationships, progression beats, outline, and safely mapped comment threads) into a new Pro project."],
+    ["Import", "From Projects: bring a Free Whiteboard draft (.json) or a whole project bundle (.lfbundle — manuscript, bible entries and relationships, first-class Progressions tracks, outline, and safely mapped comment threads) into a new Pro project. Progressions compatibility provenance, empty tracks, document-block anchors and source ordering are preserved; PSYKE subjects are remapped and scene anchors are restored only from a unique matching scene title."],
     ["Export", "Fountain / PDF / FDX / DOCX from the Export panel."],
   ] },
 ];

@@ -73,6 +73,7 @@ for (const marker of [
   "const [pendingComment, setPendingComment] = useState<number | null>(null)",
   'setPendingScene(panelId === "manuscript" ? options?.sceneId ?? null : null)',
   'setPendingPsykeEntry(panelId === "psyke" ? options?.psykeEntryId ?? null : null)',
+  'setPendingProgression(panelId === "progressions"',
   'setPendingNote(panelId === "notes" ? options?.noteId ?? null : null)',
   'setPendingComment(panelId === "comments" ? options?.commentId ?? null : null)',
   'setPendingKnowledgeGraph(panelId === "graph" && options?.graphFocusKey ? {',
@@ -80,6 +81,7 @@ for (const marker of [
   'setPendingContinuityRepair(panelId === STUDIO_AI_COMPANIONS_PANEL_ID ? options?.continuityRepair ?? null : null)',
   "setPendingNote(null)",
   "setPendingComment(null)",
+  "setPendingProgression(null)",
   "const toggleFocus = useCallback((): Promise<boolean> => {",
   "const returnPanelId = layoutRef.current.focused?.panelId ?? \"manuscript\"",
   ": panelFocusTarget(returnPanelId)",
@@ -88,6 +90,8 @@ for (const marker of [
   "clearNoteTarget: (noteId) => setPendingNote",
   "commentTargetId: pendingComment",
   "clearCommentTarget: (commentId) => setPendingComment",
+  "progressionTarget: pendingProgression",
+  "clearProgressionTarget: (trackId, beatId) => setPendingProgression",
 ]) {
   if (!integrated.includes(marker)) failures.push(`Integrated browser omnibox is missing ${marker}`);
 }

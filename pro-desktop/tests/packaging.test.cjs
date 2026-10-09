@@ -222,6 +222,63 @@ check('packaged workspace acceptance covers the real Graph, Radar, Continuity, a
   packagedWorkspaceScript.includes("'restored right dock after Continuity decision review'") &&
   packagedWorkspaceScript.includes("'Confirmed Controlled Apply mutation did not survive relaunch'") &&
   packagedWorkspaceScript.includes("'Durable Continuity review state did not survive packaged relaunch'"));
+check('packaged workspace acceptance covers transactional Progressions intelligence and relaunch persistence',
+  packagedWorkspaceScript.includes('executePackagedProgressionCommand(') &&
+  packagedWorkspaceScript.includes("kind: 'create_track'") &&
+  (packagedWorkspaceScript.match(/kind: 'create_beat'/g) || []).length >= 3 &&
+  packagedWorkspaceScript.includes("headers: { 'Idempotency-Key': idempotencyKey }") &&
+  packagedWorkspaceScript.includes('/progressions/command-receipt') &&
+  packagedWorkspaceScript.includes("waitForRendererGet(page, `/api/projects/${projectId}/dashboard`, 'Dashboard')") &&
+  packagedWorkspaceScript.includes("waitForRendererGet(page, `/api/projects/${projectId}/decision-radar`, 'Decision Radar')") &&
+  packagedWorkspaceScript.includes("waitForRendererGet(page, `/api/projects/${projectId}/knowledge-graph`, 'Knowledge Graph')") &&
+  packagedWorkspaceScript.includes("waitForRendererGet(page, `/api/projects/${projectId}/progressions`, 'Progressions')") &&
+  packagedWorkspaceScript.includes('Dashboard did not count the opening scene anchor exactly once') &&
+  packagedWorkspaceScript.includes('kg_progression_unanchored_${trackId}') &&
+  packagedWorkspaceScript.includes("name: 'OPEN PROGRESSION', exact: true") &&
+  packagedWorkspaceScript.includes('Open Progressions evidence for ${beatEvidence.label}') &&
+  packagedWorkspaceScript.includes('data-progression-track-id') &&
+  packagedWorkspaceScript.includes('data-progression-beat-id') &&
+  packagedWorkspaceScript.includes('exerciseProgressionEditorTransactions(') &&
+  packagedWorkspaceScript.includes("route.abort('failed')") &&
+  packagedWorkspaceScript.includes('Progressions changed elsewhere. Your draft was kept') &&
+  packagedWorkspaceScript.includes("'progression_conflict'") &&
+  packagedWorkspaceScript.includes("'idempotency_key_conflict'") &&
+  packagedWorkspaceScript.includes("'progression_receipt_not_found'") &&
+  packagedWorkspaceScript.includes('Fresh Progressions no-op did not commit a durable receipt') &&
+  packagedWorkspaceScript.includes('receipt changed its request digest') &&
+  packagedWorkspaceScript.includes('receipt became cacheable') &&
+  packagedWorkspaceScript.includes("name: 'Move track earlier', exact: true") &&
+  packagedWorkspaceScript.includes("name: 'Move beat earlier', exact: true") &&
+  packagedWorkspaceScript.includes("name: 'DELETE', exact: true") &&
+  packagedWorkspaceScript.includes("selectOption('document_block')") &&
+  packagedWorkspaceScript.includes("selectOption('character')") &&
+  packagedWorkspaceScript.includes('assertProgressionReceipt(') &&
+  packagedWorkspaceScript.includes('Persisted Progressions revision changed across relaunch') &&
+  packagedWorkspaceScript.includes("name: 'Float Progressions', exact: true") &&
+  packagedWorkspaceScript.includes("name: 'Progressions native window controls', exact: true") &&
+  packagedWorkspaceScript.includes("name: 'Dock Progressions to bottom', exact: true") &&
+  packagedWorkspaceScript.includes('interactive track editor inside detached Progressions window') &&
+  packagedWorkspaceScript.includes('track mutation committed from detached Progressions window') &&
+  packagedWorkspaceScript.includes('verifyPersistedProgressions(second, expected.progressions)') &&
+  packagedWorkspaceScript.includes('Progressions Graph beat ${beatId} disappeared') &&
+  packagedWorkspaceScript.includes('writeProgressionBundleFixture(') &&
+  packagedWorkspaceScript.includes("name: '⇩ IMPORT PROJECT', exact: true") &&
+  packagedWorkspaceScript.includes('exerciseProgressionBundleImport(') &&
+  packagedWorkspaceScript.includes('verifyPersistedProgressionBundleImport(') &&
+  packagedWorkspaceScript.includes('stageProgressionReceiptRecoveryAcrossCrash(') &&
+  packagedWorkspaceScript.includes('receipt-only recovery control before packaged crash') &&
+  packagedWorkspaceScript.includes('crashSession(importedRelaunch)') &&
+  packagedWorkspaceScript.includes('verifyProgressionReceiptRecoveryAfterCrash(') &&
+  packagedWorkspaceScript.includes('globalThis.logosforge.loadProgressionCommandRecovery(key)') &&
+  packagedWorkspaceScript.includes('Desktop Progressions recovery unexpectedly fell back to origin-local storage') &&
+  packagedWorkspaceScript.includes('cross-origin recovery was not exercised') &&
+  packagedWorkspaceScript.includes('Progressions recovery checked a different idempotency key') &&
+  packagedWorkspaceScript.includes('project hydration reconciled the receipt-only Progressions command automatically') &&
+  packagedWorkspaceScript.includes('Crash recovery resent the Progressions mutation instead of checking its receipt') &&
+  packagedWorkspaceScript.includes('Crash recovery did not check the exact durable Progressions receipt') &&
+  packagedWorkspaceScript.includes('Recovered Progressions command did not write its durable tombstone') &&
+  packagedWorkspaceScript.includes('verifyProgressionReceiptRemainsResolvedAfterSecondRelaunch(') &&
+  packagedWorkspaceScript.includes('Second relaunch resent a resolved Progressions mutation'));
 check('packaged intelligence fixture finalizes prose and location before the editor save barrier',
   createdOpeningStart > 0 &&
   createdCrossingStart > createdOpeningStart &&

@@ -181,6 +181,8 @@ export function ProjectsPanel(props: PanelProps) {
       ];
       if (r.relations > 0) parts.push(`${r.relations} bible relationship${r.relations === 1 ? "" : "s"}`);
       if (r.progressions > 0) parts.push(`${r.progressions} progression beat${r.progressions === 1 ? "" : "s"}`);
+      if (r.progressionTracks > 0) parts.push(`${r.progressionTracks} Progressions track${r.progressionTracks === 1 ? "" : "s"}`);
+      if (r.progressionTrackBeats > 0) parts.push(`${r.progressionTrackBeats} tracked beat${r.progressionTrackBeats === 1 ? "" : "s"}`);
       if (r.comments > 0) parts.push(`${r.comments} comment thread${r.comments === 1 ? "" : "s"}`);
       if (r.commentReplies > 0) parts.push(`${r.commentReplies} comment repl${r.commentReplies === 1 ? "y" : "ies"}`);
       if (r.drafterPages > 0) parts.push(`${r.drafterPages} Drafter page${r.drafterPages === 1 ? "" : "s"} as Notes`);
@@ -188,6 +190,7 @@ export function ProjectsPanel(props: PanelProps) {
       if (r.drafterArchivePreserved && r.drafterPages > 0) parts.push("structured Drafter archive preserved");
       if (r.links > 0) parts.push(`${r.links} section link${r.links === 1 ? "" : "s"}`);   // Phase 3
       if (r.progressionSceneLinks > 0) parts.push(`${r.progressionSceneLinks} progression scene link${r.progressionSceneLinks === 1 ? "" : "s"}`);
+      if (r.progressionTrackSceneLinks > 0) parts.push(`${r.progressionTrackSceneLinks} tracked scene anchor${r.progressionTrackSceneLinks === 1 ? "" : "s"}`);
       // Report anything that could not be mapped or created instead of silently
       // dropping it. Likewise report outline→scene links that could not resolve.
       const deferredBits: string[] = [];
@@ -200,6 +203,9 @@ export function ProjectsPanel(props: PanelProps) {
       if (r.relationsSkipped > 0) deferredBits.push(`${r.relationsSkipped} bible relationship${r.relationsSkipped === 1 ? "" : "s"} skipped (invalid, unmapped, duplicate, or failed)`);
       if (r.progressionsSkipped > 0) deferredBits.push(`${r.progressionsSkipped} progression beat${r.progressionsSkipped === 1 ? "" : "s"} skipped (invalid, unmapped, or failed)`);
       if (r.progressionSceneLinksSkipped > 0) deferredBits.push(`${r.progressionSceneLinksSkipped} progression scene anchor${r.progressionSceneLinksSkipped === 1 ? " was" : "s were"} imported unlinked because no unique matching scene was available`);
+      if (r.progressionTracksSkipped > 0) deferredBits.push(`${r.progressionTracksSkipped} Progressions track${r.progressionTracksSkipped === 1 ? "" : "s"} skipped (invalid subjects or failed command)`);
+      if (r.progressionTrackBeatsSkipped > 0) deferredBits.push(`${r.progressionTrackBeatsSkipped} tracked beat${r.progressionTrackBeatsSkipped === 1 ? "" : "s"} skipped`);
+      if (r.progressionTrackSceneLinksSkipped > 0) deferredBits.push(`${r.progressionTrackSceneLinksSkipped} tracked scene anchor${r.progressionTrackSceneLinksSkipped === 1 ? " was" : "s were"} kept unanchored because no unique matching scene was available`);
       if (r.outlineSkipped > 0) deferredBits.push(`${r.outlineSkipped} outline node${r.outlineSkipped === 1 ? "" : "s"} skipped after an API failure`);
       if (r.outlineReparented > 0) deferredBits.push(`${r.outlineReparented} outline node${r.outlineReparented === 1 ? "" : "s"} moved to root because its parent was unavailable`);
       if (r.outlineDuplicateIds > 0) deferredBits.push(`${r.outlineDuplicateIds} duplicate outline ID${r.outlineDuplicateIds === 1 ? "" : "s"} made parent mapping ambiguous`);

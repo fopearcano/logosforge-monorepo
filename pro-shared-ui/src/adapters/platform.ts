@@ -20,7 +20,30 @@ export interface SaveFileResult {
   path?: string;
 }
 
+/**
+ * Opaque, host-owned persistence used for command recovery records which must
+ * outlive a browser origin. Browser hosts can omit this and use localStorage;
+ * Electron supplies an app-owned userData implementation through its preload.
+ */
+export interface DurableRecoveryStorage {
+  getItem(key: string): Promise<string | null> | string | null;
+  setItem(key: string, value: string): Promise<void> | void;
+  /**
+   * Hosts with asynchronous storage should compare `expectedValue` before
+   * removing so an old panel cannot erase a newer command for the same slot.
+   */
+  removeItem(key: string, expectedValue?: string): Promise<boolean | void> | boolean | void;
+}
+
 export interface PlatformAdapter {
+  /**
+   * Stable, non-secret identity for the backing Core/account used to scope
+   * durable UI recovery records. Hosts serving multiple accounts or Cores from
+   * one origin must provide distinct values.
+   */
+  readonly persistenceScope?: string;
+  /** Stable command-recovery storage; desktop must not use origin localStorage. */
+  readonly progressionCommandStorage?: DurableRecoveryStorage;
   /** Local file open (desktop) / file picker or import (web). */
   openFile(opts?: { filters?: { name: string; extensions: string[] }[] }): Promise<OpenFileResult>;
   /**

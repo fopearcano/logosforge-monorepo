@@ -42,6 +42,11 @@ import type {
   CanvasPlotSnapshotDTO,
   CanvasPlotCommandDTO,
   CanvasPlotCommandResultDTO,
+  ProgressionCommandDTO,
+  ProgressionCommandReceiptDTO,
+  ProgressionCommandResultDTO,
+  ProgressionSnapshotDTO,
+  ProgressionTrackDTO,
   KnowledgeGraphEdgeDTO,
   KnowledgeGraphNodeDTO,
   KnowledgeGraphQueryDTO,
@@ -194,6 +199,7 @@ const MOCK_PERSISTENT_METHODS = new Set([
   "executeStoryStructureCommand",
   "executeTimelineCommand",
   "executeCanvasPlotCommand",
+  "executeProgressionCommand",
   "executeKnowledgeGraphCommand",
   "executeContinuityCommand",
 ]);
@@ -2251,6 +2257,233 @@ export function createMockApiClient(): ApiClient {
   seededRewrite.updated_at = seededTimestamp;
   seededRewrite.revision = workflowRevision(seededRewrite);
   addWorkflowEvent(fixtureProjectId, seededRewrite.id, "step_completed", "Completed step 'Select the passage'.", seededRewrite.steps[0]!.step_id);
+  const progressionKinds = ["story", "character", "relationship", "theme", "world", "custom"] as const;
+  const progressionSeed = (projectId: number): ProgressionSnapshotDTO => {
+    const tracks: ProgressionTrackDTO[] = projectId === fixtureProjectId ? [{
+      id: 1,
+      project_id: projectId,
+      kind: "story",
+      title: "The impossible signal",
+      description: "Tracks discovery, disbelief and the choice to answer the future.",
+      color_label: "cyan",
+      sort_order: 0,
+      legacy_compatibility: false,
+      primary_psyke_entry_id: null,
+      primary_psyke_entry_name: "",
+      primary_psyke_entry_type: "",
+      secondary_psyke_entry_id: null,
+      secondary_psyke_entry_name: "",
+      secondary_psyke_entry_type: "",
+      beats: [{
+        id: 1,
+        track_id: 1,
+        text: "Marlow hears the distress signal before it is transmitted.",
+        sort_order: 0,
+        anchor_kind: "scene",
+        scene_id: scenesFor(projectId)[0]?.id ?? null,
+        scene_title: scenesFor(projectId)[0]?.title ?? "",
+        anchor_ref: null,
+        anchor_label: "",
+      }, {
+        id: 2,
+        track_id: 1,
+        text: "She chooses whether the warning deserves an answer.",
+        sort_order: 1,
+        anchor_kind: "unanchored",
+        scene_id: null,
+        scene_title: "",
+        anchor_ref: null,
+        anchor_label: "",
+      }],
+      coverage: {
+        total_beats: 2, anchored_beats: 1, unanchored_beats: 1,
+        scene_anchored_beats: 1, document_anchored_beats: 0,
+        coverage_percent: 50, status: "partial", out_of_order_beat_ids: [],
+      },
+    }] : [];
+    return normalizeProgressions(projectId, tracks);
+  };
+  function normalizeProgressions(projectId: number, source: ProgressionTrackDTO[]): ProgressionSnapshotDTO {
+    const tracks = structuredClone(source);
+    tracks.forEach((track, trackIndex) => {
+      track.project_id = projectId;
+      track.sort_order = trackIndex;
+      track.beats.forEach((beat, beatIndex) => {
+        beat.track_id = track.id;
+        beat.sort_order = beatIndex;
+        if (beat.anchor_kind === "scene") {
+          beat.scene_title = scenesFor(projectId).find((scene) => scene.id === beat.scene_id)?.title ?? "";
+        } else {
+          beat.scene_title = "";
+        }
+      });
+      const sceneAnchored = track.beats.filter((beat) => beat.anchor_kind === "scene").length;
+      const documentAnchored = track.beats.filter((beat) => beat.anchor_kind === "document_block").length;
+      const anchored = sceneAnchored + documentAnchored;
+      const total = track.beats.length;
+      track.coverage = {
+        total_beats: total,
+        anchored_beats: anchored,
+        unanchored_beats: total - anchored,
+        scene_anchored_beats: sceneAnchored,
+        document_anchored_beats: documentAnchored,
+        coverage_percent: total ? Math.round((anchored / total) * 100) : 0,
+        status: total === 0 ? "empty" : anchored === 0 ? "unanchored" : anchored === total ? "complete" : "partial",
+        out_of_order_beat_ids: [],
+      };
+    });
+    const totalBeats = tracks.reduce((sum, track) => sum + track.coverage.total_beats, 0);
+    const anchored = tracks.reduce((sum, track) => sum + track.coverage.anchored_beats, 0);
+    const byKind = Object.fromEntries(progressionKinds.map((kind) => [kind, tracks.filter((track) => track.kind === kind).length])) as ProgressionSnapshotDTO["summary"]["by_kind"];
+    const statuses = ["empty", "unanchored", "partial", "complete"] as const;
+    const byStatus = Object.fromEntries(statuses.map((status) => [status, tracks.filter((track) => track.coverage.status === status).length])) as ProgressionSnapshotDTO["summary"]["by_status"];
+    return {
+      project_id: projectId,
+      revision: mockSha256(tracks),
+      tracks,
+      summary: {
+        total_tracks: tracks.length,
+        total_beats: totalBeats,
+        anchored_beats: anchored,
+        unanchored_beats: totalBeats - anchored,
+        coverage_percent: totalBeats ? Math.round((anchored / totalBeats) * 100) : 0,
+        by_kind: byKind,
+        by_status: byStatus,
+      },
+    };
+  }
+  const progressionStates = new Map<number, ProgressionSnapshotDTO>(
+    projects.map((project) => [project.id, progressionSeed(project.id)]),
+  );
+  const progressionFor = (projectId: number): ProgressionSnapshotDTO => {
+    let snapshot = progressionStates.get(projectId);
+    if (!snapshot) {
+      snapshot = progressionSeed(projectId);
+      progressionStates.set(projectId, snapshot);
+    }
+    return snapshot;
+  };
+  let progressionTrackSequence = 10;
+  let progressionBeatSequence = 20;
+  const progressionReceipts = new Map<string, {
+    command: string;
+    receipt: ProgressionCommandReceiptDTO;
+  }>();
+  const applyProgressionCommand = (
+    projectId: number,
+    command: ProgressionCommandDTO,
+    key: string,
+  ): ProgressionCommandResultDTO => {
+    const path = `/api/projects/${projectId}/progressions/commands`;
+    const receiptKey = `${projectId}\u0000${key}`;
+    const serialized = JSON.stringify(command);
+    const previous = progressionReceipts.get(receiptKey);
+    if (previous) {
+      if (previous.command !== serialized) throw new ApiRequestError("POST", path, 409, "Idempotency-Key was reused.", "idempotency_key_conflict");
+      return {
+        progressions: structuredClone(progressionFor(projectId)),
+        changed: false,
+        affected_track_ids: [...previous.receipt.original_affected_track_ids],
+        affected_beat_ids: [...previous.receipt.original_affected_beat_ids],
+        created_track_id: previous.receipt.original_created_track_id,
+        created_beat_id: previous.receipt.original_created_beat_id,
+        replayed: true,
+        applied_revision: previous.receipt.applied_revision,
+      };
+    }
+    const current = progressionFor(projectId);
+    if (command.expected_revision !== current.revision) throw new ApiRequestError("POST", path, 409, "Progressions changed after they were loaded.", "progressions_conflict");
+    const tracks = structuredClone(current.tracks);
+    const affectedTrackIds: number[] = [];
+    const affectedBeatIds: number[] = [];
+    let createdTrackId: number | null = null;
+    let createdBeatId: number | null = null;
+    const trackById = (id: number) => tracks.find((track) => track.id === id) ?? (() => { throw new ApiRequestError("POST", path, 404, "Track not found.", "progression_track_not_found"); })();
+    const beatLocation = (id: number) => {
+      for (const track of tracks) {
+        const index = track.beats.findIndex((beat) => beat.id === id);
+        if (index >= 0) return { track, index };
+      }
+      throw new ApiRequestError("POST", path, 404, "Beat not found.", "progression_beat_not_found");
+    };
+    switch (command.kind) {
+      case "create_track": {
+        const id = progressionTrackSequence++;
+        const psyke = (sourceId: number | null | undefined) => PSYKE.find((entry) => entry.id === sourceId);
+        const primary = psyke(command.primary_psyke_entry_id);
+        const secondary = psyke(command.secondary_psyke_entry_id);
+        const index = command.index == null ? tracks.length : Math.max(0, Math.min(tracks.length, command.index));
+        tracks.splice(index, 0, {
+          id, project_id: projectId, kind: command.track_kind, title: command.title,
+          description: command.description ?? "", color_label: command.color_label ?? "", sort_order: index,
+          legacy_compatibility: false,
+          primary_psyke_entry_id: primary?.id ?? null, primary_psyke_entry_name: primary?.name ?? "", primary_psyke_entry_type: primary?.type ?? "",
+          secondary_psyke_entry_id: secondary?.id ?? null, secondary_psyke_entry_name: secondary?.name ?? "", secondary_psyke_entry_type: secondary?.type ?? "",
+          beats: [], coverage: { total_beats: 0, anchored_beats: 0, unanchored_beats: 0, scene_anchored_beats: 0, document_anchored_beats: 0, coverage_percent: 0, status: "empty", out_of_order_beat_ids: [] },
+        });
+        affectedTrackIds.push(id); createdTrackId = id; break;
+      }
+      case "update_track": {
+        const track = trackById(command.track_id);
+        if (command.track_kind !== undefined) track.kind = command.track_kind;
+        if (command.title !== undefined) track.title = command.title;
+        if (command.description !== undefined) track.description = command.description;
+        if (command.color_label !== undefined) track.color_label = command.color_label;
+        for (const side of ["primary", "secondary"] as const) {
+          const field = `${side}_psyke_entry_id` as const;
+          if (command[field] !== undefined) {
+            const entry = PSYKE.find((candidate) => candidate.id === command[field]);
+            track[field] = entry?.id ?? null;
+            track[`${side}_psyke_entry_name`] = entry?.name ?? "";
+            track[`${side}_psyke_entry_type`] = entry?.type ?? "";
+          }
+        }
+        affectedTrackIds.push(track.id); break;
+      }
+      case "delete_track": tracks.splice(tracks.indexOf(trackById(command.track_id)), 1); affectedTrackIds.push(command.track_id); break;
+      case "reorder_tracks": {
+        const byId = new Map(tracks.map((track) => [track.id, track]));
+        if (command.track_ids.length !== tracks.length || command.track_ids.some((id) => !byId.has(id))) throw new ApiRequestError("POST", path, 400, "track_ids must be an exact partition.", "bad_request");
+        tracks.splice(0, tracks.length, ...command.track_ids.map((id) => byId.get(id)!));
+        affectedTrackIds.push(...command.track_ids); break;
+      }
+      case "create_beat": {
+        const track = trackById(command.track_id);
+        const id = progressionBeatSequence++;
+        const index = command.index == null ? track.beats.length : Math.max(0, Math.min(track.beats.length, command.index));
+        track.beats.splice(index, 0, { id, track_id: track.id, text: command.text, sort_order: index, anchor_kind: command.anchor_kind ?? "unanchored", scene_id: command.scene_id ?? null, scene_title: "", anchor_ref: command.anchor_ref ?? null, anchor_label: command.anchor_label ?? "" });
+        affectedTrackIds.push(track.id); affectedBeatIds.push(id); createdBeatId = id; break;
+      }
+      case "update_beat": {
+        const { track, index } = beatLocation(command.beat_id); const beat = track.beats[index]!;
+        if (command.text !== undefined) beat.text = command.text;
+        if (command.anchor_kind !== undefined) beat.anchor_kind = command.anchor_kind;
+        if (command.scene_id !== undefined) beat.scene_id = command.scene_id;
+        if (command.anchor_ref !== undefined) beat.anchor_ref = command.anchor_ref;
+        if (command.anchor_label !== undefined) beat.anchor_label = command.anchor_label;
+        affectedTrackIds.push(track.id); affectedBeatIds.push(beat.id); break;
+      }
+      case "delete_beat": {
+        const { track, index } = beatLocation(command.beat_id); track.beats.splice(index, 1);
+        affectedTrackIds.push(track.id); affectedBeatIds.push(command.beat_id); break;
+      }
+      case "reorder_beats": {
+        const track = trackById(command.track_id); const byId = new Map(track.beats.map((beat) => [beat.id, beat]));
+        if (command.beat_ids.length !== track.beats.length || command.beat_ids.some((id) => !byId.has(id))) throw new ApiRequestError("POST", path, 400, "beat_ids must be an exact partition.", "bad_request");
+        track.beats = command.beat_ids.map((id) => byId.get(id)!); affectedTrackIds.push(track.id); affectedBeatIds.push(...command.beat_ids); break;
+      }
+    }
+    const next = normalizeProgressions(projectId, tracks);
+    progressionStates.set(projectId, next);
+    const receipt: ProgressionCommandReceiptDTO = {
+      project_id: projectId, request_digest: mockSha256({ scope: "progression-command-v1", project_id: projectId, command }),
+      command_kind: command.kind, expected_revision: command.expected_revision, applied_revision: next.revision,
+      original_changed: true, original_affected_track_ids: affectedTrackIds, original_affected_beat_ids: affectedBeatIds,
+      original_created_track_id: createdTrackId, original_created_beat_id: createdBeatId, committed_at: new Date().toISOString(),
+    };
+    progressionReceipts.set(receiptKey, { command: serialized, receipt });
+    return { progressions: structuredClone(next), changed: true, affected_track_ids: affectedTrackIds, affected_beat_ids: affectedBeatIds, created_track_id: createdTrackId, created_beat_id: createdBeatId, replayed: false, applied_revision: next.revision };
+  };
   let commandPlanSequence = 1;
   const commandPlans = new Map<string, PsykeConsoleCommandPlanDTO & { entry_type?: string; entry_name?: string }>();
   const client: ApiClient = {
@@ -2261,8 +2494,8 @@ export function createMockApiClient(): ApiClient {
         service: "logosforge-api",
         instance_nonce: "preview-mock",
         mode: "preview-mock",
-        version: "1.16.0",
-        api_version: "1.16.0",
+        version: "1.17.0",
+        api_version: "1.17.0",
         core_version: "preview",
       };
     },
@@ -2917,6 +3150,25 @@ export function createMockApiClient(): ApiClient {
       await delay(120);
       findMockProject(projects, p, "POST", `/api/projects/${p}/canvas-plot/commands`);
       return executeCanvasPlotCommand(p, body);
+    },
+    async getProgressions(p: number) {
+      await delay();
+      findMockProject(projects, p, "GET", `/api/projects/${p}/progressions`);
+      return structuredClone(progressionFor(p));
+    },
+    async executeProgressionCommand(p: number, body: ProgressionCommandDTO, key: string) {
+      await delay(120);
+      findMockProject(projects, p, "POST", `/api/projects/${p}/progressions/commands`);
+      return applyProgressionCommand(p, body, key);
+    },
+    async getProgressionCommandReceipt(p: number, key: string, expected: ProgressionCommandDTO) {
+      await delay(80);
+      const path = `/api/projects/${p}/progressions/command-receipt`;
+      findMockProject(projects, p, "GET", path);
+      const saved = progressionReceipts.get(`${p}\u0000${key}`);
+      if (!saved) throw new ApiRequestError("GET", path, 404, "No committed Progressions command exists.", "progression_receipt_not_found");
+      if (saved.command !== JSON.stringify(expected)) throw new ApiRequestError("GET", path, 409, "Idempotency-Key was reused.", "idempotency_key_conflict");
+      return structuredClone(saved.receipt);
     },
     async getPlot() { await delay(); return PLOT.map((b) => ({ ...b })); },
     async getDashboard(p: number) {

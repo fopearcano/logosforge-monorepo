@@ -1,8 +1,13 @@
 import type {
+  ProgressionAnchorKind,
+  ProgressionCommandDTO,
+  ProgressionKind,
+  ProgressionSnapshotDTO,
   WhiteboardImportBlockDTO,
   WhiteboardImportCommentDTO,
 } from "@logosforge/ui-contracts";
 import type { ApiClient } from "./api";
+import { ApiRequestError, ApiRequestTimeoutError } from "./httpApiClient";
 
 /**
  * A LogosForge project bundle (`.lfbundle`) — the single-project migration
@@ -42,6 +47,37 @@ export interface ProjectBundlePsykeProgression {
   scene_id?: number | null;
   scene_title?: string;
   sort_order?: number;
+}
+
+/** Additive first-class Progressions payload (bundle v1.0 remains valid).
+ * Source ids are provenance only and are always remapped on import. */
+export interface ProjectBundleProgressionBeat {
+  id?: number;
+  track_id?: number;
+  text?: string;
+  sort_order?: number;
+  anchor_kind?: ProgressionAnchorKind;
+  scene_id?: number | null;
+  scene_title?: string;
+  anchor_ref?: string | null;
+  anchor_label?: string;
+}
+
+export interface ProjectBundleProgressionTrack {
+  id?: number;
+  kind?: ProgressionKind;
+  title?: string;
+  description?: string;
+  color_label?: string;
+  sort_order?: number;
+  legacy_compatibility?: boolean;
+  primary_psyke_entry_id?: number | null;
+  primary_psyke_entry_name?: string;
+  primary_psyke_entry_type?: string;
+  secondary_psyke_entry_id?: number | null;
+  secondary_psyke_entry_name?: string;
+  secondary_psyke_entry_type?: string;
+  beats?: ProjectBundleProgressionBeat[];
 }
 
 /** A Whiteboard manual-outline node. Flat list; the tree is `parentId` + `order`.
@@ -93,6 +129,7 @@ export interface ProjectBundle {
       relations?: ProjectBundlePsykeRelation[];
       progressions?: ProjectBundlePsykeProgression[];
     };
+    progression_tracks?: ProjectBundleProgressionTrack[];
     outline?: ProjectBundleOutlineNode[];   // Phase 2 — imported
     comments?: WhiteboardImportCommentDTO[];
     drafter?: { pages?: ProjectBundleDrafterPage[] };
@@ -114,6 +151,12 @@ export interface BundleImportResult {
   progressionsSkipped: number; // invalid, unmappable, or failed rows
   progressionSceneLinks: number; // source scene anchors resolved to new scenes
   progressionSceneLinksSkipped: number; // linked beats kept, but unanchored
+  progressionTracks: number; // first-class canonical tracks recreated
+  progressionTracksSkipped: number;
+  progressionTrackBeats: number; // beats recreated inside canonical tracks
+  progressionTrackBeatsSkipped: number;
+  progressionTrackSceneLinks: number;
+  progressionTrackSceneLinksSkipped: number;
   outlineNodes: number;     // outline nodes recreated (Phase 2)
   outlineSkipped: number;   // outline rows whose create call failed
   outlineReparented: number;// missing/cyclic/failed parents that fell back to root
@@ -224,6 +267,42 @@ export function parseProjectBundle(text: string): ProjectBundle {
     if (Array.isArray(project.psyke.progressions) &&
         project.psyke.progressions.some((progression) => !isRecord(progression))) {
       throw new Error("This bundle contains an invalid PSYKE progression.");
+    }
+  }
+  if (project.progression_tracks != null && !Array.isArray(project.progression_tracks)) {
+    throw new Error("This bundle has an invalid Progressions tracks section.");
+  }
+  if (Array.isArray(project.progression_tracks)) {
+    const kinds = new Set(["story", "character", "relationship", "theme", "world", "custom"]);
+    const anchors = new Set(["unanchored", "scene", "document_block"]);
+    for (const track of project.progression_tracks) {
+      if (!isRecord(track) || !Array.isArray(track.beats)) {
+        throw new Error("This bundle contains an invalid Progressions track.");
+      }
+      if (typeof track.title !== "string" || typeof track.kind !== "string" || !kinds.has(track.kind)) {
+        throw new Error("This bundle contains an invalid Progressions track.");
+      }
+      if (track.legacy_compatibility != null && typeof track.legacy_compatibility !== "boolean") {
+        throw new Error("This bundle contains an invalid Progressions compatibility marker.");
+      }
+      if (track.primary_psyke_entry_id != null && positiveSafeInteger(track.primary_psyke_entry_id) == null) {
+        throw new Error("This bundle contains an invalid Progressions PSYKE reference.");
+      }
+      if (track.secondary_psyke_entry_id != null && positiveSafeInteger(track.secondary_psyke_entry_id) == null) {
+        throw new Error("This bundle contains an invalid Progressions PSYKE reference.");
+      }
+      for (const beat of track.beats) {
+        if (!isRecord(beat) || typeof beat.text !== "string" ||
+            typeof beat.anchor_kind !== "string" || !anchors.has(beat.anchor_kind)) {
+          throw new Error("This bundle contains an invalid Progressions beat.");
+        }
+        if (beat.scene_id != null && positiveSafeInteger(beat.scene_id) == null) {
+          throw new Error("This bundle contains an invalid Progressions scene reference.");
+        }
+        if (beat.anchor_ref != null && typeof beat.anchor_ref !== "string") {
+          throw new Error("This bundle contains an invalid Progressions document reference.");
+        }
+      }
     }
   }
   if (project.outline != null && !Array.isArray(project.outline)) {
@@ -383,6 +462,82 @@ function resolveSceneLink(
   return sid;
 }
 
+async function executeBundleProgressionCommand(
+  api: ApiClient,
+  projectId: number,
+  command: ProgressionCommandDTO,
+  idempotencyKey: string,
+): Promise<ProgressionSnapshotDTO> {
+  try {
+    const result = await api.executeProgressionCommand(projectId, command, idempotencyKey);
+    return result.progressions;
+  } catch (firstFailure) {
+    if (!isAmbiguousBundleProgressionFailure(firstFailure)) throw firstFailure;
+    // An interrupted import may have committed even though the renderer missed
+    // the response. Resolve the durable receipt before resending the exact same
+    // command/key; the Core prevents a duplicate track or beat either way.
+    try {
+      await api.getProgressionCommandReceipt(projectId, idempotencyKey, command);
+      api.invalidatePendingReads?.();
+      return await api.getProgressions(projectId);
+    } catch (receiptFailure) {
+      if (!isBundleProgressionReceiptMiss(receiptFailure)) {
+        throw new BundleProgressionDeliveryUncertainError(
+          `The Progressions receipt lookup was inconclusive after an interrupted bundle command: ${failureMessage(receiptFailure)}`,
+        );
+      }
+    }
+    try {
+      return (await api.executeProgressionCommand(projectId, command, idempotencyKey)).progressions;
+    } catch (retryFailure) {
+      if (!isAmbiguousBundleProgressionFailure(retryFailure)) throw retryFailure;
+      // The sole same-key resend was interrupted too. Reconcile exactly once;
+      // a missing/inconclusive receipt is an import barrier, never permission
+      // to continue dependent commands from a potentially stale revision.
+      try {
+        await api.getProgressionCommandReceipt(projectId, idempotencyKey, command);
+        api.invalidatePendingReads?.();
+        return await api.getProgressions(projectId);
+      } catch (receiptFailure) {
+        const detail = isBundleProgressionReceiptMiss(receiptFailure)
+          ? "No durable receipt is available after the one allowed same-key resend."
+          : `The final receipt lookup was inconclusive: ${failureMessage(receiptFailure)}`;
+        throw new BundleProgressionDeliveryUncertainError(
+          `${detail} Bundle import stopped before any dependent Progressions command could run.`,
+        );
+      }
+    }
+  }
+}
+
+class BundleProgressionDeliveryUncertainError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BundleProgressionDeliveryUncertainError";
+  }
+}
+
+function failureMessage(failure: unknown): string {
+  return failure instanceof Error ? failure.message : String(failure);
+}
+
+function isAmbiguousBundleProgressionFailure(failure: unknown): boolean {
+  if (failure instanceof ApiRequestTimeoutError) return failure.outcomeUnknown;
+  if (failure instanceof ApiRequestError) {
+    return failure.status === 408 || failure.status === 429 || failure.status >= 500;
+  }
+  return true;
+}
+
+function isBundleProgressionReceiptMiss(failure: unknown): boolean {
+  return failure instanceof ApiRequestError
+    && failure.code === "progression_receipt_not_found";
+}
+
+function rethrowUncertainBundleProgression(failure: unknown): void {
+  if (failure instanceof BundleProgressionDeliveryUncertainError) throw failure;
+}
+
 /**
  * Import a `.lfbundle` into ONE new Pro project — client-side orchestration over
  * existing endpoints, no core change:
@@ -490,6 +645,63 @@ export async function importProjectBundle(api: ApiClient, bundle: ProjectBundle)
   const elements = Array.isArray(project.psyke?.elements) ? project.psyke!.elements : [];
   const sourceRelations = Array.isArray(project.psyke?.relations) ? project.psyke!.relations : [];
   const sourceProgressions = Array.isArray(project.psyke?.progressions) ? project.psyke!.progressions : [];
+  const hasCanonicalProgressionTracks = Object.prototype.hasOwnProperty.call(
+    project,
+    "progression_tracks",
+  );
+  const sourceProgressionTracks = Array.isArray(project.progression_tracks)
+    ? project.progression_tracks
+    : [];
+
+  // New Whiteboard bundles carry both the canonical track snapshot and the
+  // legacy per-entry projection for compatibility with old Pro releases. A
+  // canonical compatibility track preserves the exact legacy beat ids and its
+  // primary source entry. Import that track through createProgression so Core
+  // can recreate its private legacy_psyke_entry_id linkage (including `other`
+  // entries, whose canonical `custom + primary` shape cannot be created through
+  // the public track command). All other canonical tracks use the command API.
+  // When progression_tracks is present, unmatched legacy rows are stale
+  // compatibility data and must not create duplicate beats.
+  const legacyRowsByEntry = new Map<number, Array<{ index: number; id: number }>>();
+  sourceProgressions.forEach((progression, index) => {
+    const entryId = positiveSafeInteger(progression.entry_id);
+    const id = positiveSafeInteger(progression.id);
+    if (entryId == null || id == null) return;
+    const rows = legacyRowsByEntry.get(entryId) ?? [];
+    rows.push({ index, id });
+    legacyRowsByEntry.set(entryId, rows);
+  });
+  const compatibilityTrackIndexes = new Set<number>();
+  const compatibilityLegacyRowIndexes = new Set<number>();
+  if (hasCanonicalProgressionTracks) {
+    sourceProgressionTracks.forEach((track, trackIndex) => {
+      const entryId = positiveSafeInteger(track.primary_psyke_entry_id);
+      if (entryId == null || !Array.isArray(track.beats)) return;
+      const beatIds = track.beats.map((beat) => positiveSafeInteger(beat.id));
+      if (track.legacy_compatibility === true) {
+        compatibilityTrackIndexes.add(trackIndex);
+        const canonicalIds = new Set(beatIds.filter((id): id is number => id != null));
+        (legacyRowsByEntry.get(entryId) ?? [])
+          .filter((row) => canonicalIds.has(row.id))
+          .forEach((row) => compatibilityLegacyRowIndexes.add(row.index));
+        return;
+      }
+      // Marker-less bundles predate the explicit compatibility field. Retain
+      // their exact non-empty beat-id projection as a narrow fallback, but an
+      // explicit false marker is authoritative.
+      if (track.legacy_compatibility === false || beatIds.length === 0 || beatIds.some((id) => id == null)) return;
+      const uniqueBeatIds = new Set(beatIds as number[]);
+      if (uniqueBeatIds.size !== beatIds.length) return;
+      const legacyRows = legacyRowsByEntry.get(entryId) ?? [];
+      if (legacyRows.length !== beatIds.length) return;
+      if (!legacyRows.every((row) => uniqueBeatIds.has(row.id))) return;
+      compatibilityTrackIndexes.add(trackIndex);
+      legacyRows.forEach((row) => compatibilityLegacyRowIndexes.add(row.index));
+    });
+  }
+  const sourceProgressionsForImport = hasCanonicalProgressionTracks
+    ? sourceProgressions.filter((_progression, index) => compatibilityLegacyRowIndexes.has(index))
+    : sourceProgressions;
 
   // An old id reused for different source entries cannot be mapped honestly.
   // Detect that before any writes so iteration order cannot choose a winner.
@@ -620,9 +832,11 @@ export async function importProjectBundle(api: ApiClient, bundle: ProjectBundle)
   // index-only fallback while progression beats are safely kept unanchored.
   const sceneIdsByBlock = Array.isArray(res.scene_ids_by_block) ? res.scene_ids_by_block : [];
   const anyLinks = outline.some((n) => n && n.link && typeof n.link.blockIndex === "number");
-  const anyLinkedProgressions = sourceProgressions.some(
+  const anyLinkedProgressions = sourceProgressionsForImport.some(
     (progression) => positiveSafeInteger(progression.scene_id) != null,
-  );
+  ) || sourceProgressionTracks.some((track) => (track.beats ?? []).some(
+    (beat) => beat.anchor_kind === "scene" && positiveSafeInteger(beat.scene_id) != null,
+  ));
   const sceneTextById = new Map<number, string>();
   const destinationSceneIdsByTitle = new Map<string, number[]>();
   if (anyLinks || anyLinkedProgressions) {
@@ -643,7 +857,7 @@ export async function importProjectBundle(api: ApiClient, bundle: ProjectBundle)
   // One source scene id must describe one title. Conflicting titles make that
   // source id ambiguous even if either title happens to be unique in Pro.
   const sourceSceneTitles = new Map<number, Set<string>>();
-  for (const progression of sourceProgressions) {
+  for (const progression of sourceProgressionsForImport) {
     const sourceSceneId = positiveSafeInteger(progression.scene_id);
     if (sourceSceneId == null) continue;
     const title = typeof progression.scene_title === "string"
@@ -652,6 +866,17 @@ export async function importProjectBundle(api: ApiClient, bundle: ProjectBundle)
     const titles = sourceSceneTitles.get(sourceSceneId) ?? new Set<string>();
     titles.add(title);
     sourceSceneTitles.set(sourceSceneId, titles);
+  }
+  for (const track of sourceProgressionTracks) {
+    for (const beat of track.beats ?? []) {
+      if (beat.anchor_kind !== "scene") continue;
+      const sourceSceneId = positiveSafeInteger(beat.scene_id);
+      if (sourceSceneId == null) continue;
+      const title = typeof beat.scene_title === "string" ? beat.scene_title.trim() : "";
+      const titles = sourceSceneTitles.get(sourceSceneId) ?? new Set<string>();
+      titles.add(title);
+      sourceSceneTitles.set(sourceSceneId, titles);
+    }
   }
   const destinationSceneBySourceId = new Map<number, number | null>();
   for (const [sourceSceneId, titles] of sourceSceneTitles) {
@@ -668,7 +893,7 @@ export async function importProjectBundle(api: ApiClient, bundle: ProjectBundle)
   // valid source rows by entry/order/id so their relative arc order survives;
   // original array index is the deterministic final tie-break (and the fallback
   // when either optional source progression id is not a positive integer).
-  const orderedProgressions = sourceProgressions
+  const orderedProgressions = sourceProgressionsForImport
     .map((progression, index) => ({ progression, index }))
     .sort((left, right) => {
       const leftEntry = positiveSafeInteger(left.progression.entry_id);
@@ -699,6 +924,7 @@ export async function importProjectBundle(api: ApiClient, bundle: ProjectBundle)
   let progressionsSkipped = 0;
   let progressionSceneLinks = 0;
   let progressionSceneLinksSkipped = 0;
+  const createdLegacyBeatIdBySourceId = new Map<number, number>();
   for (const { progression } of orderedProgressions) {
     const sourceEntry = positiveSafeInteger(progression.entry_id);
     const sourceOrder = nonNegativeSafeInteger(progression.sort_order);
@@ -708,12 +934,12 @@ export async function importProjectBundle(api: ApiClient, bundle: ProjectBundle)
     if (sourceEntry == null || sourceOrder == null ||
         typeof progression.text !== "string" ||
         (progression.scene_id != null && sourceScene == null)) {
-      progressionsSkipped += 1;
+      if (!hasCanonicalProgressionTracks) progressionsSkipped += 1;
       continue;
     }
     const destinationEntry = destinationEntryBySourceId.get(sourceEntry);
     if (destinationEntry == null) {
-      progressionsSkipped += 1;
+      if (!hasCanonicalProgressionTracks) progressionsSkipped += 1;
       continue;
     }
     // Explicitly never reuse a source scene id. A null lookup means the source
@@ -722,18 +948,417 @@ export async function importProjectBundle(api: ApiClient, bundle: ProjectBundle)
       ? null
       : (destinationSceneBySourceId.get(sourceScene) ?? null);
     try {
-      await api.createProgression(projectId, {
+      const created = await api.createProgression(projectId, {
         entry_id: destinationEntry,
         text: progression.text, // blank is valid in the core contract
         scene_id: destinationScene,
       });
-      progressions += 1;
-      if (sourceScene != null) {
+      const sourceProgressionId = positiveSafeInteger(progression.id);
+      const createdBeatId = positiveSafeInteger(created.id);
+      if (sourceProgressionId != null && createdBeatId != null) {
+        createdLegacyBeatIdBySourceId.set(sourceProgressionId, createdBeatId);
+      }
+      if (!hasCanonicalProgressionTracks) progressions += 1;
+      if (!hasCanonicalProgressionTracks && sourceScene != null) {
         if (destinationScene != null) progressionSceneLinks += 1;
         else progressionSceneLinksSkipped += 1;
       }
+    } catch (failure) {
+      if (isAmbiguousBundleProgressionFailure(failure)) {
+        throw new BundleProgressionDeliveryUncertainError(
+          `A legacy PSYKE progression may have been created, but that endpoint has no durable receipt. Bundle import stopped without retrying it: ${failureMessage(failure)}`,
+        );
+      }
+      if (!hasCanonicalProgressionTracks) progressionsSkipped += 1;
+    }
+  }
+
+  // Reconcile the canonical section after PSYKE + scenes exist. Compatibility
+  // tracks already have their rows through the legacy endpoint above; commands
+  // now restore canonical presentation, rich anchors, and ordering without ever
+  // attempting to mutate their protected kind/subject linkage. Ordinary tracks
+  // are created directly through the revisioned command family.
+  let progressionTracks = 0;
+  let progressionTracksSkipped = 0;
+  let progressionTrackBeats = 0;
+  let progressionTrackBeatsSkipped = 0;
+  let progressionTrackSceneLinks = 0;
+  let progressionTrackSceneLinksSkipped = 0;
+  let progressionSnapshot: ProgressionSnapshotDTO | null = null;
+  if (sourceProgressionTracks.length) {
+    try {
+      api.invalidatePendingReads?.();
+      progressionSnapshot = await api.getProgressions(projectId);
     } catch {
-      progressionsSkipped += 1;
+      progressionTracksSkipped = sourceProgressionTracks.length;
+      progressionTrackBeatsSkipped = sourceProgressionTracks.reduce(
+        (sum, track) => sum + (track.beats?.length ?? 0),
+        0,
+      );
+    }
+  }
+
+  const orderedTracks = sourceProgressionTracks
+    .map((track, index) => ({ track, index }))
+    .sort((left, right) => {
+      const leftOrder = nonNegativeSafeInteger(left.track.sort_order);
+      const rightOrder = nonNegativeSafeInteger(right.track.sort_order);
+      if (leftOrder != null && rightOrder != null && leftOrder !== rightOrder) return leftOrder - rightOrder;
+      if (leftOrder != null && rightOrder == null) return -1;
+      if (leftOrder == null && rightOrder != null) return 1;
+      const leftId = positiveSafeInteger(left.track.id);
+      const rightId = positiveSafeInteger(right.track.id);
+      if (leftId != null && rightId != null && leftId !== rightId) return leftId - rightId;
+      return left.index - right.index;
+    });
+  const orderedSourceBeats = (track: ProjectBundleProgressionTrack) => (track.beats ?? [])
+    .map((beat, beatIndex) => ({ beat, beatIndex }))
+    .sort((left, right) => {
+      const leftOrder = nonNegativeSafeInteger(left.beat.sort_order);
+      const rightOrder = nonNegativeSafeInteger(right.beat.sort_order);
+      if (leftOrder != null && rightOrder != null && leftOrder !== rightOrder) return leftOrder - rightOrder;
+      if (leftOrder != null && rightOrder == null) return -1;
+      if (leftOrder == null && rightOrder != null) return 1;
+      return left.beatIndex - right.beatIndex;
+    });
+
+  const destinationSubject = (
+    sourceId: unknown,
+    sourceName: unknown,
+    sourceType: unknown,
+  ): { id: number; type: string } | null => {
+    const numericId = positiveSafeInteger(sourceId);
+    const mapped = numericId == null ? undefined : destinationEntryBySourceId.get(numericId);
+    const name = typeof sourceName === "string" ? sourceName.trim() : "";
+    const type = typeof sourceType === "string" ? sourceType : "";
+    const resolved = mapped ?? (name && type
+      ? destinationEntryByKey.get(JSON.stringify([type, name]))
+      : undefined);
+    return resolved == null ? null : { id: resolved, type };
+  };
+  const resolveBeatAnchor = (beat: ProjectBundleProgressionBeat): {
+    anchorKind: ProgressionAnchorKind;
+    sceneId: number | null;
+    anchorRef: string | null;
+    anchorLabel: string;
+    sceneRequested: boolean;
+  } => {
+    let anchorKind: ProgressionAnchorKind = beat.anchor_kind ?? "unanchored";
+    let sceneId: number | null = null;
+    let anchorRef: string | null = null;
+    let anchorLabel = typeof beat.anchor_label === "string" ? beat.anchor_label : "";
+    const sceneRequested = anchorKind === "scene";
+    if (anchorKind === "scene") {
+      const sourceSceneId = positiveSafeInteger(beat.scene_id);
+      if (sourceSceneId != null) sceneId = destinationSceneBySourceId.get(sourceSceneId) ?? null;
+      if (sceneId == null) {
+        const titleKey = typeof beat.scene_title === "string" ? beat.scene_title.trim() : "";
+        const candidates = titleKey ? destinationSceneIdsByTitle.get(titleKey) : undefined;
+        if (candidates?.length === 1) sceneId = candidates[0] ?? null;
+      }
+      if (sceneId == null) {
+        anchorKind = "unanchored";
+        anchorLabel = "";
+      }
+    } else if (anchorKind === "document_block") {
+      anchorRef = typeof beat.anchor_ref === "string" && beat.anchor_ref.trim()
+        ? beat.anchor_ref.trim()
+        : null;
+      if (anchorRef == null) {
+        anchorKind = "unanchored";
+        anchorLabel = "";
+      }
+    }
+    return { anchorKind, sceneId, anchorRef, anchorLabel, sceneRequested };
+  };
+
+  const destinationTrackIdBySourceIndex = new Map<number, number>();
+  for (const { track, index: sourceTrackIndex } of orderedTracks) {
+    if (!progressionSnapshot) break;
+    const orderedBeats = orderedSourceBeats(track);
+    if (compatibilityTrackIndexes.has(sourceTrackIndex)) {
+      const destinationEntry = destinationSubject(
+        track.primary_psyke_entry_id,
+        track.primary_psyke_entry_name,
+        track.primary_psyke_entry_type,
+      );
+      if (!destinationEntry) {
+        progressionTracksSkipped += 1;
+        progressionTrackBeatsSkipped += orderedBeats.length;
+        continue;
+      }
+      const createdBeatIds: Array<number | null> = orderedBeats.map(({ beat }) => {
+        const sourceBeatId = positiveSafeInteger(beat.id);
+        return sourceBeatId == null ? null : createdLegacyBeatIdBySourceId.get(sourceBeatId) ?? null;
+      });
+      let compatibilityRowsAdded = false;
+      for (let beatPosition = 0; beatPosition < orderedBeats.length; beatPosition += 1) {
+        if (createdBeatIds[beatPosition] != null) continue;
+        const { beat } = orderedBeats[beatPosition]!;
+        if (typeof beat.text !== "string") continue;
+        const anchor = resolveBeatAnchor(beat);
+        try {
+          const created = await api.createProgression(projectId, {
+            entry_id: destinationEntry.id,
+            text: beat.text,
+            scene_id: anchor.anchorKind === "scene" ? anchor.sceneId : null,
+          });
+          const createdId = positiveSafeInteger(created.id);
+          if (createdId != null) {
+            createdBeatIds[beatPosition] = createdId;
+            const sourceBeatId = positiveSafeInteger(beat.id);
+            if (sourceBeatId != null) createdLegacyBeatIdBySourceId.set(sourceBeatId, createdId);
+            compatibilityRowsAdded = true;
+          }
+        } catch (failure) {
+          if (isAmbiguousBundleProgressionFailure(failure)) {
+            throw new BundleProgressionDeliveryUncertainError(
+              `A compatibility progression beat may have been created, but that legacy endpoint has no durable receipt. Bundle import stopped without retrying it: ${failureMessage(failure)}`,
+            );
+          }
+          /* definitive failures are counted as a skipped canonical beat below */
+        }
+      }
+      let temporaryEmptyBeatId: number | null = null;
+      if (orderedBeats.length === 0) {
+        try {
+          const created = await api.createProgression(projectId, {
+            entry_id: destinationEntry.id,
+            text: "",
+            scene_id: null,
+          });
+          temporaryEmptyBeatId = positiveSafeInteger(created.id);
+          compatibilityRowsAdded = temporaryEmptyBeatId != null;
+        } catch (failure) {
+          if (isAmbiguousBundleProgressionFailure(failure)) {
+            throw new BundleProgressionDeliveryUncertainError(
+              `The temporary beat used to restore an empty compatibility track may have been created, but that legacy endpoint has no durable receipt. Bundle import stopped without retrying it: ${failureMessage(failure)}`,
+            );
+          }
+          /* a definitive failure means the compatibility track cannot be materialized */
+        }
+      }
+      if (compatibilityRowsAdded) {
+        try {
+          api.invalidatePendingReads?.();
+          progressionSnapshot = await api.getProgressions(projectId);
+        } catch {
+          progressionTracksSkipped += 1;
+          progressionTrackBeatsSkipped += orderedBeats.length;
+          continue;
+        }
+      }
+      const knownBeatIds = createdBeatIds.filter((id): id is number => id != null);
+      if (temporaryEmptyBeatId != null) knownBeatIds.push(temporaryEmptyBeatId);
+      const destinationTrack = progressionSnapshot.tracks.find((candidate) =>
+        knownBeatIds.some((id) => candidate.beats.some((beat) => beat.id === id)),
+      );
+      if (!destinationTrack || knownBeatIds.some((id) => !destinationTrack.beats.some((beat) => beat.id === id))) {
+        progressionTracksSkipped += 1;
+        progressionTrackBeatsSkipped += orderedBeats.length;
+        continue;
+      }
+      destinationTrackIdBySourceIndex.set(sourceTrackIndex, destinationTrack.id);
+      const title = typeof track.title === "string" ? track.title.trim() : "";
+      try {
+        if (!title) throw new Error("Progression track title is blank.");
+        progressionSnapshot = await executeBundleProgressionCommand(api, projectId, {
+          kind: "update_track",
+          expected_revision: progressionSnapshot.revision,
+          track_id: destinationTrack.id,
+          title,
+          description: typeof track.description === "string" ? track.description : "",
+          color_label: typeof track.color_label === "string" ? track.color_label : "",
+        }, `lfbundle-progression-${projectId}-compat-track-${sourceTrackIndex}`);
+        progressionTracks += 1;
+      } catch (failure) {
+        rethrowUncertainBundleProgression(failure);
+        progressionTracksSkipped += 1;
+      }
+
+      for (let beatPosition = 0; beatPosition < orderedBeats.length; beatPosition += 1) {
+        const { beat, beatIndex } = orderedBeats[beatPosition]!;
+        const destinationBeatId = createdBeatIds[beatPosition] ?? null;
+        if (destinationBeatId == null || typeof beat.text !== "string") {
+          progressionTrackBeatsSkipped += 1;
+          continue;
+        }
+        const anchor = resolveBeatAnchor(beat);
+        if (anchor.sceneRequested && anchor.sceneId == null) progressionTrackSceneLinksSkipped += 1;
+        try {
+          progressionSnapshot = await executeBundleProgressionCommand(api, projectId, {
+            kind: "update_beat",
+            expected_revision: progressionSnapshot.revision,
+            beat_id: destinationBeatId,
+            ...(beat.text.trim() ? { text: beat.text } : {}),
+            anchor_kind: anchor.anchorKind,
+            scene_id: anchor.sceneId,
+            anchor_ref: anchor.anchorRef,
+            anchor_label: anchor.anchorLabel,
+          }, `lfbundle-progression-${projectId}-compat-track-${sourceTrackIndex}-beat-${beatIndex}`);
+          progressionTrackBeats += 1;
+          if (anchor.sceneRequested && anchor.sceneId != null) progressionTrackSceneLinks += 1;
+        } catch (failure) {
+          rethrowUncertainBundleProgression(failure);
+          progressionTrackBeatsSkipped += 1;
+        }
+      }
+
+      const currentTrack = progressionSnapshot.tracks.find((candidate) => candidate.id === destinationTrack.id);
+      if (currentTrack) {
+        const desiredBeatIds = createdBeatIds.filter((id): id is number => id != null);
+        const remainingBeatIds = [...currentTrack.beats]
+          .sort((left, right) => left.sort_order - right.sort_order || left.id - right.id)
+          .map((beat) => beat.id)
+          .filter((id) => !desiredBeatIds.includes(id));
+        const exactBeatIds = [...desiredBeatIds, ...remainingBeatIds];
+        const currentBeatIds = [...currentTrack.beats]
+          .sort((left, right) => left.sort_order - right.sort_order || left.id - right.id)
+          .map((beat) => beat.id);
+        if (exactBeatIds.length && exactBeatIds.some((id, index) => currentBeatIds[index] !== id)) {
+          try {
+            progressionSnapshot = await executeBundleProgressionCommand(api, projectId, {
+              kind: "reorder_beats",
+              expected_revision: progressionSnapshot.revision,
+              track_id: destinationTrack.id,
+              beat_ids: exactBeatIds,
+            }, `lfbundle-progression-${projectId}-compat-track-${sourceTrackIndex}-reorder`);
+          } catch (failure) {
+            rethrowUncertainBundleProgression(failure);
+            /* beat writes remain valid even if a definitive error blocked ordering */
+          }
+        }
+      }
+      if (temporaryEmptyBeatId != null) {
+        try {
+          progressionSnapshot = await executeBundleProgressionCommand(api, projectId, {
+            kind: "delete_beat",
+            expected_revision: progressionSnapshot.revision,
+            beat_id: temporaryEmptyBeatId,
+          }, `lfbundle-progression-${projectId}-compat-track-${sourceTrackIndex}-empty`);
+        } catch (failure) {
+          rethrowUncertainBundleProgression(failure);
+          // Surface the imperfect empty-track reconstruction as a skipped item;
+          // the linked track itself remains recoverable and editable.
+          progressionTrackBeatsSkipped += 1;
+        }
+      }
+      continue;
+    }
+
+    const kind = track.kind as ProgressionKind;
+    const title = typeof track.title === "string" ? track.title.trim() : "";
+    const primary = destinationSubject(
+      track.primary_psyke_entry_id,
+      track.primary_psyke_entry_name,
+      track.primary_psyke_entry_type,
+    );
+    const secondary = destinationSubject(
+      track.secondary_psyke_entry_id,
+      track.secondary_psyke_entry_name,
+      track.secondary_psyke_entry_type,
+    );
+    const sourceHasPrimary = track.primary_psyke_entry_id != null
+      || !!track.primary_psyke_entry_name?.trim()
+      || !!track.primary_psyke_entry_type?.trim();
+    const sourceHasSecondary = track.secondary_psyke_entry_id != null
+      || !!track.secondary_psyke_entry_name?.trim()
+      || !!track.secondary_psyke_entry_type?.trim();
+    const subjectsValid = kind === "story" || kind === "custom"
+      ? !sourceHasPrimary && !sourceHasSecondary
+      : kind === "character"
+        ? primary?.type === "character" && secondary == null
+        : kind === "theme"
+          ? primary?.type === "theme" && secondary == null
+          : kind === "world"
+            ? primary != null && ["place", "object", "lore"].includes(primary.type) && secondary == null
+            : kind === "relationship"
+              ? primary != null && secondary != null && primary.id !== secondary.id
+              : false;
+    if (!title || !subjectsValid) {
+      progressionTracksSkipped += 1;
+      progressionTrackBeatsSkipped += orderedBeats.length;
+      continue;
+    }
+    const priorTrackIds = new Set(progressionSnapshot.tracks.map((candidate) => candidate.id));
+    try {
+      progressionSnapshot = await executeBundleProgressionCommand(api, projectId, {
+        kind: "create_track",
+        expected_revision: progressionSnapshot.revision,
+        track_kind: kind,
+        title,
+        description: typeof track.description === "string" ? track.description : "",
+        color_label: typeof track.color_label === "string" ? track.color_label : "",
+        primary_psyke_entry_id: kind === "story" || kind === "custom" ? null : primary?.id ?? null,
+        secondary_psyke_entry_id: kind === "relationship" ? secondary?.id ?? null : null,
+      }, `lfbundle-progression-${projectId}-track-${sourceTrackIndex}`);
+    } catch (failure) {
+      rethrowUncertainBundleProgression(failure);
+      progressionTracksSkipped += 1;
+      progressionTrackBeatsSkipped += orderedBeats.length;
+      continue;
+    }
+    const createdTrack = progressionSnapshot.tracks.find((candidate) => !priorTrackIds.has(candidate.id));
+    if (!createdTrack) {
+      progressionTracksSkipped += 1;
+      progressionTrackBeatsSkipped += orderedBeats.length;
+      continue;
+    }
+    destinationTrackIdBySourceIndex.set(sourceTrackIndex, createdTrack.id);
+    progressionTracks += 1;
+
+    for (const { beat, beatIndex } of orderedBeats) {
+      if (typeof beat.text !== "string") {
+        progressionTrackBeatsSkipped += 1;
+        continue;
+      }
+      const anchor = resolveBeatAnchor(beat);
+      if (anchor.sceneRequested && anchor.sceneId == null) progressionTrackSceneLinksSkipped += 1;
+      try {
+        progressionSnapshot = await executeBundleProgressionCommand(api, projectId, {
+          kind: "create_beat",
+          expected_revision: progressionSnapshot.revision,
+          track_id: createdTrack.id,
+          text: beat.text,
+          anchor_kind: anchor.anchorKind,
+          scene_id: anchor.sceneId,
+          anchor_ref: anchor.anchorRef,
+          anchor_label: anchor.anchorLabel,
+        }, `lfbundle-progression-${projectId}-track-${sourceTrackIndex}-beat-${beatIndex}`);
+        progressionTrackBeats += 1;
+        if (anchor.sceneRequested && anchor.sceneId != null) progressionTrackSceneLinks += 1;
+      } catch (failure) {
+        rethrowUncertainBundleProgression(failure);
+        progressionTrackBeatsSkipped += 1;
+      }
+    }
+  }
+
+  // Legacy compatibility tracks are born in first-beat creation order. Restore
+  // the source's single global track order after every track family is present.
+  if (progressionSnapshot && destinationTrackIdBySourceIndex.size) {
+    const desiredTrackIds = orderedTracks
+      .map(({ index }) => destinationTrackIdBySourceIndex.get(index) ?? null)
+      .filter((id): id is number => id != null);
+    const remainingTrackIds = [...progressionSnapshot.tracks]
+      .sort((left, right) => left.sort_order - right.sort_order || left.id - right.id)
+      .map((track) => track.id)
+      .filter((id) => !desiredTrackIds.includes(id));
+    const exactTrackIds = [...desiredTrackIds, ...remainingTrackIds];
+    const currentTrackIds = [...progressionSnapshot.tracks]
+      .sort((left, right) => left.sort_order - right.sort_order || left.id - right.id)
+      .map((track) => track.id);
+    if (exactTrackIds.some((id, index) => currentTrackIds[index] !== id)) {
+      try {
+        progressionSnapshot = await executeBundleProgressionCommand(api, projectId, {
+          kind: "reorder_tracks",
+          expected_revision: progressionSnapshot.revision,
+          track_ids: exactTrackIds,
+        }, `lfbundle-progression-${projectId}-reorder-tracks`);
+      } catch (failure) {
+        rethrowUncertainBundleProgression(failure);
+        /* imported tracks remain usable if a definitive error blocked ordering */
+      }
     }
   }
 
@@ -789,6 +1414,12 @@ export async function importProjectBundle(api: ApiClient, bundle: ProjectBundle)
     progressionsSkipped,
     progressionSceneLinks,
     progressionSceneLinksSkipped,
+    progressionTracks,
+    progressionTracksSkipped,
+    progressionTrackBeats,
+    progressionTrackBeatsSkipped,
+    progressionTrackSceneLinks,
+    progressionTrackSceneLinksSkipped,
     outlineNodes,
     outlineSkipped,
     outlineReparented,

@@ -1,6 +1,8 @@
 /** Whiteboard `.lfbundle` parser + Pro import orchestration tests. */
 
+import type { ProgressionCommandDTO, ProgressionSnapshotDTO } from '@logosforge/ui-contracts';
 import type { ApiClient } from '../src/adapters/api';
+import { ApiRequestError, ApiRequestTimeoutError } from '../src/adapters/httpApiClient';
 import {
   BUNDLE_FORMAT,
   importProjectBundle,
@@ -86,6 +88,27 @@ expectParseError(
     project: { manuscript: { blocks: [] }, psyke: { elements: [], progressions: [false] } },
   }),
   'This bundle contains an invalid PSYKE progression.',
+);
+expectParseError(
+  'non-array first-class Progressions rejected before project creation',
+  JSON.stringify({ format: BUNDLE_FORMAT, project: { manuscript: { blocks: [] }, progression_tracks: {} } }),
+  'This bundle has an invalid Progressions tracks section.',
+);
+expectParseError(
+  'invalid first-class Progressions beat rejected before project creation',
+  JSON.stringify({
+    format: BUNDLE_FORMAT,
+    project: { manuscript: { blocks: [] }, progression_tracks: [{ kind: 'story', title: 'Arc', beats: [{ text: 'Beat', anchor_kind: 'guess' }] }] },
+  }),
+  'This bundle contains an invalid Progressions beat.',
+);
+expectParseError(
+  'invalid Progressions compatibility marker rejected before project creation',
+  JSON.stringify({
+    format: BUNDLE_FORMAT,
+    project: { manuscript: { blocks: [] }, progression_tracks: [{ kind: 'story', title: 'Arc', legacy_compatibility: 'yes', beats: [] }] },
+  }),
+  'This bundle contains an invalid Progressions compatibility marker.',
 );
 expectParseError(
   'non-object inline comment rejected before project creation',
@@ -203,7 +226,7 @@ const api = {
   createProgression: async (projectId: number, body: Record<string, unknown>) => {
     progressionCalls.push({ projectId, body });
     if (body.text === 'API progression failure') {
-      throw new Error('simulated progression failure');
+      throw new ApiRequestError('POST', '/progressions', 400, 'simulated progression failure');
     }
     return {
       id: 7000 + progressionCalls.length,
@@ -678,6 +701,604 @@ check(
   check(
     'scene-list failure retains outline block-map fallback',
     outlineBodies[0]?.scene_id === 901 && unavailableScenesResult.links === 1 && unavailableScenesResult.linksSkipped === 0,
+  );
+}
+
+// Additive first-class tracks import after PSYKE/scenes and never reuse source ids.
+{
+  const commands: ProgressionCommandDTO[] = [];
+  let revisionCounter = 0;
+  let snapshot: ProgressionSnapshotDTO = {
+    project_id: 91,
+    revision: '0'.repeat(64),
+    tracks: [],
+    summary: {
+      total_tracks: 0, total_beats: 0, anchored_beats: 0, unanchored_beats: 0,
+      coverage_percent: 0,
+      by_kind: { story: 0, character: 0, relationship: 0, theme: 0, world: 0, custom: 0 },
+      by_status: { empty: 0, unanchored: 0, partial: 0, complete: 0 },
+    },
+  };
+  const refreshSummary = () => {
+    const totalBeats = snapshot.tracks.reduce((sum, track) => sum + track.beats.length, 0);
+    const anchored = snapshot.tracks.reduce((sum, track) => sum + track.beats.filter((beat) => beat.anchor_kind !== 'unanchored').length, 0);
+    snapshot.summary.total_tracks = snapshot.tracks.length;
+    snapshot.summary.total_beats = totalBeats;
+    snapshot.summary.anchored_beats = anchored;
+    snapshot.summary.unanchored_beats = totalBeats - anchored;
+    snapshot.summary.coverage_percent = totalBeats ? Math.round(anchored / totalBeats * 100) : 0;
+    snapshot.summary.by_kind = { story: 0, character: 0, relationship: 0, theme: 0, world: 0, custom: 0 };
+    snapshot.summary.by_status = { empty: 0, unanchored: 0, partial: 0, complete: 0 };
+    for (const track of snapshot.tracks) {
+      snapshot.summary.by_kind[track.kind] += 1;
+      snapshot.summary.by_status[track.coverage.status] += 1;
+    }
+    revisionCounter += 1;
+    snapshot.revision = revisionCounter.toString(16).padStart(64, '0');
+  };
+  const progressionApi = {
+    importWhiteboard: async () => ({ project_id: 91, title: 'Tracked import', mode: 'novel', scenes_created: 1, scene_titles: ['Arrival'], scene_ids_by_block: [901] }),
+    createPsyke: async (_projectId: number, body: Record<string, unknown>) => ({ id: 1901, ...body }),
+    listScenes: async () => [{ id: 901, title: 'Arrival', content: 'The arrival.' }],
+    getProgressions: async () => structuredClone(snapshot),
+    getProgressionCommandReceipt: async () => { throw new Error('receipt should not be needed'); },
+    executeProgressionCommand: async (_projectId: number, command: ProgressionCommandDTO) => {
+      commands.push(command);
+      let createdTrackId: number | null = null;
+      let createdBeatId: number | null = null;
+      let affectedTrackIds: number[] = [];
+      let affectedBeatIds: number[] = [];
+      if (command.kind === 'create_track') {
+        createdTrackId = 2000 + snapshot.tracks.length;
+        snapshot.tracks.push({
+          id: createdTrackId, project_id: 91, kind: command.track_kind, title: command.title,
+          description: command.description ?? '', color_label: command.color_label ?? '', sort_order: snapshot.tracks.length,
+          legacy_compatibility: false,
+          primary_psyke_entry_id: command.primary_psyke_entry_id ?? null,
+          primary_psyke_entry_name: command.primary_psyke_entry_id ? 'Mara' : '',
+          primary_psyke_entry_type: command.primary_psyke_entry_id ? 'character' : '',
+          secondary_psyke_entry_id: command.secondary_psyke_entry_id ?? null,
+          secondary_psyke_entry_name: '', secondary_psyke_entry_type: '', beats: [],
+          coverage: { total_beats: 0, anchored_beats: 0, unanchored_beats: 0, scene_anchored_beats: 0, document_anchored_beats: 0, coverage_percent: 0, status: 'empty', out_of_order_beat_ids: [] },
+        });
+        affectedTrackIds = [createdTrackId];
+      } else if (command.kind === 'create_beat') {
+        const track = snapshot.tracks.find((candidate) => candidate.id === command.track_id)!;
+        createdBeatId = 3000 + track.beats.length;
+        track.beats.push({
+          id: createdBeatId, track_id: track.id, text: command.text, sort_order: track.beats.length,
+          anchor_kind: command.anchor_kind ?? 'unanchored', scene_id: command.scene_id ?? null,
+          scene_title: command.scene_id === 901 ? 'Arrival' : '', anchor_ref: command.anchor_ref ?? null,
+          anchor_label: command.anchor_label ?? '',
+        });
+        const sceneCount = track.beats.filter((beat) => beat.anchor_kind === 'scene').length;
+        const documentCount = track.beats.filter((beat) => beat.anchor_kind === 'document_block').length;
+        const anchored = sceneCount + documentCount;
+        track.coverage = {
+          total_beats: track.beats.length, anchored_beats: anchored,
+          unanchored_beats: track.beats.length - anchored, scene_anchored_beats: sceneCount,
+          document_anchored_beats: documentCount, coverage_percent: Math.round(anchored / track.beats.length * 100),
+          status: anchored === track.beats.length ? 'complete' : anchored ? 'partial' : 'unanchored', out_of_order_beat_ids: [],
+        };
+        affectedTrackIds = [track.id]; affectedBeatIds = [createdBeatId];
+      }
+      refreshSummary();
+      return { progressions: structuredClone(snapshot), changed: true, affected_track_ids: affectedTrackIds, affected_beat_ids: affectedBeatIds, created_track_id: createdTrackId, created_beat_id: createdBeatId, replayed: false, applied_revision: snapshot.revision };
+    },
+    createOutlineNode: async () => { throw new Error('unexpected outline'); },
+  } as unknown as ApiClient;
+  const progressionBundle: ProjectBundle = {
+    format: BUNDLE_FORMAT,
+    version: '1.0',
+    project: {
+      manuscript: { blocks: [{ id: 'b1', type: 'paragraph', text: 'The arrival.' }] },
+      psyke: { elements: [{ id: '41', name: 'Mara', entry_type: 'character' }] },
+      progression_tracks: [{
+        id: 12, kind: 'character', title: 'Mara learns to answer', description: 'Her trust arc.',
+        color_label: 'cyan', sort_order: 0,
+        primary_psyke_entry_id: 41, primary_psyke_entry_name: 'Mara', primary_psyke_entry_type: 'character',
+        secondary_psyke_entry_id: null, secondary_psyke_entry_name: '', secondary_psyke_entry_type: '',
+        beats: [
+          { id: 21, track_id: 12, text: 'She hears it.', sort_order: 0, anchor_kind: 'scene', scene_id: 700, scene_title: 'Arrival', anchor_ref: null, anchor_label: '' },
+          { id: 22, track_id: 12, text: 'She writes alone.', sort_order: 1, anchor_kind: 'document_block', scene_id: null, scene_title: '', anchor_ref: 'drafter:block-7', anchor_label: 'Private draft' },
+        ],
+      }],
+    },
+  };
+  const imported = await importProjectBundle(progressionApi, progressionBundle);
+  const trackCommand = commands.find((command) => command.kind === 'create_track');
+  const beatCommands = commands.filter((command) => command.kind === 'create_beat');
+  check('first-class track remaps its PSYKE subject', trackCommand?.kind === 'create_track' && trackCommand.primary_psyke_entry_id === 1901);
+  check('first-class scene beat remaps by unique title without forwarding source id', beatCommands[0]?.kind === 'create_beat' && beatCommands[0].scene_id === 901);
+  check('first-class document anchor preserves reference and label', beatCommands[1]?.kind === 'create_beat' && beatCommands[1].anchor_ref === 'drafter:block-7' && beatCommands[1].anchor_label === 'Private draft');
+  check('first-class import reports tracks beats and anchors', imported.progressionTracks === 1 && imported.progressionTrackBeats === 2 && imported.progressionTrackSceneLinks === 1 && imported.progressionTracksSkipped === 0 && imported.progressionTrackBeatsSkipped === 0);
+}
+
+// New bundles include the legacy per-entry projection beside canonical tracks.
+// Exact beat-id compatibility tracks must go through the legacy endpoint once
+// (so Core restores its private linkage), while unmatched legacy rows are not
+// duplicated. This includes `other` entries represented as custom tracks, which
+// the ordinary canonical create_track command intentionally rejects.
+{
+  const legacyWrites: Record<string, unknown>[] = [];
+  const canonicalCommands: ProgressionCommandDTO[] = [];
+  let revisionCounter = 0;
+  let snapshot: ProgressionSnapshotDTO = {
+    project_id: 92,
+    revision: '0'.repeat(64),
+    tracks: [],
+    summary: {
+      total_tracks: 0, total_beats: 0, anchored_beats: 0, unanchored_beats: 0,
+      coverage_percent: 0,
+      by_kind: { story: 0, character: 0, relationship: 0, theme: 0, world: 0, custom: 0 },
+      by_status: { empty: 0, unanchored: 0, partial: 0, complete: 0 },
+    },
+  };
+  const refreshCompatibilitySnapshot = () => {
+    snapshot.tracks.forEach((track, trackIndex) => {
+      track.sort_order = trackIndex;
+      track.beats.forEach((beat, beatIndex) => { beat.sort_order = beatIndex; });
+      const sceneCount = track.beats.filter((beat) => beat.anchor_kind === 'scene').length;
+      const documentCount = track.beats.filter((beat) => beat.anchor_kind === 'document_block').length;
+      const anchored = sceneCount + documentCount;
+      track.coverage = {
+        total_beats: track.beats.length,
+        anchored_beats: anchored,
+        unanchored_beats: track.beats.length - anchored,
+        scene_anchored_beats: sceneCount,
+        document_anchored_beats: documentCount,
+        coverage_percent: track.beats.length ? Math.round(anchored / track.beats.length * 100) : 0,
+        status: track.beats.length === 0 ? 'empty' : anchored === 0 ? 'unanchored' : anchored === track.beats.length ? 'complete' : 'partial',
+        out_of_order_beat_ids: [],
+      };
+    });
+    const totalBeats = snapshot.tracks.reduce((sum, track) => sum + track.beats.length, 0);
+    const anchored = snapshot.tracks.reduce((sum, track) => sum + track.coverage.anchored_beats, 0);
+    snapshot.summary = {
+      total_tracks: snapshot.tracks.length,
+      total_beats: totalBeats,
+      anchored_beats: anchored,
+      unanchored_beats: totalBeats - anchored,
+      coverage_percent: totalBeats ? Math.round(anchored / totalBeats * 100) : 0,
+      by_kind: { story: 0, character: 0, relationship: 0, theme: 0, world: 0, custom: 0 },
+      by_status: { empty: 0, unanchored: 0, partial: 0, complete: 0 },
+    };
+    for (const track of snapshot.tracks) {
+      snapshot.summary.by_kind[track.kind] += 1;
+      snapshot.summary.by_status[track.coverage.status] += 1;
+    }
+    revisionCounter += 1;
+    snapshot.revision = revisionCounter.toString(16).padStart(64, '0');
+  };
+  const compatibilityApi = {
+    importWhiteboard: async () => ({ project_id: 92, title: 'Compatibility import', mode: 'novel', scenes_created: 0, scene_titles: [], scene_ids_by_block: [] }),
+    createPsyke: async (_projectId: number, body: Record<string, unknown>) => ({
+      id: body.name === 'Artifact' ? 2505 : 2506,
+      ...body,
+    }),
+    createProgression: async (_projectId: number, body: Record<string, unknown>) => {
+      legacyWrites.push(body);
+      let compatibilityTrack = snapshot.tracks.find((track) => track.id === 4100);
+      if (!compatibilityTrack) {
+        compatibilityTrack = {
+          id: 4100, project_id: 92, kind: 'custom', title: 'Artifact', description: '', color_label: '', sort_order: snapshot.tracks.length,
+          legacy_compatibility: true,
+          primary_psyke_entry_id: 2505, primary_psyke_entry_name: 'Artifact', primary_psyke_entry_type: 'other',
+          secondary_psyke_entry_id: null, secondary_psyke_entry_name: '', secondary_psyke_entry_type: '', beats: [],
+          coverage: { total_beats: 0, anchored_beats: 0, unanchored_beats: 0, scene_anchored_beats: 0, document_anchored_beats: 0, coverage_percent: 0, status: 'empty', out_of_order_beat_ids: [] },
+        };
+        snapshot.tracks.push(compatibilityTrack);
+      }
+      const id = body.text === 'Artifact appears' ? 9101 : 9102;
+      compatibilityTrack.beats.push({ id, track_id: 4100, text: String(body.text), sort_order: compatibilityTrack.beats.length, anchor_kind: 'unanchored', scene_id: null, scene_title: '', anchor_ref: null, anchor_label: '' });
+      refreshCompatibilitySnapshot();
+      return { id, entry_id: body.entry_id, text: body.text, scene_id: null, scene_title: '', sort_order: compatibilityTrack.beats.length - 1 };
+    },
+    getProgressions: async () => structuredClone(snapshot),
+    getProgressionCommandReceipt: async () => { throw new Error('receipt should not be needed'); },
+    executeProgressionCommand: async (_projectId: number, command: ProgressionCommandDTO) => {
+      canonicalCommands.push(command);
+      let createdTrackId: number | null = null;
+      let createdBeatId: number | null = null;
+      if (command.kind === 'update_track') {
+        const track = snapshot.tracks.find((candidate) => candidate.id === command.track_id)!;
+        if (command.title !== undefined) track.title = command.title;
+        if (command.description !== undefined) track.description = command.description;
+        if (command.color_label !== undefined) track.color_label = command.color_label;
+      } else if (command.kind === 'update_beat') {
+        const beat = snapshot.tracks.flatMap((track) => track.beats).find((candidate) => candidate.id === command.beat_id)!;
+        if (command.text !== undefined) beat.text = command.text;
+        if (command.anchor_kind !== undefined) beat.anchor_kind = command.anchor_kind;
+        if (command.scene_id !== undefined) beat.scene_id = command.scene_id;
+        if (command.anchor_ref !== undefined) beat.anchor_ref = command.anchor_ref;
+        if (command.anchor_label !== undefined) beat.anchor_label = command.anchor_label;
+      } else if (command.kind === 'reorder_beats') {
+        const track = snapshot.tracks.find((candidate) => candidate.id === command.track_id)!;
+        track.beats = command.beat_ids.map((id) => track.beats.find((beat) => beat.id === id)!);
+      } else if (command.kind === 'create_track') {
+        createdTrackId = 4200;
+        snapshot.tracks.push({
+          id: createdTrackId, project_id: 92, kind: command.track_kind, title: command.title,
+          description: command.description ?? '', color_label: command.color_label ?? '', sort_order: snapshot.tracks.length,
+          legacy_compatibility: false,
+          primary_psyke_entry_id: null, primary_psyke_entry_name: '', primary_psyke_entry_type: '',
+          secondary_psyke_entry_id: null, secondary_psyke_entry_name: '', secondary_psyke_entry_type: '', beats: [],
+          coverage: { total_beats: 0, anchored_beats: 0, unanchored_beats: 0, scene_anchored_beats: 0, document_anchored_beats: 0, coverage_percent: 0, status: 'empty', out_of_order_beat_ids: [] },
+        });
+      } else if (command.kind === 'create_beat') {
+        createdBeatId = 9200;
+        snapshot.tracks.find((track) => track.id === command.track_id)!.beats.push({
+          id: createdBeatId, track_id: command.track_id, text: command.text, sort_order: 0,
+          anchor_kind: command.anchor_kind ?? 'unanchored', scene_id: command.scene_id ?? null,
+          scene_title: '', anchor_ref: command.anchor_ref ?? null, anchor_label: command.anchor_label ?? '',
+        });
+      } else if (command.kind === 'reorder_tracks') {
+        snapshot.tracks = command.track_ids.map((id) => snapshot.tracks.find((track) => track.id === id)!);
+      }
+      refreshCompatibilitySnapshot();
+      return {
+        progressions: structuredClone(snapshot), changed: true,
+        affected_track_ids: [], affected_beat_ids: [], created_track_id: createdTrackId,
+        created_beat_id: createdBeatId, replayed: false, applied_revision: snapshot.revision,
+      };
+    },
+    createOutlineNode: async () => { throw new Error('unexpected outline'); },
+  } as unknown as ApiClient;
+  const compatibilityBundle: ProjectBundle = {
+    format: BUNDLE_FORMAT,
+    version: '1.0',
+    project: {
+      manuscript: { blocks: [] },
+      psyke: {
+        elements: [
+          { id: '5', name: 'Artifact', entry_type: 'other' },
+          { id: '6', name: 'Hero', entry_type: 'character' },
+        ],
+        progressions: [
+          { id: 71, entry_id: 5, text: 'Artifact appears', scene_id: null, scene_title: '', sort_order: 1 },
+          { id: 72, entry_id: 5, text: '', scene_id: null, scene_title: '', sort_order: 0 },
+          { id: 80, entry_id: 6, text: 'Stale unmatched projection', scene_id: null, scene_title: '', sort_order: 0 },
+        ],
+      },
+      progression_tracks: [{
+        id: 13, kind: 'story', title: 'Whole story', description: 'Primary narrative.', color_label: 'blue', sort_order: 0,
+        legacy_compatibility: false,
+        primary_psyke_entry_id: null, primary_psyke_entry_name: '', primary_psyke_entry_type: '',
+        secondary_psyke_entry_id: null, secondary_psyke_entry_name: '', secondary_psyke_entry_type: '',
+        beats: [{ id: 81, track_id: 13, text: 'The story turns.', sort_order: 0, anchor_kind: 'unanchored', scene_id: null, scene_title: '', anchor_ref: null, anchor_label: '' }],
+      }, {
+        id: 12, kind: 'custom', title: 'Artifact arc', description: 'Ancient object progression.', color_label: 'violet', sort_order: 1,
+        legacy_compatibility: true,
+        primary_psyke_entry_id: 5, primary_psyke_entry_name: 'Artifact', primary_psyke_entry_type: 'other',
+        secondary_psyke_entry_id: null, secondary_psyke_entry_name: '', secondary_psyke_entry_type: '',
+        beats: [
+          { id: 71, track_id: 12, text: 'Artifact appears', sort_order: 0, anchor_kind: 'document_block', scene_id: null, scene_title: '', anchor_ref: 'drafter:relic', anchor_label: 'Relic draft' },
+          { id: 72, track_id: 12, text: '', sort_order: 1, anchor_kind: 'unanchored', scene_id: null, scene_title: '', anchor_ref: null, anchor_label: '' },
+        ],
+      }],
+    },
+  };
+  const imported = await importProjectBundle(compatibilityApi, compatibilityBundle);
+  check(
+    'canonical compatibility track imports exactly once through legacy linkage path',
+    legacyWrites.length === 2 &&
+      legacyWrites.every((body) => body.entry_id === 2505) &&
+      canonicalCommands.some((command) => command.kind === 'update_track' && command.track_id === 4100 && command.title === 'Artifact arc' && command.description === 'Ancient object progression.' && command.color_label === 'violet' && command.track_kind === undefined && command.primary_psyke_entry_id === undefined),
+  );
+  const documentAnchorUpdate = canonicalCommands.find((command) => command.kind === 'update_beat' && command.beat_id === 9101);
+  const blankBeatUpdate = canonicalCommands.find((command) => command.kind === 'update_beat' && command.beat_id === 9102);
+  const compatibilityReorder = canonicalCommands.find((command) => command.kind === 'reorder_beats' && command.track_id === 4100);
+  const globalReorder = canonicalCommands.find((command) => command.kind === 'reorder_tracks');
+  check(
+    'canonical compatibility import restores document anchor and beat/global ordering',
+    documentAnchorUpdate?.kind === 'update_beat' && documentAnchorUpdate.anchor_kind === 'document_block' && documentAnchorUpdate.anchor_ref === 'drafter:relic' && documentAnchorUpdate.anchor_label === 'Relic draft' &&
+      blankBeatUpdate?.kind === 'update_beat' && blankBeatUpdate.text === undefined &&
+      compatibilityReorder?.kind === 'reorder_beats' && compatibilityReorder.beat_ids.join(',') === '9101,9102' &&
+      globalReorder?.kind === 'reorder_tracks' && globalReorder.track_ids.join(',') === '4200,4100',
+  );
+  check(
+    'canonical compatibility import excludes unmatched legacy rows and reports canonical items once',
+    !legacyWrites.some((body) => body.text === 'Stale unmatched projection') &&
+      imported.progressions === 0 && imported.progressionsSkipped === 0 &&
+      imported.progressionTracks === 2 && imported.progressionTrackBeats === 3 &&
+      imported.progressionTracksSkipped === 0 && imported.progressionTrackBeatsSkipped === 0,
+  );
+}
+
+// Explicit compatibility provenance also preserves an empty legacy track. The
+// importer materializes its protected Core linkage with one temporary blank
+// legacy beat, restores presentation through canonical commands, then deletes
+// the temporary beat so the destination remains genuinely empty.
+{
+  const commands: ProgressionCommandDTO[] = [];
+  let legacyCreates = 0;
+  let revisionCounter = 0;
+  let snapshot: ProgressionSnapshotDTO = {
+    project_id: 94,
+    revision: '0'.repeat(64),
+    tracks: [],
+    summary: {
+      total_tracks: 0, total_beats: 0, anchored_beats: 0, unanchored_beats: 0, coverage_percent: 0,
+      by_kind: { story: 0, character: 0, relationship: 0, theme: 0, world: 0, custom: 0 },
+      by_status: { empty: 0, unanchored: 0, partial: 0, complete: 0 },
+    },
+  };
+  const touch = () => {
+    revisionCounter += 1;
+    snapshot.revision = revisionCounter.toString(16).padStart(64, '0');
+    snapshot.summary.total_tracks = snapshot.tracks.length;
+    snapshot.summary.total_beats = snapshot.tracks.reduce((sum, track) => sum + track.beats.length, 0);
+    snapshot.summary.unanchored_beats = snapshot.summary.total_beats;
+    snapshot.summary.by_kind.custom = snapshot.tracks.length;
+    snapshot.summary.by_status.empty = snapshot.tracks.filter((track) => track.beats.length === 0).length;
+    snapshot.summary.by_status.unanchored = snapshot.tracks.filter((track) => track.beats.length > 0).length;
+  };
+  const emptyCompatibilityApi = {
+    importWhiteboard: async () => ({ project_id: 94, title: 'Empty compatibility', mode: 'novel', scenes_created: 0, scene_titles: [], scene_ids_by_block: [] }),
+    createPsyke: async (_projectId: number, body: Record<string, unknown>) => ({ id: 2701, ...body }),
+    createProgression: async (_projectId: number, body: Record<string, unknown>) => {
+      legacyCreates += 1;
+      snapshot.tracks = [{
+        id: 4701, project_id: 94, kind: 'custom', title: 'Cipher', description: '', color_label: '', sort_order: 0,
+        legacy_compatibility: true,
+        primary_psyke_entry_id: 2701, primary_psyke_entry_name: 'Cipher', primary_psyke_entry_type: 'artifact',
+        secondary_psyke_entry_id: null, secondary_psyke_entry_name: '', secondary_psyke_entry_type: '',
+        beats: [{ id: 9701, track_id: 4701, text: String(body.text), sort_order: 0, anchor_kind: 'unanchored', scene_id: null, scene_title: '', anchor_ref: null, anchor_label: '' }],
+        coverage: { total_beats: 1, anchored_beats: 0, unanchored_beats: 1, scene_anchored_beats: 0, document_anchored_beats: 0, coverage_percent: 0, status: 'unanchored', out_of_order_beat_ids: [] },
+      }];
+      touch();
+      return { id: 9701, entry_id: body.entry_id, text: body.text, scene_id: null, scene_title: '', sort_order: 0 };
+    },
+    getProgressions: async () => structuredClone(snapshot),
+    getProgressionCommandReceipt: async () => { throw new Error('receipt should not be needed'); },
+    executeProgressionCommand: async (_projectId: number, command: ProgressionCommandDTO) => {
+      commands.push(command);
+      if (command.kind === 'update_track') {
+        const track = snapshot.tracks[0]!;
+        if (command.title !== undefined) track.title = command.title;
+        if (command.description !== undefined) track.description = command.description;
+        if (command.color_label !== undefined) track.color_label = command.color_label;
+      } else if (command.kind === 'delete_beat') {
+        snapshot.tracks[0]!.beats = [];
+        snapshot.tracks[0]!.coverage = { total_beats: 0, anchored_beats: 0, unanchored_beats: 0, scene_anchored_beats: 0, document_anchored_beats: 0, coverage_percent: 0, status: 'empty', out_of_order_beat_ids: [] };
+      }
+      touch();
+      return { progressions: structuredClone(snapshot), changed: true, affected_track_ids: [], affected_beat_ids: [], created_track_id: null, created_beat_id: null, replayed: false, applied_revision: snapshot.revision };
+    },
+    createOutlineNode: async () => { throw new Error('unexpected outline'); },
+  } as unknown as ApiClient;
+  const imported = await importProjectBundle(emptyCompatibilityApi, {
+    format: BUNDLE_FORMAT,
+    version: '1.0',
+    project: {
+      manuscript: { blocks: [] },
+      psyke: { elements: [{ id: '14', name: 'Cipher', entry_type: 'artifact' }], progressions: [] },
+      progression_tracks: [{
+        id: 140, kind: 'custom', title: 'Cipher lifecycle', description: 'Reserved for later.', color_label: 'amber', sort_order: 0,
+        legacy_compatibility: true,
+        primary_psyke_entry_id: 14, primary_psyke_entry_name: 'Cipher', primary_psyke_entry_type: 'artifact',
+        secondary_psyke_entry_id: null, secondary_psyke_entry_name: '', secondary_psyke_entry_type: '', beats: [],
+      }],
+    },
+  });
+  const metadata = commands.find((command) => command.kind === 'update_track');
+  check(
+    'empty legacy compatibility track restores protected linkage and presentation',
+    legacyCreates === 1 && metadata?.kind === 'update_track' && metadata.title === 'Cipher lifecycle' &&
+      metadata.description === 'Reserved for later.' && metadata.color_label === 'amber' &&
+      metadata.track_kind === undefined && metadata.primary_psyke_entry_id === undefined,
+  );
+  check(
+    'empty legacy compatibility track removes temporary beat and reports no phantom beat',
+    commands.some((command) => command.kind === 'delete_beat' && command.beat_id === 9701) &&
+      snapshot.tracks[0]?.beats.length === 0 && imported.progressionTracks === 1 &&
+      imported.progressionTrackBeats === 0 && imported.progressionTrackBeatsSkipped === 0,
+  );
+}
+
+// The mere presence of an empty canonical section is authoritative; it must
+// suppress compatibility rows left in the legacy projection.
+{
+  let legacyWrites = 0;
+  const emptyCanonicalApi = {
+    importWhiteboard: async () => ({ project_id: 93, title: 'Empty canonical import', mode: 'novel', scenes_created: 0, scene_titles: [], scene_ids_by_block: [] }),
+    createPsyke: async (_projectId: number, body: Record<string, unknown>) => ({ id: 2601, ...body }),
+    createProgression: async () => { legacyWrites += 1; throw new Error('authoritative empty canonical section must suppress legacy rows'); },
+    createOutlineNode: async () => { throw new Error('unexpected outline'); },
+  } as unknown as ApiClient;
+  const imported = await importProjectBundle(emptyCanonicalApi, {
+    format: BUNDLE_FORMAT,
+    version: '1.0',
+    project: {
+      manuscript: { blocks: [] },
+      psyke: {
+        elements: [{ id: '1', name: 'Hero', entry_type: 'character' }],
+        progressions: [{ id: 1, entry_id: 1, text: 'Legacy projection', scene_id: null, scene_title: '', sort_order: 0 }],
+      },
+      progression_tracks: [],
+    },
+  });
+check(
+    'empty canonical progression_tracks suppresses legacy compatibility import',
+    legacyWrites === 0 && imported.progressions === 0 && imported.progressionsSkipped === 0,
+  );
+}
+
+// Canonical bundle commands use the same durable-delivery boundary as the live
+// panel: only an ambiguous write plus a proven receipt miss permits one exact
+// same-key resend. Definitive errors and inconclusive receipt lookups never
+// resend, and a second ambiguous miss aborts before dependent writes.
+{
+  const deliveryBundle = (withBeat = false): ProjectBundle => ({
+    format: BUNDLE_FORMAT,
+    version: '1.0',
+    project: {
+      manuscript: { blocks: [] },
+      progression_tracks: [{
+        id: 1, kind: 'story', title: 'Delivery arc', description: '', color_label: '',
+        sort_order: 0, legacy_compatibility: false,
+        primary_psyke_entry_id: null, secondary_psyke_entry_id: null,
+        beats: withBeat ? [{
+          id: 2, track_id: 1, text: 'Dependent beat', sort_order: 0,
+          anchor_kind: 'unanchored', scene_id: null, anchor_ref: null, anchor_label: '',
+        }] : [],
+      }],
+    },
+  });
+  const emptySnapshot = (): ProgressionSnapshotDTO => ({
+    project_id: 95,
+    revision: '0'.repeat(64),
+    tracks: [],
+    summary: {
+      total_tracks: 0, total_beats: 0, anchored_beats: 0, unanchored_beats: 0,
+      coverage_percent: 0,
+      by_kind: { story: 0, character: 0, relationship: 0, theme: 0, world: 0, custom: 0 },
+      by_status: { empty: 0, unanchored: 0, partial: 0, complete: 0 },
+    },
+  });
+  const committedSnapshot = (): ProgressionSnapshotDTO => ({
+    project_id: 95,
+    revision: '1'.padStart(64, '0'),
+    tracks: [{
+      id: 9501, project_id: 95, kind: 'story', title: 'Delivery arc', description: '',
+      color_label: '', sort_order: 0, legacy_compatibility: false,
+      primary_psyke_entry_id: null, primary_psyke_entry_name: '', primary_psyke_entry_type: '',
+      secondary_psyke_entry_id: null, secondary_psyke_entry_name: '', secondary_psyke_entry_type: '',
+      beats: [],
+      coverage: {
+        total_beats: 0, anchored_beats: 0, unanchored_beats: 0,
+        scene_anchored_beats: 0, document_anchored_beats: 0, coverage_percent: 0,
+        status: 'empty', out_of_order_beat_ids: [],
+      },
+    }],
+    summary: {
+      total_tracks: 1, total_beats: 0, anchored_beats: 0, unanchored_beats: 0,
+      coverage_percent: 0,
+      by_kind: { story: 1, character: 0, relationship: 0, theme: 0, world: 0, custom: 0 },
+      by_status: { empty: 1, unanchored: 0, partial: 0, complete: 0 },
+    },
+  });
+  const baseDeliveryApi = {
+    importWhiteboard: async () => ({ project_id: 95, title: 'Delivery', mode: 'novel', scenes_created: 0, scene_titles: [], scene_ids_by_block: [] }),
+    createOutlineNode: async () => { throw new Error('unexpected outline'); },
+  };
+
+  let definitiveWrites = 0;
+  let definitiveReceipts = 0;
+  const definitiveResult = await importProjectBundle({
+    ...baseDeliveryApi,
+    getProgressions: async () => emptySnapshot(),
+    executeProgressionCommand: async () => {
+      definitiveWrites += 1;
+      throw new ApiRequestError('POST', '/progressions/commands', 400, 'invalid command');
+    },
+    getProgressionCommandReceipt: async () => {
+      definitiveReceipts += 1;
+      throw new Error('receipt must not be checked');
+    },
+  } as unknown as ApiClient, deliveryBundle());
+  check(
+    'bundle progression definitive 400 is not resent or receipt-checked',
+    definitiveWrites === 1 && definitiveReceipts === 0 && definitiveResult.progressionTracksSkipped === 1,
+  );
+
+  let receiptFailureWrites = 0;
+  let receiptFailureChecks = 0;
+  let receiptFailureRejected = false;
+  try {
+    await importProjectBundle({
+      ...baseDeliveryApi,
+      getProgressions: async () => emptySnapshot(),
+      executeProgressionCommand: async () => {
+        receiptFailureWrites += 1;
+        throw new ApiRequestTimeoutError('POST', '/progressions/commands', 1);
+      },
+      getProgressionCommandReceipt: async () => {
+        receiptFailureChecks += 1;
+        throw new ApiRequestError('GET', '/progressions/command-receipt', 503, 'unavailable');
+      },
+    } as unknown as ApiClient, deliveryBundle());
+  } catch (error) {
+    receiptFailureRejected = error instanceof Error && error.message.includes('receipt lookup was inconclusive');
+  }
+  check(
+    'bundle progression inconclusive receipt lookup never resends',
+    receiptFailureRejected && receiptFailureWrites === 1 && receiptFailureChecks === 1,
+  );
+
+  let committed = false;
+  let lostResponseWrites = 0;
+  let lostResponseReceipts = 0;
+  const recoveredResult = await importProjectBundle({
+    ...baseDeliveryApi,
+    getProgressions: async () => structuredClone(committed ? committedSnapshot() : emptySnapshot()),
+    executeProgressionCommand: async () => {
+      lostResponseWrites += 1;
+      committed = true;
+      throw new ApiRequestTimeoutError('POST', '/progressions/commands', 1);
+    },
+    getProgressionCommandReceipt: async () => {
+      lostResponseReceipts += 1;
+      return {};
+    },
+  } as unknown as ApiClient, deliveryBundle());
+  check(
+    'bundle progression recovers commit after lost response without resend',
+    lostResponseWrites === 1 && lostResponseReceipts === 1 && recoveredResult.progressionTracks === 1,
+  );
+
+  const ambiguousKeys: string[] = [];
+  let secondMissReceipts = 0;
+  let secondMissRejected = false;
+  try {
+    await importProjectBundle({
+      ...baseDeliveryApi,
+      getProgressions: async () => emptySnapshot(),
+      executeProgressionCommand: async (_projectId: number, _command: ProgressionCommandDTO, key: string) => {
+        ambiguousKeys.push(key);
+        throw new ApiRequestTimeoutError('POST', '/progressions/commands', 1);
+      },
+      getProgressionCommandReceipt: async () => {
+        secondMissReceipts += 1;
+        throw new ApiRequestError('GET', '/progressions/command-receipt', 404, '', 'progression_receipt_not_found');
+      },
+    } as unknown as ApiClient, deliveryBundle(true));
+  } catch (error) {
+    secondMissRejected = error instanceof Error && error.message.includes('Bundle import stopped');
+  }
+  check(
+    'bundle progression second ambiguous receipt miss fails closed with one same-key resend',
+    secondMissRejected && ambiguousKeys.length === 2 && new Set(ambiguousKeys).size === 1 && secondMissReceipts === 2,
+  );
+
+  let ambiguousLegacyWrites = 0;
+  let ambiguousLegacyRejected = false;
+  try {
+    await importProjectBundle({
+      importWhiteboard: async () => ({ project_id: 96, title: 'Legacy delivery', mode: 'novel', scenes_created: 0, scene_titles: [], scene_ids_by_block: [] }),
+      createPsyke: async () => ({ id: 9601 }),
+      createProgression: async () => {
+        ambiguousLegacyWrites += 1;
+        throw new ApiRequestTimeoutError('POST', '/psyke/progressions', 1);
+      },
+      createOutlineNode: async () => { throw new Error('unexpected outline'); },
+    } as unknown as ApiClient, {
+      format: BUNDLE_FORMAT,
+      version: '1.0',
+      project: {
+        manuscript: { blocks: [] },
+        psyke: {
+          elements: [{ id: '1', name: 'Legacy subject', entry_type: 'other' }],
+          progressions: [{ id: 1, entry_id: 1, text: 'Possibly committed', scene_id: null, sort_order: 0 }],
+        },
+      },
+    });
+  } catch (error) {
+    ambiguousLegacyRejected = error instanceof Error && error.message.includes('has no durable receipt');
+  }
+  check(
+    'legacy compatibility POST is never retried after an ambiguous outcome',
+    ambiguousLegacyRejected && ambiguousLegacyWrites === 1,
   );
 }
 

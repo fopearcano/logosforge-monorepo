@@ -54,6 +54,9 @@ export interface LogosForgeDesktop {
   saveLayout(projectId: number, layout: unknown, options?: LayoutSaveOptions): Promise<void>;
   loadDesktopSessionState(): Promise<DesktopSessionState | null>;
   saveLastActiveProjectId(projectId: number | null): Promise<void>;
+  loadProgressionCommandRecovery(storageKey: string): Promise<string | null>;
+  saveProgressionCommandRecovery(storageKey: string, value: string): Promise<void>;
+  removeProgressionCommandRecovery(storageKey: string, expectedValue: string): Promise<boolean>;
   onSaveBeforeClose(cb: (attemptId: number) => void): () => void;
   onCloseCancelled(cb: () => void): () => void;
   sendCloseResult(attemptId: number, saved: boolean): void;
@@ -99,6 +102,18 @@ const api: LogosForgeDesktop = {
   }),
   loadDesktopSessionState: () => ipcRenderer.invoke('session:load'),
   saveLastActiveProjectId: (projectId) => ipcRenderer.invoke('session:save-last-project', { projectId }),
+  loadProgressionCommandRecovery: (storageKey) => ipcRenderer.invoke(
+    'progression-command:load',
+    { storageKey },
+  ),
+  saveProgressionCommandRecovery: (storageKey, value) => ipcRenderer.invoke(
+    'progression-command:save',
+    { storageKey, value },
+  ),
+  removeProgressionCommandRecovery: (storageKey, expectedValue) => ipcRenderer.invoke(
+    'progression-command:remove',
+    { storageKey, expectedValue },
+  ),
   onSaveBeforeClose: (cb) => subscribe<number>('app:save-before-close', cb),
   onCloseCancelled: (cb) => subscribe<void>('app:close-cancelled', () => cb()),
   sendCloseResult: (attemptId, saved) => ipcRenderer.send('app:close-result', attemptId, saved),

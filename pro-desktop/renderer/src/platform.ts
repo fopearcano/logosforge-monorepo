@@ -44,6 +44,9 @@ export interface DesktopBridge {
   saveLayout(projectId: number, layout: unknown, options?: { preserveBackup?: boolean }): Promise<void>;
   loadDesktopSessionState(): Promise<DesktopSessionState | null>;
   saveLastActiveProjectId(projectId: number | null): Promise<void>;
+  loadProgressionCommandRecovery(storageKey: string): Promise<string | null>;
+  saveProgressionCommandRecovery(storageKey: string, value: string): Promise<void>;
+  removeProgressionCommandRecovery(storageKey: string, expectedValue: string): Promise<boolean>;
   onSaveBeforeClose(cb: (attemptId: number) => void): () => void;
   onCloseCancelled(cb: () => void): () => void;
   sendCloseResult(attemptId: number, saved: boolean): void;
@@ -70,6 +73,15 @@ export const desktop: DesktopBridge | undefined = window.logosforge;
 /** The pro-shared-ui PlatformAdapter, backed by the Electron host. */
 export const platform: PlatformAdapter = {
   isDesktop: true,
+  persistenceScope: 'logosforge-pro-desktop-local-core',
+  progressionCommandStorage: {
+    getItem: (storageKey) => desktop!.loadProgressionCommandRecovery(storageKey),
+    setItem: (storageKey, value) => desktop!.saveProgressionCommandRecovery(storageKey, value),
+    removeItem: (storageKey, expectedValue) => {
+      if (expectedValue == null) return Promise.resolve(false);
+      return desktop!.removeProgressionCommandRecovery(storageKey, expectedValue);
+    },
+  },
   openFile: (opts) => desktop!.openFile(opts?.filters),
   saveFile: (opts) => desktop!.saveFile(opts),
   openExternal: (target) => desktop!.openExternal(target),

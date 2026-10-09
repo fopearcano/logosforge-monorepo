@@ -177,8 +177,8 @@ async def _exercise_mcp(
         if initialized.serverInfo.name != "logosforge":
             raise RuntimeError(f"unexpected MCP server: {initialized.serverInfo.name!r}")
         listed = await session.list_tools()
-        if len(listed.tools) != 46:
-            raise RuntimeError(f"expected 46 MCP tools, received {len(listed.tools)}")
+        if len(listed.tools) != 48:
+            raise RuntimeError(f"expected 48 MCP tools, received {len(listed.tools)}")
         tool_names = {tool.name for tool in listed.tools}
         expected_tools = {
             "logosforge_get_timeline",
@@ -190,6 +190,8 @@ async def _exercise_mcp(
             "logosforge_propose_knowledge_graph_command",
             "logosforge_get_story_diagnostics",
             "logosforge_propose_continuity_command",
+            "logosforge_get_progressions",
+            "logosforge_propose_progression_command",
             "logosforge_search",
             "logosforge_list_comments",
             "logosforge_propose_comment_reply",
@@ -568,7 +570,7 @@ def smoke(executable: Path, mcp_executable: Path | None = None) -> None:
                     process.kill()
                     process.wait(timeout=10)
         print(
-            "Frozen LogosForge MCP initialized, advertised 46 tools, read and "
+            "Frozen LogosForge MCP initialized, advertised 48 tools, read and "
             "proposed against the revisioned Timeline, Canvas Plot, and Knowledge "
             "Graph plus Semantic Continuity without mutation, searched and read a seeded thread, and "
             "created both comment proposal types."

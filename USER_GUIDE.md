@@ -172,6 +172,14 @@ The strip along the bottom is a **visual overview** of the story, derived from t
 - Search the bible by name/alias/notes.
 - PSYKE is **scoped to the document** — every project has its own isolated bible, so casts never bleed between stories.
 
+### Progressions
+
+Select a PSYKE entry and open its **Progressions** tab to describe how it changes through the work. A track has a kind (**story, character, relationship, theme, world, or custom**), title, description, optional colour label, and an ordered series of beats. You can add, edit, delete, and reorder both tracks and beats. Tracks shown on an entry include it as either the primary or secondary subject.
+
+To locate a beat in the prose, place the caret in the **main Manuscript** and choose **Anchor here**. Whiteboard stores the manuscript block's durable identity plus a readable heading or excerpt—not a fragile block number. If that block is later removed, the beat stays visibly unresolved instead of silently moving to unrelated prose. Drafter pages are deliberately excluded from anchors: they share the project's PSYKE and AI knowledge, but remain provisional.
+
+Billy and Logos receive a bounded relevant Progressions summary as part of project context. **Export Project (.lfbundle)** also carries the canonical tracks and document-block anchors into Pro. This remains a one-way Whiteboard → Pro path; Whiteboard does not import Pro bundles.
+
 ---
 
 ## 9. Comments
@@ -231,7 +239,7 @@ see [Moving a project to LogosForge Pro](#16-moving-a-project-to-logosforge-pro)
 
 | Format | Contains |
 |---|---|
-| **Export Project** (`.lfbundle`) | A complete portable snapshot — manuscript, Drafter pages, narrative/format settings, outline, comments, and PSYKE — for archiving or one-way migration into LogosForge Pro. Whiteboard does not import it by design. |
+| **Export Project** (`.lfbundle`) | A complete portable snapshot — manuscript, Drafter pages, narrative/format settings, outline, comments, PSYKE, and canonical Progression tracks — for archiving or one-way migration into LogosForge Pro. Whiteboard does not import it by design. |
 | Text / Markdown / Fountain | The manuscript as text. |
 | HTML | A styled, self-contained web page of the manuscript. |
 | JSON | Title, mode, and raw blocks. |
@@ -239,7 +247,7 @@ see [Moving a project to LogosForge Pro](#16-moving-a-project-to-logosforge-pro)
 | Comments | A Markdown report of all comments, grouped open/resolved and labelled with their Drafter page when applicable. |
 | PDF | The print path — a paginated script for screenplays, plain print otherwise. |
 
-For a true "save everything" snapshot, use **Export Project (.lfbundle)** — it's the only single file that captures Drafter pages, document settings, outline, comments, *and* characters alongside the prose. Whiteboard aborts this export if any component cannot be read; it never reports success for a bundle that silently dropped Drafter, PSYKE, or damaged local state. Drafter remains a Whiteboard-only authoring surface; migration compatibility may preserve draft material as ordinary Pro Notes, but it does not create a Pro Drafter surface or a round trip back to Whiteboard. To restore Whiteboard itself, restore the `~/.logosforge` data folder instead.
+For a true "save everything" snapshot, use **Export Project (.lfbundle)** — it's the only single file that captures Drafter pages, document settings, outline, comments, characters, *and* Progression tracks alongside the prose. Whiteboard aborts this export if any component cannot be read; it never reports success for a bundle that silently dropped Drafter, PSYKE, Progressions, or damaged local state. Drafter remains a Whiteboard-only authoring surface; migration compatibility may preserve draft material as ordinary Pro Notes, but it does not create a Pro Drafter surface or a round trip back to Whiteboard. To restore Whiteboard itself, restore the `~/.logosforge` data folder instead.
 
 ---
 
@@ -355,12 +363,13 @@ Whiteboard and Pro are separate apps. To graduate a project to Pro:
 2. In Pro: import that `.lfbundle`.
 
 Pro converts the manuscript blocks to scenes and imports the document settings,
-PSYKE entries, relationships, progression beats, outline, and outline links.
+PSYKE entries, relationships, canonical Progression tracks and beats, outline, and outline links.
 Drafter remains a Whiteboard-only authoring surface. Existing migration
 compatibility may retain Drafter material as tagged Notes, but this is not a Pro
 Drafter feature or a Whiteboard round-trip contract.
-Progression scene anchors are remapped only when their title uniquely matches an
-imported scene; unresolved anchors keep their progression beat unlinked and are reported.
+Whiteboard document-block Progression anchors are preserved as source provenance.
+Pro remaps an anchor only when it can do so safely; unresolved anchors keep their
+progression beat unlinked and are reported rather than guessed.
 Whiteboard Manuscript comment threads are also recreated in Pro when their text span can be
 mapped safely to the imported scene title/content. Replies, open/resolved state,
 timestamps, cross-field or cross-scene ranges, and source provenance are
@@ -399,6 +408,18 @@ The Graph clears manual hiding filters for that handoff and selects the returned
 canonical node. If the underlying evidence changed since the card was loaded,
 the panel reports that the target is stale and offers a return to the full
 Project Map. These cards remain advisory and never mutate story data.
+
+Canonical Progression tracks and beats also participate in this intelligence.
+The Graph gives them distinct node types, and the Dashboard, Decision Radar,
+Graph, and workflow recommendations refresh after a Progressions edit. Radar
+can flag deterministic aggregate gaps such as an empty track, unanchored beats,
+or scene anchors whose story order disagrees with beat order. Expand the card
+to inspect the bounded track/beat evidence. **OPEN GRAPH EVIDENCE** keeps its
+exact graph focus; **OPEN PROGRESSION** crosses the normal save barrier and
+opens the detachable Progressions panel on the exact track or beat. Filters are
+cleared for that handoff. If the referenced row was removed, Pro reports stale
+evidence instead of guessing from a similar title or position. These findings
+remain advisory; opening one never changes a track, beat, or manuscript scene.
 
 Semantic Continuity decisions appear in the same Radar with a **SEMANTIC
 CONTINUITY** badge. Expand a card to inspect its bounded evidence, choose **OPEN
@@ -505,10 +526,11 @@ Comment text is treated as project content, not as instructions to the agent.
 Creating anchored comments, changing their anchor or original body, and
 deleting threads or replies remain actions for Pro's Comments UI.
 
-The same 46-tool Pro gateway (MCP contract 1.11.0) can read and orchestrate the
-Timeline, Canvas Plot, Narrative Knowledge Graph, and Semantic Continuity
-review state. An agent can prepare one reviewed change at a time against the
-exact surface revision it read, and Core checks that revision again when applied.
+The same 48-tool Pro gateway (MCP contract 1.12.0) can read and orchestrate the
+Timeline, Canvas Plot, Narrative Knowledge Graph, Semantic Continuity, and
+canonical Progressions state. An agent can prepare one reviewed change at a
+time against the exact surface revision it read, and Core checks that revision
+again when applied.
 Timeline commands cover lanes,
 event membership, structural/custom ordering, and both Timeline relationship
 families through the existing Timeline read and proposal tools. The Timeline
@@ -528,20 +550,24 @@ For Continuity, the agent first reads the deterministic report, then may propose
 Defer, Dismiss, or Resolve for one exact open issue. That proposal carries both
 the report revision and the issue fingerprint. Applying it changes status only;
 MCP does not repair, generate, or apply Manuscript prose.
+For Progressions, the agent reads the complete typed track/beat workspace and
+may propose any one of its eight transactional commands. Scene and stable
+Whiteboard document-block anchors, subject rules, ordering partitions, and the
+loaded Progressions revision are all checked again at apply time.
 Deleting a Timeline lane leaves its scenes Unassigned, removing an event leaves
 the manuscript scene intact, and deleting a Canvas card preserves any linked
 manuscript scene.
 
-Timeline, Canvas Plot, Knowledge Graph, and Continuity applies carry a durable
-project receipt under the same reviewed proposal id. If a response is lost, the
-gateway reconciles that exact proposal instead of duplicating the change; this
-also works after restarting the MCP companion. Recovery never becomes a fresh
-proposal. A proven family-specific miss permits at most one exact resend; after
-that, recovery can only inspect the receipt. When an unknown proposal id is
-recovered, all four receipt families are checked and more than one match fails
-closed instead of guessing. Other proposal types remain conservative: if their
-apply response is uncertain, inspect current state and do not retry because the
-change may already have committed.
+Timeline, Canvas Plot, Knowledge Graph, Continuity, and Progressions applies
+carry a durable project receipt under the same reviewed proposal id. If a
+response is lost, the gateway reconciles that exact proposal instead of
+duplicating the change; this also works after restarting the MCP companion.
+Recovery never becomes a fresh proposal. A proven family-specific miss permits
+at most one exact resend; after that, recovery can only inspect the receipt.
+When an unknown proposal id is recovered, all five receipt families are checked
+and more than one match fails closed instead of guessing. Other proposal types
+remain conservative: if their apply response is uncertain, inspect current
+state and do not retry because the change may already have committed.
 
 Pro uses the stored quote and surrounding context to relocate marks after edits,
 including imported spans that cross title/content or scene boundaries. It saves

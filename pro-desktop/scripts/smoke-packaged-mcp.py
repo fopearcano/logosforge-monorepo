@@ -285,8 +285,8 @@ async def _exercise_installed_mcp(
         if initialized.serverInfo.name != "logosforge":
             raise RuntimeError(f"unexpected MCP server: {initialized.serverInfo.name!r}")
         listed = await session.list_tools()
-        if len(listed.tools) != 46:
-            raise RuntimeError(f"expected 46 MCP tools, received {len(listed.tools)}")
+        if len(listed.tools) != 48:
+            raise RuntimeError(f"expected 48 MCP tools, received {len(listed.tools)}")
         tool_names = {tool.name for tool in listed.tools}
         expected_tools = {
             "logosforge_get_timeline",
@@ -298,6 +298,8 @@ async def _exercise_installed_mcp(
             "logosforge_propose_knowledge_graph_command",
             "logosforge_get_story_diagnostics",
             "logosforge_propose_continuity_command",
+            "logosforge_get_progressions",
+            "logosforge_propose_progression_command",
             "logosforge_search",
             "logosforge_list_comments",
             "logosforge_propose_comment_reply",
@@ -2074,7 +2076,7 @@ def _smoke_app(app: Path, timeout: int, codex_command: str | None = None) -> Non
             if process is not None:
                 _stop_process_tree(process, app_pid, core_pid)
         print(
-            "Packaged Pro published a verified descriptor, advertised 46 MCP tools "
+            "Packaged Pro published a verified descriptor, advertised 48 MCP tools "
             "including canonical project search plus revisioned Timeline, Canvas "
             "Plot, Knowledge Graph, and Semantic Continuity orchestration; applied all "
             "four transactional surfaces plus Timeline relationship and structure-link "

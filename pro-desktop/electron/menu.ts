@@ -130,6 +130,7 @@ export function buildAppMenu(getWin: () => BrowserWindow | null): Menu {
           label: 'Bible',
           submenu: [
             { label: 'PSYKE', accelerator: 'CmdOrCtrl+Alt+Shift+Y', click: () => send('nav:psyke') },
+            { label: 'Progressions', accelerator: 'CmdOrCtrl+Alt+Shift+P', click: () => send('nav:progressions') },
             { label: 'Characters', accelerator: 'CmdOrCtrl+Alt+Shift+K', click: () => send('nav:characters') },
             { label: 'Theme Scenes', accelerator: 'CmdOrCtrl+Alt+Shift+8', click: () => send('nav:theme-scenes') },
             { label: 'Graph', accelerator: 'CmdOrCtrl+Alt+Shift+9', click: () => send('nav:graph') },

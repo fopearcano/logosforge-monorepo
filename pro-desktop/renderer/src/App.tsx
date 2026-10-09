@@ -17,6 +17,7 @@ import {
   type ExternalFloatingWindowHost,
   type StudioNavigationOptions,
   type KnowledgeGraphNavigationTarget,
+  type ProgressionNavigationTarget,
   type ContinuityRepairTarget,
   STUDIO_AI_COMPANIONS_PANEL_ID,
   STUDIO_PANELS,
@@ -193,6 +194,7 @@ export function App() {
   const [bootstrapAttempt, setBootstrapAttempt] = useState(0);
   const [pendingScene, setPendingScene] = useState<number | null>(null);
   const [pendingPsykeEntry, setPendingPsykeEntry] = useState<number | null>(null);
+  const [pendingProgression, setPendingProgression] = useState<ProgressionNavigationTarget | null>(null);
   const [pendingNote, setPendingNote] = useState<number | null>(null);
   const [pendingComment, setPendingComment] = useState<number | null>(null);
   const [pendingKnowledgeGraph, setPendingKnowledgeGraph] = useState<KnowledgeGraphNavigationTarget | null>(null);
@@ -412,6 +414,12 @@ export function App() {
       // scroll and steal focus after Billy becomes active.
       setPendingScene(panelId === 'manuscript' ? opts?.sceneId ?? null : null);
       setPendingPsykeEntry(panelId === 'psyke' ? opts?.psykeEntryId ?? null : null);
+      setPendingProgression(panelId === 'progressions' && (
+        opts?.progressionTrackId != null || opts?.progressionBeatId != null
+      ) ? {
+        trackId: opts.progressionTrackId ?? null,
+        beatId: opts.progressionBeatId ?? null,
+      } : null);
       setPendingNote(panelId === 'notes' ? opts?.noteId ?? null : null);
       setPendingComment(panelId === 'comments' ? opts?.commentId ?? null : null);
       setPendingKnowledgeGraph(panelId === 'graph' && opts?.graphFocusKey ? {
@@ -702,6 +710,7 @@ export function App() {
       void persistLastActiveProjectId(target ?? null);
       setPendingScene(null);
       setPendingPsykeEntry(null);
+      setPendingProgression(null);
       setPendingNote(null);
       setPendingComment(null);
       setPendingKnowledgeGraph(null);
@@ -887,6 +896,7 @@ export function App() {
         setMode(projectWritingMode(opened));
         setPendingScene(null);
         setPendingPsykeEntry(null);
+        setPendingProgression(null);
         setPendingNote(null);
         setPendingComment(null);
         setPendingKnowledgeGraph(null);
@@ -1373,6 +1383,13 @@ export function App() {
           clearManuscriptTarget: (sceneId) => setPendingScene((current) => sceneId == null || current === sceneId ? null : current),
           psykeTargetEntryId: pendingPsykeEntry,
           clearPsykeTarget: (entryId) => setPendingPsykeEntry((current) => entryId == null || current === entryId ? null : current),
+          progressionTarget: pendingProgression,
+          clearProgressionTarget: (trackId, beatId) => setPendingProgression((current) => (
+            (trackId == null && beatId == null)
+            || (current?.trackId === (trackId ?? null) && current?.beatId === (beatId ?? null))
+              ? null
+              : current
+          )),
           noteTargetId: pendingNote,
           clearNoteTarget: (noteId) => setPendingNote((current) => noteId == null || current === noteId ? null : current),
           commentTargetId: pendingComment,

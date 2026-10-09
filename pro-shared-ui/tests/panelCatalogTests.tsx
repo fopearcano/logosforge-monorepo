@@ -9,6 +9,7 @@ import {
   NarrativeDashboard,
 } from "../src/components/projectos";
 import { StoryHealthHud } from "../src/components/intelligence";
+import { ProgressionsPanel } from "../src/components/bible";
 import {
   STUDIO_AI_COMPANIONS_PANEL_ID,
   STUDIO_PANEL_GROUPS,
@@ -59,6 +60,7 @@ const EXPECTED_PANEL_IDS = [
   "adapt",
   "review",
   "psyke",
+  "progressions",
   "characters",
   "theme-scenes",
   "graph",
@@ -107,12 +109,12 @@ check(
     && STUDIO_WORKSPACE_PANEL_IDS.filter((id) => id === STUDIO_AI_COMPANIONS_PANEL_ID).length === 1,
   "workspace IDs must add the host-owned AI companion surface exactly once",
 );
-check(STUDIO_PANELS.length === 36, "the shared catalog must expose all 36 shared Pro panels");
+check(STUDIO_PANELS.length === 37, "the shared catalog must expose all 37 shared Pro panels");
 check(
-  STUDIO_PANEL_SHORTCUTS.length === 37
+  STUDIO_PANEL_SHORTCUTS.length === 38
     && STUDIO_PANEL_SHORTCUTS.map((definition) => definition.id).join("\n")
       === STUDIO_WORKSPACE_PANEL_IDS.join("\n"),
-  "canonical shortcuts must cover the 36 shared panels plus AI Companions exactly once",
+  "canonical shortcuts must cover the 37 shared panels plus AI Companions exactly once",
 );
 check(
   STUDIO_PANELS.every((panel) => {
@@ -130,7 +132,7 @@ check(
   aiShortcut?.label === "AI Companions"
     && aiShortcut.shortcut === "Primary+J"
     && studioPanelShortcut(STUDIO_AI_COMPANIONS_PANEL_ID) === aiShortcut.shortcut,
-  "AI Companions must complete the 37-panel shortcut catalog",
+  "AI Companions must complete the 38-panel shortcut catalog",
 );
 for (const [field, values] of [
   ["ids", STUDIO_PANEL_SHORTCUTS.map((definition) => definition.id.toLowerCase())],
@@ -215,9 +217,11 @@ check(findStudioPanel("outline")?.node.type === OutlinePanel, "outline catalog n
 check(findStudioPanel("decision-radar")?.node.type === DecisionRadar, "decision-radar catalog node must be the real panel");
 check(findStudioPanel("guided-workflows")?.node.type === GuidedWorkflowStepper, "guided-workflows catalog node must be the live workflow panel");
 check(findStudioPanel("health")?.node.type === StoryHealthHud, "health catalog node must be the real story-health panel");
+check(findStudioPanel("progressions")?.node.type === ProgressionsPanel, "progressions catalog node must be the real Bible panel");
 
 check(findStudioPanel("outline")?.preferredRegion === "bottom", "Outline must retain its preferred bottom dock");
 check(findStudioPanel("health")?.preferredRegion === "bottom", "Health must retain its preferred bottom dock");
+check(findStudioPanel("progressions")?.preferredRegion === "bottom", "Progressions must prefer the bottom dock");
 check(findStudioPanel("decision-radar")?.preferredRegion === "right", "Decision Radar must retain its preferred right dock");
 check(findStudioPanel("guided-workflows")?.preferredRegion === "right", "Guided Workflows must prefer the right dock");
 
@@ -231,6 +235,7 @@ for (const mode of WRITING_MODES) {
   check(ids.has("dashboard"), `${mode} must expose the dashboard`);
   check(ids.has("outline"), `${mode} must expose the outline`);
   check(ids.has("psyke"), `${mode} must expose PSYKE`);
+  check(ids.has("progressions"), `${mode} must expose Progressions`);
   check(ids.has("chapters") === (mode === "novel"), `${mode} has the wrong Chapters mode gate`);
   check(ids.has("series") === (mode === "series"), `${mode} has the wrong Series mode gate`);
 

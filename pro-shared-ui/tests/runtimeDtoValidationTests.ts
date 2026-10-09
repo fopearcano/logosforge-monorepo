@@ -620,11 +620,43 @@ const continuityDecisionCard = (overrides: Record<string, unknown> = {}) => deci
   ...overrides,
 });
 
+const progressionDecisionCard = (overrides: Record<string, unknown> = {}) => decisionCard({
+  id: "kg_progression_unanchored_11",
+  category: "progression",
+  severity: "suggestion",
+  confidence: "confirmed",
+  title: "A progression beat is unanchored.",
+  related_section: "Progressions",
+  related_target_type: "progression_track",
+  related_target_id: 11,
+  created_from: "knowledge_graph",
+  graph_focus_key: "progression_track:progression_track:11",
+  graph_view_mode: "project_map",
+  evidence: [{
+    kind: "progression_beat",
+    label: "Unanchored beat",
+    detail: "Beat #21 has no story-axis anchor.",
+    graph_focus_key: "progression_beat:progression_beat:21",
+    source_key: "progression_track:progression_track:11",
+    target_key: "progression_beat:progression_beat:21",
+    edge_type: "contains",
+    confidence: "confirmed",
+    source_system: "progressions",
+    provenance: "canonical progression beat",
+    related_section: "Progressions",
+    related_target_type: "progression_beat",
+    related_target_id: 21,
+    related_target_key: "",
+  }],
+  evidence_total: 1,
+  ...overrides,
+});
+
 const decisionRadar = (overrides: Record<string, unknown> = {}) => ({
   project_id: 1,
   generated_light: false,
   summary_line: "Radar",
-  radar: [decisionCard()],
+  radar: [decisionCard(), progressionDecisionCard()],
   knowledge_graph_available: true,
   knowledge_graph_cards: [graphDecisionCard()],
   continuity_available: true,
@@ -2365,11 +2397,22 @@ try {
   );
 
   await expectValid(
-    "Decision Radar accepts bounded traceable Graph and Continuity evidence",
+    "Decision Radar accepts bounded traceable Graph, Continuity, and Progressions evidence",
     () => client.getDecisionRadar(1),
     decisionRadar(),
     (value) => value.knowledge_graph_cards[0]?.graph_focus_key === "theme:psyke:6"
-      && value.continuity_cards[0]?.related_target_key === "0123456789abcdef",
+      && value.continuity_cards[0]?.related_target_key === "0123456789abcdef"
+      && value.radar[1]?.related_target_type === "progression_track",
+  );
+  await expectInvalid(
+    "Decision Radar rejects a non-positive Progressions deep-link id",
+    () => client.getDecisionRadar(1),
+    json(decisionRadar({
+      radar: [progressionDecisionCard({ related_target_id: 0 })],
+    })),
+    "GET",
+    "/api/projects/1/decision-radar",
+    "$.radar[0]",
   );
   await expectInvalid(
     "Decision Radar rejects a response for another project",

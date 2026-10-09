@@ -4,6 +4,7 @@ import {
   type EventMessage,
   type EventsPollDTO,
   type TimelineCommandDTO,
+  type ProgressionCommandDTO,
 } from "@logosforge/ui-contracts";
 import type { ApiClient } from "./api";
 import { trackProjectOperation } from "./projectSaveCoordinator";
@@ -41,6 +42,9 @@ import {
   validateTimelineSnapshotDTOForProject,
   validateTimelineCommandResultDTOForRequest,
   validateTimelineCommandReceiptDTOForRequest,
+  validateProgressionSnapshotDTOForProject,
+  validateProgressionCommandResultDTOForRequest,
+  validateProgressionCommandReceiptDTOForRequest,
   validateCanvasPlotSnapshotDTOForProject,
   validateCanvasPlotCommandResultDTOForRequest,
   validateContinuityCommandReceiptDTOForRequest,
@@ -335,7 +339,7 @@ function stableCompactJson(value: unknown): string {
     return JSON.stringify(value);
   }
   if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw new Error("Timeline command contains a non-finite number");
+    if (!Number.isFinite(value)) throw new Error("Command contains a non-finite number");
     return JSON.stringify(value);
   }
   if (Array.isArray(value)) {
@@ -349,12 +353,13 @@ function stableCompactJson(value: unknown): string {
       .map((key) => `${JSON.stringify(key)}:${stableCompactJson(source[key])}`);
     return `{${fields.join(",")}}`;
   }
-  throw new Error(`Timeline command contains an unsupported ${typeof value} value`);
+  throw new Error(`Command contains an unsupported ${typeof value} value`);
 }
 
-async function timelineCommandRequestDigest(
+async function commandRequestDigest(
+  scope: string,
   projectId: number,
-  command: TimelineCommandDTO,
+  command: TimelineCommandDTO | ProgressionCommandDTO,
 ): Promise<string> {
   const cryptoApi = globalThis.crypto;
   if (!cryptoApi?.subtle || typeof cryptoApi.subtle.digest !== "function") {
@@ -365,7 +370,7 @@ async function timelineCommandRequestDigest(
   }
   const { kind, expected_revision: expectedRevision, ...fields } = command;
   const canonical = stableCompactJson({
-    scope: "timeline-command-v1",
+    scope,
     project_id: projectId,
     kind,
     expected_revision: expectedRevision,
@@ -377,6 +382,12 @@ async function timelineCommandRequestDigest(
   );
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
+
+const timelineCommandRequestDigest = (projectId: number, command: TimelineCommandDTO) =>
+  commandRequestDigest("timeline-command-v1", projectId, command);
+
+const progressionCommandRequestDigest = (projectId: number, command: ProgressionCommandDTO) =>
+  commandRequestDigest("progression-command-v1", projectId, command);
 
 /**
  * `createHttpApiClient(baseUrl, authToken)` — the reference {@link ApiClient} over the
@@ -726,6 +737,51 @@ export function createHttpApiClient(
       b,
       (value) => validateCanvasPlotCommandResultDTOForRequest(value, p, b),
     ),
+    getProgressions: (p) => get(
+      ROUTES.progressions(p),
+      (value) => validateProgressionSnapshotDTOForProject(value, p),
+    ),
+    executeProgressionCommand: (p, b, idempotencyKey) => trackProjectOperation(
+      req(
+        ROUTES.progressionCommands(p),
+        {
+          method: "POST",
+          body: JSON.stringify(b),
+          headers: { "Idempotency-Key": idempotencyKey },
+        },
+        (value) => validateProgressionCommandResultDTOForRequest(value, p, b),
+      ),
+      { persistence: true },
+    ),
+    getProgressionCommandReceipt: async (p, idempotencyKey, expectedCommand) => {
+      const path = ROUTES.progressionCommandReceipt(p);
+      let expectedRequestDigest: string;
+      try {
+        expectedRequestDigest = await progressionCommandRequestDigest(p, expectedCommand);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : "unknown digest failure";
+        throw new ApiResponseValidationError(
+          "GET",
+          path,
+          `cannot validate Progressions receipt integrity: ${detail}`,
+        );
+      }
+      return req(
+        path,
+        {
+          headers: {
+            "Idempotency-Key": idempotencyKey,
+            "Cache-Control": "no-store",
+          },
+        },
+        (value) => validateProgressionCommandReceiptDTOForRequest(
+          value,
+          p,
+          expectedCommand,
+          expectedRequestDigest,
+        ),
+      );
+    },
 
     listPsyke: (p) => get(ROUTES.psykeEntries(p)),
     searchPsyke: (p, q) => get(`${ROUTES.psykeSearch(p)}?q=${encodeURIComponent(q)}`),

@@ -774,6 +774,17 @@ await act(async () => {
   await Promise.resolve();
 });
 check(text(hookRenderer.root.findByType("output")).includes("FRESH GRAPH"), "the force-fresh post-event graph response must publish");
+act(() => liveListener?.({ id: 2, event: "progressions_changed", project_id: 7, data: { track_id: 11 }, ts: Date.now() }));
+await act(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 140));
+  await Promise.resolve();
+});
+check(readInvalidations === 2 && liveRequests.length === 3, "a progressions_changed event must refresh the graph projection that contains canonical progression nodes");
+await act(async () => {
+  liveRequests[2]!.resolve(graphFixture(7));
+  await Promise.resolve();
+  await Promise.resolve();
+});
 act(() => hookRenderer.unmount());
 
 const graphRequests: Array<{ projectId: number; query: KnowledgeGraphQueryDTO }> = [];

@@ -41,6 +41,7 @@ export const NATIVE_PANEL_IDS = [
   'adapt',
   'review',
   'psyke',
+  'progressions',
   'characters',
   'theme-scenes',
   'graph',

@@ -45,6 +45,7 @@ export const STUDIO_PANEL_SHORTCUTS: readonly StudioPanelShortcutDefinition[] = 
   { id: "review", label: "Review", group: "ANALYTICS", shortcut: "Primary+Alt+Shift+7" },
 
   { id: "psyke", label: "PSYKE", group: "BIBLE", shortcut: "Primary+Alt+Shift+Y" },
+  { id: "progressions", label: "Progressions", group: "BIBLE", shortcut: "Primary+Alt+Shift+P" },
   { id: "characters", label: "Characters", group: "BIBLE", shortcut: "Primary+Alt+Shift+K" },
   { id: "theme-scenes", label: "Theme Scenes", group: "BIBLE", shortcut: "Primary+Alt+Shift+8" },
   { id: "graph", label: "Graph", group: "BIBLE", shortcut: "Primary+Alt+Shift+9" },

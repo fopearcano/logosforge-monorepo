@@ -59,6 +59,7 @@ import {
   type WorkspacePanelDefinition,
   type StudioNavigationOptions,
   type KnowledgeGraphNavigationTarget,
+  type ProgressionNavigationTarget,
   type ContinuityRepairTarget,
   type SkinId,
 } from "../src";
@@ -150,6 +151,7 @@ export function IntegratedWorkspaceHarness({
   );
   const [pendingScene, setPendingScene] = useState<number | null>(null);
   const [pendingPsykeEntry, setPendingPsykeEntry] = useState<number | null>(null);
+  const [pendingProgression, setPendingProgression] = useState<ProgressionNavigationTarget | null>(null);
   const [pendingNote, setPendingNote] = useState<number | null>(null);
   const [pendingComment, setPendingComment] = useState<number | null>(null);
   const [pendingKnowledgeGraph, setPendingKnowledgeGraph] = useState<KnowledgeGraphNavigationTarget | null>(null);
@@ -373,6 +375,12 @@ export function IntegratedWorkspaceHarness({
       if (!didSelect) return false;
       setPendingScene(panelId === "manuscript" ? options?.sceneId ?? null : null);
       setPendingPsykeEntry(panelId === "psyke" ? options?.psykeEntryId ?? null : null);
+      setPendingProgression(panelId === "progressions" && (
+        options?.progressionTrackId != null || options?.progressionBeatId != null
+      ) ? {
+        trackId: options.progressionTrackId ?? null,
+        beatId: options.progressionBeatId ?? null,
+      } : null);
       setPendingNote(panelId === "notes" ? options?.noteId ?? null : null);
       setPendingComment(panelId === "comments" ? options?.commentId ?? null : null);
       setPendingKnowledgeGraph(panelId === "graph" && options?.graphFocusKey ? {
@@ -457,6 +465,7 @@ export function IntegratedWorkspaceHarness({
         setProjectReady(true);
         setPendingScene(null);
         setPendingPsykeEntry(null);
+        setPendingProgression(null);
         setPendingNote(null);
         setPendingComment(null);
         setPendingKnowledgeGraph(null);
@@ -715,6 +724,13 @@ export function IntegratedWorkspaceHarness({
           clearManuscriptTarget: (sceneId) => setPendingScene((current) => sceneId == null || current === sceneId ? null : current),
           psykeTargetEntryId: pendingPsykeEntry,
           clearPsykeTarget: (entryId) => setPendingPsykeEntry((current) => entryId == null || current === entryId ? null : current),
+          progressionTarget: pendingProgression,
+          clearProgressionTarget: (trackId, beatId) => setPendingProgression((current) => (
+            (trackId == null && beatId == null)
+            || (current?.trackId === (trackId ?? null) && current?.beatId === (beatId ?? null))
+              ? null
+              : current
+          )),
           noteTargetId: pendingNote,
           clearNoteTarget: (noteId) => setPendingNote((current) => noteId == null || current === noteId ? null : current),
           commentTargetId: pendingComment,

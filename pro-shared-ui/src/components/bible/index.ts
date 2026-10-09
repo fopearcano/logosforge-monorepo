@@ -11,3 +11,4 @@ export * from "./ControllingIdeaCompass";
 export * from "./PsykeConsoleInbox";
 export * from "./CharacterLinks";
 export * from "./ThemeScenes";
+export * from "./ProgressionsPanel";

@@ -235,16 +235,16 @@ no token or changing package-extraction path belongs in Codex configuration.
 Writes remain disabled unless the MCP client explicitly sets
 `LOGOSFORGE_MCP_ALLOW_WRITES=1`.
 
-Gateway version 1.11.0 keeps the surface at 46 named tools. In addition to
+Gateway version 1.12.0 exposes 48 named tools. In addition to
 paged/filterable comment-thread reads and revision-bound Reply/Resolve/Reopen proposals, it can
-read the canonical Timeline, Canvas Plot, and bounded Narrative Knowledge Graph
+read the canonical Timeline, Canvas Plot, first-class Progressions, and bounded Narrative Knowledge Graph
 plus the deterministic Semantic Continuity report, and propose strict guarded
-commands for all four transactional surfaces. Knowledge Graph tools also page
+commands for all five receipt-backed transactional surfaces. Knowledge Graph tools also page
 through the complete hidden-edge restore queue. A Continuity proposal can Defer,
 Dismiss, or Resolve one open issue and must bind both the report revision and the
 exact finding fingerprint. It changes review status only; manuscript repair
 remains a separate Billy → Controlled Apply flow. The core rechecks board,
-graph-review, Continuity review/finding, and comment revisions atomically with
+graph-review, Continuity review/finding, Progressions, and comment revisions atomically with
 apply, rejecting intervening changes. Canvas node deletion
 removes incident Canvas links but preserves linked manuscript scenes. Timeline
 lane deletion preserves events as Unassigned and event removal preserves the
@@ -268,8 +268,9 @@ migration, Timeline command/topology revision change, or receipt v2 change was
 introduced. The MCP read carries the same data without adding to the 46-tool
 surface; mode-lens text is project data, never agent instructions.
 
-HTTP 1.16.0 adds Phase 7D durable live-event recovery for changed Timeline,
-Canvas Plot, Knowledge Graph, Semantic Continuity, and Guided Workflow
+HTTP 1.17.0 retains Phase 7D durable live-event recovery and extends it to the
+new first-class Progressions family, so changed Timeline, Canvas Plot, Knowledge
+Graph, Semantic Continuity, Guided Workflow, and Progressions
 commands. A compact invalidation row commits atomically with each mutation and
 receipt; the single-process broker reconciles and acknowledges pending rows
 after commit and at API-process startup. Poll responses expose
@@ -280,15 +281,16 @@ cursor regression, or truncation. Token-checked acknowledgement distinguishes
 reused SQLite row generations, and live invalidations prevent a post-boundary
 refetch from joining a stale in-flight GET. Legacy mutation routes remain best-effort;
 this is not multi-process fan-out or a background-delivery/LAN guarantee. MCP
-remains 1.11.0 with the same 46 tools. Full-suite and packaged Phase 7D
-validation are pending.
+1.12.0 adds the canonical Progressions read/proposal pair for a total of 48
+tools. Full-suite source validation is complete; packaged Progressions
+validation remains pending.
 
-Timeline, Canvas Plot, Knowledge Graph, and Continuity proposals use their
+Timeline, Canvas Plot, Knowledge Graph, Continuity, and Progressions proposals use their
 opaque proposal id for a durable core receipt, so an
 ambiguous apply can recover the exact committed outcome across an MCP companion
 restart without duplicating the command. A proven family-specific receipt miss
 permits exactly one resend of that identical proposal/key; later ambiguous
-outcomes are receipt-only. Unknown proposal recovery probes all four receipt
+outcomes are receipt-only. Unknown proposal recovery probes all five receipt
 families and fails closed if more than one matches. Other proposal families keep
 their terminal indeterminate-response rule.
 Canvas reads use bounded node-body previews by default and require an explicit
@@ -305,7 +307,7 @@ decision, with rejected stale siblings; durable receipt recovery for all four
 surfaces from a fresh MCP process; Canvas, graph-review, and Continuity-status
 persistence across that restart; a revision-guarded comment reply and
 resolution; stale-write rejection; and single-use proposal replay protection.
-The frozen-companion smoke separately verifies all 46 discovered tools and that
+The frozen-companion smoke separately verifies all 48 discovered tools and that
 an exact Continuity proposal is non-mutating. The optional Codex subprocess used
 by the packaged smoke remains read-only.
 
@@ -336,7 +338,7 @@ Codex configuration and the proposal/review/apply safety model.
 ## Status
 
 - **Workspace** is a dockable, keyboard-accessible four-region shell in which
-  all 37 panels—including Manuscript and AI Companions—can be docked or detached
+  all 38 panels—including Manuscript, Progressions, and AI Companions—can be docked or detached
   into independent native windows that move outside the Studio frame and across
   monitors. Every panel has a unique open/focus shortcut;
   Manuscript and AI Companions remain non-closable. Per-project versioned
@@ -357,10 +359,12 @@ Codex configuration and the proposal/review/apply safety model.
   Timeline story-flow and mode projections, and Pro renders FLOW and MODE LENS.
   The exact `33feac9` source passed the hosted Windows packaged journey;
   Linux/Xvfb and Intel macOS remain pending.
-- **Phase 7D source status:** HTTP 1.16.0 implements an atomic pending-event
-  outbox and restart reconciliation for the five transactional command
-  families. Pro recognizes broker replacement and recovery as authoritative
-  refetch boundaries. Full validation and packaged evidence remain pending;
+- **Current transactional source status:** HTTP 1.17.0 implements an atomic pending-event
+  outbox and restart reconciliation for six transactional command families,
+  including first-class Progressions. Pro recognizes broker replacement and
+  recovery as authoritative refetch boundaries. Full source validation is
+  complete and packaged Progressions evidence remains pending;
   legacy routes, multi-process fan-out, and independent background delivery are
-  not covered. MCP remains 1.11.0 with 46 tools.
+  not covered. MCP 1.12.0 exposes 48 tools, including canonical Progressions
+  read and proposal operations with durable same-key recovery.
 - The renderer uses bundled/local assets and runs under a restrictive CSP.

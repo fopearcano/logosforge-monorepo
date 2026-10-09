@@ -15,6 +15,8 @@ export interface StudioServices {
 export interface StudioNavigationOptions {
   sceneId?: number;
   psykeEntryId?: number;
+  progressionTrackId?: number;
+  progressionBeatId?: number;
   noteId?: number;
   commentId?: number;
   graphFocusKey?: string;
@@ -43,6 +45,12 @@ export interface KnowledgeGraphNavigationTarget {
   depth: 1 | 2;
 }
 
+/** Exact canonical Progressions row requested by Decision Radar or another surface. */
+export interface ProgressionNavigationTarget {
+  trackId: number | null;
+  beatId: number | null;
+}
+
 export interface NavTarget {
   /**
    * Open a workspace surface after the host's pending-save barrier. Hosts that
@@ -58,6 +66,9 @@ export interface NavTarget {
   /** PSYKE entry requested by an external surface such as the Console. */
   psykeTargetEntryId?: number | null;
   clearPsykeTarget?: (entryId?: number) => void;
+  /** Exact Progressions track/beat requested by Decision Radar. */
+  progressionTarget?: ProgressionNavigationTarget | null;
+  clearProgressionTarget?: (trackId?: number, beatId?: number) => void;
   /** Note requested by an external surface such as the Omnibox. */
   noteTargetId?: number | null;
   clearNoteTarget?: (noteId?: number) => void;
@@ -167,6 +178,22 @@ export function usePsykeTarget(): { entryId: number | null; clear: () => void } 
   const ctx = useContext(StudioContext);
   const entryId = ctx?.psykeTargetEntryId ?? null;
   return { entryId, clear: () => ctx?.clearPsykeTarget?.(entryId ?? undefined) };
+}
+
+/** The exact Progressions track/beat another surface asked to reveal. */
+export function useProgressionTarget(): {
+  target: ProgressionNavigationTarget | null;
+  clear: () => void;
+} {
+  const ctx = useContext(StudioContext);
+  const target = ctx?.progressionTarget ?? null;
+  return {
+    target,
+    clear: () => ctx?.clearProgressionTarget?.(
+      target?.trackId ?? undefined,
+      target?.beatId ?? undefined,
+    ),
+  };
 }
 
 /** The note another surface asked the Notes panel to open. */

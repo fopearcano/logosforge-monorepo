@@ -23,8 +23,8 @@ design-tickets/             one focused ticket per panel area
 
 ## Workspace contract
 
-The canonical catalog describes 36 shared panels; hosts add the permanent AI
-Companions surface for a complete 37-panel Pro workspace. Every one of those
+The canonical catalog describes 37 shared panels; hosts add the permanent AI
+Companions surface for a complete 38-panel Pro workspace. Every one of those
 panels can be placed in any of the four docks or detached as a modeless floating
 window, then moved, resized, minimized, restored, raised, and redocked without
 remounting its React content. Manuscript and AI Companions are non-closable, but
@@ -52,6 +52,19 @@ projection of that state: it presents Manuscript alone while leaving dock order,
 floating geometry, z-order, and minimization untouched for the return to
 Cockpit. Host implementations must preserve that round trip and keep panel
 identity stable across every placement change.
+
+## Progressions intelligence handoff
+
+Canonical Progression tracks and beats are first-class Knowledge Graph and
+Decision Radar targets. A graph-backed Progressions card keeps both journeys:
+`OPEN GRAPH EVIDENCE` preserves its exact graph projection/focus, while `OPEN
+PROGRESSION` publishes `progressionTrackId` or `progressionBeatId` through the
+host's normal save-barrier-aware navigation. The host owns a one-shot
+`ProgressionNavigationTarget`; the detachable Progressions panel resolves only
+that canonical id, clears hiding filters, focuses the exact row, and consumes
+the target. It reports removed evidence instead of matching by title or order.
+Dashboard, Graph, Radar, and graph-backed workflow recommendation resources all
+subscribe to `progressions_changed`.
 
 ## Rules
 

@@ -115,6 +115,8 @@ const TYPE_META: Record<string, NodeMeta> = {
   chapter: { icon: "§", color: "var(--amber)", label: "Chapter" },
   scene: { icon: "▤", color: "var(--cyan)", label: "Scene" },
   screenplay_block: { icon: "▥", color: "var(--cyan)", label: "Screenplay block" },
+  progression_track: { icon: "↝", color: "var(--violet)", label: "Progression track" },
+  progression_beat: { icon: "•", color: "var(--accent)", label: "Progression beat" },
   psyke_entry: { icon: "◆", color: "var(--c-char)", label: "PSYKE entry" },
   character: { icon: "◆", color: "var(--c-char)", label: "Character" },
   place: { icon: "▲", color: "var(--c-place)", label: "Place" },

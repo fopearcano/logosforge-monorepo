@@ -72,6 +72,10 @@ import type {
   CanvasPlotSnapshotDTO,
   CanvasPlotCommandDTO,
   CanvasPlotCommandResultDTO,
+  ProgressionSnapshotDTO,
+  ProgressionCommandDTO,
+  ProgressionCommandResultDTO,
+  ProgressionCommandReceiptDTO,
   PsykeEntryDTO,
   PsykeEntryCreateDTO,
   PsykeEntryUpdateDTO,
@@ -243,6 +247,22 @@ export interface ApiClient {
     p: number,
     body: CanvasPlotCommandDTO,
   ): Promise<CanvasPlotCommandResultDTO>;
+
+  // Progressions
+  /** Coherent project-owned story/character/relationship progression board. */
+  getProgressions(p: number): Promise<ProgressionSnapshotDTO>;
+  /** Apply one revision-guarded, idempotent Progressions mutation. */
+  executeProgressionCommand(
+    p: number,
+    body: ProgressionCommandDTO,
+    idempotencyKey: string,
+  ): Promise<ProgressionCommandResultDTO>;
+  /** Resolve an ambiguously completed Progressions command by capability key. */
+  getProgressionCommandReceipt(
+    p: number,
+    idempotencyKey: string,
+    expectedCommand: ProgressionCommandDTO,
+  ): Promise<ProgressionCommandReceiptDTO>;
 
   // PSYKE
   listPsyke(p: number): Promise<PsykeEntryDTO[]>;

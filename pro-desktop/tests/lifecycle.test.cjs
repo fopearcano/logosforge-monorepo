@@ -10,6 +10,7 @@ const palette = readSource('renderer', 'src', 'CommandPalette.tsx');
 const main = readSource('electron', 'main.ts');
 const menu = readSource('electron', 'menu.ts');
 const preload = readSource('electron', 'preload.ts');
+const platform = readSource('renderer', 'src', 'platform.ts');
 const styles = readSource('renderer', 'src', 'styles.css');
 const mainRenderer = readSource('renderer', 'src', 'main.tsx');
 const skinPreference = readSource('renderer', 'src', 'skinPreference.ts');
@@ -97,6 +98,8 @@ for (const marker of [
   'runtimeStatus={workspaceStatus}',
   'psykeTargetEntryId: pendingPsykeEntry',
   'clearPsykeTarget: (entryId) => setPendingPsykeEntry',
+  'progressionTarget: pendingProgression',
+  'clearProgressionTarget: (trackId, beatId) => setPendingProgression',
 ]) {
   if (!app.includes(marker)) failures.push(`App command/status/PSYKE Console integration missing ${marker}`);
 }
@@ -106,6 +109,7 @@ for (const marker of [
   'const [pendingComment, setPendingComment] = useState<number | null>(null)',
   "setPendingScene(panelId === 'manuscript' ? opts?.sceneId ?? null : null)",
   "setPendingPsykeEntry(panelId === 'psyke' ? opts?.psykeEntryId ?? null : null)",
+  "setPendingProgression(panelId === 'progressions'",
   "setPendingNote(panelId === 'notes' ? opts?.noteId ?? null : null)",
   "setPendingComment(panelId === 'comments' ? opts?.commentId ?? null : null)",
   "setPendingKnowledgeGraph(panelId === 'graph' && opts?.graphFocusKey ? {",
@@ -113,6 +117,7 @@ for (const marker of [
   'setPendingContinuityRepair(panelId === AI_PANEL_ID ? opts?.continuityRepair ?? null : null)',
   'setPendingNote(null)',
   'setPendingComment(null)',
+  'setPendingProgression(null)',
   'noteTargetId: pendingNote',
   'clearNoteTarget: (noteId) => setPendingNote',
   'commentTargetId: pendingComment',
@@ -331,17 +336,17 @@ const shortcutDefinitions = [...panelShortcuts.matchAll(
 const nativeNavEntries = [...menu.matchAll(
   /accelerator: '([^']+)', click: \(\) => send\('nav:([^']+)'\)/g,
 )].map((match) => ({ accelerator: match[1], panelId: match[2] }));
-if (shortcutDefinitions.length !== 37) {
-  failures.push(`Canonical panel shortcut catalog has ${shortcutDefinitions.length} entries instead of 37`);
+if (shortcutDefinitions.length !== 38) {
+  failures.push(`Canonical panel shortcut catalog has ${shortcutDefinitions.length} entries instead of 38`);
 }
-if (nativeNavEntries.length !== 37) {
-  failures.push(`Native menu has ${nativeNavEntries.length} accelerated panel entries instead of 37`);
+if (nativeNavEntries.length !== 38) {
+  failures.push(`Native menu has ${nativeNavEntries.length} accelerated panel entries instead of 38`);
 }
-if (new Set(nativeNavEntries.map((entry) => entry.accelerator)).size !== 37) {
+if (new Set(nativeNavEntries.map((entry) => entry.accelerator)).size !== 38) {
   failures.push('Native panel accelerators are not unique');
 }
-if (new Set(nativeNavEntries.map((entry) => entry.panelId)).size !== 37) {
-  failures.push('Native menu does not target 37 unique panel ids');
+if (new Set(nativeNavEntries.map((entry) => entry.panelId)).size !== 38) {
+  failures.push('Native menu does not target 38 unique panel ids');
 }
 const nativeByPanelId = new Map(nativeNavEntries.map((entry) => [entry.panelId, entry.accelerator]));
 for (const expected of shortcutDefinitions) {
@@ -374,14 +379,17 @@ for (const marker of [
   "ipcMain.handle('live-context:clear'",
   "ipcMain.handle('session:load'",
   "ipcMain.handle('session:save-last-project'",
+  "ipcMain.handle('progression-command:load'",
+  "ipcMain.handle('progression-command:save'",
+  "ipcMain.handle('progression-command:remove'",
   'requireMainRenderer(event);\n    return core.publishLiveContext(payload);',
   'requireMainRenderer(event);\n    return core.clearLiveContextFromRenderer();',
   'requireMainRenderer(event);\n    return loadDesktopSessionState();',
   'return saveLastActiveProjectId(p.projectId);',
   'await core.suspendLiveContext();',
   'await core.stop();',
-  'await drainDesktopSessionSaves();',
-  'drainDesktopSessionSaves().then(() => core.stop())',
+  'drainDesktopSessionSaves(),',
+  'drainProgressionCommandRecoveryOperations(),',
   'core.resumeLiveContext();',
   'if (!allowClose) void core.suspendLiveContext();',
 ]) {
@@ -405,8 +413,20 @@ for (const marker of [
   "ipcRenderer.invoke('live-context:clear')",
   "ipcRenderer.invoke('session:load')",
   "ipcRenderer.invoke('session:save-last-project', { projectId })",
+  "ipcRenderer.invoke(\n    'progression-command:load'",
+  "ipcRenderer.invoke(\n    'progression-command:save'",
+  "ipcRenderer.invoke(\n    'progression-command:remove'",
 ]) {
   if (!preload.includes(marker)) failures.push(`Preload close protocol missing ${marker}`);
+}
+for (const marker of [
+  "persistenceScope: 'logosforge-pro-desktop-local-core'",
+  'progressionCommandStorage: {',
+  'desktop!.loadProgressionCommandRecovery(storageKey)',
+  'desktop!.saveProgressionCommandRecovery(storageKey, value)',
+  'desktop!.removeProgressionCommandRecovery(storageKey, expectedValue)',
+]) {
+  if (!platform.includes(marker)) failures.push(`Desktop Progressions recovery bridge missing ${marker}`);
 }
 for (const forbidden of ['source_id', 'sourceId', 'revision:']) {
   if (preload.includes(forbidden)) {

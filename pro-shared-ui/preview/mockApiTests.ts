@@ -35,6 +35,9 @@ check(typeof api.planPsykeConsoleCommand === "function", "preview mock must impl
 check(typeof api.executePsykeConsoleCommand === "function", "preview mock must implement PSYKE command execution");
 check(typeof api.executeTimelineCommand === "function", "preview mock must implement guarded Timeline commands");
 check(typeof api.executeCanvasPlotCommand === "function", "preview mock must implement guarded Canvas Plot commands");
+check(typeof api.getProgressions === "function", "preview mock must implement canonical Progressions reads");
+check(typeof api.executeProgressionCommand === "function", "preview mock must implement guarded Progressions commands");
+check(typeof api.getProgressionCommandReceipt === "function", "preview mock must implement durable Progressions receipts");
 check(typeof api.getKnowledgeGraph === "function", "preview mock must implement the canonical Knowledge Graph read");
 check(typeof api.executeKnowledgeGraphCommand === "function", "preview mock must implement guarded Knowledge Graph review commands");
 check(typeof api.getKnowledgeGraphCommandReceipt === "function", "preview mock must implement durable Knowledge Graph command receipts");
@@ -45,8 +48,46 @@ check(typeof api.getContinuityCommandReceipt === "function", "preview mock must 
 
 const health = await api.health();
 check(
-  health.status === "ok" && health.version === "1.16.0" && health.api_version === "1.16.0",
+  health.status === "ok" && health.version === "1.17.0" && health.api_version === "1.17.0",
   "preview health must satisfy the core contract",
+);
+const initialProgressions = await api.getProgressions(1);
+check(
+  initialProgressions.project_id === 1
+    && /^[0-9a-f]{64}$/.test(initialProgressions.revision)
+    && initialProgressions.tracks.length > 0,
+  "preview Progressions must expose a coherent project snapshot",
+);
+const createTrackCommand = {
+  kind: "create_track" as const,
+  expected_revision: initialProgressions.revision,
+  track_kind: "story" as const,
+  title: "Answering the future",
+  description: "Preview track",
+  color_label: "amber",
+  primary_psyke_entry_id: null,
+  secondary_psyke_entry_id: null,
+};
+const progressionKey = "preview-progression-key-0001";
+const createdTrack = await api.executeProgressionCommand(1, createTrackCommand, progressionKey);
+check(
+  createdTrack.changed && !createdTrack.replayed && createdTrack.created_track_id != null
+    && createdTrack.progressions.revision !== initialProgressions.revision,
+  "preview Progressions must apply one revision-guarded track command",
+);
+const progressionReceipt = await api.getProgressionCommandReceipt(1, progressionKey, createTrackCommand);
+check(
+  progressionReceipt.original_changed
+    && progressionReceipt.original_created_track_id === createdTrack.created_track_id
+    && progressionReceipt.applied_revision === createdTrack.applied_revision,
+  "preview Progressions receipt must retain the original committed outcome",
+);
+const replayedProgression = await api.executeProgressionCommand(1, createTrackCommand, progressionKey);
+check(
+  replayedProgression.replayed && !replayedProgression.changed
+    && replayedProgression.created_track_id === createdTrack.created_track_id
+    && replayedProgression.applied_revision === createdTrack.applied_revision,
+  "preview Progressions same-command replay must be idempotent",
 );
 const projectMap = await api.getKnowledgeGraph(1, { limit: 160, include_inferred: true });
 check(

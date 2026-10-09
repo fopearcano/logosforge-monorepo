@@ -98,6 +98,8 @@ const confLabel = (confidence: string) => `conf ${CONF[confidence] ?? confidence
 /** A small ref tag: scene targets read as 'SC.{id}', otherwise the section / target type. */
 function refTag(card: DecisionCardDTO): string | null {
   if (card.related_target_type === "scene" && card.related_target_id != null) return `SC.${card.related_target_id}`;
+  if (card.related_target_type === "progression_track" && card.related_target_id != null) return `TRACK ${card.related_target_id}`;
+  if (card.related_target_type === "progression_beat" && card.related_target_id != null) return `BEAT ${card.related_target_id}`;
   if (card.related_section) return card.related_section;
   if (card.related_target_type && card.related_target_id != null) return `${card.related_target_type} ${card.related_target_id}`;
   return null;
@@ -111,6 +113,12 @@ function remediationOptions(card: DecisionCardDTO): StudioNavigationOptions | un
   if (card.related_target_type === "scene") return { sceneId: card.related_target_id };
   if (card.related_target_type === "psyke" || card.related_target_type === "psyke_entry") {
     return { psykeEntryId: card.related_target_id };
+  }
+  if (card.related_target_type === "progression_track") {
+    return { progressionTrackId: card.related_target_id };
+  }
+  if (card.related_target_type === "progression_beat") {
+    return { progressionBeatId: card.related_target_id };
   }
   if (card.related_target_type === "note") return { noteId: card.related_target_id };
   if (card.related_target_type === "comment") return { commentId: card.related_target_id };
@@ -127,28 +135,51 @@ function graphOptions(card: DecisionCardDTO, focusKey = card.graph_focus_key): S
   };
 }
 
-function evidenceDestination(card: DecisionCardDTO, item: DecisionEvidenceDTO): {
+function evidenceDestinations(card: DecisionCardDTO, item: DecisionEvidenceDTO): Array<{
   panel: string;
   options: StudioNavigationOptions;
   label: string;
-} | undefined {
+  ariaLabel?: string;
+}> {
+  const destinations: Array<{
+    panel: string;
+    options: StudioNavigationOptions;
+    label: string;
+    ariaLabel?: string;
+  }> = [];
   const graph = graphOptions(card, item.graph_focus_key);
-  if (graph) return { panel: "Graph", options: graph, label: "FOCUS THIS EVIDENCE" };
+  if (graph) destinations.push({ panel: "Graph", options: graph, label: "FOCUS THIS EVIDENCE" });
   if (item.related_target_type === "scene" && item.related_target_id != null) {
-    return {
+    destinations.push({
       panel: item.related_section || "Manuscript",
       options: { sceneId: item.related_target_id },
       label: "OPEN SCENE EVIDENCE",
-    };
+    });
   }
   if (item.related_target_type === "continuity_issue" && item.related_target_key) {
-    return {
+    destinations.push({
       panel: item.related_section || "Continuity",
       options: { continuityIssueKey: item.related_target_key },
       label: "FOCUS THIS EVIDENCE",
-    };
+    });
   }
-  return undefined;
+  if (item.related_target_type === "progression_track" && item.related_target_id != null) {
+    destinations.push({
+      panel: item.related_section || "Progressions",
+      options: { progressionTrackId: item.related_target_id },
+      label: "OPEN PROGRESSION EVIDENCE",
+      ariaLabel: `Open Progressions evidence for ${item.label}`,
+    });
+  }
+  if (item.related_target_type === "progression_beat" && item.related_target_id != null) {
+    destinations.push({
+      panel: item.related_section || "Progressions",
+      options: { progressionBeatId: item.related_target_id },
+      label: "OPEN PROGRESSION EVIDENCE",
+      ariaLabel: `Open Progressions evidence for ${item.label}`,
+    });
+  }
+  return destinations;
 }
 
 /** Build the chip row: the suggested action (navigable when a section is set) + an optional ref tag. */
@@ -176,6 +207,16 @@ function cardActions(card: DecisionCardDTO, sev: SevStyle): Action[] {
     nav: "Continuity",
     options: { continuityIssueKey: card.related_target_key },
   });
+  if (
+    card.related_target_id != null
+    && (card.related_target_type === "progression_track" || card.related_target_type === "progression_beat")
+  ) actions.push({
+    text: "OPEN PROGRESSION",
+    color: "var(--violet)",
+    border: "var(--line-cy)",
+    nav: card.related_section || "Progressions",
+    options: remediationOptions(card),
+  });
   const ref = refTag(card);
   if (ref) actions.push({ text: ref, color: "var(--txt2)", border: "var(--line2)" });
   return actions;
@@ -193,7 +234,7 @@ function EvidenceRows({ card, onNavigate }: {
       </summary>
       <div style={{ display: "grid", gap: 5, marginTop: 6 }}>
         {card.evidence.map((item: DecisionEvidenceDTO, index) => {
-          const destination = evidenceDestination(card, item);
+          const destinations = evidenceDestinations(card, item);
           const meta = [
             item.edge_type && `TYPE ${item.edge_type.replaceAll("_", " ")}`,
             item.confidence && `CONF ${item.confidence}`,
@@ -201,17 +242,19 @@ function EvidenceRows({ card, onNavigate }: {
             item.provenance && `PROVENANCE ${item.provenance}`,
             item.related_target_type === "scene" && item.related_target_id != null && `SCENE ${item.related_target_id}`,
             item.related_target_type === "continuity_issue" && item.related_target_key && `ISSUE ${item.related_target_key}`,
+            item.related_target_type === "progression_track" && item.related_target_id != null && `TRACK ${item.related_target_id}`,
+            item.related_target_type === "progression_beat" && item.related_target_id != null && `BEAT ${item.related_target_id}`,
           ].filter(Boolean).join(" · ");
           return (
             <div key={`${item.kind}:${item.source_key}:${item.target_key}:${item.graph_focus_key}:${index}`} style={{ borderLeft: "2px solid var(--line-cy)", background: "var(--tint2)", padding: "6px 7px" }}>
               <div style={{ color: "var(--txt)", fontSize: 8.5, lineHeight: 1.35 }}>{item.label}</div>
               {item.detail && <div style={{ color: "var(--txt2)", fontSize: 8, lineHeight: 1.35, marginTop: 2 }}>{item.detail}</div>}
               {meta && <div style={{ color: "var(--txt3)", fontSize: 7, lineHeight: 1.35, marginTop: 3, overflowWrap: "anywhere" }}>{meta}</div>}
-              {destination && (
-                <button type="button" aria-label={`Open evidence for ${item.label}`} onClick={() => onNavigate(destination.panel, destination.options)} style={{ marginTop: 5, border: "1px solid var(--line2)", background: "transparent", color: "var(--accent)", padding: "2px 6px", font: "inherit", fontSize: 7.5, cursor: "pointer" }}>
+              {destinations.map((destination, destinationIndex) => (
+                <button type="button" key={`${destination.panel}:${destinationIndex}`} aria-label={destination.ariaLabel ?? `Open evidence for ${item.label}`} onClick={() => onNavigate(destination.panel, destination.options)} style={{ marginTop: 5, marginRight: 5, border: "1px solid var(--line2)", background: "transparent", color: "var(--accent)", padding: "2px 6px", font: "inherit", fontSize: 7.5, cursor: "pointer" }}>
                   {destination.label}
                 </button>
-              )}
+              ))}
             </div>
           );
         })}
@@ -229,6 +272,7 @@ function RadarCard({ card, severity, label, icon, conf, title, desc, actions, on
         <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 7.5, color: "var(--txt3)" }}>
           {card.created_from === "knowledge_graph" && <span style={{ color: "var(--accent)", border: "1px solid var(--line-cy)", padding: "1px 4px" }}>KNOWLEDGE GRAPH</span>}
           {card.created_from === "semantic_continuity" && <span style={{ color: "var(--cyan)", border: "1px solid var(--line-cy)", padding: "1px 4px" }}>SEMANTIC CONTINUITY</span>}
+          {(card.created_from === "progressions" || card.category === "progression") && <span style={{ color: "var(--violet)", border: "1px solid var(--line-cy)", padding: "1px 4px" }}>PROGRESSIONS</span>}
           {conf}
         </span>
       </div>

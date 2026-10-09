@@ -241,13 +241,18 @@ check('packaged smoke exercises Timeline relationship and structure-link transac
   packagedSmoke.includes('created_structure_result.get("affected_structure_link_ids")') &&
   packagedSmoke.includes('structure_links[0].get("target_exists") is not True'));
 check('frozen smoke advertises and proposes an exact non-mutating Canvas Plot command',
-  frozenSmoke.includes('expected 46 MCP tools') &&
+  frozenSmoke.includes('expected 48 MCP tools') &&
   frozenSmoke.includes('"logosforge_get_canvas_plot"') &&
   frozenSmoke.includes('"logosforge_propose_canvas_plot_command"') &&
   frozenSmoke.includes('f"/api/projects/{project_id}/canvas-plot/commands"') &&
   frozenSmoke.includes('canvas_after != canvas_before'));
+check('frozen and packaged smoke require canonical Progressions discovery',
+  frozenSmoke.includes('"logosforge_get_progressions"') &&
+  frozenSmoke.includes('"logosforge_propose_progression_command"') &&
+  packagedSmoke.includes('"logosforge_get_progressions"') &&
+  packagedSmoke.includes('"logosforge_propose_progression_command"'));
 check('packaged smoke applies one Canvas Plot proposal and rejects its stale sibling',
-  packagedSmoke.includes('expected 46 MCP tools') &&
+  packagedSmoke.includes('expected 48 MCP tools') &&
   packagedSmoke.includes('"logosforge_get_canvas_plot"') &&
   packagedSmoke.includes('"logosforge_propose_canvas_plot_command"') &&
   (packagedSmoke.match(/\{"include_bodies": True\}/g) || []).length === 4 &&
@@ -255,7 +260,7 @@ check('packaged smoke applies one Canvas Plot proposal and rejects its stale sib
   packagedSmoke.includes('installed MCP stale Canvas Plot sibling apply') &&
   packagedSmoke.includes('after_stale_canvas != applied_canvas_snapshot'));
 check('frozen smoke advertises an exact non-mutating Knowledge Graph proposal',
-  frozenSmoke.includes('expected 46 MCP tools') &&
+  frozenSmoke.includes('expected 48 MCP tools') &&
   frozenSmoke.includes('"logosforge_get_knowledge_graph"') &&
   frozenSmoke.includes('"logosforge_get_knowledge_graph_hidden_edges"') &&
   frozenSmoke.includes('"logosforge_propose_knowledge_graph_command"') &&

@@ -33,7 +33,7 @@ import {
 } from "../components/intelligence";
 import { FormatStructure } from "../components/aipanels";
 import { CrossCutting, ExportDialog, VoiceHud } from "../components/formatpanels";
-import { CharacterLinks, PsykeBible, ThemeScenes } from "../components/bible";
+import { CharacterLinks, ProgressionsPanel, PsykeBible, ThemeScenes } from "../components/bible";
 import { CanvasPlot, KnowledgeGraph, TimelinePanel } from "../components/spatialcanvas";
 import { HelpPanel } from "../components/help";
 import type { DockRegionId } from "./layoutModel";
@@ -133,6 +133,7 @@ export const STUDIO_PANEL_GROUPS: readonly StudioPanelGroup[] = [
     group: "BIBLE",
     panels: [
       panel({ id: "psyke", label: "PSYKE", node: <PsykeBible /> }),
+      panel({ id: "progressions", label: "Progressions", node: <ProgressionsPanel />, preferredRegion: "bottom" }),
       panel({ id: "characters", label: "Characters", node: <CharacterLinks /> }),
       panel({ id: "theme-scenes", label: "Theme Scenes", node: <ThemeScenes /> }),
       panel({ id: "graph", label: "Graph", node: <KnowledgeGraph /> }),

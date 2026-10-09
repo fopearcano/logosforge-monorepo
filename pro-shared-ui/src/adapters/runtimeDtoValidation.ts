@@ -47,6 +47,17 @@ import type {
   TimelineOrderMode,
   TimelineSnapshotDTO,
   TimelineStructureLinkDTO,
+  ProgressionAnchorKind,
+  ProgressionCommandDTO,
+  ProgressionCommandReceiptDTO,
+  ProgressionCommandResultDTO,
+  ProgressionCoverageDTO,
+  ProgressionCoverageStatus,
+  ProgressionKind,
+  ProgressionSnapshotDTO,
+  ProgressionTrackDTO,
+  ProgressionBeatDTO,
+  ProgressionSummaryDTO,
   CanvasPlotCommandDTO,
   CanvasPlotCommandResultDTO,
   CanvasPlotFrameDTO,
@@ -265,6 +276,11 @@ function decisionEvidence(value: unknown, path: string): DecisionEvidenceDTO {
   )) {
     fail(path, "continuity issue evidence with a canonical issue key", value);
   }
+  if ((relatedTargetType === "progression_track" || relatedTargetType === "progression_beat") && (
+    relatedTargetId === null || relatedTargetId <= 0 || relatedTargetKey
+  )) {
+    fail(path, "Progressions evidence with only a positive related_target_id", value);
+  }
   if (!relatedTargetType && (relatedTargetId !== null || relatedTargetKey)) {
     fail(path, "related_target_type when an evidence target is set", value);
   }
@@ -312,6 +328,11 @@ function decisionCard(value: unknown, path: string): DecisionCardDTO {
     fieldPath(path, "related_target_key"),
     512,
   );
+  if ((relatedTargetType === "progression_track" || relatedTargetType === "progression_beat") && (
+    relatedTargetId === null || relatedTargetId <= 0 || relatedTargetKey
+  )) {
+    fail(path, "a Progressions target with only a positive related_target_id", value);
+  }
   const createdFrom = boundedDecisionString(
     requireField(dto, "created_from", path),
     fieldPath(path, "created_from"),
@@ -1954,6 +1975,366 @@ export function validateTimelineSnapshotDTOForProject(
   return snapshot;
 }
 
+const PROGRESSION_KINDS = [
+  "story", "character", "relationship", "theme", "world", "custom",
+] as const satisfies readonly ProgressionKind[];
+const PROGRESSION_ANCHOR_KINDS = [
+  "unanchored", "scene", "document_block",
+] as const satisfies readonly ProgressionAnchorKind[];
+const PROGRESSION_COVERAGE_STATUSES = [
+  "empty", "unanchored", "partial", "complete",
+] as const satisfies readonly ProgressionCoverageStatus[];
+const PROGRESSION_COMMAND_KINDS = [
+  "create_track", "update_track", "delete_track", "reorder_tracks",
+  "create_beat", "update_beat", "delete_beat", "reorder_beats",
+] as const satisfies readonly ProgressionCommandDTO["kind"][];
+
+function enumString<T extends string>(
+  value: unknown,
+  path: string,
+  choices: readonly T[],
+): T {
+  const candidate = stringValue(value, path);
+  return choices.includes(candidate as T)
+    ? candidate as T
+    : fail(path, choices.map((choice) => JSON.stringify(choice)).join(", "), value);
+}
+
+function positiveInteger(value: unknown, path: string): number {
+  const result = integerValue(value, path);
+  return result > 0 ? result : fail(path, "a positive safe integer", value);
+}
+
+function nonNegativeInteger(value: unknown, path: string): number {
+  const result = integerValue(value, path);
+  return result >= 0 ? result : fail(path, "a non-negative safe integer", value);
+}
+
+function lowercaseRevision(value: unknown, path: string): string {
+  const result = stringValue(value, path);
+  return /^[0-9a-f]{64}$/.test(result)
+    ? result
+    : fail(path, "a 64-character lowercase hexadecimal revision", value);
+}
+
+function progressionBeat(value: unknown, path: string): ProgressionBeatDTO {
+  const dto = record(value, path);
+  positiveInteger(requireField(dto, "id", path), fieldPath(path, "id"));
+  positiveInteger(requireField(dto, "track_id", path), fieldPath(path, "track_id"));
+  stringValue(requireField(dto, "text", path), fieldPath(path, "text"));
+  nonNegativeInteger(requireField(dto, "sort_order", path), fieldPath(path, "sort_order"));
+  const anchorKind = enumString(
+    requireField(dto, "anchor_kind", path),
+    fieldPath(path, "anchor_kind"),
+    PROGRESSION_ANCHOR_KINDS,
+  );
+  const sceneId = nullable(
+    requireField(dto, "scene_id", path),
+    fieldPath(path, "scene_id"),
+    positiveInteger,
+  );
+  const sceneTitle = stringValue(
+    requireField(dto, "scene_title", path),
+    fieldPath(path, "scene_title"),
+  );
+  const anchorRef = nullable(
+    requireField(dto, "anchor_ref", path),
+    fieldPath(path, "anchor_ref"),
+    stringValue,
+  );
+  stringValue(requireField(dto, "anchor_label", path), fieldPath(path, "anchor_label"));
+  if (anchorKind === "scene" && sceneId === null) {
+    fail(fieldPath(path, "scene_id"), "a positive scene id for a scene anchor", sceneId);
+  }
+  if (anchorKind !== "scene" && sceneId !== null) {
+    fail(fieldPath(path, "scene_id"), `null for a ${anchorKind} anchor`, sceneId);
+  }
+  if (anchorKind === "document_block" && !anchorRef?.trim()) {
+    fail(fieldPath(path, "anchor_ref"), "a non-empty reference for a document-block anchor", anchorRef);
+  }
+  if (anchorKind !== "document_block" && anchorRef !== null) {
+    fail(fieldPath(path, "anchor_ref"), `null for a ${anchorKind} anchor`, anchorRef);
+  }
+  if (anchorKind !== "scene" && sceneTitle) {
+    fail(fieldPath(path, "scene_title"), `blank for a ${anchorKind} anchor`, sceneTitle);
+  }
+  return value as ProgressionBeatDTO;
+}
+
+function progressionCoverage(value: unknown, path: string): ProgressionCoverageDTO {
+  const dto = record(value, path);
+  const total = nonNegativeInteger(requireField(dto, "total_beats", path), fieldPath(path, "total_beats"));
+  const anchored = nonNegativeInteger(requireField(dto, "anchored_beats", path), fieldPath(path, "anchored_beats"));
+  const unanchored = nonNegativeInteger(requireField(dto, "unanchored_beats", path), fieldPath(path, "unanchored_beats"));
+  const scene = nonNegativeInteger(requireField(dto, "scene_anchored_beats", path), fieldPath(path, "scene_anchored_beats"));
+  const document = nonNegativeInteger(requireField(dto, "document_anchored_beats", path), fieldPath(path, "document_anchored_beats"));
+  const percent = numberValue(requireField(dto, "coverage_percent", path), fieldPath(path, "coverage_percent"));
+  const status = enumString(
+    requireField(dto, "status", path),
+    fieldPath(path, "status"),
+    PROGRESSION_COVERAGE_STATUSES,
+  );
+  const outOfOrderPath = fieldPath(path, "out_of_order_beat_ids");
+  const outOfOrder = integerArray(requireField(dto, "out_of_order_beat_ids", path), outOfOrderPath);
+  const seen = new Set<number>();
+  outOfOrder.forEach((id, index) => {
+    if (id <= 0) fail(`${outOfOrderPath}[${index}]`, "a positive beat id", id);
+    if (seen.has(id)) fail(`${outOfOrderPath}[${index}]`, "a unique beat id", id);
+    seen.add(id);
+  });
+  if (anchored + unanchored !== total || scene + document !== anchored) {
+    fail(path, "internally consistent progression coverage counts", value);
+  }
+  if (percent < 0 || percent > 100) {
+    fail(fieldPath(path, "coverage_percent"), "a percentage from 0 to 100", percent);
+  }
+  const expectedStatus: ProgressionCoverageStatus = total === 0
+    ? "empty"
+    : anchored === 0
+      ? "unanchored"
+      : anchored === total
+        ? "complete"
+        : "partial";
+  if (status !== expectedStatus) {
+    fail(fieldPath(path, "status"), expectedStatus, status);
+  }
+  return value as ProgressionCoverageDTO;
+}
+
+function progressionTrack(value: unknown, path: string): ProgressionTrackDTO {
+  const dto = record(value, path);
+  const id = positiveInteger(requireField(dto, "id", path), fieldPath(path, "id"));
+  positiveInteger(requireField(dto, "project_id", path), fieldPath(path, "project_id"));
+  const kind = enumString(requireField(dto, "kind", path), fieldPath(path, "kind"), PROGRESSION_KINDS);
+  for (const key of [
+    "title", "description", "color_label",
+    "primary_psyke_entry_name", "primary_psyke_entry_type",
+    "secondary_psyke_entry_name", "secondary_psyke_entry_type",
+  ] as const) stringValue(requireField(dto, key, path), fieldPath(path, key));
+  nonNegativeInteger(requireField(dto, "sort_order", path), fieldPath(path, "sort_order"));
+  const legacyCompatibility = booleanValue(
+    requireField(dto, "legacy_compatibility", path),
+    fieldPath(path, "legacy_compatibility"),
+  );
+  const primaryId = nullable(requireField(dto, "primary_psyke_entry_id", path), fieldPath(path, "primary_psyke_entry_id"), positiveInteger);
+  const secondaryId = nullable(requireField(dto, "secondary_psyke_entry_id", path), fieldPath(path, "secondary_psyke_entry_id"), positiveInteger);
+  const primaryName = dto.primary_psyke_entry_name as string;
+  const primaryType = dto.primary_psyke_entry_type as string;
+  const secondaryName = dto.secondary_psyke_entry_name as string;
+  const secondaryType = dto.secondary_psyke_entry_type as string;
+  // Core permits intentionally blank PsykeEntry names and entry types. Stable
+  // ids carry generic relationship/legacy identity; kind-specific rules below
+  // still require character/theme/world subjects to have their exact types.
+  if (primaryId === null && (!!primaryName || !!primaryType)) {
+    fail(path, "a primary PSYKE id with optional label/type strings, or three blank values", value);
+  }
+  if (secondaryId === null && (!!secondaryName || !!secondaryType)) {
+    fail(path, "a secondary PSYKE id with optional label/type strings, or three blank values", value);
+  }
+  const legacyCustomSubject = kind === "custom"
+    && legacyCompatibility
+    && primaryId !== null
+    && secondaryId === null;
+  const subjectsValid = kind === "story" || kind === "custom"
+    ? primaryId === null && secondaryId === null || legacyCustomSubject
+    : kind === "character"
+      ? primaryId !== null && primaryType === "character" && secondaryId === null
+      : kind === "theme"
+        ? primaryId !== null && primaryType === "theme" && secondaryId === null
+        : kind === "world"
+          ? primaryId !== null && ["place", "object", "lore"].includes(primaryType) && secondaryId === null
+          : primaryId !== null && secondaryId !== null && primaryId !== secondaryId;
+  if (!subjectsValid) fail(path, `valid ${kind} progression subjects`, value);
+  const beatsPath = fieldPath(path, "beats");
+  const beats = arrayOf(requireField(dto, "beats", path), beatsPath, progressionBeat);
+  const beatIds = new Set<number>();
+  beats.forEach((beat, index) => {
+    if (beat.track_id !== id) {
+      fail(`${beatsPath}[${index}].track_id`, `the containing track id ${id}`, beat.track_id);
+    }
+    if (beatIds.has(beat.id)) fail(`${beatsPath}[${index}].id`, "a unique beat id", beat.id);
+    beatIds.add(beat.id);
+  });
+  const coverage = progressionCoverage(
+    requireField(dto, "coverage", path),
+    fieldPath(path, "coverage"),
+  );
+  if (coverage.total_beats !== beats.length) {
+    fail(`${fieldPath(path, "coverage")}.total_beats`, `the returned beat count ${beats.length}`, coverage.total_beats);
+  }
+  for (const [field, count] of [
+    ["anchored_beats", beats.filter((beat) => beat.anchor_kind !== "unanchored").length],
+    ["unanchored_beats", beats.filter((beat) => beat.anchor_kind === "unanchored").length],
+    ["scene_anchored_beats", beats.filter((beat) => beat.anchor_kind === "scene").length],
+    ["document_anchored_beats", beats.filter((beat) => beat.anchor_kind === "document_block").length],
+  ] as const) {
+    if (coverage[field] !== count) {
+      fail(`${fieldPath(path, "coverage")}.${field}`, `the derived count ${count}`, coverage[field]);
+    }
+  }
+  coverage.out_of_order_beat_ids.forEach((beatId, index) => {
+    if (!beatIds.has(beatId)) {
+      fail(`${fieldPath(path, "coverage")}.out_of_order_beat_ids[${index}]`, "an id in this track", beatId);
+    }
+  });
+  return value as ProgressionTrackDTO;
+}
+
+function progressionSummary(value: unknown, path: string): ProgressionSummaryDTO {
+  const dto = record(value, path);
+  for (const key of ["total_tracks", "total_beats", "anchored_beats", "unanchored_beats"] as const) {
+    nonNegativeInteger(requireField(dto, key, path), fieldPath(path, key));
+  }
+  const percent = numberValue(requireField(dto, "coverage_percent", path), fieldPath(path, "coverage_percent"));
+  if (percent < 0 || percent > 100) fail(fieldPath(path, "coverage_percent"), "a percentage from 0 to 100", percent);
+  const byKind = record(requireField(dto, "by_kind", path), fieldPath(path, "by_kind"));
+  for (const kind of PROGRESSION_KINDS) {
+    nonNegativeInteger(requireField(byKind, kind, fieldPath(path, "by_kind")), `${fieldPath(path, "by_kind")}.${kind}`);
+  }
+  const byStatus = record(requireField(dto, "by_status", path), fieldPath(path, "by_status"));
+  for (const status of PROGRESSION_COVERAGE_STATUSES) {
+    nonNegativeInteger(requireField(byStatus, status, fieldPath(path, "by_status")), `${fieldPath(path, "by_status")}.${status}`);
+  }
+  return value as ProgressionSummaryDTO;
+}
+
+function progressionSnapshot(value: unknown, path: string): ProgressionSnapshotDTO {
+  const dto = record(value, path);
+  const projectId = positiveInteger(requireField(dto, "project_id", path), fieldPath(path, "project_id"));
+  lowercaseRevision(requireField(dto, "revision", path), fieldPath(path, "revision"));
+  const tracksPath = fieldPath(path, "tracks");
+  const tracks = arrayOf(requireField(dto, "tracks", path), tracksPath, progressionTrack);
+  const trackIds = new Set<number>();
+  const beatIds = new Set<number>();
+  tracks.forEach((track, trackIndex) => {
+    if (track.project_id !== projectId) {
+      fail(`${tracksPath}[${trackIndex}].project_id`, `the snapshot project id ${projectId}`, track.project_id);
+    }
+    if (trackIds.has(track.id)) fail(`${tracksPath}[${trackIndex}].id`, "a unique track id", track.id);
+    trackIds.add(track.id);
+    track.beats.forEach((beat, beatIndex) => {
+      if (beatIds.has(beat.id)) fail(`${tracksPath}[${trackIndex}].beats[${beatIndex}].id`, "a project-unique beat id", beat.id);
+      beatIds.add(beat.id);
+    });
+  });
+  const summary = progressionSummary(requireField(dto, "summary", path), fieldPath(path, "summary"));
+  const totalBeats = tracks.reduce((sum, track) => sum + track.coverage.total_beats, 0);
+  const anchored = tracks.reduce((sum, track) => sum + track.coverage.anchored_beats, 0);
+  const unanchored = tracks.reduce((sum, track) => sum + track.coverage.unanchored_beats, 0);
+  if (summary.total_tracks !== tracks.length) fail(`${fieldPath(path, "summary")}.total_tracks`, `the returned track count ${tracks.length}`, summary.total_tracks);
+  if (summary.total_beats !== totalBeats) fail(`${fieldPath(path, "summary")}.total_beats`, `the returned beat count ${totalBeats}`, summary.total_beats);
+  if (summary.anchored_beats !== anchored) fail(`${fieldPath(path, "summary")}.anchored_beats`, `the derived anchored count ${anchored}`, summary.anchored_beats);
+  if (summary.unanchored_beats !== unanchored) fail(`${fieldPath(path, "summary")}.unanchored_beats`, `the derived unanchored count ${unanchored}`, summary.unanchored_beats);
+  for (const kind of PROGRESSION_KINDS) {
+    const expected = tracks.filter((track) => track.kind === kind).length;
+    if (summary.by_kind[kind] !== expected) fail(`${fieldPath(path, "summary")}.by_kind.${kind}`, `the derived count ${expected}`, summary.by_kind[kind]);
+  }
+  for (const status of PROGRESSION_COVERAGE_STATUSES) {
+    const expected = tracks.filter((track) => track.coverage.status === status).length;
+    if (summary.by_status[status] !== expected) fail(`${fieldPath(path, "summary")}.by_status.${status}`, `the derived count ${expected}`, summary.by_status[status]);
+  }
+  return value as ProgressionSnapshotDTO;
+}
+
+function progressionAffectedIds(
+  dto: JsonRecord,
+  prefix: "" | "original_",
+  changed: boolean,
+  replayed = false,
+): void {
+  for (const family of ["track", "beat"] as const) {
+    const field = `${prefix}affected_${family}_ids`;
+    const ids = integerArray(requireField(dto, field, "$"), `$.${field}`);
+    const seen = new Set<number>();
+    ids.forEach((id, index) => {
+      if (id <= 0) fail(`$.${field}[${index}]`, `a positive ${family} id`, id);
+      if (seen.has(id)) fail(`$.${field}[${index}]`, `a unique ${family} id`, id);
+      seen.add(id);
+    });
+    if (!changed && ids.length) fail(`$.${field}`, "empty when changed is false", ids);
+    const createdField = `${prefix}created_${family}_id`;
+    const created = nullable(requireField(dto, createdField, "$"), `$.${createdField}`, positiveInteger);
+    if (!changed && created !== null && !replayed) {
+      fail(`$.${createdField}`, "null when changed is false for a fresh command", created);
+    }
+    if (created !== null && !ids.includes(created) && !replayed) {
+      fail(`$.${createdField}`, `an id in ${field}`, created);
+    }
+  }
+}
+
+export function validateProgressionCommandResultDTOForRequest(
+  value: unknown,
+  projectId: number,
+  command: ProgressionCommandDTO,
+): ProgressionCommandResultDTO {
+  const dto = record(value, "$");
+  const progressions = progressionSnapshot(requireField(dto, "progressions", "$"), "$.progressions");
+  const changed = booleanValue(requireField(dto, "changed", "$"), "$.changed");
+  const replayed = booleanValue(requireField(dto, "replayed", "$"), "$.replayed");
+  const appliedRevision = lowercaseRevision(requireField(dto, "applied_revision", "$"), "$.applied_revision");
+  progressionAffectedIds(dto, "", changed, replayed);
+  if (progressions.project_id !== projectId) fail("$.progressions.project_id", `the requested project id ${projectId}`, progressions.project_id);
+  if (replayed && changed) fail("$.changed", "false for a replay", changed);
+  if (!replayed && appliedRevision !== progressions.revision) fail("$.applied_revision", "the returned Progressions revision", appliedRevision);
+  if (!replayed && !changed && progressions.revision !== command.expected_revision) fail("$.progressions.revision", "the expected revision for a no-op", progressions.revision);
+  if (!replayed && changed && progressions.revision === command.expected_revision) fail("$.progressions.revision", "a new revision for a changed command", progressions.revision);
+  const expectedCreated = command.kind === "create_track"
+    ? "created_track_id"
+    : command.kind === "create_beat"
+      ? "created_beat_id"
+      : null;
+  for (const field of ["created_track_id", "created_beat_id"] as const) {
+    const id = dto[field] as number | null;
+    if (!replayed && changed && field === expectedCreated && id === null) fail(`$.${field}`, `a created id for ${command.kind}`, id);
+    if (field !== expectedCreated && id !== null) fail(`$.${field}`, `null for ${command.kind}`, id);
+  }
+  return value as ProgressionCommandResultDTO;
+}
+
+export function validateProgressionCommandReceiptDTOForRequest(
+  value: unknown,
+  projectId: number,
+  command: ProgressionCommandDTO,
+  expectedRequestDigest: string,
+): ProgressionCommandReceiptDTO {
+  const dto = record(value, "$");
+  const returnedProjectId = positiveInteger(requireField(dto, "project_id", "$"), "$.project_id");
+  const requestDigest = lowercaseRevision(requireField(dto, "request_digest", "$"), "$.request_digest");
+  const commandKind = enumString(requireField(dto, "command_kind", "$"), "$.command_kind", PROGRESSION_COMMAND_KINDS);
+  const expectedRevision = lowercaseRevision(requireField(dto, "expected_revision", "$"), "$.expected_revision");
+  const appliedRevision = lowercaseRevision(requireField(dto, "applied_revision", "$"), "$.applied_revision");
+  const changed = booleanValue(requireField(dto, "original_changed", "$"), "$.original_changed");
+  progressionAffectedIds(dto, "original_", changed);
+  isoTimestamp(requireField(dto, "committed_at", "$"), "$.committed_at");
+  if (returnedProjectId !== projectId) fail("$.project_id", `the requested project id ${projectId}`, returnedProjectId);
+  if (requestDigest !== expectedRequestDigest) fail("$.request_digest", "the canonical digest for the submitted Progressions command", requestDigest);
+  if (commandKind !== command.kind) fail("$.command_kind", `the submitted command kind ${command.kind}`, commandKind);
+  if (expectedRevision !== command.expected_revision) fail("$.expected_revision", "the submitted expected revision", expectedRevision);
+  if (changed && appliedRevision === expectedRevision) fail("$.applied_revision", "a new committed revision", appliedRevision);
+  if (!changed && appliedRevision !== expectedRevision) fail("$.applied_revision", "the expected revision for a no-op command", appliedRevision);
+  const expectedCreated = command.kind === "create_track"
+    ? "original_created_track_id"
+    : command.kind === "create_beat"
+      ? "original_created_beat_id"
+      : null;
+  for (const field of ["original_created_track_id", "original_created_beat_id"] as const) {
+    const id = dto[field] as number | null;
+    if (changed && field === expectedCreated && id === null) fail(`$.${field}`, `a created id for ${command.kind}`, id);
+    if (field !== expectedCreated && id !== null) fail(`$.${field}`, `null for ${command.kind}`, id);
+  }
+  return value as ProgressionCommandReceiptDTO;
+}
+
+export function validateProgressionSnapshotDTOForProject(
+  value: unknown,
+  projectId: number,
+): ProgressionSnapshotDTO {
+  const snapshot = progressionSnapshot(value, "$");
+  if (snapshot.project_id !== projectId) fail("$.project_id", `the requested project id ${projectId}`, snapshot.project_id);
+  return snapshot;
+}
+
 function canvasPlotNode(value: unknown, path: string): CanvasPlotNodeDTO {
   const dto = record(value, path);
   const id = integerValue(requireField(dto, "id", path), fieldPath(path, "id"));
@@ -3491,6 +3872,17 @@ export const validateTimelineSnapshotDTO: RuntimeDtoValidator<TimelineSnapshotDT
   timelineSnapshot(value, "$");
 export const validateTimelineCommandResultDTO: RuntimeDtoValidator<TimelineCommandResultDTO> = (value) =>
   timelineCommandResult(value, "$");
+export const validateProgressionSnapshotDTO: RuntimeDtoValidator<ProgressionSnapshotDTO> = (value) =>
+  progressionSnapshot(value, "$");
+export const validateProgressionCommandResultDTO: RuntimeDtoValidator<ProgressionCommandResultDTO> = (value) => {
+  const dto = record(value, "$");
+  progressionSnapshot(requireField(dto, "progressions", "$"), "$.progressions");
+  const changed = booleanValue(requireField(dto, "changed", "$"), "$.changed");
+  const replayed = booleanValue(requireField(dto, "replayed", "$"), "$.replayed");
+  lowercaseRevision(requireField(dto, "applied_revision", "$"), "$.applied_revision");
+  progressionAffectedIds(dto, "", changed, replayed);
+  return value as ProgressionCommandResultDTO;
+};
 export const validateCanvasPlotSnapshotDTO: RuntimeDtoValidator<CanvasPlotSnapshotDTO> = (value) =>
   canvasPlotSnapshot(value, "$");
 export const validateCanvasPlotCommandResultDTO: RuntimeDtoValidator<CanvasPlotCommandResultDTO> = (value) =>

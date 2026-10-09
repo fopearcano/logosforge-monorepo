@@ -18,6 +18,12 @@ import {
 import { buildAppMenu } from './menu';
 import { installMcpCompanion, mcpCompanionPath, runtimeDescriptorPath } from './mcp-runtime';
 import {
+  drainProgressionCommandRecoveryOperations,
+  loadProgressionCommandRecovery,
+  removeProgressionCommandRecovery,
+  saveProgressionCommandRecovery,
+} from './progression-command-store';
+import {
   bundledMcpExecutableName,
   resolveBundledCorePath,
   resolveBundledMcpPath,
@@ -426,7 +432,10 @@ async function handleCloseRequest(): Promise<void> {
   // Resume state is host-owned and may still be fsyncing after the renderer's
   // project/save barrier completed. Do not destroy the window or process until
   // every session operation accepted so far has settled.
-  await drainDesktopSessionSaves();
+  await Promise.all([
+    drainDesktopSessionSaves(),
+    drainProgressionCommandRecoveryOperations(),
+  ]);
   if (isQuitting) {
     // Child panel windows must not get a chance to veto app shutdown or publish
     // layout mutations after the renderer's save barrier has completed.
@@ -562,6 +571,18 @@ function registerIpc(): void {
     }
     return saveLastActiveProjectId(p.projectId);
   });
+  ipcMain.handle('progression-command:load', (event, p?: { storageKey?: unknown }) => {
+    requireMainRenderer(event);
+    return loadProgressionCommandRecovery(p?.storageKey);
+  });
+  ipcMain.handle('progression-command:save', (event, p?: { storageKey?: unknown; value?: unknown }) => {
+    requireMainRenderer(event);
+    return saveProgressionCommandRecovery(p?.storageKey, p?.value);
+  });
+  ipcMain.handle('progression-command:remove', (event, p?: { storageKey?: unknown; expectedValue?: unknown }) => {
+    requireMainRenderer(event);
+    return removeProgressionCommandRecovery(p?.storageKey, p?.expectedValue);
+  });
   ipcMain.handle(NATIVE_PANEL_WINDOW_CHANNELS.show, (event, payload: unknown) => {
     requireMainRenderer(event);
     const { panelId, token } = requireNativePanelPayload(payload);
@@ -693,7 +714,10 @@ app.on('before-quit', (event) => {
   }
   if (shutdownInProgress) return;
   shutdownInProgress = true;
-  void drainDesktopSessionSaves().then(() => core.stop()).finally(() => {
+  void Promise.all([
+    drainDesktopSessionSaves(),
+    drainProgressionCommandRecoveryOperations(),
+  ]).then(() => core.stop()).finally(() => {
     destroyNativePanelWindows();
     shutdownPrepared = true;
     shutdownInProgress = false;

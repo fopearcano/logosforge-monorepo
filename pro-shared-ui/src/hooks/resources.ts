@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import type { NoteDTO, InlineCommentDTO, CharacterDTO, SceneDTO, ManuscriptSnapshotDTO, StoryStructureDTO, PsykeEntryDTO, PsykeRelationDTO, PsykeProgressionDTO, OutlineNodeDTO, ProjectDTO, TimelineSnapshotDTO, CanvasPlotSnapshotDTO, PlotBlockDTO, ExportRequestDTO, ExportResponseDTO, NarrativeDashboardDTO, ContinuityReportDTO, PacingInsightDTO, BalanceDataDTO, StoryHealthDTO, StructuralAnalysisDTO, WorkflowTemplateDTO, WorkflowRecommendationDTO, WorkflowRunDTO, WorkflowEventDTO, DecisionRadarDTO, KnowledgeGraphQueryDTO, KnowledgeGraphReadDTO, KnowledgeGraphHiddenEdgePageDTO, GraphGravityDTO, AdaptDTO, ReviewReportDTO, FormatReviewDTO, QuantumResultDTO, AssistantResponseDTO, ExtractionResultDTO, ExtractionApplyRequestDTO, ExtractionApplyReportDTO, EventName } from "@logosforge/ui-contracts";
+import type { NoteDTO, InlineCommentDTO, CharacterDTO, SceneDTO, ManuscriptSnapshotDTO, StoryStructureDTO, PsykeEntryDTO, PsykeRelationDTO, PsykeProgressionDTO, OutlineNodeDTO, ProjectDTO, TimelineSnapshotDTO, CanvasPlotSnapshotDTO, ProgressionSnapshotDTO, PlotBlockDTO, ExportRequestDTO, ExportResponseDTO, NarrativeDashboardDTO, ContinuityReportDTO, PacingInsightDTO, BalanceDataDTO, StoryHealthDTO, StructuralAnalysisDTO, WorkflowTemplateDTO, WorkflowRecommendationDTO, WorkflowRunDTO, WorkflowEventDTO, DecisionRadarDTO, KnowledgeGraphQueryDTO, KnowledgeGraphReadDTO, KnowledgeGraphHiddenEdgePageDTO, GraphGravityDTO, AdaptDTO, ReviewReportDTO, FormatReviewDTO, QuantumResultDTO, AssistantResponseDTO, ExtractionResultDTO, ExtractionApplyRequestDTO, ExtractionApplyReportDTO, EventName } from "@logosforge/ui-contracts";
 import type { ExtractionJobDTO } from "@logosforge/ui-contracts";
 import { useStudio } from "../adapters/StudioProvider";
 import { useResource, type Resource } from "./useResource";
@@ -150,7 +150,7 @@ export function usePlot(): Resource<PlotBlockDTO[]> {
 /** Derived narrative dashboard (tension curve, character/theme presence, structure) — read-only. */
 export function useDashboard(): Resource<NarrativeDashboardDTO> {
   const { api, projectId } = useStudio();
-  return useResource(projectId ?? null, () => api.getDashboard(projectId as number), ["dashboard_changed", "scenes_changed", "scene_changed", "psyke_changed"]);
+  return useResource(projectId ?? null, () => api.getDashboard(projectId as number), ["dashboard_changed", "scenes_changed", "scene_changed", "psyke_changed", "progressions_changed"]);
 }
 
 /** Continuity issues (contradictions, drift, gaps) by dimension + counts. */
@@ -207,7 +207,7 @@ export function useWorkflowRecommendations(): Resource<WorkflowRecommendationDTO
     () => api.getWorkflowRecommendations(projectId as number),
     [
       "workflow_changed", "project_data_changed", "scene_changed", "scenes_changed",
-      "psyke_changed", "outline_changed", "knowledge_graph_changed", "continuity_changed",
+      "psyke_changed", "outline_changed", "progressions_changed", "knowledge_graph_changed", "continuity_changed",
     ],
   );
 }
@@ -248,6 +248,7 @@ export function useDecisionRadar(): Resource<DecisionRadarDTO> {
     "outline_changed",
     "plot_changed",
     "timeline_changed",
+    "progressions_changed",
     "project_data_changed",
     "knowledge_graph_changed",
     "continuity_changed",
@@ -277,7 +278,7 @@ export function useKnowledgeGraph(query: KnowledgeGraphQueryDTO = {}): Resource<
     }),
     [
       "project_data_changed", "scene_changed", "scenes_changed", "outline_changed",
-      "plot_changed", "timeline_changed", "psyke_changed", "notes_changed", "characters_changed",
+      "plot_changed", "timeline_changed", "progressions_changed", "psyke_changed", "notes_changed", "characters_changed",
       "knowledge_graph_changed",
     ],
   );
@@ -687,6 +688,16 @@ export function usePsykeRelations(): Resource<PsykeRelationDTO[]> {
 export function usePsykeProgressions(): Resource<PsykeProgressionDTO[]> {
   const { api, projectId } = useStudio();
   return useResource(projectId ?? null, () => api.listProgressions(projectId as number), ["psyke_changed"]);
+}
+
+/** First-class, revisioned story/character/theme progression tracks. */
+export function useProgressions(): Resource<ProgressionSnapshotDTO> {
+  const { api, projectId } = useStudio();
+  return useResource(
+    projectId ?? null,
+    () => api.getProgressions(projectId as number),
+    ["progressions_changed", "psyke_changed", "scene_changed", "scenes_changed", "project_data_changed"],
+  );
 }
 
 /**
