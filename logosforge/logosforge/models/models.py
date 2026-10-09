@@ -817,6 +817,56 @@ class PsykeProgression(SQLModel, table=True):
     sort_order: int = 0
 
 
+class ProgressionTrack(SQLModel, table=True):
+    """A first-class ordered narrative progression owned by one project."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    project_id: int = Field(foreign_key="project.id", index=True)
+    kind: str = "custom"
+    title: str
+    description: str = ""
+    color_label: str = ""
+    sort_order: int = 0
+    primary_psyke_entry_id: Optional[int] = Field(
+        default=None, foreign_key="psykeentry.id",
+    )
+    secondary_psyke_entry_id: Optional[int] = Field(
+        default=None, foreign_key="psykeentry.id",
+    )
+    # A designated compatibility track is the canonical backing store for the
+    # legacy per-entry PsykeProgression API.  PSYKE ids are globally unique, so
+    # a global uniqueness constraint also enforces one such track per entry.
+    legacy_psyke_entry_id: Optional[int] = Field(
+        default=None, foreign_key="psykeentry.id", unique=True,
+    )
+    created_at: datetime = Field(default_factory=_now)
+
+
+class ProgressionBeat(SQLModel, table=True):
+    """One ordered state change within a :class:`ProgressionTrack`."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    project_id: int = Field(foreign_key="project.id", index=True)
+    track_id: int = Field(foreign_key="progressiontrack.id", index=True)
+    text: str
+    sort_order: int = 0
+    anchor_kind: str = "unanchored"
+    scene_id: Optional[int] = Field(default=None, foreign_key="scene.id")
+    anchor_ref: Optional[str] = None
+    anchor_label: str = ""
+    created_at: datetime = Field(default_factory=_now)
+
+
+class ProgressionCommandReceipt(SQLModel, table=True):
+    """Durable exactly-once receipt for a Progressions command."""
+
+    project_id: int = Field(foreign_key="project.id", primary_key=True)
+    idempotency_key_hash: str = Field(primary_key=True, max_length=64)
+    request_digest: str = Field(max_length=64)
+    result_json: str
+    created_at: datetime = Field(default_factory=_now)
+
+
 class StoryMemoryEntry(SQLModel, table=True):
     """Extracted narrative memory — continuity-relevant facts."""
 

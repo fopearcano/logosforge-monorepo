@@ -24,19 +24,21 @@ alpha. Nothing here is a data-safety risk; it's about scope and polish. See
   them in the command transaction. ([GuidedWorkflows.md](GuidedWorkflows.md))
 - **Timeline relationships and Phase 7C lenses** — HTTP 1.15.0, the Pro
   relationship editor, FLOW ribbon/Story Pulse/warnings, read-only MODE LENS,
-  and the existing 46-tool MCP surface are implemented in current source. The
+  and the then-current 46-tool MCP surface are implemented. The current MCP
+  1.12.0 surface has 48 tools after adding canonical Progressions read/proposal.
+  The
   exact `33feac9` source passed the hosted Windows packaged pointer workspace,
   restart-persistence, frozen-companion, and cross-product journey. The exact
   Phase 7B `cfd4c7b` AppImage passed the full packaged workspace + MCP journey
   on clean Ubuntu 22.04; current-source Linux/Xvfb and Intel macOS journeys
   remain pending. The Timeline still does not replace the independent Canvas
   Plot board.
-- **Phase 7D live-event recovery** — HTTP 1.16.0 atomically records pending
+- **Live-event recovery** — HTTP 1.17.0 atomically records pending
   invalidations with changed Timeline, Canvas Plot, Knowledge Graph, Semantic
-  Continuity, and Guided Workflow mutations/receipts. The broker reconciles and
+  Continuity, Guided Workflow, and Progressions mutations/receipts. The broker reconciles and
   acknowledges them after commit and on API-process startup, while Pro refetches
   on connection recovery, broker replacement, or bounded-ring truncation. Full validation and the
-  packaged gate are still pending; MCP remains 1.11.0 with 46 tools.
+  packaged gate are still pending; MCP is 1.12.0 with 48 tools.
 
 ## Experimental / optional
 
@@ -164,6 +166,13 @@ alpha. Nothing here is a data-safety risk; it's about scope and polish. See
   (voice drift, knowledge leak, object reuse, lore-rule violation) are not done.
 - **Knowledge Graph** centrality is plain degree; undefined-term detection is
   heuristic.
+- **Progressions in the Knowledge Graph** — native tracks and beats now project
+  as traceable nodes with confirmed membership, subject, ordering, and explicit
+  scene-anchor evidence. Projection is bounded to 100 native tracks / 400 beats
+  per build. Whiteboard document-block anchors remain reference metadata because
+  Core cannot inspect the open Whiteboard document; they are never guessed into
+  Pro scenes. Designated legacy tracks retain their historical PSYKE scene edge
+  and are deliberately not duplicated as native nodes.
 - **Grammar / spelling checking is DEFERRED for Alpha** (see the Languages
   section): the local rule-based checker remains in the codebase but has no
   active UI route — the Review-menu entry is a disabled "deferred after
@@ -238,8 +247,8 @@ alpha. Nothing here is a data-safety risk; it's about scope and polish. See
    native platforms. The exact `33feac9` source passed the hosted Windows
    packaged journey; the exact Phase 7B `cfd4c7b` AppImage passed the full
    packaged workspace + MCP journey on a clean Ubuntu 22.04 VM. Phase 7D's
-   later HTTP 1.16.0 outbox changes still need source-bound packaged validation;
-   MCP remains 1.11.0.
+   later HTTP 1.17.0 outbox and Progressions changes still need source-bound
+   packaged validation; MCP is 1.12.0.
 3. Harden and authenticate API LAN/remote transport before any non-desktop
    exposure.
 4. Finish Phase 7C Linux/macOS packaged validation, then evaluate richer dated
@@ -248,15 +257,16 @@ alpha. Nothing here is a data-safety risk; it's about scope and polish. See
 ## Live-event delivery boundary
 
 Phase 7D protects changed Timeline, Canvas Plot, Knowledge Graph, Semantic
-Continuity, and Guided Workflow commands with pending invalidation rows written
-in the same SQLite transaction as their mutation and receipt. The broker moves
-those committed rows into its bounded live ring and acknowledges them after
-commit and when an API process starts. Token-checked acknowledgement protects
-against SQLite row-id reuse. Poll exposes `broker_instance_id` and a bounded-
-ring reset signal; SSE emits a full `connected` control message plus resumable
-ids for domain events and repeats the control boundary on a live ring gap. Pro
-responds to recovery, broker replacement, cursor regression, or truncation by
-refetching authoritative state.
+Continuity, Guided Workflow, and Progressions commands with pending
+invalidation rows written in the same SQLite transaction as their mutation and
+receipt. The broker moves those committed rows into its bounded live ring and
+acknowledges them after commit and when an API process starts. Token-checked
+acknowledgement protects against SQLite row-id reuse. Poll exposes
+`broker_instance_id` and a bounded-ring reset signal; SSE emits a full
+`connected` control message plus resumable ids for domain events and repeats
+the control boundary on a live ring gap. Pro responds to recovery, broker
+replacement, cursor regression, or truncation by refetching authoritative
+state.
 
 The implementation is deliberately a one-API-process boundary. It does not
 provide multi-process fan-out or an independent background delivery worker;

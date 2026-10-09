@@ -32,7 +32,7 @@ from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
 
-DB_SCHEMA_VERSION = 6
+DB_SCHEMA_VERSION = 7
 SQLITE_BUSY_TIMEOUT_MS = 5000
 BACKUP_INSTALL_WAIT_SECONDS = 10.0
 
@@ -304,6 +304,119 @@ def _repair_character_psyke_foreign_key(conn) -> None:
         conn.execute(text("PRAGMA foreign_keys=ON"))
         conn.commit()
 
+
+def _legacy_progression_kind_for_entry_type(entry_type: str) -> str:
+    """Map a legacy PSYKE subject type to its compatibility track kind."""
+    return {
+        "character": "character",
+        "theme": "theme",
+        "place": "world",
+        "object": "world",
+        "lore": "world",
+    }.get(entry_type, "custom")
+
+
+def _migrate_legacy_progressions(conn) -> None:
+    """Move legacy per-entry rows into designated canonical tracks.
+
+    SQLModel creates the three additive v7 tables before this runs.  Keeping
+    the old table empty after a verified copy makes the compatibility API a
+    view over one source of truth rather than a fragile dual-write system.
+    """
+    legacy_rows = conn.execute(text(
+        "SELECT p.id, p.entry_id, p.text, p.scene_id, p.sort_order, "
+        "e.project_id, e.name, e.entry_type, e.created_at "
+        "FROM psykeprogression AS p "
+        "JOIN psykeentry AS e ON e.id = p.entry_id "
+        "ORDER BY e.project_id, p.entry_id, p.sort_order, p.id"
+    )).fetchall()
+    if not legacy_rows:
+        return
+
+    track_by_entry: dict[int, int] = {}
+    for row in legacy_rows:
+        entry_id = int(row[1])
+        if entry_id in track_by_entry:
+            continue
+        existing = conn.execute(text(
+            "SELECT id FROM progressiontrack "
+            "WHERE legacy_psyke_entry_id=:entry_id"
+        ), {"entry_id": entry_id}).fetchone()
+        if existing is not None:
+            track_by_entry[entry_id] = int(existing[0])
+            continue
+        project_id = int(row[5])
+        next_order = int(conn.execute(text(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 "
+            "FROM progressiontrack WHERE project_id=:project_id"
+        ), {"project_id": project_id}).scalar_one())
+        entry_type = str(row[7] or "other")
+        kind = _legacy_progression_kind_for_entry_type(entry_type)
+        inserted = conn.execute(text(
+            "INSERT INTO progressiontrack ("
+            "project_id, kind, title, description, color_label, sort_order, "
+            "primary_psyke_entry_id, secondary_psyke_entry_id, "
+            "legacy_psyke_entry_id, created_at"
+            ") VALUES ("
+            ":project_id, :kind, :title, '', '', :sort_order, "
+            ":entry_id, NULL, :entry_id, :created_at)"
+        ), {
+            "project_id": project_id,
+            "kind": kind,
+            "title": str(row[6] or "Progression"),
+            "sort_order": next_order,
+            "entry_id": entry_id,
+            "created_at": row[8] or datetime.now(timezone.utc),
+        })
+        track_by_entry[entry_id] = int(inserted.lastrowid)
+
+    next_beat_order_by_entry: dict[int, int] = {}
+    for row in legacy_rows:
+        legacy_id = int(row[0])
+        entry_id = int(row[1])
+        dense_order = next_beat_order_by_entry.get(entry_id, 0)
+        next_beat_order_by_entry[entry_id] = dense_order + 1
+        if conn.execute(text(
+            "SELECT 1 FROM progressionbeat WHERE id=:beat_id"
+        ), {"beat_id": legacy_id}).fetchone() is not None:
+            continue
+        scene_id = int(row[3]) if row[3] is not None else None
+        if scene_id is not None and conn.execute(text(
+            "SELECT 1 FROM scene WHERE id=:scene_id AND project_id=:project_id"
+        ), {
+            "scene_id": scene_id,
+            "project_id": int(row[5]),
+        }).fetchone() is None:
+            # Released legacy code could retain a cross-project scene id when
+            # foreign keys existed but project ownership was not checked.
+            scene_id = None
+        conn.execute(text(
+            "INSERT INTO progressionbeat ("
+            "id, project_id, track_id, text, sort_order, anchor_kind, "
+            "scene_id, anchor_ref, anchor_label, created_at"
+            ") VALUES ("
+            ":id, :project_id, :track_id, :beat_text, :sort_order, "
+            ":anchor_kind, :scene_id, NULL, '', :created_at)"
+        ), {
+            "id": legacy_id,
+            "project_id": int(row[5]),
+            "track_id": track_by_entry[entry_id],
+            "beat_text": str(row[2] or ""),
+            "sort_order": dense_order,
+            "anchor_kind": "scene" if scene_id is not None else "unanchored",
+            "scene_id": scene_id,
+            "created_at": row[8] or datetime.now(timezone.utc),
+        })
+
+    copied = int(conn.execute(text(
+        "SELECT COUNT(*) FROM progressionbeat AS b "
+        "JOIN progressiontrack AS t ON t.id=b.track_id "
+        "WHERE t.legacy_psyke_entry_id IS NOT NULL"
+    )).scalar_one())
+    if copied < len(legacy_rows):
+        raise RuntimeError("Legacy progression migration changed the row count")
+    conn.execute(text("DELETE FROM psykeprogression"))
+
 # Sentinel for partial updates: distinguishes "argument not provided" (leave the
 # column as-is) from an explicit ``None`` (clear a nullable column).
 _UNSET: object = object()
@@ -333,6 +446,9 @@ from logosforge.models import (
     PsykeEntry,
     VoiceGlossaryTerm,
     PsykeProgression,
+    ProgressionTrack,
+    ProgressionBeat,
+    ProgressionCommandReceipt,
     PsykeRelation,
     QuantumStateRecord,
     Scene,
@@ -527,6 +643,47 @@ class CanvasPlotFrameNotFound(LookupError):
 
 class CanvasPlotSceneNotFound(LookupError):
     """The requested Scene is absent from the path-scoped Project."""
+
+
+class ProgressionRevisionConflict(RuntimeError):
+    """Raised when a Progressions command targets older project state."""
+
+    def __init__(self, expected: str, current: str) -> None:
+        super().__init__("progressions revision does not match")
+        self.expected = expected
+        self.current = current
+
+
+class ProgressionCommandError(ValueError):
+    """A requested Progressions mutation is invalid or ambiguous."""
+
+
+class ProgressionIdempotencyKeyConflict(RuntimeError):
+    """An Idempotency-Key was already committed for another command."""
+
+
+class ProgressionProjectNotFound(LookupError):
+    """The path-scoped Project disappeared before the transaction began."""
+
+
+class ProgressionTrackNotFound(LookupError):
+    """A progression track is absent from the path-scoped Project."""
+
+
+class ProgressionBeatNotFound(LookupError):
+    """A progression beat is absent from the path-scoped Project."""
+
+
+class ProgressionSceneNotFound(LookupError):
+    """A scene anchor is absent from the path-scoped Project."""
+
+
+class ProgressionPsykeEntryNotFound(LookupError):
+    """A subject entry is absent from the path-scoped Project."""
+
+
+class ProgressionStateCorrupt(RuntimeError):
+    """Persisted Progressions rows violate ownership or anchor invariants."""
 
 
 class KnowledgeGraphRevisionConflict(RuntimeError):
@@ -764,6 +921,72 @@ class CanvasPlotCommandReceiptData:
 
 
 @dataclass(frozen=True)
+class ProgressionCoverageData:
+    """Deterministic anchor coverage for one ordered progression track."""
+
+    total_beats: int
+    anchored_beats: int
+    unanchored_beats: int
+    scene_anchored_beats: int
+    document_anchored_beats: int
+    coverage_percent: float
+    status: str
+    out_of_order_beat_ids: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class ProgressionTrackReadData:
+    """One detached track plus all labels needed by the public DTO."""
+
+    track: ProgressionTrack
+    beats: tuple[ProgressionBeat, ...]
+    primary_entry: PsykeEntry | None
+    secondary_entry: PsykeEntry | None
+    scene_titles_by_id: dict[int, str]
+    coverage: ProgressionCoverageData
+
+
+@dataclass(frozen=True)
+class ProgressionReadSnapshot:
+    """One coherent detached read of every canonical Progressions row."""
+
+    project: Project
+    tracks: tuple[ProgressionTrackReadData, ...]
+    revision: str
+
+
+@dataclass(frozen=True)
+class ProgressionCommandResult:
+    """Committed Progressions state plus focused invalidation metadata."""
+
+    snapshot: ProgressionReadSnapshot
+    changed: bool
+    affected_track_ids: tuple[int, ...] = ()
+    affected_beat_ids: tuple[int, ...] = ()
+    created_track_id: int | None = None
+    created_beat_id: int | None = None
+    replayed: bool = False
+    applied_revision: str = ""
+
+
+@dataclass(frozen=True)
+class ProgressionCommandReceiptData:
+    """Decoded durable Progressions command receipt."""
+
+    project_id: int
+    request_digest: str
+    kind: str
+    expected_revision: str
+    applied_revision: str
+    original_changed: bool
+    original_affected_track_ids: tuple[int, ...]
+    original_affected_beat_ids: tuple[int, ...]
+    original_created_track_id: int | None
+    original_created_beat_id: int | None
+    created_at: datetime
+
+
+@dataclass(frozen=True)
 class KnowledgeGraphEdgeIdentity:
     """Public, directional identity of one graph edge proposal."""
 
@@ -881,6 +1104,7 @@ class WorkflowCommandReceiptData:
 
 _TIMELINE_RECEIPT_SCHEMA_VERSION = 2
 _CANVAS_PLOT_RECEIPT_SCHEMA_VERSION = 1
+_PROGRESSION_RECEIPT_SCHEMA_VERSION = 1
 _KNOWLEDGE_GRAPH_RECEIPT_SCHEMA_VERSION = 1
 _CONTINUITY_RECEIPT_SCHEMA_VERSION = 2
 _WORKFLOW_RECEIPT_SCHEMA_VERSION = 1
@@ -917,6 +1141,22 @@ _CANVAS_PLOT_COMMAND_KINDS = frozenset({
     "update_frame",
     "delete_frame",
 })
+PROGRESSION_KINDS = frozenset({
+    "story", "character", "relationship", "theme", "world", "custom",
+})
+PROGRESSION_ANCHOR_KINDS = frozenset({
+    "unanchored", "scene", "document_block",
+})
+_PROGRESSION_COMMAND_KINDS = frozenset({
+    "create_track",
+    "update_track",
+    "delete_track",
+    "reorder_tracks",
+    "create_beat",
+    "update_beat",
+    "delete_beat",
+    "reorder_beats",
+})
 _KNOWLEDGE_GRAPH_COMMAND_KINDS = frozenset({
     "confirm_edge",
     "hide_edge",
@@ -943,6 +1183,9 @@ _TIMELINE_IDEMPOTENCY_KEY_RE = re.compile(
 _CANVAS_PLOT_IDEMPOTENCY_KEY_RE = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$"
 )
+_PROGRESSION_IDEMPOTENCY_KEY_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$"
+)
 _KNOWLEDGE_GRAPH_IDEMPOTENCY_KEY_RE = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$"
 )
@@ -954,6 +1197,173 @@ _WORKFLOW_IDEMPOTENCY_KEY_RE = re.compile(
 )
 _CONTINUITY_ISSUE_KEY_RE = re.compile(r"^[0-9a-f]{16}$")
 _LOWER_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _progression_idempotency_key_hash(value: str) -> str:
+    """Validate and irreversibly identify a Progressions retry capability."""
+    if not isinstance(value, str):
+        raise ProgressionCommandError("Idempotency-Key must be a string")
+    if (
+        value != value.strip()
+        or _PROGRESSION_IDEMPOTENCY_KEY_RE.fullmatch(value) is None
+    ):
+        raise ProgressionCommandError(
+            "Idempotency-Key must contain 16-128 safe ASCII characters"
+        )
+    return hashlib.sha256(value.encode("ascii")).hexdigest()
+
+
+def _progression_command_request_digest(
+    project_id: int,
+    kind: str,
+    expected_revision: str,
+    fields: dict,
+) -> str:
+    """Content-address one validated command for exact retry recovery."""
+    try:
+        encoded = json.dumps(
+            {
+                "scope": "progression-command-v1",
+                "project_id": int(project_id),
+                "kind": kind,
+                "expected_revision": expected_revision,
+                "fields": fields,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise ProgressionCommandError(
+            "Progressions command contains a value that cannot be persisted"
+        ) from exc
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _progression_receipt_result_json(
+    *,
+    kind: str,
+    expected_revision: str,
+    applied_revision: str,
+    original_changed: bool,
+    original_affected_track_ids: tuple[int, ...],
+    original_affected_beat_ids: tuple[int, ...],
+    original_created_track_id: int | None,
+    original_created_beat_id: int | None,
+) -> str:
+    return json.dumps(
+        {
+            "schema_version": _PROGRESSION_RECEIPT_SCHEMA_VERSION,
+            "kind": kind,
+            "expected_revision": expected_revision,
+            "applied_revision": applied_revision,
+            "original_changed": original_changed,
+            "original_affected_track_ids": list(
+                original_affected_track_ids
+            ),
+            "original_affected_beat_ids": list(original_affected_beat_ids),
+            "original_created_track_id": original_created_track_id,
+            "original_created_beat_id": original_created_beat_id,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+
+
+def _decode_progression_command_receipt(
+    row: ProgressionCommandReceipt,
+) -> ProgressionCommandReceiptData:
+    """Decode a Progressions receipt fail-closed."""
+    try:
+        payload = json.loads(row.result_json)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise RuntimeError("Progressions command receipt is corrupt") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("Progressions command receipt is corrupt")
+
+    def valid_ids(value) -> bool:
+        return (
+            isinstance(value, list)
+            and not any(
+                isinstance(item, bool)
+                or not isinstance(item, int)
+                or item <= 0
+                for item in value
+            )
+            and len(value) == len(set(value))
+        )
+
+    def valid_optional_id(value) -> bool:
+        return value is None or (
+            isinstance(value, int) and not isinstance(value, bool) and value > 0
+        )
+
+    schema_version = payload.get("schema_version")
+    kind = payload.get("kind")
+    expected_revision = payload.get("expected_revision")
+    applied_revision = payload.get("applied_revision")
+    changed = payload.get("original_changed")
+    track_ids = payload.get("original_affected_track_ids")
+    beat_ids = payload.get("original_affected_beat_ids")
+    created_track_id = payload.get("original_created_track_id")
+    created_beat_id = payload.get("original_created_beat_id")
+    no_op_kinds = {
+        "update_track", "reorder_tracks", "update_beat", "reorder_beats",
+    }
+    track_only_kinds = {
+        "create_track", "update_track", "reorder_tracks",
+    }
+    beat_kinds = {
+        "create_beat", "update_beat", "delete_beat", "reorder_beats",
+    }
+    if (
+        schema_version != _PROGRESSION_RECEIPT_SCHEMA_VERSION
+        or kind not in _PROGRESSION_COMMAND_KINDS
+        or not isinstance(expected_revision, str)
+        or _LOWER_SHA256_RE.fullmatch(expected_revision) is None
+        or not isinstance(applied_revision, str)
+        or _LOWER_SHA256_RE.fullmatch(applied_revision) is None
+        or not isinstance(changed, bool)
+        or not valid_ids(track_ids)
+        or not valid_ids(beat_ids)
+        or not valid_optional_id(created_track_id)
+        or not valid_optional_id(created_beat_id)
+        or (created_track_id is not None and kind != "create_track")
+        or (created_beat_id is not None and kind != "create_beat")
+        or (changed and kind == "create_track" and created_track_id is None)
+        or (changed and kind == "create_beat" and created_beat_id is None)
+        or (created_track_id is not None and created_track_id not in track_ids)
+        or (created_beat_id is not None and created_beat_id not in beat_ids)
+        or (changed and applied_revision == expected_revision)
+        or (not changed and applied_revision != expected_revision)
+        or (not changed and kind not in no_op_kinds)
+        or (
+            not changed
+            and (track_ids or beat_ids or created_track_id or created_beat_id)
+        )
+        or (changed and not track_ids)
+        or (changed and kind in track_only_kinds and beat_ids)
+        or (changed and kind in beat_kinds and not beat_ids)
+        or _LOWER_SHA256_RE.fullmatch(row.idempotency_key_hash or "") is None
+        or _LOWER_SHA256_RE.fullmatch(row.request_digest or "") is None
+    ):
+        raise RuntimeError("Progressions command receipt has invalid result data")
+    return ProgressionCommandReceiptData(
+        project_id=int(row.project_id),
+        request_digest=row.request_digest,
+        kind=kind,
+        expected_revision=expected_revision,
+        applied_revision=applied_revision,
+        original_changed=changed,
+        original_affected_track_ids=tuple(track_ids),
+        original_affected_beat_ids=tuple(beat_ids),
+        original_created_track_id=created_track_id,
+        original_created_beat_id=created_beat_id,
+        created_at=row.created_at,
+    )
 
 
 def _timeline_idempotency_key_hash(value: str) -> str:
@@ -2111,6 +2521,8 @@ class Database:
         self._plot_write_locks: dict[int, threading.RLock] = {}
         self._canvas_plot_locks_guard = threading.RLock()
         self._canvas_plot_write_locks: dict[int, threading.RLock] = {}
+        self._progression_locks_guard = threading.RLock()
+        self._progression_write_locks: dict[int, threading.RLock] = {}
         self._knowledge_graph_locks_guard = threading.RLock()
         self._knowledge_graph_write_locks: dict[int, threading.RLock] = {}
         self._continuity_locks_guard = threading.RLock()
@@ -2210,6 +2622,17 @@ class Database:
         key = int(project_id)
         with self._canvas_plot_locks_guard:
             lock = self._canvas_plot_write_locks.setdefault(key, threading.RLock())
+        with lock:
+            yield
+
+    @contextmanager
+    def progression_write_lock(self, project_id: int):
+        """Serialize Progressions writers for one project in-process."""
+        key = int(project_id)
+        with self._progression_locks_guard:
+            lock = self._progression_write_locks.setdefault(
+                key, threading.RLock(),
+            )
         with lock:
             yield
 
@@ -2462,6 +2885,12 @@ class Database:
                 ))
                 conn.commit()
             _repair_character_psyke_foreign_key(conn)
+
+            # v7 promotes entry-bound progression notes into the canonical
+            # project Progressions domain before the schema version is raised.
+            # The helper is idempotent and also absorbs residue from an
+            # interrupted upgrade whose additive tables were already created.
+            _migrate_legacy_progressions(conn)
 
             conn.execute(text(f"PRAGMA user_version = {DB_SCHEMA_VERSION}"))
             conn.commit()
@@ -6264,6 +6693,24 @@ class Database:
             ).all():
                 row.scene_id = None
 
+        detached_progression_beats = list(session.exec(
+            select(ProgressionBeat).where(
+                ProgressionBeat.scene_id == scene_id,
+                ProgressionBeat.project_id == scene.project_id,
+            )
+        ).all())
+        for beat in detached_progression_beats:
+            beat.anchor_kind = "unanchored"
+            beat.scene_id = None
+            beat.anchor_ref = None
+            beat.anchor_label = ""
+        if detached_progression_beats:
+            _enqueue_api_event(
+                session,
+                int(scene.project_id),
+                "progressions_changed",
+            )
+
         session.flush()
         session.delete(scene)
         return tuple(scrubbed_scene_ids)
@@ -9042,6 +9489,1093 @@ class Database:
                 session.delete(row)
                 session.commit()
 
+    # -- Progressions -------------------------------------------------------
+
+    def _progression_snapshot_in_session(
+        self,
+        session: Session,
+        project_id: int,
+    ) -> ProgressionReadSnapshot | None:
+        """Build one canonical Progressions snapshot inside the caller's txn."""
+        project = session.get(Project, int(project_id))
+        if project is None:
+            return None
+        tracks = list(session.exec(
+            select(ProgressionTrack)
+            .where(ProgressionTrack.project_id == int(project_id))
+            .order_by(ProgressionTrack.sort_order, ProgressionTrack.id)
+        ).all())
+        beats = list(session.exec(
+            select(ProgressionBeat)
+            .where(ProgressionBeat.project_id == int(project_id))
+            .order_by(
+                ProgressionBeat.track_id,
+                ProgressionBeat.sort_order,
+                ProgressionBeat.id,
+            )
+        ).all())
+        scenes = list(session.exec(
+            select(Scene)
+            .where(Scene.project_id == int(project_id))
+            .order_by(Scene.sort_order, Scene.id)
+        ).all())
+        entries = list(session.exec(
+            select(PsykeEntry).where(PsykeEntry.project_id == int(project_id))
+        ).all())
+        track_by_id = {int(row.id): row for row in tracks}
+        scene_by_id = {int(row.id): row for row in scenes}
+        entry_by_id = {int(row.id): row for row in entries}
+        grouped: dict[int, list[ProgressionBeat]] = {
+            int(row.id): [] for row in tracks
+        }
+        for beat in beats:
+            track = track_by_id.get(int(beat.track_id))
+            if track is None or int(beat.project_id) != int(project_id):
+                raise ProgressionStateCorrupt(
+                    "A progression beat is outside its track/project"
+                )
+            grouped[int(track.id)].append(beat)
+
+        revision_tracks: list[dict] = []
+        read_tracks: list[ProgressionTrackReadData] = []
+        for track in tracks:
+            primary = (
+                entry_by_id.get(int(track.primary_psyke_entry_id))
+                if track.primary_psyke_entry_id is not None else None
+            )
+            secondary = (
+                entry_by_id.get(int(track.secondary_psyke_entry_id))
+                if track.secondary_psyke_entry_id is not None else None
+            )
+            if (
+                track.kind not in PROGRESSION_KINDS
+                or (
+                    track.primary_psyke_entry_id is not None
+                    and primary is None
+                )
+                or (
+                    track.secondary_psyke_entry_id is not None
+                    and secondary is None
+                )
+            ):
+                raise ProgressionStateCorrupt(
+                    "A progression track has invalid subjects"
+                )
+            if track.legacy_psyke_entry_id is not None:
+                if (
+                    primary is None
+                    or int(primary.id) != int(track.legacy_psyke_entry_id)
+                    or secondary is not None
+                ):
+                    raise ProgressionStateCorrupt(
+                        "A legacy progression track has invalid subjects"
+                    )
+            elif track.kind in {"story", "custom"}:
+                if primary is not None or secondary is not None:
+                    raise ProgressionStateCorrupt(
+                        "Story/custom progression tracks cannot have subjects"
+                    )
+            elif track.kind == "relationship":
+                if (
+                    primary is None
+                    or secondary is None
+                    or int(primary.id) == int(secondary.id)
+                ):
+                    raise ProgressionStateCorrupt(
+                        "Relationship progression tracks need two subjects"
+                    )
+            else:
+                if primary is None or secondary is not None:
+                    raise ProgressionStateCorrupt(
+                        "This progression track needs one subject"
+                    )
+                expected_types = {
+                    "character": {"character"},
+                    "theme": {"theme"},
+                    "world": {"place", "object", "lore"},
+                }[track.kind]
+                if primary.entry_type not in expected_types:
+                    raise ProgressionStateCorrupt(
+                        "A progression track subject has the wrong type"
+                    )
+
+            track_beats = grouped[int(track.id)]
+            scene_count = 0
+            document_count = 0
+            out_of_order: list[int] = []
+            previous_scene_order: int | None = None
+            revision_beats: list[dict] = []
+            scene_titles: dict[int, str] = {}
+            for expected_order, beat in enumerate(track_beats):
+                if int(beat.sort_order) != expected_order:
+                    raise ProgressionStateCorrupt(
+                        "Progression beat ordering is not dense"
+                    )
+                scene = None
+                if beat.anchor_kind == "unanchored":
+                    if (
+                        beat.scene_id is not None
+                        or beat.anchor_ref is not None
+                        or beat.anchor_label
+                    ):
+                        raise ProgressionStateCorrupt(
+                            "An unanchored beat contains an anchor"
+                        )
+                elif beat.anchor_kind == "scene":
+                    if beat.scene_id is None or beat.anchor_ref is not None:
+                        raise ProgressionStateCorrupt(
+                            "A scene beat has invalid anchor fields"
+                        )
+                    scene = scene_by_id.get(int(beat.scene_id))
+                    if scene is None:
+                        raise ProgressionStateCorrupt(
+                            "A progression beat references a foreign scene"
+                        )
+                    scene_count += 1
+                    scene_titles[int(scene.id)] = str(scene.title or "")
+                    scene_order = int(scene.sort_order)
+                    if (
+                        previous_scene_order is not None
+                        and scene_order < previous_scene_order
+                    ):
+                        out_of_order.append(int(beat.id))
+                    previous_scene_order = scene_order
+                elif beat.anchor_kind == "document_block":
+                    if beat.scene_id is not None or not (beat.anchor_ref or "").strip():
+                        raise ProgressionStateCorrupt(
+                            "A document-block beat has invalid anchor fields"
+                        )
+                    document_count += 1
+                else:
+                    raise ProgressionStateCorrupt(
+                        "A progression beat has an unsupported anchor kind"
+                    )
+                revision_beats.append({
+                    "id": int(beat.id),
+                    "created_at": beat.created_at.isoformat(),
+                    "text": beat.text,
+                    "sort_order": int(beat.sort_order),
+                    "anchor_kind": beat.anchor_kind,
+                    "scene_id": int(beat.scene_id) if beat.scene_id is not None else None,
+                    "scene": (
+                        {
+                            "id": int(scene.id),
+                            "title": scene.title,
+                            "sort_order": int(scene.sort_order),
+                            "act": scene.act,
+                            "chapter": scene.chapter,
+                        }
+                        if scene is not None else None
+                    ),
+                    "anchor_ref": beat.anchor_ref,
+                    "anchor_label": beat.anchor_label,
+                })
+            total = len(track_beats)
+            anchored = scene_count + document_count
+            unanchored = total - anchored
+            if total == 0:
+                status = "empty"
+            elif anchored == 0:
+                status = "unanchored"
+            elif anchored == total:
+                status = "complete"
+            else:
+                status = "partial"
+            coverage = ProgressionCoverageData(
+                total_beats=total,
+                anchored_beats=anchored,
+                unanchored_beats=unanchored,
+                scene_anchored_beats=scene_count,
+                document_anchored_beats=document_count,
+                coverage_percent=(round(anchored * 100.0 / total, 2) if total else 0.0),
+                status=status,
+                out_of_order_beat_ids=tuple(out_of_order),
+            )
+            read_tracks.append(ProgressionTrackReadData(
+                track=track,
+                beats=tuple(track_beats),
+                primary_entry=primary,
+                secondary_entry=secondary,
+                scene_titles_by_id=scene_titles,
+                coverage=coverage,
+            ))
+            revision_tracks.append({
+                "id": int(track.id),
+                "created_at": track.created_at.isoformat(),
+                "kind": track.kind,
+                "title": track.title,
+                "description": track.description,
+                "color_label": track.color_label,
+                "sort_order": int(track.sort_order),
+                "primary": (
+                    {
+                        "id": int(primary.id),
+                        "name": primary.name,
+                        "type": primary.entry_type,
+                    } if primary is not None else None
+                ),
+                "secondary": (
+                    {
+                        "id": int(secondary.id),
+                        "name": secondary.name,
+                        "type": secondary.entry_type,
+                    } if secondary is not None else None
+                ),
+                "legacy_psyke_entry_id": (
+                    int(track.legacy_psyke_entry_id)
+                    if track.legacy_psyke_entry_id is not None else None
+                ),
+                "beats": revision_beats,
+            })
+        for expected_order, track in enumerate(tracks):
+            if int(track.sort_order) != expected_order:
+                raise ProgressionStateCorrupt(
+                    "Progression track ordering is not dense"
+                )
+        encoded = json.dumps(
+            {
+                "scope": "progressions-snapshot-v1",
+                "project_id": int(project.id),
+                "project_created_at": project.created_at.isoformat(),
+                "tracks": revision_tracks,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        return ProgressionReadSnapshot(
+            project=project,
+            tracks=tuple(read_tracks),
+            revision=hashlib.sha256(encoded).hexdigest(),
+        )
+
+    def read_progression_snapshot(
+        self,
+        project_id: int,
+    ) -> ProgressionReadSnapshot | None:
+        """Read all Progressions inputs from one SQLite snapshot."""
+        with Session(self._engine, expire_on_commit=False) as session:
+            session.connection().exec_driver_sql("BEGIN")
+            try:
+                snapshot = self._progression_snapshot_in_session(
+                    session, int(project_id),
+                )
+                if snapshot is not None:
+                    session.expunge_all()
+            finally:
+                session.rollback()
+        return snapshot
+
+    def restore_progression_tracks(
+        self,
+        project_id: int,
+        tracks: list[dict],
+    ) -> ProgressionReadSnapshot:
+        """Restore a complete canonical Progressions section into a new project.
+
+        Import resolves portable subject/scene references before calling this
+        method.  The guarded all-or-nothing write preserves designated legacy
+        tracks without replaying their compatibility projection a second time.
+        Existing canonical rows are never overwritten.
+        """
+        if not isinstance(tracks, list):
+            raise ProgressionCommandError("progression_tracks must be a list")
+
+        with self.progression_write_lock(project_id), Session(
+            self._engine, expire_on_commit=False,
+        ) as session:
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                if session.get(Project, int(project_id)) is None:
+                    raise ProgressionProjectNotFound(project_id)
+                existing = session.exec(select(ProgressionTrack).where(
+                    ProgressionTrack.project_id == int(project_id)
+                )).first()
+                if existing is not None:
+                    raise ProgressionCommandError(
+                        "Canonical Progressions restore requires an empty project"
+                    )
+                entries = {
+                    int(entry.id): entry
+                    for entry in session.exec(select(PsykeEntry).where(
+                        PsykeEntry.project_id == int(project_id)
+                    )).all()
+                }
+                scenes = {
+                    int(scene.id): scene
+                    for scene in session.exec(select(Scene).where(
+                        Scene.project_id == int(project_id)
+                    )).all()
+                }
+                legacy_subjects: set[int] = set()
+
+                def optional_id(value, label: str) -> int | None:
+                    if value is None:
+                        return None
+                    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                        raise ProgressionCommandError(
+                            f"{label} must be a positive integer or null"
+                        )
+                    if value not in entries:
+                        raise ProgressionPsykeEntryNotFound(value)
+                    return value
+
+                def string_value(value, label: str) -> str:
+                    if not isinstance(value, str):
+                        raise ProgressionCommandError(f"{label} must be a string")
+                    return value
+
+                for track_order, raw_track in enumerate(tracks):
+                    if not isinstance(raw_track, dict):
+                        raise ProgressionCommandError(
+                            "Each progression track must be an object"
+                        )
+                    kind = raw_track.get("kind")
+                    if kind not in PROGRESSION_KINDS:
+                        raise ProgressionCommandError(
+                            "A restored progression track has an unsupported kind"
+                        )
+                    title = string_value(raw_track.get("title"), "title")
+                    if not title.strip():
+                        raise ProgressionCommandError("title cannot be empty")
+                    primary_id = optional_id(
+                        raw_track.get("primary_psyke_entry_id"),
+                        "primary_psyke_entry_id",
+                    )
+                    secondary_id = optional_id(
+                        raw_track.get("secondary_psyke_entry_id"),
+                        "secondary_psyke_entry_id",
+                    )
+                    legacy_id = optional_id(
+                        raw_track.get("legacy_psyke_entry_id"),
+                        "legacy_psyke_entry_id",
+                    )
+                    if legacy_id is not None:
+                        if (
+                            legacy_id in legacy_subjects
+                            or primary_id != legacy_id
+                            or secondary_id is not None
+                            or kind != _legacy_progression_kind_for_entry_type(
+                                entries[legacy_id].entry_type,
+                            )
+                        ):
+                            raise ProgressionCommandError(
+                                "A restored legacy compatibility track has invalid subjects"
+                            )
+                        legacy_subjects.add(legacy_id)
+                    elif kind in {"story", "custom"}:
+                        if primary_id is not None or secondary_id is not None:
+                            raise ProgressionCommandError(
+                                "Story/custom tracks cannot have PSYKE subjects"
+                            )
+                    elif kind == "relationship":
+                        if (
+                            primary_id is None
+                            or secondary_id is None
+                            or primary_id == secondary_id
+                        ):
+                            raise ProgressionCommandError(
+                                "Relationship tracks require two distinct subjects"
+                            )
+                    else:
+                        allowed = {
+                            "character": {"character"},
+                            "theme": {"theme"},
+                            "world": {"place", "object", "lore"},
+                        }[kind]
+                        if (
+                            primary_id is None
+                            or secondary_id is not None
+                            or entries[primary_id].entry_type not in allowed
+                        ):
+                            raise ProgressionCommandError(
+                                f"The restored subject is not valid for a {kind} track"
+                            )
+
+                    track = ProgressionTrack(
+                        project_id=int(project_id),
+                        kind=kind,
+                        title=title,
+                        description=string_value(
+                            raw_track.get("description", ""), "description",
+                        ),
+                        color_label=string_value(
+                            raw_track.get("color_label", ""), "color_label",
+                        ),
+                        sort_order=track_order,
+                        primary_psyke_entry_id=primary_id,
+                        secondary_psyke_entry_id=secondary_id,
+                        legacy_psyke_entry_id=legacy_id,
+                    )
+                    session.add(track)
+                    session.flush()
+                    raw_beats = raw_track.get("beats", [])
+                    if not isinstance(raw_beats, list):
+                        raise ProgressionCommandError("beats must be a list")
+                    for beat_order, raw_beat in enumerate(raw_beats):
+                        if not isinstance(raw_beat, dict):
+                            raise ProgressionCommandError(
+                                "Each progression beat must be an object"
+                            )
+                        beat_text = string_value(raw_beat.get("text"), "text")
+                        if legacy_id is None and not beat_text.strip():
+                            raise ProgressionCommandError("text cannot be empty")
+                        anchor_kind = raw_beat.get("anchor_kind", "unanchored")
+                        if anchor_kind not in PROGRESSION_ANCHOR_KINDS:
+                            raise ProgressionCommandError(
+                                "A restored progression beat has an unsupported anchor"
+                            )
+                        scene_id = raw_beat.get("scene_id")
+                        anchor_ref = raw_beat.get("anchor_ref")
+                        anchor_label = string_value(
+                            raw_beat.get("anchor_label", ""), "anchor_label",
+                        )
+                        if anchor_kind == "unanchored":
+                            if (
+                                scene_id is not None
+                                or anchor_ref is not None
+                                or anchor_label
+                            ):
+                                raise ProgressionCommandError(
+                                    "Unanchored beats cannot contain anchor data"
+                                )
+                        elif anchor_kind == "scene":
+                            if (
+                                isinstance(scene_id, bool)
+                                or not isinstance(scene_id, int)
+                                or scene_id not in scenes
+                                or anchor_ref is not None
+                            ):
+                                raise ProgressionCommandError(
+                                    "A restored scene anchor is invalid"
+                                )
+                        else:
+                            if (
+                                scene_id is not None
+                                or not isinstance(anchor_ref, str)
+                                or not anchor_ref.strip()
+                            ):
+                                raise ProgressionCommandError(
+                                    "A restored document-block anchor is invalid"
+                                )
+                        session.add(ProgressionBeat(
+                            project_id=int(project_id),
+                            track_id=int(track.id),
+                            text=beat_text,
+                            sort_order=beat_order,
+                            anchor_kind=anchor_kind,
+                            scene_id=scene_id,
+                            anchor_ref=anchor_ref,
+                            anchor_label=anchor_label,
+                        ))
+
+                session.flush()
+                restored = self._progression_snapshot_in_session(
+                    session, int(project_id),
+                )
+                assert restored is not None
+                if tracks:
+                    _enqueue_api_event(
+                        session, int(project_id), "progressions_changed",
+                    )
+                session.commit()
+                session.expunge_all()
+                return restored
+            except Exception:
+                session.rollback()
+                raise
+
+    def get_progression_command_receipt(
+        self,
+        project_id: int,
+        idempotency_key: str,
+    ) -> ProgressionCommandReceiptData | None:
+        """Return a committed Progressions receipt scoped to one project."""
+        key_hash = _progression_idempotency_key_hash(idempotency_key)
+        with Session(self._engine, expire_on_commit=False) as session:
+            session.connection().exec_driver_sql("BEGIN")
+            try:
+                if session.get(Project, int(project_id)) is None:
+                    return None
+                row = session.get(
+                    ProgressionCommandReceipt,
+                    (int(project_id), key_hash),
+                )
+                if row is None:
+                    return None
+                receipt = _decode_progression_command_receipt(row)
+            finally:
+                session.rollback()
+        return receipt
+
+    def execute_progression_command(
+        self,
+        project_id: int,
+        *,
+        kind: str,
+        expected_revision: str,
+        idempotency_key: str | None = None,
+        **fields,
+    ) -> ProgressionCommandResult:
+        """Apply one revision-guarded Progressions command atomically."""
+        if kind not in _PROGRESSION_COMMAND_KINDS:
+            raise ProgressionCommandError(
+                f"Unsupported Progressions command: {kind!r}"
+            )
+        if (
+            not isinstance(expected_revision, str)
+            or _LOWER_SHA256_RE.fullmatch(expected_revision) is None
+        ):
+            raise ProgressionCommandError(
+                "expected_revision must be a lowercase SHA-256 digest"
+            )
+        key_hash: str | None = None
+        request_digest: str | None = None
+        if idempotency_key is not None:
+            key_hash = _progression_idempotency_key_hash(idempotency_key)
+            request_digest = _progression_command_request_digest(
+                project_id, kind, expected_revision, fields,
+            )
+
+        with self.progression_write_lock(project_id):
+            with Session(self._engine, expire_on_commit=False) as session:
+                session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+                try:
+                    current = self._progression_snapshot_in_session(
+                        session, int(project_id),
+                    )
+                    if current is None:
+                        raise ProgressionProjectNotFound(project_id)
+                    if key_hash is not None:
+                        row = session.get(
+                            ProgressionCommandReceipt,
+                            (int(project_id), key_hash),
+                        )
+                        if row is not None:
+                            receipt = _decode_progression_command_receipt(row)
+                            assert request_digest is not None
+                            if not hmac.compare_digest(
+                                receipt.request_digest, request_digest,
+                            ):
+                                raise ProgressionIdempotencyKeyConflict(
+                                    "Idempotency-Key was already used for a "
+                                    "different Progressions command"
+                                )
+                            session.expunge_all()
+                            session.rollback()
+                            return ProgressionCommandResult(
+                                snapshot=current,
+                                changed=False,
+                                created_track_id=(
+                                    receipt.original_created_track_id
+                                ),
+                                created_beat_id=(
+                                    receipt.original_created_beat_id
+                                ),
+                                replayed=True,
+                                applied_revision=receipt.applied_revision,
+                            )
+                    if expected_revision != current.revision:
+                        raise ProgressionRevisionConflict(
+                            expected_revision, current.revision,
+                        )
+
+                    tracks = [row.track for row in current.tracks]
+                    beats = [beat for row in current.tracks for beat in row.beats]
+                    entries = {
+                        int(entry.id): entry
+                        for entry in session.exec(select(PsykeEntry).where(
+                            PsykeEntry.project_id == int(project_id)
+                        )).all()
+                    }
+                    scenes = {
+                        int(scene.id): scene
+                        for scene in session.exec(select(Scene).where(
+                            Scene.project_id == int(project_id)
+                        )).all()
+                    }
+                    affected_tracks: list[int] = []
+                    affected_beats: list[int] = []
+                    created_track_id: int | None = None
+                    created_beat_id: int | None = None
+                    savepoint = session.begin_nested()
+
+                    def checked_id(value, label: str) -> int:
+                        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                            raise ProgressionCommandError(
+                                f"{label} must be a positive integer"
+                            )
+                        return value
+
+                    def checked_text(
+                        value,
+                        label: str,
+                        maximum: int,
+                        *,
+                        required: bool = False,
+                        strip: bool = False,
+                    ) -> str:
+                        if not isinstance(value, str):
+                            raise ProgressionCommandError(f"{label} must be a string")
+                        result = value.strip() if strip else value
+                        if required and not result.strip():
+                            raise ProgressionCommandError(f"{label} cannot be empty")
+                        if len(result) > maximum:
+                            raise ProgressionCommandError(
+                                f"{label} cannot exceed {maximum} characters"
+                            )
+                        return result
+
+                    def checked_index(value, maximum: int, label: str) -> int:
+                        if isinstance(value, bool) or not isinstance(value, int):
+                            raise ProgressionCommandError(f"{label} must be an integer")
+                        if value < 0 or value > maximum:
+                            raise ProgressionCommandError(
+                                f"{label} is outside the available range"
+                            )
+                        return value
+
+                    def track_or_error(value) -> ProgressionTrack:
+                        track_id = checked_id(value, "track_id")
+                        track = next((row for row in tracks if row.id == track_id), None)
+                        if track is None:
+                            raise ProgressionTrackNotFound(track_id)
+                        return track
+
+                    def beat_or_error(value) -> ProgressionBeat:
+                        beat_id = checked_id(value, "beat_id")
+                        beat = next((row for row in beats if row.id == beat_id), None)
+                        if beat is None:
+                            raise ProgressionBeatNotFound(beat_id)
+                        return beat
+
+                    def entry_or_error(value, label: str) -> PsykeEntry:
+                        entry_id = checked_id(value, label)
+                        entry = entries.get(entry_id)
+                        if entry is None:
+                            raise ProgressionPsykeEntryNotFound(entry_id)
+                        return entry
+
+                    def validate_subjects(
+                        track_kind,
+                        primary_id,
+                        secondary_id,
+                    ) -> tuple[str, int | None, int | None]:
+                        if track_kind not in PROGRESSION_KINDS:
+                            raise ProgressionCommandError(
+                                "track_kind is not supported"
+                            )
+                        primary = (
+                            entry_or_error(primary_id, "primary_psyke_entry_id")
+                            if primary_id is not None else None
+                        )
+                        secondary = (
+                            entry_or_error(secondary_id, "secondary_psyke_entry_id")
+                            if secondary_id is not None else None
+                        )
+                        if track_kind in {"story", "custom"}:
+                            if primary is not None or secondary is not None:
+                                raise ProgressionCommandError(
+                                    "Story/custom tracks cannot have PSYKE subjects"
+                                )
+                        elif track_kind == "relationship":
+                            if (
+                                primary is None or secondary is None
+                                or int(primary.id) == int(secondary.id)
+                            ):
+                                raise ProgressionCommandError(
+                                    "Relationship tracks require two distinct subjects"
+                                )
+                        else:
+                            if primary is None or secondary is not None:
+                                raise ProgressionCommandError(
+                                    f"{track_kind} tracks require exactly one subject"
+                                )
+                            allowed = {
+                                "character": {"character"},
+                                "theme": {"theme"},
+                                "world": {"place", "object", "lore"},
+                            }[track_kind]
+                            if primary.entry_type not in allowed:
+                                raise ProgressionCommandError(
+                                    f"The selected subject is not valid for a {track_kind} track"
+                                )
+                        return (
+                            track_kind,
+                            int(primary.id) if primary is not None else None,
+                            int(secondary.id) if secondary is not None else None,
+                        )
+
+                    def validate_anchor(
+                        anchor_kind,
+                        scene_id,
+                        anchor_ref,
+                        anchor_label,
+                    ) -> tuple[str, int | None, str | None, str]:
+                        if anchor_kind not in PROGRESSION_ANCHOR_KINDS:
+                            raise ProgressionCommandError(
+                                "anchor_kind is not supported"
+                            )
+                        label = checked_text(
+                            anchor_label, "anchor_label", 500,
+                        )
+                        if anchor_kind == "unanchored":
+                            if (
+                                scene_id is not None
+                                or anchor_ref is not None
+                                or label
+                            ):
+                                raise ProgressionCommandError(
+                                    "Unanchored beats cannot contain anchor data"
+                                )
+                            return anchor_kind, None, None, label
+                        if anchor_kind == "scene":
+                            sid = checked_id(scene_id, "scene_id")
+                            if sid not in scenes:
+                                raise ProgressionSceneNotFound(sid)
+                            if anchor_ref is not None:
+                                raise ProgressionCommandError(
+                                    "Scene anchors cannot contain anchor_ref"
+                                )
+                            return anchor_kind, sid, None, label
+                        if scene_id is not None:
+                            raise ProgressionCommandError(
+                                "Document-block anchors cannot contain scene_id"
+                            )
+                        ref = checked_text(
+                            anchor_ref, "anchor_ref", 1000,
+                            required=True, strip=True,
+                        )
+                        return anchor_kind, None, ref, label
+
+                    def dense_tracks() -> None:
+                        for index, track in enumerate(tracks):
+                            track.sort_order = index
+
+                    def track_beats(track_id: int) -> list[ProgressionBeat]:
+                        return sorted(
+                            [row for row in beats if int(row.track_id) == track_id],
+                            key=lambda row: (int(row.sort_order), int(row.id)),
+                        )
+
+                    def dense_beats(rows: list[ProgressionBeat]) -> None:
+                        for index, beat in enumerate(rows):
+                            beat.sort_order = index
+
+                    if kind == "create_track":
+                        track_kind, primary_id, secondary_id = validate_subjects(
+                            fields.get("track_kind"),
+                            fields.get("primary_psyke_entry_id"),
+                            fields.get("secondary_psyke_entry_id"),
+                        )
+                        title = checked_text(
+                            fields.get("title"), "title", 500,
+                            required=True, strip=True,
+                        )
+                        track = ProgressionTrack(
+                            project_id=int(project_id),
+                            kind=track_kind,
+                            title=title,
+                            description=checked_text(
+                                fields.get("description", ""),
+                                "description", 10000,
+                            ),
+                            color_label=checked_text(
+                                fields.get("color_label", ""),
+                                "color_label", 100,
+                            ),
+                            sort_order=len(tracks),
+                            primary_psyke_entry_id=primary_id,
+                            secondary_psyke_entry_id=secondary_id,
+                        )
+                        session.add(track)
+                        session.flush()
+                        assert track.id is not None
+                        insertion = fields.get("index")
+                        if insertion is None:
+                            insertion = len(tracks)
+                        insertion = checked_index(
+                            insertion, len(tracks), "Track index",
+                        )
+                        tracks.insert(insertion, track)
+                        dense_tracks()
+                        created_track_id = int(track.id)
+                        affected_tracks.append(int(track.id))
+
+                    elif kind == "update_track":
+                        track = track_or_error(fields.get("track_id"))
+                        update_names = {
+                            "track_kind", "title", "description", "color_label",
+                            "primary_psyke_entry_id", "secondary_psyke_entry_id",
+                        }
+                        updates = update_names.intersection(fields)
+                        if not updates:
+                            raise ProgressionCommandError(
+                                "update_track must change at least one field"
+                            )
+                        if track.legacy_psyke_entry_id is not None and updates & {
+                            "track_kind", "primary_psyke_entry_id",
+                            "secondary_psyke_entry_id",
+                        }:
+                            raise ProgressionCommandError(
+                                "A legacy compatibility track cannot change its subject"
+                            )
+                        track_kind = fields.get("track_kind", track.kind)
+                        primary_id = fields.get(
+                            "primary_psyke_entry_id", track.primary_psyke_entry_id,
+                        )
+                        secondary_id = fields.get(
+                            "secondary_psyke_entry_id", track.secondary_psyke_entry_id,
+                        )
+                        if track.legacy_psyke_entry_id is None:
+                            track_kind, primary_id, secondary_id = validate_subjects(
+                                track_kind, primary_id, secondary_id,
+                            )
+                        values = {
+                            "kind": track_kind,
+                            "primary_psyke_entry_id": primary_id,
+                            "secondary_psyke_entry_id": secondary_id,
+                        }
+                        if "title" in updates:
+                            values["title"] = checked_text(
+                                fields["title"], "title", 500,
+                                required=True, strip=True,
+                            )
+                        if "description" in updates:
+                            values["description"] = checked_text(
+                                fields["description"], "description", 10000,
+                            )
+                        if "color_label" in updates:
+                            values["color_label"] = checked_text(
+                                fields["color_label"], "color_label", 100,
+                            )
+                        changed_track = False
+                        for name, value in values.items():
+                            if getattr(track, name) != value:
+                                setattr(track, name, value)
+                                changed_track = True
+                        if changed_track:
+                            affected_tracks.append(int(track.id))
+
+                    elif kind == "delete_track":
+                        track = track_or_error(fields.get("track_id"))
+                        doomed = track_beats(int(track.id))
+                        affected_tracks.append(int(track.id))
+                        affected_beats.extend(int(row.id) for row in doomed)
+                        for beat in doomed:
+                            session.delete(beat)
+                        session.delete(track)
+                        tracks = [row for row in tracks if row.id != track.id]
+                        beats = [row for row in beats if row.track_id != track.id]
+                        dense_tracks()
+
+                    elif kind == "reorder_tracks":
+                        requested = fields.get("track_ids")
+                        if (
+                            not isinstance(requested, list)
+                            or any(
+                                isinstance(value, bool) or not isinstance(value, int)
+                                or value <= 0 for value in requested
+                            )
+                            or len(set(requested)) != len(requested)
+                            or set(requested) != {int(row.id) for row in tracks}
+                        ):
+                            raise ProgressionCommandError(
+                                "track_ids must contain every project track exactly once"
+                            )
+                        by_id = {int(row.id): row for row in tracks}
+                        before = [int(row.id) for row in tracks]
+                        tracks = [by_id[value] for value in requested]
+                        dense_tracks()
+                        if requested != before:
+                            affected_tracks.extend(requested)
+
+                    elif kind == "create_beat":
+                        track = track_or_error(fields.get("track_id"))
+                        anchor_kind, scene_id, anchor_ref, anchor_label = validate_anchor(
+                            fields.get("anchor_kind", "unanchored"),
+                            fields.get("scene_id"),
+                            fields.get("anchor_ref"),
+                            fields.get("anchor_label", ""),
+                        )
+                        siblings = track_beats(int(track.id))
+                        beat = ProgressionBeat(
+                            project_id=int(project_id),
+                            track_id=int(track.id),
+                            text=checked_text(
+                                fields.get("text"), "text", 50000,
+                                required=True,
+                            ),
+                            sort_order=len(siblings),
+                            anchor_kind=anchor_kind,
+                            scene_id=scene_id,
+                            anchor_ref=anchor_ref,
+                            anchor_label=anchor_label,
+                        )
+                        session.add(beat)
+                        session.flush()
+                        assert beat.id is not None
+                        insertion = fields.get("index")
+                        if insertion is None:
+                            insertion = len(siblings)
+                        insertion = checked_index(
+                            insertion, len(siblings), "Beat index",
+                        )
+                        siblings.insert(insertion, beat)
+                        dense_beats(siblings)
+                        beats.append(beat)
+                        created_beat_id = int(beat.id)
+                        affected_tracks.append(int(track.id))
+                        affected_beats.append(int(beat.id))
+
+                    elif kind == "update_beat":
+                        beat = beat_or_error(fields.get("beat_id"))
+                        updates = {
+                            "text", "anchor_kind", "scene_id", "anchor_ref",
+                            "anchor_label",
+                        }.intersection(fields)
+                        if not updates:
+                            raise ProgressionCommandError(
+                                "update_beat must change at least one field"
+                            )
+                        anchor_kind, scene_id, anchor_ref, anchor_label = validate_anchor(
+                            fields.get("anchor_kind", beat.anchor_kind),
+                            fields.get("scene_id", beat.scene_id),
+                            fields.get("anchor_ref", beat.anchor_ref),
+                            fields.get("anchor_label", beat.anchor_label),
+                        )
+                        values = {
+                            "anchor_kind": anchor_kind,
+                            "scene_id": scene_id,
+                            "anchor_ref": anchor_ref,
+                            "anchor_label": anchor_label,
+                        }
+                        if "text" in updates:
+                            values["text"] = checked_text(
+                                fields["text"], "text", 50000, required=True,
+                            )
+                        changed_beat = False
+                        for name, value in values.items():
+                            if getattr(beat, name) != value:
+                                setattr(beat, name, value)
+                                changed_beat = True
+                        if changed_beat:
+                            affected_tracks.append(int(beat.track_id))
+                            affected_beats.append(int(beat.id))
+
+                    elif kind == "delete_beat":
+                        beat = beat_or_error(fields.get("beat_id"))
+                        track_id = int(beat.track_id)
+                        affected_tracks.append(track_id)
+                        affected_beats.append(int(beat.id))
+                        session.delete(beat)
+                        beats = [row for row in beats if row.id != beat.id]
+                        dense_beats(track_beats(track_id))
+
+                    elif kind == "reorder_beats":
+                        track = track_or_error(fields.get("track_id"))
+                        siblings = track_beats(int(track.id))
+                        requested = fields.get("beat_ids")
+                        if (
+                            not isinstance(requested, list)
+                            or any(
+                                isinstance(value, bool) or not isinstance(value, int)
+                                or value <= 0 for value in requested
+                            )
+                            or len(set(requested)) != len(requested)
+                            or set(requested) != {int(row.id) for row in siblings}
+                        ):
+                            raise ProgressionCommandError(
+                                "beat_ids must contain every track beat exactly once"
+                            )
+                        before = [int(row.id) for row in siblings]
+                        by_id = {int(row.id): row for row in siblings}
+                        ordered = [by_id[value] for value in requested]
+                        dense_beats(ordered)
+                        if requested != before:
+                            affected_tracks.append(int(track.id))
+                            affected_beats.extend(requested)
+
+                    session.flush()
+                    updated = self._progression_snapshot_in_session(
+                        session, int(project_id),
+                    )
+                    assert updated is not None
+                    if updated.revision == current.revision:
+                        savepoint.rollback()
+                        stable = self._progression_snapshot_in_session(
+                            session, int(project_id),
+                        )
+                        assert stable is not None
+                        if key_hash is not None:
+                            assert request_digest is not None
+                            session.add(ProgressionCommandReceipt(
+                                project_id=int(project_id),
+                                idempotency_key_hash=key_hash,
+                                request_digest=request_digest,
+                                result_json=_progression_receipt_result_json(
+                                    kind=kind,
+                                    expected_revision=expected_revision,
+                                    applied_revision=stable.revision,
+                                    original_changed=False,
+                                    original_affected_track_ids=(),
+                                    original_affected_beat_ids=(),
+                                    original_created_track_id=None,
+                                    original_created_beat_id=None,
+                                ),
+                            ))
+                            session.commit()
+                            session.expunge_all()
+                        else:
+                            session.expunge_all()
+                            session.rollback()
+                        return ProgressionCommandResult(
+                            snapshot=stable,
+                            changed=False,
+                            applied_revision=stable.revision,
+                        )
+
+                    savepoint.commit()
+                    unique_tracks = tuple(dict.fromkeys(affected_tracks))
+                    unique_beats = tuple(dict.fromkeys(affected_beats))
+                    if key_hash is not None:
+                        assert request_digest is not None
+                        session.add(ProgressionCommandReceipt(
+                            project_id=int(project_id),
+                            idempotency_key_hash=key_hash,
+                            request_digest=request_digest,
+                            result_json=_progression_receipt_result_json(
+                                kind=kind,
+                                expected_revision=expected_revision,
+                                applied_revision=updated.revision,
+                                original_changed=True,
+                                original_affected_track_ids=unique_tracks,
+                                original_affected_beat_ids=unique_beats,
+                                original_created_track_id=created_track_id,
+                                original_created_beat_id=created_beat_id,
+                            ),
+                        ))
+                    _enqueue_api_event(
+                        session,
+                        int(project_id),
+                        "progressions_changed",
+                    )
+                    session.commit()
+                    session.expunge_all()
+                    return ProgressionCommandResult(
+                        snapshot=updated,
+                        changed=True,
+                        affected_track_ids=unique_tracks,
+                        affected_beat_ids=unique_beats,
+                        created_track_id=created_track_id,
+                        created_beat_id=created_beat_id,
+                        applied_revision=updated.revision,
+                    )
+                except Exception:
+                    session.rollback()
+                    raise
+
     # -- PSYKE (Story Bible) ------------------------------------------------
 
     def get_psyke_entry_by_id(self, entry_id: int) -> PsykeEntry | None:
@@ -9159,8 +10693,64 @@ class Database:
         details: dict | None = None,
     ) -> PsykeEntry:
         import json
-        with Session(self._engine) as session:
+
+        existing = self.get_psyke_entry_by_id(entry_id)
+        if existing is None:
+            raise ProgressionPsykeEntryNotFound(entry_id)
+        project_id = int(existing.project_id)
+        with self.progression_write_lock(project_id), Session(
+            self._engine, expire_on_commit=False,
+        ) as session:
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
             entry = session.get(PsykeEntry, entry_id)
+            if entry is None or int(entry.project_id) != project_id:
+                raise ProgressionPsykeEntryNotFound(entry_id)
+            progression_tracks = list(session.exec(
+                select(ProgressionTrack).where(
+                    (ProgressionTrack.primary_psyke_entry_id == entry_id)
+                    | (ProgressionTrack.secondary_psyke_entry_id == entry_id)
+                    | (ProgressionTrack.legacy_psyke_entry_id == entry_id)
+                )
+            ).all())
+
+            # Validate every ordinary canonical track before changing either
+            # the subject or any derived legacy compatibility kind.
+            if entry_type != entry.entry_type:
+                allowed_by_kind = {
+                    "character": {"character"},
+                    "theme": {"theme"},
+                    "world": {"place", "object", "lore"},
+                }
+                for track in progression_tracks:
+                    if track.legacy_psyke_entry_id is not None:
+                        if int(track.legacy_psyke_entry_id) != int(entry_id):
+                            raise ProgressionStateCorrupt(
+                                "A legacy progression track references mismatched subjects"
+                            )
+                        continue
+                    if track.kind == "relationship":
+                        continue
+                    allowed = allowed_by_kind.get(track.kind)
+                    if (
+                        allowed is None
+                        or track.secondary_psyke_entry_id == entry_id
+                        or entry_type not in allowed
+                    ):
+                        raise ProgressionCommandError(
+                            "The PSYKE entry type cannot change while it is a "
+                            f"subject of the {track.kind!r} progression track "
+                            f"{track.id}"
+                        )
+
+                for track in progression_tracks:
+                    if track.legacy_psyke_entry_id is not None:
+                        track.kind = _legacy_progression_kind_for_entry_type(
+                            entry_type,
+                        )
+
+            progression_projection_changed = bool(progression_tracks) and (
+                name != entry.name or entry_type != entry.entry_type
+            )
             entry.name = name
             entry.entry_type = entry_type
             entry.aliases = aliases
@@ -9168,6 +10758,10 @@ class Database:
             entry.is_global = is_global
             if details is not None:
                 entry.details_json = json.dumps(details)
+            if progression_projection_changed:
+                _enqueue_api_event(
+                    session, project_id, "progressions_changed",
+                )
             session.commit()
             session.refresh(entry)
             from logosforge.quantum_outliner.lookahead_cache import invalidate_lookahead
@@ -9239,7 +10833,13 @@ class Database:
             session.commit()
 
     def delete_psyke_entry(self, entry_id: int) -> None:
-        with Session(self._engine) as session:
+        existing_entry = self.get_psyke_entry_by_id(entry_id)
+        if existing_entry is None:
+            return
+        with self.progression_write_lock(existing_entry.project_id), Session(
+            self._engine,
+        ) as session:
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
             for rel in session.exec(
                 select(PsykeRelation).where(
                     (PsykeRelation.entry_id == entry_id)
@@ -9253,6 +10853,34 @@ class Database:
                 )
             ).all():
                 session.delete(prog)
+            progression_tracks = list(session.exec(
+                select(ProgressionTrack).where(
+                    (ProgressionTrack.primary_psyke_entry_id == entry_id)
+                    | (ProgressionTrack.secondary_psyke_entry_id == entry_id)
+                    | (ProgressionTrack.legacy_psyke_entry_id == entry_id)
+                )
+            ).all())
+            removed_track_ids = {int(track.id) for track in progression_tracks}
+            if removed_track_ids:
+                for beat in session.exec(
+                    select(ProgressionBeat).where(
+                        ProgressionBeat.track_id.in_(removed_track_ids)
+                    )
+                ).all():
+                    session.delete(beat)
+                for track in progression_tracks:
+                    session.delete(track)
+                remaining_tracks = list(session.exec(
+                    select(ProgressionTrack)
+                    .where(ProgressionTrack.project_id == existing_entry.project_id)
+                    .order_by(ProgressionTrack.sort_order, ProgressionTrack.id)
+                ).all())
+                remaining_tracks = [
+                    track for track in remaining_tracks
+                    if int(track.id) not in removed_track_ids
+                ]
+                for index, track in enumerate(remaining_tracks):
+                    track.sort_order = index
             for npl in session.exec(
                 select(NotePsykeLink).where(
                     NotePsykeLink.psyke_entry_id == entry_id,
@@ -9286,6 +10914,12 @@ class Database:
             entry = session.get(PsykeEntry, entry_id)
             if entry:
                 session.delete(entry)
+            if removed_track_ids:
+                _enqueue_api_event(
+                    session,
+                    int(existing_entry.project_id),
+                    "progressions_changed",
+                )
             session.commit()
 
     # -- PSYKE Relations -----------------------------------------------------
@@ -9384,18 +11018,80 @@ class Database:
 
     # -- PSYKE Progressions --------------------------------------------------
 
+    @staticmethod
+    def _legacy_progression_view(
+        beat: ProgressionBeat,
+        entry_id: int,
+    ) -> PsykeProgression:
+        """Project one canonical compatibility beat into the legacy shape."""
+        return PsykeProgression(
+            id=int(beat.id),
+            entry_id=int(entry_id),
+            text=beat.text,
+            scene_id=(
+                int(beat.scene_id)
+                if beat.anchor_kind == "scene" and beat.scene_id is not None
+                else None
+            ),
+            sort_order=int(beat.sort_order),
+        )
+
     def get_psyke_progression_by_id(self, progression_id: int) -> PsykeProgression | None:
         with Session(self._engine) as session:
-            return session.get(PsykeProgression, progression_id)
+            beat = session.get(ProgressionBeat, progression_id)
+            if beat is None:
+                return None
+            track = session.get(ProgressionTrack, beat.track_id)
+            if track is None or track.legacy_psyke_entry_id is None:
+                return None
+            return self._legacy_progression_view(
+                beat, int(track.legacy_psyke_entry_id),
+            )
+
+    def _legacy_progression_target(
+        self, progression_id: int,
+    ) -> tuple[PsykeProgression, int, int] | None:
+        """Resolve a legacy view plus the canonical identity it refers to.
+
+        The track id is deliberately carried into the locked write and
+        revalidated there.  A bare beat id is not a stable authorization to
+        mutate: SQLite may reuse it after the compatibility beat is deleted,
+        or another writer may move the row to a non-legacy track between the
+        optimistic read and lock acquisition.
+        """
+        with Session(self._engine) as session:
+            beat = session.get(ProgressionBeat, progression_id)
+            if beat is None:
+                return None
+            track = session.get(ProgressionTrack, beat.track_id)
+            if track is None or track.legacy_psyke_entry_id is None:
+                return None
+            if int(beat.project_id) != int(track.project_id):
+                return None
+            return (
+                self._legacy_progression_view(
+                    beat, int(track.legacy_psyke_entry_id),
+                ),
+                int(track.id),
+                int(track.project_id),
+            )
 
     def get_psyke_progressions(self, entry_id: int) -> list[PsykeProgression]:
         with Session(self._engine) as session:
-            stmt = (
-                select(PsykeProgression)
-                .where(PsykeProgression.entry_id == entry_id)
-                .order_by(PsykeProgression.sort_order, PsykeProgression.id)
-            )
-            return list(session.exec(stmt).all())
+            track = session.exec(select(ProgressionTrack).where(
+                ProgressionTrack.legacy_psyke_entry_id == int(entry_id)
+            )).first()
+            if track is None:
+                return []
+            beats = list(session.exec(
+                select(ProgressionBeat)
+                .where(ProgressionBeat.track_id == int(track.id))
+                .order_by(ProgressionBeat.sort_order, ProgressionBeat.id)
+            ).all())
+            return [
+                self._legacy_progression_view(beat, entry_id)
+                for beat in beats
+            ]
 
     def create_psyke_progression(
         self,
@@ -9403,28 +11099,62 @@ class Database:
         text: str,
         scene_id: int | None = None,
     ) -> PsykeProgression:
-        with Session(self._engine) as session:
-            from sqlalchemy import func
-
-            max_order = session.exec(
-                select(func.max(PsykeProgression.sort_order)).where(
-                    PsykeProgression.entry_id == entry_id
+        entry = self.get_psyke_entry_by_id(entry_id)
+        if entry is None:
+            raise ProgressionPsykeEntryNotFound(entry_id)
+        with self.progression_write_lock(entry.project_id), Session(
+            self._engine, expire_on_commit=False,
+        ) as session:
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            if scene_id is not None:
+                scene = session.get(Scene, int(scene_id))
+                if scene is None or int(scene.project_id) != int(entry.project_id):
+                    # Legacy callers historically could persist a malformed
+                    # foreign anchor and relied on serializers to hide it.
+                    # The canonical store cannot contain that corruption, so
+                    # retain the beat while safely detaching the bad anchor.
+                    scene_id = None
+            track = session.exec(select(ProgressionTrack).where(
+                ProgressionTrack.legacy_psyke_entry_id == int(entry_id)
+            )).first()
+            if track is None:
+                track_count = len(session.exec(select(ProgressionTrack).where(
+                    ProgressionTrack.project_id == int(entry.project_id)
+                )).all())
+                track = ProgressionTrack(
+                    project_id=int(entry.project_id),
+                    kind=_legacy_progression_kind_for_entry_type(
+                        entry.entry_type,
+                    ),
+                    title=entry.name,
+                    sort_order=track_count,
+                    primary_psyke_entry_id=int(entry.id),
+                    legacy_psyke_entry_id=int(entry.id),
                 )
-            ).one()
-            next_order = (max_order or 0) + 1
-
-            prog = PsykeProgression(
-                entry_id=entry_id,
+                session.add(track)
+                session.flush()
+            siblings = list(session.exec(
+                select(ProgressionBeat)
+                .where(ProgressionBeat.track_id == int(track.id))
+                .order_by(ProgressionBeat.sort_order, ProgressionBeat.id)
+            ).all())
+            beat = ProgressionBeat(
+                project_id=int(entry.project_id),
+                track_id=int(track.id),
                 text=text,
                 scene_id=scene_id,
-                sort_order=next_order,
+                anchor_kind="scene" if scene_id is not None else "unanchored",
+                sort_order=len(siblings),
             )
-            session.add(prog)
+            session.add(beat)
+            _enqueue_api_event(
+                session, int(entry.project_id), "progressions_changed",
+            )
             session.commit()
-            session.refresh(prog)
+            session.refresh(beat)
             from logosforge.quantum_outliner.lookahead_cache import invalidate_lookahead
             invalidate_lookahead()
-            return prog
+            return self._legacy_progression_view(beat, entry_id)
 
     def update_psyke_progression(
         self,
@@ -9432,22 +11162,105 @@ class Database:
         text: str,
         scene_id: int | None = None,
     ) -> PsykeProgression:
-        with Session(self._engine) as session:
-            prog = session.get(PsykeProgression, progression_id)
-            prog.text = text
-            prog.scene_id = scene_id
+        target = self._legacy_progression_target(progression_id)
+        if target is None:
+            raise ProgressionBeatNotFound(progression_id)
+        existing, expected_track_id, project_id = target
+        entry = self.get_psyke_entry_by_id(existing.entry_id)
+        if entry is None:
+            raise ProgressionPsykeEntryNotFound(existing.entry_id)
+        if int(entry.project_id) != project_id:
+            raise ProgressionBeatNotFound(progression_id)
+        with self.progression_write_lock(project_id), Session(
+            self._engine, expire_on_commit=False,
+        ) as session:
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            beat = session.get(ProgressionBeat, progression_id)
+            track = (
+                session.get(ProgressionTrack, int(beat.track_id))
+                if beat is not None else None
+            )
+            locked_entry = session.get(PsykeEntry, existing.entry_id)
+            if (
+                beat is None
+                or int(beat.track_id) != expected_track_id
+                or int(beat.project_id) != project_id
+                or track is None
+                or int(track.id) != expected_track_id
+                or int(track.project_id) != project_id
+                or track.legacy_psyke_entry_id != existing.entry_id
+            ):
+                raise ProgressionBeatNotFound(progression_id)
+            if (
+                locked_entry is None
+                or int(locked_entry.project_id) != project_id
+            ):
+                raise ProgressionPsykeEntryNotFound(existing.entry_id)
+            if scene_id is not None:
+                scene = session.get(Scene, int(scene_id))
+                if scene is None or int(scene.project_id) != project_id:
+                    scene_id = None
+            beat.text = text
+            beat.scene_id = scene_id
+            beat.anchor_kind = "scene" if scene_id is not None else "unanchored"
+            beat.anchor_ref = None
+            beat.anchor_label = ""
+            _enqueue_api_event(
+                session, project_id, "progressions_changed",
+            )
             session.commit()
-            session.refresh(prog)
+            session.refresh(beat)
             from logosforge.quantum_outliner.lookahead_cache import invalidate_lookahead
             invalidate_lookahead()
-            return prog
+            return self._legacy_progression_view(beat, existing.entry_id)
 
     def delete_psyke_progression(self, progression_id: int) -> None:
-        with Session(self._engine) as session:
-            prog = session.get(PsykeProgression, progression_id)
-            if prog:
-                session.delete(prog)
+        target = self._legacy_progression_target(progression_id)
+        if target is None:
+            return
+        existing, expected_track_id, project_id = target
+        entry = self.get_psyke_entry_by_id(existing.entry_id)
+        if entry is None or int(entry.project_id) != project_id:
+            return
+        with self.progression_write_lock(project_id), Session(
+            self._engine,
+        ) as session:
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            beat = session.get(ProgressionBeat, progression_id)
+            track = (
+                session.get(ProgressionTrack, int(beat.track_id))
+                if beat is not None else None
+            )
+            locked_entry = session.get(PsykeEntry, existing.entry_id)
+            if (
+                beat is not None
+                and int(beat.track_id) == expected_track_id
+                and int(beat.project_id) == project_id
+                and track is not None
+                and int(track.id) == expected_track_id
+                and int(track.project_id) == project_id
+                and track.legacy_psyke_entry_id == existing.entry_id
+                and locked_entry is not None
+                and int(locked_entry.project_id) == project_id
+            ):
+                track_id = int(beat.track_id)
+                session.delete(beat)
+                remaining = list(session.exec(
+                    select(ProgressionBeat)
+                    .where(
+                        ProgressionBeat.track_id == track_id,
+                        ProgressionBeat.id != progression_id,
+                    )
+                    .order_by(ProgressionBeat.sort_order, ProgressionBeat.id)
+                ).all())
+                for index, row in enumerate(remaining):
+                    row.sort_order = index
+                _enqueue_api_event(
+                    session, project_id, "progressions_changed",
+                )
             session.commit()
+        from logosforge.quantum_outliner.lookahead_cache import invalidate_lookahead
+        invalidate_lookahead()
 
     # -- Search --------------------------------------------------------------
 

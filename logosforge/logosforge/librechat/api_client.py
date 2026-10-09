@@ -326,6 +326,27 @@ class LogosForgeApiClient:
             idempotency_key=idempotency_key,
         )
 
+    def get_progressions(self, project_id: int | None = None) -> dict:
+        """Return the canonical revisioned Progressions workspace."""
+        pid = int(project_id) if project_id is not None else self.require_project_id()
+        return self.request(
+            "GET",
+            f"{self._prefix}/projects/{pid}/progressions",
+        )
+
+    def get_progression_command_receipt(
+        self,
+        idempotency_key: str,
+        project_id: int | None = None,
+    ) -> dict:
+        """Return one durable project-scoped Progressions command receipt."""
+        pid = int(project_id) if project_id is not None else self.require_project_id()
+        return self.request(
+            "GET",
+            f"{self._prefix}/projects/{pid}/progressions/command-receipt",
+            idempotency_key=idempotency_key,
+        )
+
     def list_characters(self, project_id: int | None = None) -> list[dict]:
         pid = int(project_id) if project_id is not None else self.require_project_id()
         return self.request("GET", f"{self._prefix}/projects/{pid}/characters")

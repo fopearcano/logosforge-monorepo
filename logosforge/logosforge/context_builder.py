@@ -19,6 +19,8 @@ PSYKE_GLOBAL_NOTES_MAX = 100
 PSYKE_RELEVANT_NOTES_MAX = 150
 PSYKE_MAX_RELEVANT = 10
 PSYKE_RELATION_DEPTH = 2
+PROGRESSION_CONTEXT_MAX_TRACKS = 8
+PROGRESSION_CONTEXT_MAX_CHARS = 1800
 
 _LINK_RE = re.compile(r"\[\[(.+?)\]\]")
 
@@ -690,6 +692,111 @@ def gather_psyke_context(
         parts.extend(related_lines)
 
     return "\n".join(parts)
+
+
+def gather_progressions_context(
+    db: Database,
+    project_id: int,
+    scene_id: int | None = None,
+    *,
+    max_tracks: int = PROGRESSION_CONTEXT_MAX_TRACKS,
+    max_chars: int = PROGRESSION_CONTEXT_MAX_CHARS,
+) -> str:
+    """Build bounded, deterministic first-class progression grounding.
+
+    With an active scene, story tracks and tracks whose subject or anchored
+    beat is relevant expose only the latest reached beat and the next scene
+    beat.  Without a scene, the assistant receives compact coverage summaries
+    rather than the complete (potentially manuscript-sized) beat collection.
+    """
+    snapshot = db.read_progression_snapshot(project_id)
+    if snapshot is None or not snapshot.tracks:
+        return ""
+    scene = db.get_scene_by_id(scene_id) if scene_id is not None else None
+    scene_order = {
+        int(row.id): int(row.sort_order)
+        for row in db.get_all_scenes(project_id)
+    }
+    current_order = scene_order.get(int(scene.id)) if scene is not None else None
+    scene_text = _scene_searchable_text(scene) if scene is not None else ""
+
+    selected = []
+    for row in snapshot.tracks:
+        track = row.track
+        subjects = [row.primary_entry, row.secondary_entry]
+        subject_relevant = any(
+            entry is not None and _entry_matches_scene(entry, scene_text)
+            for entry in subjects
+        ) if scene is not None else False
+        anchor_relevant = any(
+            beat.anchor_kind == "scene" and beat.scene_id == scene_id
+            for beat in row.beats
+        ) if scene is not None else False
+        if (
+            scene is None
+            or track.kind == "story"
+            or subject_relevant
+            or anchor_relevant
+        ):
+            selected.append(row)
+        if len(selected) >= max(1, int(max_tracks)):
+            break
+    if not selected:
+        # Keep the active-scene context useful even when prose has not yet
+        # named a tracked subject: story first, then the earliest tracks.
+        selected = list(snapshot.tracks[:max(1, int(max_tracks))])
+
+    lines = ["[Progressions]"]
+    for row in selected:
+        track = row.track
+        coverage = row.coverage
+        subject_names = [
+            entry.name
+            for entry in (row.primary_entry, row.secondary_entry)
+            if entry is not None
+        ]
+        subject_suffix = (
+            f" — {' / '.join(subject_names)}" if subject_names else ""
+        )
+        lines.append(
+            f"- {track.title} [{track.kind}; {coverage.status}; "
+            f"{coverage.anchored_beats}/{coverage.total_beats} anchored]"
+            f"{subject_suffix}"
+        )
+        if current_order is None:
+            continue
+        reached = None
+        next_beat = None
+        fallback = None
+        for beat in row.beats:
+            if beat.anchor_kind == "scene" and beat.scene_id in scene_order:
+                order = scene_order[int(beat.scene_id)]
+                if order <= current_order:
+                    reached = beat
+                elif next_beat is None:
+                    next_beat = beat
+            elif fallback is None:
+                fallback = beat
+        reached = reached or fallback
+        if reached is not None:
+            text = " ".join((reached.text or "").split())
+            lines.append(f"  Current: {text[:240]}")
+        if next_beat is not None:
+            text = " ".join((next_beat.text or "").split())
+            label = row.scene_titles_by_id.get(int(next_beat.scene_id), "")
+            where = f" @ {label}" if label else ""
+            lines.append(f"  Next{where}: {text[:240]}")
+    omitted = len(snapshot.tracks) - len(selected)
+    if omitted > 0:
+        lines.append(f"(+{omitted} progression track(s) omitted)")
+    rendered = "\n".join(lines)
+    bounded = max(1, int(max_chars))
+    if len(rendered) <= bounded:
+        return rendered
+    suffix = "\n[...truncated]"
+    if bounded <= len(suffix):
+        return rendered[:bounded]
+    return rendered[:bounded - len(suffix)].rstrip() + suffix
 
 
 class _LegacyAsPsyke:

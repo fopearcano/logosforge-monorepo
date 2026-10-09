@@ -202,6 +202,17 @@ class _InProcessApiClient:
             idempotency_key=idempotency_key,
         )
 
+    def get_progression_command_receipt(
+        self,
+        idempotency_key: str,
+        project_id: int | None = None,
+    ) -> dict:
+        return self.request(
+            "GET",
+            self.project_path("progressions/command-receipt", project_id),
+            idempotency_key=idempotency_key,
+        )
+
 
 @pytest.fixture
 def graph_gateway(tmp_path):
@@ -259,8 +270,8 @@ def test_graph_digest_matches_core_canonical_wire():
 
 def test_graph_tools_are_versioned_bounded_and_strict(graph_gateway):
     _db, _client, gateway = graph_gateway
-    assert SERVER_VERSION == "1.11.0"
-    assert len(TOOL_SPECS) == 46
+    assert SERVER_VERSION == "1.12.0"
+    assert len(TOOL_SPECS) == 48
     assert {
         "logosforge_get_knowledge_graph",
         "logosforge_get_knowledge_graph_hidden_edges",
@@ -283,6 +294,50 @@ def test_graph_tools_are_versioned_bounded_and_strict(graph_gateway):
     assert read["result"]["view_mode"] == "structure"
     assert read["result"]["story_gravity_available"] is True
     assert all("story_gravity" in node for node in read["result"]["nodes"])
+
+
+def test_mcp_graph_read_includes_native_progression_nodes(graph_gateway):
+    db, _client, gateway = graph_gateway
+    project_id = gateway.client.project_id
+    scene = db.get_all_scenes(project_id)[0]
+    snapshot = db.read_progression_snapshot(project_id)
+    assert snapshot is not None
+    track_result = db.execute_progression_command(
+        project_id,
+        kind="create_track",
+        expected_revision=snapshot.revision,
+        track_kind="story",
+        title="MCP-visible arc",
+    )
+    track_id = track_result.created_track_id
+    assert track_id is not None
+    beat_result = db.execute_progression_command(
+        project_id,
+        kind="create_beat",
+        expected_revision=track_result.snapshot.revision,
+        track_id=track_id,
+        text="The arc turns",
+        anchor_kind="scene",
+        scene_id=scene.id,
+    )
+    beat_id = beat_result.created_beat_id
+    assert beat_id is not None
+
+    response = call_tool(
+        gateway,
+        "logosforge_get_knowledge_graph",
+        {
+            "depth": 2,
+            "limit": 200,
+            "include_inferred": False,
+            "view_mode": "project_map",
+        },
+    )
+
+    assert response["ok"] is True
+    keys = {node["key"] for node in response["result"]["nodes"]}
+    assert f"progression_track:progressions:{track_id}" in keys
+    assert f"progression_beat:progressions:{beat_id}" in keys
     graph_tool = next(
         spec for spec in TOOL_SPECS
         if spec.name == "logosforge_get_knowledge_graph"

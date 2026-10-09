@@ -85,6 +85,10 @@ class KnowledgeGraph:
     edges: list[KGEdge] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     unavailable: list[str] = field(default_factory=list)  # deferred source systems
+    # Internal, bounded analyzer handoff.  It is intentionally not serialized
+    # as graph payload; Decision Radar uses it to report full-snapshot totals
+    # while graph nodes/edges remain independently capped.
+    progression_diagnostics: dict = field(default_factory=dict, repr=False)
     _edge_index: dict[tuple, KGEdge] = field(default_factory=dict, repr=False)
 
     # -- mutation (build-time only; never touches project content) ----------

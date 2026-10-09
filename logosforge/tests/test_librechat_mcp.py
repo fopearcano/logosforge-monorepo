@@ -35,6 +35,8 @@ from logosforge.librechat.mcp_gateway import (
     _canvas_plot_receipt_request_digest,
     _continuity_receipt_request_digest,
     _knowledge_graph_receipt_request_digest,
+    _normalize_progression_command,
+    _progression_receipt_request_digest,
     _timeline_receipt_request_digest,
 )
 
@@ -160,6 +162,107 @@ def test_api_client_get_canvas_plot_uses_authoritative_project_endpoint():
         "timeout": 15.0,
     }
     assert result == canvas_plot
+
+
+def test_api_client_progression_reads_and_receipts_keep_capability_in_header():
+    client = LogosForgeApiClient(
+        base_url="http://127.0.0.1:8765", project_id=7, auth_token="secret",
+    )
+    proposal_id = "lfp_progressionabcdefghijkl"
+    captured: list[dict] = []
+
+    def fake_urlopen(request, timeout=None):
+        captured.append({
+            "url": request.full_url,
+            "method": request.get_method(),
+            "headers": {
+                key.lower(): value for key, value in request.header_items()
+            },
+        })
+        return _response({"project_id": 7, "revision": "a" * 64})
+
+    with mock.patch.object(ac.urllib.request, "urlopen", fake_urlopen):
+        client.get_progressions()
+        client.get_progression_command_receipt(proposal_id)
+
+    assert captured[0]["url"] == (
+        "http://127.0.0.1:8765/api/projects/7/progressions"
+    )
+    assert captured[1]["url"] == (
+        "http://127.0.0.1:8765/api/projects/7/progressions/command-receipt"
+    )
+    assert captured[1]["headers"]["idempotency-key"] == proposal_id
+
+
+def test_progression_command_normalization_and_receipt_digest_are_exact():
+    revision = "a" * 64
+    command = {
+        "kind": "create_beat",
+        "expected_revision": revision,
+        "track_id": 4,
+        "text": "  The alliance fractures.  ",
+        "anchor_kind": "document_block",
+        "scene_id": None,
+        "anchor_ref": "block-123",
+        "anchor_label": "Chapter 4",
+        "index": 2,
+    }
+    normalized = _normalize_progression_command(command)
+    assert normalized == command
+    expected = hashlib.sha256(json.dumps({
+        "scope": "progression-command-v1",
+        "project_id": 7,
+        "kind": "create_beat",
+        "expected_revision": revision,
+        "fields": {
+            key: value
+            for key, value in command.items()
+            if key not in {"kind", "expected_revision"}
+        },
+    }, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+    assert _progression_receipt_request_digest(7, command) == expected
+
+    with pytest.raises(GatewayError, match="Unexpected Progressions"):
+        _normalize_progression_command({**command, "surprise": True})
+    with pytest.raises(GatewayError, match="track_kind"):
+        _normalize_progression_command({
+            "kind": "create_track",
+            "expected_revision": revision,
+            "track_kind": "magic",
+            "title": "Nope",
+        })
+
+
+def test_progression_receipt_shape_rejects_impossible_command_outcomes():
+    receipt = {
+        "project_id": 1,
+        "request_digest": "a" * 64,
+        "command_kind": "create_beat",
+        "expected_revision": "b" * 64,
+        "applied_revision": "c" * 64,
+        "original_changed": True,
+        "original_affected_track_ids": [9],
+        "original_affected_beat_ids": [10],
+        "original_created_track_id": None,
+        "original_created_beat_id": 10,
+        "committed_at": "2026-10-09T10:00:00Z",
+    }
+    assert LogosForgeMcpGateway._validate_progression_receipt_shape(
+        receipt, 1,
+    )["original_created_beat_id"] == 10
+
+    for invalid in (
+        {**receipt, "original_created_beat_id": None},
+        {**receipt, "original_affected_beat_ids": []},
+        {
+            **receipt,
+            "original_changed": False,
+            "applied_revision": receipt["expected_revision"],
+        },
+        {**receipt, "command_kind": "update_track"},
+    ):
+        with pytest.raises(GatewayError, match="invalid Progressions receipt"):
+            LogosForgeMcpGateway._validate_progression_receipt_shape(invalid, 1)
 
 
 def test_api_client_knowledge_graph_reads_preserve_bounded_queries():
@@ -764,6 +867,63 @@ class _FakeApiClient:
         }
         self._timeline_revision_sequence = 3
         self.timeline_receipts: dict[tuple[int, str], dict] = {}
+        self.progressions = {
+            1: {
+                "project_id": 1,
+                "revision": "d" * 64,
+                "tracks": [{
+                    "id": 901,
+                    "project_id": 1,
+                    "kind": "story",
+                    "title": "Main story",
+                    "description": "",
+                    "color_label": "blue",
+                    "sort_order": 0,
+                    "primary_psyke_entry_id": None,
+                    "primary_psyke_entry_name": "",
+                    "primary_psyke_entry_type": "",
+                    "secondary_psyke_entry_id": None,
+                    "secondary_psyke_entry_name": "",
+                    "secondary_psyke_entry_type": "",
+                    "beats": [],
+                    "coverage": {
+                        "total_beats": 0,
+                        "anchored_beats": 0,
+                        "unanchored_beats": 0,
+                        "scene_anchored_beats": 0,
+                        "document_anchored_beats": 0,
+                        "coverage_percent": 0.0,
+                        "status": "empty",
+                        "out_of_order_beat_ids": [],
+                    },
+                }],
+                "summary": {
+                    "total_tracks": 1,
+                    "total_beats": 0,
+                    "anchored_beats": 0,
+                    "unanchored_beats": 0,
+                    "coverage_percent": 0.0,
+                    "by_kind": {"story": 1},
+                    "by_status": {"empty": 1},
+                },
+            },
+            2: {
+                "project_id": 2,
+                "revision": "e" * 64,
+                "tracks": [],
+                "summary": {
+                    "total_tracks": 0,
+                    "total_beats": 0,
+                    "anchored_beats": 0,
+                    "unanchored_beats": 0,
+                    "coverage_percent": 0.0,
+                    "by_kind": {},
+                    "by_status": {},
+                },
+            },
+        }
+        self._progression_revision_sequence = 15
+        self.progression_receipts: dict[tuple[int, str], dict] = {}
         self.canvas_plots = {
             1: {
                 "project_id": 1,
@@ -1084,6 +1244,10 @@ class _FakeApiClient:
         pid = int(project_id) if project_id is not None else self.require_project_id()
         return copy.deepcopy(self.canvas_plots[pid])
 
+    def get_progressions(self, project_id: int | None = None) -> dict:
+        pid = int(project_id) if project_id is not None else self.require_project_id()
+        return copy.deepcopy(self.progressions[pid])
+
     def get_knowledge_graph(
         self,
         project_id: int | None = None,
@@ -1184,6 +1348,18 @@ class _FakeApiClient:
         return self.request(
             "GET",
             self.project_path("continuity/command-receipt", pid),
+            idempotency_key=idempotency_key,
+        )
+
+    def get_progression_command_receipt(
+        self,
+        idempotency_key: str,
+        project_id: int | None = None,
+    ) -> dict:
+        pid = int(project_id) if project_id is not None else self.require_project_id()
+        return self.request(
+            "GET",
+            self.project_path("progressions/command-receipt", pid),
             idempotency_key=idempotency_key,
         )
 
@@ -1291,10 +1467,24 @@ class _FakeApiClient:
                     status_code=404,
                     error_code="continuity_receipt_not_found",
                 )
+            if path.endswith("/progressions/command-receipt"):
+                project_id = int(path.split("/")[3])
+                receipt = self.progression_receipts.get(
+                    (project_id, idempotency_key)
+                )
+                if receipt is None:
+                    raise LogosForgeApiError(
+                        "Progressions command receipt not found",
+                        status_code=404,
+                        error_code="progression_receipt_not_found",
+                    )
+                return copy.deepcopy(receipt)
             if path == "/api/projects/1/timeline":
                 return self.get_timeline(1)
             if path == "/api/projects/1/canvas-plot":
                 return self.get_canvas_plot(1)
+            if path == "/api/projects/1/progressions":
+                return self.get_progressions(1)
             comment_prefix = "/api/projects/1/comments/"
             if path.startswith(comment_prefix):
                 return self.get_comment(int(path.removeprefix(comment_prefix)), 1)
@@ -1343,6 +1533,102 @@ class _FakeApiClient:
                 comment["updated_at"] = "2026-09-01T11:00:00Z"
                 comment["revision"] = self._next_comment_revision()
                 return copy.deepcopy(comment)
+
+        if method == "POST" and path == "/api/projects/1/progressions/commands":
+            snapshot = self.progressions[1]
+            assert body is not None
+            receipt_key = (1, idempotency_key)
+            request_digest = _progression_receipt_request_digest(1, body)
+            if idempotency_key and receipt_key in self.progression_receipts:
+                receipt = self.progression_receipts[receipt_key]
+                if receipt["request_digest"] != request_digest:
+                    raise LogosForgeApiError(
+                        "Idempotency-Key was reused",
+                        status_code=409,
+                        error_code="idempotency_key_conflict",
+                    )
+                return {
+                    "progressions": copy.deepcopy(snapshot),
+                    "replayed": True,
+                    "applied_revision": receipt["applied_revision"],
+                    "changed": False,
+                    "affected_track_ids": [],
+                    "affected_beat_ids": [],
+                    "created_track_id": receipt["original_created_track_id"],
+                    "created_beat_id": receipt["original_created_beat_id"],
+                }
+            if body.get("expected_revision") != snapshot["revision"]:
+                raise LogosForgeApiError(
+                    "HTTP 409: Progressions changed",
+                    status_code=409,
+                    error_code="progression_conflict",
+                )
+            if body.get("kind") != "create_beat":
+                raise LogosForgeApiError("unsupported fake Progressions command")
+            track = next(
+                row for row in snapshot["tracks"]
+                if row["id"] == body["track_id"]
+            )
+            created_beat_id = 1001 + len(track["beats"])
+            beat = {
+                "id": created_beat_id,
+                "track_id": track["id"],
+                "text": body["text"],
+                "sort_order": len(track["beats"]),
+                "anchor_kind": body.get("anchor_kind", "unanchored"),
+                "scene_id": body.get("scene_id"),
+                "scene_title": "",
+                "anchor_ref": body.get("anchor_ref"),
+                "anchor_label": body.get("anchor_label", ""),
+            }
+            index = body.get("index")
+            if index is None:
+                index = len(track["beats"])
+            track["beats"].insert(index, beat)
+            for sort_order, row in enumerate(track["beats"]):
+                row["sort_order"] = sort_order
+            track["coverage"].update({
+                "total_beats": len(track["beats"]),
+                "anchored_beats": sum(
+                    row["anchor_kind"] != "unanchored" for row in track["beats"]
+                ),
+                "unanchored_beats": sum(
+                    row["anchor_kind"] == "unanchored" for row in track["beats"]
+                ),
+                "scene_anchored_beats": sum(
+                    row["anchor_kind"] == "scene" for row in track["beats"]
+                ),
+                "document_anchored_beats": sum(
+                    row["anchor_kind"] == "document_block" for row in track["beats"]
+                ),
+            })
+            snapshot["summary"]["total_beats"] += 1
+            snapshot["revision"] = f"{self._progression_revision_sequence:064x}"
+            self._progression_revision_sequence += 1
+            if idempotency_key:
+                self.progression_receipts[receipt_key] = {
+                    "project_id": 1,
+                    "request_digest": request_digest,
+                    "command_kind": body["kind"],
+                    "expected_revision": body["expected_revision"],
+                    "applied_revision": snapshot["revision"],
+                    "original_changed": True,
+                    "original_affected_track_ids": [track["id"]],
+                    "original_affected_beat_ids": [created_beat_id],
+                    "original_created_track_id": None,
+                    "original_created_beat_id": created_beat_id,
+                    "committed_at": "2026-10-09T10:00:00Z",
+                }
+            return {
+                "progressions": copy.deepcopy(snapshot),
+                "replayed": False,
+                "applied_revision": snapshot["revision"],
+                "changed": True,
+                "affected_track_ids": [track["id"]],
+                "affected_beat_ids": [created_beat_id],
+                "created_track_id": None,
+                "created_beat_id": created_beat_id,
+            }
 
         if method == "POST" and path == "/api/projects/1/timeline/commands":
             timeline = self.timelines[1]
@@ -3284,21 +3570,25 @@ def test_unknown_proposal_receipt_miss_stays_unknown():
 
     with pytest.raises(GatewayError, match="Unknown proposal id"):
         gateway.get_proposal("lfp_abcdefghijklmnopqrstuvwx")
-    assert fake.requests[-4][0:2] == (
+    assert fake.requests[-5][0:2] == (
         "GET",
         "/api/projects/1/timeline/command-receipt",
     )
-    assert fake.requests[-3][0:2] == (
+    assert fake.requests[-4][0:2] == (
         "GET",
         "/api/projects/1/canvas-plot/command-receipt",
     )
-    assert fake.requests[-2][0:2] == (
+    assert fake.requests[-3][0:2] == (
         "GET",
         "/api/projects/1/knowledge-graph/command-receipt",
     )
-    assert fake.requests[-1][0:2] == (
+    assert fake.requests[-2][0:2] == (
         "GET",
         "/api/projects/1/continuity/command-receipt",
+    )
+    assert fake.requests[-1][0:2] == (
+        "GET",
+        "/api/projects/1/progressions/command-receipt",
     )
 
 
@@ -4204,6 +4494,258 @@ def test_apply_uses_the_exact_stored_payload_once_and_replay_is_rejected():
     assert len([call for call in fake.requests if call[0] == "PATCH"]) == 1
 
 
+def test_progression_read_proposal_and_apply_are_revision_bound_and_idempotent():
+    gateway, fake = _gateway(allow_writes=True)
+    current = gateway.get_progressions()
+    command = {
+        "kind": "create_beat",
+        "expected_revision": current["revision"],
+        "track_id": 901,
+        "text": "The threshold is crossed.",
+        "anchor_kind": "document_block",
+        "anchor_ref": "block-opening",
+        "anchor_label": "Opening",
+    }
+    proposal = gateway.propose_progression_command(command)
+    assert proposal["state"] == "pending"
+    assert proposal["request"]["body"] == command
+    assert fake.progressions[1]["tracks"][0]["beats"] == []
+
+    applied = gateway.apply_proposal(proposal["proposal_id"])
+    result = applied["result"]
+    assert result["changed"] is True
+    assert result["created_beat_id"] == 1001
+    assert result["progressions"]["tracks"][0]["beats"][0]["anchor_ref"] == (
+        "block-opening"
+    )
+    assert fake.request_idempotency_keys[-1] == (
+        "POST",
+        "/api/projects/1/progressions/commands",
+        proposal["proposal_id"],
+    )
+
+    with pytest.raises(GatewayError, match="applied, not pending"):
+        gateway.apply_proposal(proposal["proposal_id"])
+
+
+def test_progression_ambiguous_apply_recovers_committed_receipt_without_resend():
+    gateway, fake = _gateway(allow_writes=True)
+    proposal = gateway.propose_progression_command({
+        "kind": "create_beat",
+        "expected_revision": fake.progressions[1]["revision"],
+        "track_id": 901,
+        "text": "The irreversible turn.",
+    })
+    request = fake.request
+    post_keys: list[str] = []
+
+    def commit_then_lose_response(
+        method, path, body=None, query=None, *, idempotency_key="",
+    ):
+        result = request(
+            method, path, body, query, idempotency_key=idempotency_key,
+        )
+        if method == "POST" and path.endswith("/progressions/commands"):
+            post_keys.append(idempotency_key)
+            del result
+            raise LogosForgeApiError("connection reset after commit")
+        return result
+
+    fake.request = commit_then_lose_response
+    applied = gateway.apply_proposal(proposal["proposal_id"])
+
+    assert applied["state"] == "applied"
+    assert applied["recovered_from_core"] is True
+    assert applied["result"]["replayed"] is True
+    assert applied["result"]["created_beat_id"] == 1001
+    assert applied["receipt"]["original_created_beat_id"] == 1001
+    assert post_keys == [proposal["proposal_id"]]
+    assert [
+        beat["text"]
+        for beat in fake.progressions[1]["tracks"][0]["beats"]
+    ] == ["The irreversible turn."]
+
+
+@pytest.mark.parametrize("ambiguous_status", [408, 429])
+def test_progression_transient_receipt_lookup_keeps_exact_key_for_one_resend(
+    ambiguous_status,
+):
+    gateway, fake = _gateway(allow_writes=True)
+    proposal = gateway.propose_progression_command({
+        "kind": "create_beat",
+        "expected_revision": fake.progressions[1]["revision"],
+        "track_id": 901,
+        "text": "Recovered after a transient receipt outage.",
+    })
+    request = fake.request
+    first_post = True
+    first_receipt_lookup = True
+    post_keys: list[str] = []
+
+    def transient_then_recover(
+        method, path, body=None, query=None, *, idempotency_key="",
+    ):
+        nonlocal first_post, first_receipt_lookup
+        if method == "POST" and path.endswith("/progressions/commands"):
+            post_keys.append(idempotency_key)
+            if first_post:
+                first_post = False
+                raise LogosForgeApiError(
+                    "ambiguous write response",
+                    status_code=ambiguous_status,
+                )
+        if (
+            method == "GET"
+            and path.endswith("/progressions/command-receipt")
+            and first_receipt_lookup
+        ):
+            first_receipt_lookup = False
+            raise LogosForgeApiError(
+                "receipt service temporarily unavailable",
+                status_code=503,
+            )
+        return request(
+            method, path, body, query, idempotency_key=idempotency_key,
+        )
+
+    fake.request = transient_then_recover
+    with pytest.raises(GatewayError, match="recovery"):
+        gateway.apply_proposal(proposal["proposal_id"])
+    stored = gateway.get_proposal(proposal["proposal_id"])
+    assert stored["state"] == "recovery_pending"
+    assert post_keys == [proposal["proposal_id"]]
+
+    applied = gateway.apply_proposal(proposal["proposal_id"])
+
+    assert applied["state"] == "applied"
+    assert applied["result"]["created_beat_id"] == 1001
+    assert post_keys == [proposal["proposal_id"], proposal["proposal_id"]]
+    assert [
+        beat["text"]
+        for beat in fake.progressions[1]["tracks"][0]["beats"]
+    ] == ["Recovered after a transient receipt outage."]
+
+
+def test_progression_transient_receipt_lookup_later_recovers_commit_without_resend():
+    gateway, fake = _gateway(allow_writes=True)
+    proposal = gateway.propose_progression_command({
+        "kind": "create_beat",
+        "expected_revision": fake.progressions[1]["revision"],
+        "track_id": 901,
+        "text": "Committed before receipt lookup failed.",
+    })
+    request = fake.request
+    first_receipt_lookup = True
+    post_keys: list[str] = []
+
+    def commit_then_transient_lookup(
+        method, path, body=None, query=None, *, idempotency_key="",
+    ):
+        nonlocal first_receipt_lookup
+        if method == "POST" and path.endswith("/progressions/commands"):
+            post_keys.append(idempotency_key)
+            result = request(
+                method, path, body, query, idempotency_key=idempotency_key,
+            )
+            del result
+            raise LogosForgeApiError("response lost after commit")
+        if (
+            method == "GET"
+            and path.endswith("/progressions/command-receipt")
+            and first_receipt_lookup
+        ):
+            first_receipt_lookup = False
+            raise LogosForgeApiError("receipt lookup timed out", status_code=503)
+        return request(
+            method, path, body, query, idempotency_key=idempotency_key,
+        )
+
+    fake.request = commit_then_transient_lookup
+    with pytest.raises(GatewayError, match="recovery"):
+        gateway.apply_proposal(proposal["proposal_id"])
+    assert gateway.get_proposal(proposal["proposal_id"])["state"] == (
+        "recovery_pending"
+    )
+
+    applied = gateway.apply_proposal(proposal["proposal_id"])
+
+    assert applied["state"] == "applied"
+    assert applied["recovered_from_core"] is True
+    assert applied["result"]["created_beat_id"] == 1001
+    assert post_keys == [proposal["proposal_id"]]
+
+
+def test_progression_proposal_preflights_subject_anchor_and_partition_invariants():
+    gateway, fake = _gateway(allow_writes=True)
+    revision = fake.progressions[1]["revision"]
+
+    character = gateway.propose_progression_command({
+        "kind": "create_track",
+        "expected_revision": revision,
+        "track_kind": "character",
+        "title": "Ada's arc",
+        "primary_psyke_entry_id": 5,
+    })
+    assert character["state"] == "pending"
+
+    with pytest.raises(GatewayError, match="exactly one compatible"):
+        gateway.propose_progression_command({
+            "kind": "create_track",
+            "expected_revision": revision,
+            "track_kind": "character",
+            "title": "Missing subject",
+        })
+    with pytest.raises(GatewayError, match="not compatible"):
+        gateway.propose_progression_command({
+            "kind": "create_track",
+            "expected_revision": revision,
+            "track_kind": "world",
+            "title": "Wrong subject type",
+            "primary_psyke_entry_id": 5,
+        })
+    with pytest.raises(GatewayError, match="anchor fields"):
+        gateway.propose_progression_command({
+            "kind": "create_beat",
+            "expected_revision": revision,
+            "track_id": 901,
+            "text": "Unresolved block",
+            "anchor_kind": "document_block",
+        })
+    with pytest.raises(GatewayError, match="anchor fields"):
+        gateway.propose_progression_command({
+            "kind": "create_beat",
+            "expected_revision": revision,
+            "track_id": 901,
+            "text": "A mislabeled unanchored beat",
+            "anchor_kind": "unanchored",
+            "anchor_label": "Not actually anchored",
+        })
+    with pytest.raises(GatewayError, match="every current progression track"):
+        gateway.propose_progression_command({
+            "kind": "reorder_tracks",
+            "expected_revision": revision,
+            "track_ids": [],
+        })
+
+    fake.progressions[1]["tracks"].append({
+        **copy.deepcopy(fake.progressions[1]["tracks"][0]),
+        "id": 902,
+        "kind": "custom",
+        "title": "Legacy other-entry progression",
+        "sort_order": 1,
+        "primary_psyke_entry_id": 5,
+        "primary_psyke_entry_name": "Ada",
+        "primary_psyke_entry_type": "other",
+    })
+    legacy_title_edit = gateway.propose_progression_command({
+        "kind": "update_track",
+        "expected_revision": revision,
+        "track_id": 902,
+        "title": "Renamed legacy progression",
+    })
+    assert legacy_title_edit["state"] == "pending"
+
+
 def test_digest_guard_rejects_a_stale_proposal_without_mutating():
     gateway, fake = _gateway(allow_writes=True)
     proposal = gateway.propose_patch_psyke_entry(5, {"name": "Ada Revised"})
@@ -4291,7 +4833,7 @@ def test_mcp_registry_has_unique_focused_tools_and_no_legacy_self_approval():
     assert "mode-lens" in server.SERVER_INSTRUCTIONS
     assert "user-authored project data" in server.SERVER_INSTRUCTIONS
     names = [spec.name for spec in server.TOOL_SPECS]
-    assert len(names) == len(set(names)) == 46
+    assert len(names) == len(set(names)) == 48
     assert {
         "logosforge_get_timeline",
         "logosforge_propose_timeline_command",
@@ -4301,6 +4843,8 @@ def test_mcp_registry_has_unique_focused_tools_and_no_legacy_self_approval():
         "logosforge_get_knowledge_graph_hidden_edges",
         "logosforge_propose_knowledge_graph_command",
         "logosforge_propose_continuity_command",
+        "logosforge_get_progressions",
+        "logosforge_propose_progression_command",
         "logosforge_list_comments",
         "logosforge_propose_comment_reply",
         "logosforge_propose_comment_resolution",
@@ -4479,6 +5023,26 @@ def test_mcp_registry_has_unique_focused_tools_and_no_legacy_self_approval():
         "issue_id",
         "expected_issue_fingerprint",
     ]
+    progression_proposal = server.HANDLERS[
+        "logosforge_propose_progression_command"
+    ]
+    assert progression_proposal.read_only is True
+    assert progression_proposal.destructive is False
+    assert progression_proposal.idempotent is False
+    progression_variants = progression_proposal.input_schema["properties"][
+        "command"
+    ]["oneOf"]
+    assert {
+        variant["properties"]["kind"]["const"]
+        for variant in progression_variants
+    } == {
+        "create_track", "update_track", "delete_track", "reorder_tracks",
+        "create_beat", "update_beat", "delete_beat", "reorder_beats",
+    }
+    assert all(
+        variant["additionalProperties"] is False
+        for variant in progression_variants
+    )
     search = server.HANDLERS["logosforge_search"]
     assert search.input_schema == server._obj(
         {"query": {"type": "string", "maxLength": 500}}, ["query"],
@@ -4534,9 +5098,9 @@ def test_real_mcp_stdio_initializes_and_advertises_structured_tools():
 
     initialized, listed = asyncio.run(exercise())
     assert initialized.serverInfo.name == "logosforge"
-    assert initialized.serverInfo.version == "1.11.0"
+    assert initialized.serverInfo.version == "1.12.0"
     tools = {tool.name: tool for tool in listed.tools}
-    assert len(tools) == 46
+    assert len(tools) == 48
     assert {
         "logosforge_get_timeline",
         "logosforge_propose_timeline_command",
@@ -4546,6 +5110,8 @@ def test_real_mcp_stdio_initializes_and_advertises_structured_tools():
         "logosforge_get_knowledge_graph_hidden_edges",
         "logosforge_propose_knowledge_graph_command",
         "logosforge_propose_continuity_command",
+        "logosforge_get_progressions",
+        "logosforge_propose_progression_command",
         "logosforge_list_comments",
         "logosforge_propose_comment_reply",
         "logosforge_propose_comment_resolution",

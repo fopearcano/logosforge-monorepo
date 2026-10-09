@@ -240,6 +240,57 @@ def test_tension_progression_increases_score():
     assert data.tension.points[0].progression_count == 0
 
 
+def test_tension_counts_each_canonical_scene_beat_once_across_track_kinds():
+    db = Database()
+    project = db.create_project("Canonical progressions")
+    scene = db.create_scene(project.id, "Turn", content="A quiet turn.")
+    alice = db.create_psyke_entry(project.id, "Alice", entry_type="character")
+    bob = db.create_psyke_entry(project.id, "Bob", entry_type="character")
+
+    # One designated legacy beat.
+    db.create_psyke_progression(
+        alice.id, "Alice changes", scene_id=scene.id,
+    )
+
+    def command(kind: str, **fields):
+        snapshot = db.read_progression_snapshot(project.id)
+        assert snapshot is not None
+        return db.execute_progression_command(
+            project.id,
+            kind=kind,
+            expected_revision=snapshot.revision,
+            **fields,
+        )
+
+    story = command(
+        "create_track", track_kind="story", title="Story arc",
+    ).created_track_id
+    command(
+        "create_beat", track_id=story, text="Story turns",
+        anchor_kind="scene", scene_id=scene.id,
+    )
+    relationship = command(
+        "create_track", track_kind="relationship", title="Alice and Bob",
+        primary_psyke_entry_id=alice.id,
+        secondary_psyke_entry_id=bob.id,
+    ).created_track_id
+    command(
+        "create_beat", track_id=relationship, text="They reconcile",
+        anchor_kind="scene", scene_id=scene.id,
+    )
+    custom = command(
+        "create_track", track_kind="custom", title="Draft notes",
+    ).created_track_id
+    command(
+        "create_beat", track_id=custom, text="Only in Drafter",
+        anchor_kind="document_block", anchor_ref="draft-1",
+        anchor_label="Draft one",
+    )
+
+    point = compute_dashboard(db, project.id).tension.points[0]
+    assert point.progression_count == 3
+
+
 def test_tension_flat_flag():
     db = Database()
     proj = db.create_project("K")

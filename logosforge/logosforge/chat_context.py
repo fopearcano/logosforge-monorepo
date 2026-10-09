@@ -14,6 +14,7 @@ from logosforge.context_builder import (
     gather_comments_context,
     gather_notes_context,
     gather_outline_context,
+    gather_progressions_context,
     gather_psyke_context,
     gather_scene_context,
     gather_story_memory,
@@ -30,7 +31,8 @@ _SOURCE_MIN_CHARS = {
     "project": 300,
     "scene": 1200,
     "outline": 1200,
-    "psyke": 1200,
+    "psyke": 900,
+    "progressions": 900,
     "notes": 600,
     "comments": 600,
     "memory": 400,
@@ -168,6 +170,14 @@ def build_chat_context(
             "psyke",
             "PSYKE",
             lambda: gather_psyke_context(
+                db, project_id, scene_id=active_scene_id,
+            ),
+        )
+        _append_context_source(
+            sections,
+            "progressions",
+            "Progressions",
+            lambda: gather_progressions_context(
                 db, project_id, scene_id=active_scene_id,
             ),
         )

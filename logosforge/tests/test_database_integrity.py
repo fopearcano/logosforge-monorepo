@@ -52,7 +52,7 @@ def test_first_versioned_upgrade_preserves_exact_pre_migration_copy(tmp_path: Pa
     assert backup.read_bytes() == original_backup
 
 
-def test_v4_to_v6_preserves_canvas_and_graph_receipt_boundary(
+def test_v4_to_current_preserves_canvas_and_graph_receipt_boundary(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "v4-receipts.db"
@@ -71,7 +71,7 @@ def test_v4_to_v6_preserves_canvas_and_graph_receipt_boundary(
         conn.commit()
 
     upgraded = Database(str(path))
-    backup = path.with_name(path.name + ".pre-v6.bak")
+    backup = path.with_name(path.name + f".pre-v{DB_SCHEMA_VERSION}.bak")
     with sqlite3.connect(backup) as snapshot:
         assert snapshot.execute("PRAGMA user_version").fetchone()[0] == 4
         assert snapshot.execute(
@@ -91,7 +91,7 @@ def test_v4_to_v6_preserves_canvas_and_graph_receipt_boundary(
             " WHERE type='table' AND name='timelinecommandreceipt'"
         ).fetchone() is not None
 
-    assert _pragma(upgraded, "PRAGMA user_version") == 6
+    assert _pragma(upgraded, "PRAGMA user_version") == DB_SCHEMA_VERSION
     with upgraded._engine.connect() as connection:
         for table in (
             "canvasplotcommandreceipt",
@@ -105,7 +105,7 @@ def test_v4_to_v6_preserves_canvas_and_graph_receipt_boundary(
     upgraded._engine.dispose()
 
 
-def test_v5_to_v6_backs_up_before_creating_graph_receipts(
+def test_v5_to_current_backs_up_before_creating_graph_receipts(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "v5-graph-receipts.db"
@@ -124,7 +124,7 @@ def test_v5_to_v6_backs_up_before_creating_graph_receipts(
         conn.commit()
 
     upgraded = Database(str(path))
-    backup = path.with_name(path.name + ".pre-v6.bak")
+    backup = path.with_name(path.name + f".pre-v{DB_SCHEMA_VERSION}.bak")
     with sqlite3.connect(backup) as snapshot:
         assert snapshot.execute("PRAGMA user_version").fetchone()[0] == 5
         assert snapshot.execute(
@@ -139,7 +139,7 @@ def test_v5_to_v6_backs_up_before_creating_graph_receipts(
             " WHERE type='table' AND name='canvasplotcommandreceipt'"
         ).fetchone() is not None
 
-    assert _pragma(upgraded, "PRAGMA user_version") == 6
+    assert _pragma(upgraded, "PRAGMA user_version") == DB_SCHEMA_VERSION
     with upgraded._engine.connect() as connection:
         assert connection.execute(text(
             "SELECT 1 FROM sqlite_master"

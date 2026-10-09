@@ -168,6 +168,17 @@ class _InProcessApiClient:
             idempotency_key=idempotency_key,
         )
 
+    def get_progression_command_receipt(
+        self,
+        idempotency_key: str,
+        project_id: int | None = None,
+    ) -> dict:
+        return self.request(
+            "GET",
+            self.project_path("progressions/command-receipt", project_id),
+            idempotency_key=idempotency_key,
+        )
+
 
 @pytest.fixture
 def continuity_gateway(tmp_path):
@@ -234,8 +245,8 @@ def test_continuity_digest_matches_core_canonical_wire():
 
 def test_continuity_tool_is_versioned_read_only_and_strict(continuity_gateway):
     _db, _client, gateway = continuity_gateway
-    assert SERVER_VERSION == "1.11.0"
-    assert len(TOOL_SPECS) == 46
+    assert SERVER_VERSION == "1.12.0"
+    assert len(TOOL_SPECS) == 48
     assert "logosforge_propose_continuity_command" in HANDLERS
 
     tool = next(

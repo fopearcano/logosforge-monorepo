@@ -15,7 +15,7 @@ from logosforge.api.deps import (
 )
 from logosforge.api.errors import bad_request, conflict, forbidden, not_found
 from logosforge.api.events import ApiEventBroker
-from logosforge.db import Database
+from logosforge.db import Database, ProgressionCommandError
 from logosforge.psyke_command_plans import (
     CommandPlanAmbiguousError,
     CommandPlanConfirmationError,
@@ -169,17 +169,23 @@ def update_entry(
 ):
     entry = _entry_or_404(db, project.id, entry_id)
     patch = body.model_dump(exclude_unset=True)
-    db.update_psyke_entry(
-        entry_id,
-        name=patch.get("name", entry.name),
-        entry_type=patch.get("type", entry.entry_type),
-        aliases=_csv(patch["aliases"]) if "aliases" in patch else entry.aliases,
-        notes=patch.get("notes", entry.notes),
-        is_global=patch.get("is_global", entry.is_global),
-        details=patch.get("details", db.get_psyke_entry_details(entry_id)),
-    )
+    try:
+        updated = db.update_psyke_entry(
+            entry_id,
+            name=patch.get("name", entry.name),
+            entry_type=patch.get("type", entry.entry_type),
+            aliases=_csv(patch["aliases"]) if "aliases" in patch else entry.aliases,
+            notes=patch.get("notes", entry.notes),
+            is_global=patch.get("is_global", entry.is_global),
+            details=patch.get("details", db.get_psyke_entry_details(entry_id)),
+        )
+    except ProgressionCommandError as exc:
+        raise conflict(
+            str(exc), code="psyke_progression_subject_conflict",
+        ) from exc
+    broker.reconcile()
     broker.publish("psyke_changed", project_id=project.id, entry_id=entry_id)
-    return serializers.psyke_entry_to_dto(db, db.get_psyke_entry_by_id(entry_id))
+    return serializers.psyke_entry_to_dto(db, updated)
 
 
 @router.delete(
@@ -194,6 +200,7 @@ def delete_entry(
 ):
     _entry_or_404(db, project.id, entry_id)
     db.delete_psyke_entry(entry_id)
+    broker.reconcile()
     broker.publish("psyke_changed", project_id=project.id, entry_id=entry_id)
     return {"ok": True, "deleted": entry_id}
 
@@ -283,6 +290,7 @@ def create_progression(
     if body.scene_id is not None:
         _scene_or_404(db, project.id, body.scene_id)
     prog = db.create_psyke_progression(body.entry_id, body.text, scene_id=body.scene_id)
+    broker.reconcile()
     broker.publish("psyke_changed", project_id=project.id, entry_id=body.entry_id)
     return serializers.progression_to_dto(db, project.id, prog, body.entry_id)
 
@@ -303,6 +311,7 @@ def update_progression(
     if body.scene_id is not None:
         _scene_or_404(db, project.id, body.scene_id)
     prog = db.update_psyke_progression(progression_id, body.text, scene_id=body.scene_id)
+    broker.reconcile()
     broker.publish("psyke_changed", project_id=project.id, entry_id=prog.entry_id)
     return serializers.progression_to_dto(db, project.id, prog, prog.entry_id)
 
@@ -320,6 +329,7 @@ def delete_progression(
     """Remove an arc-progression beat."""
     _progression_or_404(db, project.id, progression_id)
     db.delete_psyke_progression(progression_id)
+    broker.reconcile()
     broker.publish("psyke_changed", project_id=project.id)
     return {"ok": True, "deleted": progression_id}
 

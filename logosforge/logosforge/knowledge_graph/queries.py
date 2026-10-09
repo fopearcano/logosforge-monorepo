@@ -116,7 +116,9 @@ def query_knowledge_graph(db, project_id: int, query: GraphQuery, *,
 _SRC_GUESS = {P.NT_SCENE: "scene", P.NT_NOTE: "note", P.NT_PROJECT: "project",
               P.NT_PSYKE_ENTRY: "psyke", P.NT_CHARACTER: "psyke",
               P.NT_PLACE: "psyke", P.NT_OBJECT: "psyke", P.NT_THEME: "psyke",
-              P.NT_MOTIF: "psyke", P.NT_LORE: "psyke"}
+              P.NT_MOTIF: "psyke", P.NT_LORE: "psyke",
+              P.NT_PROGRESSION_TRACK: P.SS_PROGRESSIONS,
+              P.NT_PROGRESSION_BEAT: P.SS_PROGRESSIONS}
 
 
 def _src_for(node_type: str) -> str:

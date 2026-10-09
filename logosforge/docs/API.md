@@ -102,9 +102,12 @@ GET  /api/health → { status, service, mode, version, api_version, core_version
 `core_version` is the Logosforge build (e.g. `0.9.0-alpha`). Clients (Electron
 desktop and Web/PWA) read these to verify they're talking to a compatible
 backend. `version` mirrors `api_version` for backward compatibility.
-The current additive HTTP contract version is **1.16.0**. It adds durable
-pending invalidations for changed Timeline, Canvas Plot, Knowledge Graph,
-Semantic Continuity, and Guided Workflow commands plus broker-generation-aware
+The current additive HTTP contract version is **1.17.0**. It adds the canonical,
+revisioned Progressions workspace: typed tracks, ordered beats, scene and
+document-block anchors, coverage summaries, eight transactional commands, and
+durable idempotency receipts. Version 1.16.0 added durable pending
+invalidations for changed Timeline, Canvas Plot, Knowledge Graph, Semantic
+Continuity, and Guided Workflow commands plus broker-generation-aware
 live-event recovery. Version 1.15.0 added read-only `story_flow` and
 writing-mode-discriminated `mode_projection` fields to the coherent Timeline
 snapshot. Version 1.14.0 added persisted scene-to-scene and
@@ -121,9 +124,9 @@ canonical issue keys,
 structured issue/scene evidence, and an explicit availability state. HTTP 1.10.0
 introduced the equivalent Knowledge Graph feed and graph deep-link scope; the
 stable Project Intelligence feed remains unchanged. The HTTP version remains
-deliberately independent from the local MCP server contract; MCP gateway 1.11.0
-keeps the 46-tool surface and extends its existing Timeline read with the Phase
-7C projections. No new Timeline command or MCP tool was added.
+deliberately independent from the local MCP server contract; MCP gateway 1.12.0
+has 48 tools, including a canonical Progressions read and one guarded
+Progressions command proposal tool.
 
 ### Packaged-desktop live context
 ```
@@ -732,6 +735,36 @@ they could mutate scene structure without the Timeline revision guard. Create
 and edit scene prose/metadata through `/scenes`; use Timeline commands for
 membership, lanes, board order, and relationships.
 
+### Progressions
+```
+GET  /api/projects/{project_id}/progressions
+POST /api/projects/{project_id}/progressions/commands
+GET  /api/projects/{project_id}/progressions/command-receipt
+```
+
+The read returns one coherent snapshot with a 64-character `revision`, summary,
+and ordered tracks. Track kinds are `story`, `character`, `relationship`,
+`theme`, `world`, and `custom`. Each track contains ordered beats whose anchor
+is exactly one of `unanchored`, a project-owned `scene`, or a stable
+`document_block` reference used by Whiteboard manuscripts. Coverage reports
+anchored/unanchored totals; it is anchor coverage, not a quality score.
+
+The command endpoint accepts exactly one of `create_track`, `update_track`,
+`delete_track`, `reorder_tracks`, `create_beat`, `update_beat`, `delete_beat`,
+or `reorder_beats`. Every command carries the exact snapshot
+`expected_revision`; the comparison and mutation occur in one transaction.
+Reorder commands must contain the complete, duplicate-free partition they are
+reordering. Character, theme, and world tracks require one compatible PSYKE
+subject; relationship tracks require two distinct subjects; story and custom
+tracks have none.
+
+Clients should send a stable `Idempotency-Key` when applying a reviewed
+command. A replay of the same key and request returns the original outcome; a
+key reused for different content fails closed. Receipt lookup uses the same key
+in the header, never in the URL. A true miss returns `404` with
+`progression_receipt_not_found`. See [Progressions.md](Progressions.md) for the
+domain, compatibility, and Whiteboard anchor rules.
+
 ### PSYKE
 ```
 GET    /api/projects/{project_id}/psyke/entries
@@ -746,6 +779,10 @@ GET    /api/projects/{project_id}/psyke/progressions
 POST   /api/projects/{project_id}/psyke/progressions
 GET    /api/projects/{project_id}/psyke/search?q=
 ```
+
+The `/psyke/progressions` endpoints remain as a compatibility projection over
+canonical Progressions tracks for older clients. New clients should use the
+revisioned `/progressions` surface.
 
 ### Notes
 ```
@@ -895,7 +932,7 @@ when a continuously open stream detects the same gap.
 ```
 project_loaded, project_data_changed, scene_changed, scenes_changed,
 outline_changed, plot_changed, canvas_plot_changed, timeline_changed, psyke_changed,
-knowledge_graph_changed, continuity_changed, workflow_changed, notes_changed,
+progressions_changed, knowledge_graph_changed, continuity_changed, workflow_changed, notes_changed,
 comments_changed, characters_changed, dashboard_changed, assistant_action_completed
 ```
 
@@ -903,8 +940,8 @@ The API owns its own Qt-free event broker (`logosforge/api/events.py`); it
 does not require the desktop Qt event loop, so the PyQt app and the API can run
 independently.
 
-Under HTTP 1.16.0, each changed Timeline, Canvas Plot, Knowledge Graph,
-Semantic Continuity, or Guided Workflow command writes a compact pending
+Under HTTP 1.17.0, each changed Timeline, Canvas Plot, Knowledge Graph,
+Semantic Continuity, Guided Workflow, or Progressions command writes a compact pending
 tokenized invalidation row in the same SQLite transaction as its mutation and receipt.
 The API broker reconciles committed rows into its bounded in-memory ring and
 then acknowledges the exact token-bearing row generation after command commit
@@ -917,9 +954,9 @@ do not apply event payloads as mutations.
 This boundary currently assumes one API process. It does not provide
 multi-process fan-out or an independent background delivery worker, and legacy
 mutation routes still publish best-effort after commit. Supported Alpha use
-therefore remains authenticated desktop/localhost; HTTP 1.16.0 is not a LAN,
+therefore remains authenticated desktop/localhost; HTTP 1.17.0 is not a LAN,
 multi-user, or background-delivery guarantee. MCP remains independently
-versioned at 1.11.0 with the same 46 tools.
+versioned at 1.12.0 with 48 tools.
 
 ---
 

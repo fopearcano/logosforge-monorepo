@@ -148,15 +148,15 @@ Codex configuration.
 
 The exact schemas are reported by MCP discovery. The surface is grouped by
 responsibility rather than exposing arbitrary HTTP requests. Gateway version
-1.11.0 keeps the surface at 46 named tools:
+1.12.0 exposes 48 named tools:
 
 - Project and manuscript reads: list/select project, project context and
   snapshot, scene list/full scene, outline, notes, complete comment threads,
   search, events, and export. Comment listing is paged, can exclude resolved
   threads, and returns the revision for every thread.
-- Story intelligence reads: PSYKE entries, characters, relations,
-  progressions, diagnostics, the canonical revisioned Timeline and Canvas Plot
-  boards, bounded Knowledge Graph maps plus the paged hidden-edge queue, and the
+- Story intelligence reads: PSYKE entries, characters, relations, legacy PSYKE
+  progressions, diagnostics, and the canonical revisioned Timeline, Canvas Plot,
+  and Progressions workspaces; bounded Knowledge Graph maps plus the paged hidden-edge queue; and the
   revisioned deterministic Semantic Continuity report. The Timeline read now
   includes Phase 7C story-flow and mode-specific read-only projections.
 - Desktop-aware reads: live panel/context, current scene, and current selection.
@@ -172,8 +172,8 @@ responsibility rather than exposing arbitrary HTTP requests. Gateway version
 - Focused proposals: create a project or scene; patch a revisioned scene;
   create/patch outline nodes, PSYKE entries, relations, progressions, and
   notes; reply to a comment as `MCP assistant`; Resolve/Reopen a comment; or
-  submit one strict revision-bound Timeline, Canvas Plot, Knowledge Graph, or
-  Semantic Continuity status command.
+  submit one strict revision-bound Timeline, Canvas Plot, Knowledge Graph,
+  Semantic Continuity status, or Progressions command.
 - Proposal management: list, inspect, discard, and apply a stored proposal.
 
 The three comment-specific tools are `logosforge_list_comments`,
@@ -199,12 +199,21 @@ resolution change, reanchor, or deletion made after the read makes apply fail
 instead of overwriting or appending to stale context. Reread the thread and
 create a fresh proposal after a conflict.
 
+Canonical arc orchestration uses `logosforge_get_progressions` followed by
+`logosforge_propose_progression_command`. The proposal accepts all eight track
+and beat create/update/delete/reorder commands, each bound to the exact current
+Progressions revision. Beats may remain unanchored, point to a project-owned
+Pro scene, or use a stable Whiteboard document-block reference. The proposal is
+still read-only; only `logosforge_apply_proposal` can apply its stored payload.
+Lost responses use the same durable same-key receipt recovery guarantees as the
+other transactional command families.
+
 Timeline orchestration uses `logosforge_get_timeline` followed by
 `logosforge_propose_timeline_command`. The proposal tool accepts exactly one of
 12 commands: create/update/delete a lane, place/remove a scene event, switch
 between structural and custom ordering, create/update/delete a scene link, or
-create/update/delete a scene-to-structure link. No new MCP tool was added for
-Phase 7B or 7C: MCP 1.11.0 extends the existing read schema, while the proposal
+create/update/delete a scene-to-structure link. No new Timeline-specific MCP
+tool was added for Phase 7B or 7C: MCP 1.12.0 retains the existing read schema, while the proposal
 schema and command set remain unchanged. Command `index` values and lane
 `order_index` values are zero-based; the snapshot's event `order_index` is a
 one-based display value. Every command
@@ -320,8 +329,8 @@ other story content, invokes an LLM, or performs a repair. Pro's separate
 **Repair with Billy** handoff and Controlled Apply confirmation remain the prose
 workflow.
 
-Timeline, Canvas Plot, Knowledge Graph, and Continuity proposals have durable core
-receipts. The gateway uses the opaque proposal id itself as the command's
+Timeline, Canvas Plot, Knowledge Graph, Continuity, and Progressions proposals
+have durable core receipts. The gateway uses the opaque proposal id itself as the command's
 `Idempotency-Key`; callers cannot choose or replace it. If a transactional
 apply response is lost after commit, the gateway asks the core for that exact
 family receipt. A receipt proves the original command committed, even after the
@@ -330,22 +339,23 @@ current coherent surface together with the original `applied_revision`; it
 does not replace newer state with an old snapshot. If the receipt-capable core
 explicitly reports the family-specific `timeline_receipt_not_found`,
 `canvas_plot_receipt_not_found`, `knowledge_graph_receipt_not_found`, or
-`continuity_receipt_not_found`, the gateway may resend that exact stored command
+`continuity_receipt_not_found`, or `progression_receipt_not_found`, the gateway may resend that exact stored command
 once with the same proposal id. It never creates a fresh key for recovery. A
-fresh gateway resolving an unknown proposal id probes all four receipt families:
+fresh gateway resolving an unknown proposal id probes all five receipt families:
 exactly one match recovers the proposal, while multiple matches fail closed as a
 collision. Receipts live for the project lifetime and are deleted with it.
 Timeline relationship outcomes use receipt payload v2; Core still decodes
 existing Timeline receipt v1 rows, so upgrading does not make earlier receipts
 unrecoverable.
 
-The frozen-companion acceptance smoke discovers all 46 tools, reads a seeded
+The frozen-companion acceptance smoke discovers all 48 tools, reads a seeded
 Continuity report, prepares an exact fingerprint-bound proposal, and proves that
 proposal creation is non-mutating. The packaged-app smoke applies a Continuity
 decision, rejects a stale sibling, verifies persisted status, restarts the MCP
 companion, and recovers the original result from the durable receipt. The same
-restart run exercises receipts for Timeline, Canvas Plot, and Knowledge Graph,
-so the four-family recovery boundary is covered together.
+restart run exercises receipts for Timeline, Canvas Plot, and Knowledge Graph.
+Progressions receipt recovery is covered by the source suite; its packaged
+journey remains part of the next release gate.
 
 The exact Phase 7B `cfd4c7b` AppImage passed the full packaged workspace + MCP
 journey on a clean Ubuntu 22.04 VM. Current-source Windows and macOS full

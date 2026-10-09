@@ -147,6 +147,36 @@ if (!KNOWN_EVENTS.includes('canvas_plot_changed')) {
   throw new Error('canvas_plot_changed is missing from the known project events');
 }
 
+const progressionRoutes = [
+  ROUTES.progressions(42),
+  ROUTES.progressionCommands(42),
+  ROUTES.progressionCommandReceipt(42),
+];
+const expectedProgressionRoutes = [
+  '/api/projects/42/progressions',
+  '/api/projects/42/progressions/commands',
+  '/api/projects/42/progressions/command-receipt',
+];
+if (JSON.stringify(progressionRoutes) !== JSON.stringify(expectedProgressionRoutes)) {
+  throw new Error(`Progressions route mismatch: ${progressionRoutes}`);
+}
+if (!KNOWN_EVENTS.includes('progressions_changed')) {
+  throw new Error('progressions_changed is missing from the known project events');
+}
+const pythonProgressionRoute = readFileSync(
+  '../logosforge/logosforge/api/routes/progressions.py',
+  'utf8',
+);
+for (const route of [
+  '"/projects/{project_id}/progressions"',
+  '"/projects/{project_id}/progressions/commands"',
+  '"/projects/{project_id}/progressions/command-receipt"',
+]) {
+  if (!pythonProgressionRoute.includes(route)) {
+    throw new Error(`Python Progressions route is missing or drifted: ${route}`);
+  }
+}
+
 const psykeCommandRoutes = [
   ROUTES.psykeConsolePlan(42),
   ROUTES.psykeConsoleExecute(42),
@@ -201,7 +231,7 @@ for (const route of [
   }
 }
 
-console.log('Contract route/event tests: 16 passed, 0 failed');
+console.log('Contract route/event tests: 19 passed, 0 failed');
 
 const pythonSchemas = readFileSync('../logosforge/logosforge/api/schemas.py', 'utf8');
 const typescriptSchemas = readFileSync('src/types.ts', 'utf8');
@@ -350,8 +380,8 @@ for (const field of ['run_id', 'expected_revision']) {
 }
 
 const pythonApiApp = readFileSync('../logosforge/logosforge/api/app.py', 'utf8');
-if (!pythonApiApp.includes('API_CONTRACT_VERSION = "1.16.0"')) {
-  throw new Error('Transactional event outbox reconciliation must ship as HTTP contract 1.16.0');
+if (!pythonApiApp.includes('API_CONTRACT_VERSION = "1.17.0"')) {
+  throw new Error('First-class transactional Progressions must ship as HTTP contract 1.17.0');
 }
 const pythonEventsPoll = pythonSchemas.match(
   /class EventsPollDTO\(BaseModel\):([\s\S]*?)\n\nclass /,

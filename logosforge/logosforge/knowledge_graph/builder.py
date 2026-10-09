@@ -14,6 +14,7 @@ from logosforge.db import KnowledgeGraphProjectNotFound
 from logosforge.knowledge_graph import provenance as P
 from logosforge.knowledge_graph.extractor_notes import extract_notes
 from logosforge.knowledge_graph.extractor_psyke import extract_psyke
+from logosforge.knowledge_graph.extractor_progressions import extract_progressions
 from logosforge.knowledge_graph.extractor_revision import (
     extract_apply,
     extract_revision,
@@ -67,7 +68,25 @@ def build_knowledge_graph(db, project_id: int, *, options: dict | None = None,
 
     # Order matters only for node-existence; extractors are individually safe.
     extract_structure(db, project_id, graph)
-    extract_psyke(db, project_id, graph)
+    # Progressions has two graph projections: designated legacy tracks retain
+    # their historical PSYKE->scene edge, while native tracks expose first-class
+    # track/beat evidence.  Read one canonical snapshot so the two projections
+    # cannot observe different revisions during a concurrent edit.
+    try:
+        progression_snapshot = db.read_progression_snapshot(project_id)
+    except Exception:
+        progression_snapshot = None
+        graph.unavailable.append(P.SS_PROGRESSIONS)
+    if progression_snapshot is None and P.SS_PROGRESSIONS not in graph.unavailable:
+        graph.unavailable.append(P.SS_PROGRESSIONS)
+    extract_psyke(
+        db, project_id, graph,
+        progression_snapshot=progression_snapshot,
+    )
+    extract_progressions(
+        db, project_id, graph,
+        progression_snapshot=progression_snapshot,
+    )
     undefined_term_sources: dict[str, set[str]] = {}
     undefined = extract_notes(
         db,

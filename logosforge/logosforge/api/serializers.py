@@ -16,6 +16,7 @@ from logosforge.db import (
     CanvasPlotReadSnapshot,
     Database,
     ManuscriptReadSnapshot,
+    ProgressionReadSnapshot,
     StoryStructureReadSnapshot,
     TimelineReadSnapshot,
 )
@@ -34,6 +35,108 @@ def _local_scene_id(
         return None
     scene = db.get_scene_by_id(scene_id)
     return scene_id if scene is not None and scene.project_id == project_id else None
+
+
+def progression_snapshot_to_dto(
+    snapshot: ProgressionReadSnapshot,
+) -> schemas.ProgressionSnapshotDTO:
+    """Serialize one coherent canonical Progressions snapshot."""
+    track_dtos: list[schemas.ProgressionTrackDTO] = []
+    by_kind = {
+        key: 0 for key in (
+            "story", "character", "relationship", "theme", "world", "custom",
+        )
+    }
+    by_status = {
+        key: 0 for key in ("empty", "unanchored", "partial", "complete")
+    }
+    total_beats = 0
+    anchored_beats = 0
+    for row in snapshot.tracks:
+        track = row.track
+        coverage = row.coverage
+        by_kind[track.kind] += 1
+        by_status[coverage.status] += 1
+        total_beats += coverage.total_beats
+        anchored_beats += coverage.anchored_beats
+        beats = [
+            schemas.ProgressionBeatDTO(
+                id=int(beat.id),
+                track_id=int(beat.track_id),
+                text=beat.text,
+                sort_order=int(beat.sort_order),
+                anchor_kind=beat.anchor_kind,
+                scene_id=(
+                    int(beat.scene_id) if beat.scene_id is not None else None
+                ),
+                scene_title=(
+                    row.scene_titles_by_id.get(int(beat.scene_id), "")
+                    if beat.scene_id is not None else ""
+                ),
+                anchor_ref=beat.anchor_ref,
+                anchor_label=beat.anchor_label,
+            )
+            for beat in row.beats
+        ]
+        track_dtos.append(schemas.ProgressionTrackDTO(
+            id=int(track.id),
+            project_id=int(track.project_id),
+            kind=track.kind,
+            title=track.title,
+            description=track.description,
+            color_label=track.color_label,
+            sort_order=int(track.sort_order),
+            primary_psyke_entry_id=(
+                int(row.primary_entry.id) if row.primary_entry is not None else None
+            ),
+            primary_psyke_entry_name=(
+                row.primary_entry.name if row.primary_entry is not None else ""
+            ),
+            primary_psyke_entry_type=(
+                row.primary_entry.entry_type if row.primary_entry is not None else ""
+            ),
+            secondary_psyke_entry_id=(
+                int(row.secondary_entry.id)
+                if row.secondary_entry is not None else None
+            ),
+            secondary_psyke_entry_name=(
+                row.secondary_entry.name if row.secondary_entry is not None else ""
+            ),
+            secondary_psyke_entry_type=(
+                row.secondary_entry.entry_type
+                if row.secondary_entry is not None else ""
+            ),
+            legacy_compatibility=track.legacy_psyke_entry_id is not None,
+            beats=beats,
+            coverage=schemas.ProgressionCoverageDTO(
+                total_beats=coverage.total_beats,
+                anchored_beats=coverage.anchored_beats,
+                unanchored_beats=coverage.unanchored_beats,
+                scene_anchored_beats=coverage.scene_anchored_beats,
+                document_anchored_beats=coverage.document_anchored_beats,
+                coverage_percent=coverage.coverage_percent,
+                status=coverage.status,
+                out_of_order_beat_ids=list(coverage.out_of_order_beat_ids),
+            ),
+        ))
+    unanchored_beats = total_beats - anchored_beats
+    return schemas.ProgressionSnapshotDTO(
+        project_id=int(snapshot.project.id),
+        revision=snapshot.revision,
+        tracks=track_dtos,
+        summary=schemas.ProgressionSummaryDTO(
+            total_tracks=len(track_dtos),
+            total_beats=total_beats,
+            anchored_beats=anchored_beats,
+            unanchored_beats=unanchored_beats,
+            coverage_percent=(
+                round(anchored_beats * 100.0 / total_beats, 2)
+                if total_beats else 0.0
+            ),
+            by_kind=by_kind,
+            by_status=by_status,
+        ),
+    )
 
 
 # -- Projects ----------------------------------------------------------------

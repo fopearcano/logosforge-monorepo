@@ -8,6 +8,13 @@ import xml.etree.ElementTree as ET
 from logosforge.db import Database
 
 
+_PROGRESSION_EXPORT_MAX_ATTEMPTS = 3
+
+
+class _ProgressionExportChanged(RuntimeError):
+    """A canonical Progressions snapshot changed during export assembly."""
+
+
 def _build_timeline_section(db: Database, project_id: int, scenes: list) -> dict:
     """Timeline topology in an id-independent, import-compatible shape.
 
@@ -89,7 +96,114 @@ def _build_timeline_section(db: Database, project_id: int, scenes: list) -> dict
     }
 
 
-def _gather_project_data(db: Database, project_id: int) -> dict:
+def _progression_tracks_from_snapshot(snapshot, ordered_scenes: list) -> list[dict]:
+    """Serialize one snapshot against its matching portable scene ordering."""
+    scene_order_by_id = {
+        int(scene.id): index
+        for index, scene in enumerate(ordered_scenes, start=1)
+    }
+    scene_title_by_id = {
+        int(scene.id): scene.title for scene in ordered_scenes
+    }
+
+    def subject_ref(entry) -> dict | None:
+        if entry is None:
+            return None
+        return {"name": entry.name, "entry_type": entry.entry_type}
+
+    tracks: list[dict] = []
+    for row in snapshot.tracks:
+        track = row.track
+        beats = []
+        for beat in row.beats:
+            scene_anchor = None
+            if beat.anchor_kind == "scene" and beat.scene_id is not None:
+                scene_id = int(beat.scene_id)
+                if scene_id not in scene_order_by_id:
+                    raise _ProgressionExportChanged(
+                        "A Progressions scene anchor changed during export"
+                    )
+                scene_anchor = {
+                    "source_order": scene_order_by_id[scene_id],
+                    "source_title": scene_title_by_id[scene_id],
+                }
+            beats.append({
+                "text": beat.text,
+                "sort_order": int(beat.sort_order),
+                "anchor_kind": beat.anchor_kind,
+                "scene_anchor": scene_anchor,
+                "anchor_ref": beat.anchor_ref,
+                "anchor_label": beat.anchor_label,
+            })
+        tracks.append({
+            "kind": track.kind,
+            "title": track.title,
+            "description": track.description,
+            "color_label": track.color_label,
+            "sort_order": int(track.sort_order),
+            "primary_subject": subject_ref(row.primary_entry),
+            "secondary_subject": subject_ref(row.secondary_entry),
+            "legacy_compatibility": track.legacy_psyke_entry_id is not None,
+            "beats": beats,
+        })
+    return tracks
+
+
+def _build_progression_tracks_section(
+    db: Database,
+    project_id: int,
+    scenes: list | None = None,
+    *,
+    expected_revision: str | None = None,
+) -> list[dict]:
+    """Return canonical Progressions tracks using coherent portable references.
+
+    Full-project export supplies ``expected_revision`` and retries its entire
+    projection when it changes.  Standalone structured exports receive the
+    same guarantee locally by re-reading the snapshot after serialization.
+    """
+    if expected_revision is not None:
+        snapshot = db.read_progression_snapshot(project_id)
+        if snapshot is None or snapshot.revision != expected_revision:
+            raise _ProgressionExportChanged(
+                "Progressions changed during export"
+            )
+        ordered_scenes = (
+            scenes if scenes is not None else db.get_all_scenes(project_id)
+        )
+        return _progression_tracks_from_snapshot(snapshot, ordered_scenes)
+
+    for _attempt in range(_PROGRESSION_EXPORT_MAX_ATTEMPTS):
+        snapshot = db.read_progression_snapshot(project_id)
+        if snapshot is None:
+            return []
+        ordered_scenes = (
+            scenes if scenes is not None else db.get_all_scenes(project_id)
+        )
+        try:
+            tracks = _progression_tracks_from_snapshot(
+                snapshot, ordered_scenes,
+            )
+        except _ProgressionExportChanged:
+            if scenes is not None:
+                break
+            continue
+        confirmed = db.read_progression_snapshot(project_id)
+        if confirmed is not None and confirmed.revision == snapshot.revision:
+            return tracks
+        if scenes is not None:
+            break
+    raise RuntimeError(
+        "Project Progressions changed repeatedly during export; retry the export."
+    )
+
+
+def _gather_project_data_once(
+    db: Database,
+    project_id: int,
+    *,
+    expected_progression_revision: str | None = None,
+) -> dict:
     project = db.get_project_by_id(project_id)
 
     characters = db.get_all_characters(project_id)
@@ -281,6 +395,12 @@ def _gather_project_data(db: Database, project_id: int) -> dict:
             for ch in db.get_chapters(project_id)
         ],
         "psyke_entries": psyke_list,
+        "progression_tracks": _build_progression_tracks_section(
+            db,
+            project_id,
+            scenes,
+            expected_revision=expected_progression_revision,
+        ),
         "outline": _build_outline_tree(None),
         "continuity": continuity_items,
         "plot_timeline": _build_timeline_section(db, project_id, scenes),
@@ -291,6 +411,28 @@ def _gather_project_data(db: Database, project_id: int) -> dict:
         data["quantum_state"] = quantum
 
     return data
+
+
+def _gather_project_data(db: Database, project_id: int) -> dict:
+    """Gather a full export without mixing Progressions reference revisions."""
+    for _attempt in range(_PROGRESSION_EXPORT_MAX_ATTEMPTS):
+        before = db.read_progression_snapshot(project_id)
+        if before is None:
+            return _gather_project_data_once(db, project_id)
+        try:
+            data = _gather_project_data_once(
+                db,
+                project_id,
+                expected_progression_revision=before.revision,
+            )
+        except _ProgressionExportChanged:
+            continue
+        after = db.read_progression_snapshot(project_id)
+        if after is not None and after.revision == before.revision:
+            return data
+    raise RuntimeError(
+        "Project Progressions changed repeatedly during export; retry the export."
+    )
 
 
 def export_json(db: Database, project_id: int) -> str:

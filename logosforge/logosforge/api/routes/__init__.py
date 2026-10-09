@@ -20,6 +20,7 @@ from logosforge.api.routes import (
     notes,
     outline,
     plot,
+    progressions,
     projects,
     psyke,
     quantum,
@@ -29,8 +30,8 @@ from logosforge.api.routes import (
     themes,
     timeline,
     voice,
-    writing_modes,
     workflows,
+    writing_modes,
 )
 
 # Ordered list of every router mounted under the /api prefix.
@@ -44,6 +45,7 @@ ALL_ROUTERS = [
     plot.router,
     canvas_plot.router,
     timeline.router,
+    progressions.router,
     psyke.router,
     notes.router,
     comments.router,

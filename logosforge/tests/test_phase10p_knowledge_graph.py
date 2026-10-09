@@ -31,8 +31,10 @@ from logosforge.knowledge_graph import (
 from logosforge.knowledge_graph import provenance as P
 from logosforge.knowledge_graph.builder import KnowledgeGraphResult
 from logosforge.knowledge_graph.extractor_revision import extract_revision
+from logosforge.knowledge_graph.extractor_progressions import extract_progressions
 from logosforge.knowledge_graph.extractor_structure import extract_structure
 from logosforge.knowledge_graph.models import KGEdge, KGNode, KnowledgeGraph
+from logosforge.knowledge_graph import scoring
 
 
 @pytest.fixture(autouse=True)
@@ -60,6 +62,17 @@ def _project(mode="novel"):
     s2 = db.create_scene(pid, "Twist", content="Bob betrays Alice.",
                          summary="turn", chapter="Ch1")
     return db, pid, alice.id, bob.id, s1.id, s2.id
+
+
+def _progression_command(db, project_id: int, kind: str, **fields):
+    snapshot = db.read_progression_snapshot(project_id)
+    assert snapshot is not None
+    return db.execute_progression_command(
+        project_id,
+        kind=kind,
+        expected_revision=snapshot.revision,
+        **fields,
+    )
 
 
 def test_capped_structure_flow_metadata_uses_full_manuscript_total():
@@ -181,6 +194,453 @@ def test_psyke_appears_in_scene_via_text_match():
     g = build_knowledge_graph(db, pid).graph
     appears = [e for e in g.edges if e.edge_type == P.ET_APPEARS_IN]
     assert appears and all(e.confidence == P.CONF_CONFIRMED for e in appears)
+
+
+def test_psyke_progression_scene_id_creates_confirmed_graph_edge():
+    db, pid, aid, _bid, _s1, _s2 = _project()
+    quiet_scene = db.create_scene(pid, "Quiet", content="No names here.")
+    db.create_psyke_progression(aid, "Arc turns here", scene_id=quiet_scene.id)
+    graph = build_knowledge_graph(db, pid).graph
+    expected_source = node_key(P.NT_CHARACTER, "psyke", aid)
+    expected_target = node_key(P.NT_SCENE, "scene", quiet_scene.id)
+    assert any(
+        edge.source == expected_source
+        and edge.target == expected_target
+        and edge.provenance == P.PROV_PSYKE_PROGRESSION
+        for edge in graph.edges
+    )
+
+
+def test_native_progression_tracks_project_typed_traceable_graph_evidence():
+    db = Database()
+    project = db.create_project("Native arcs", narrative_engine="novel")
+    first = db.create_scene(project.id, "Opening")
+    second = db.create_scene(project.id, "Turn")
+    alice = db.create_psyke_entry(project.id, "Alice", "character")
+    bob = db.create_psyke_entry(project.id, "Bob", "character")
+    theme = db.create_psyke_entry(project.id, "Mercy", "theme")
+    place = db.create_psyke_entry(project.id, "Citadel", "place")
+
+    specs = [
+        ("story", "Story arc", None, None),
+        ("character", "Alice arc", alice.id, None),
+        ("relationship", "Alice and Bob", alice.id, bob.id),
+        ("theme", "Mercy arc", theme.id, None),
+        ("world", "Citadel arc", place.id, None),
+        ("custom", "Weather arc", None, None),
+    ]
+    track_ids = {}
+    for kind, title, primary_id, secondary_id in specs:
+        fields = {"track_kind": kind, "title": title}
+        if primary_id is not None:
+            fields["primary_psyke_entry_id"] = primary_id
+        if secondary_id is not None:
+            fields["secondary_psyke_entry_id"] = secondary_id
+        result = _progression_command(
+            db, project.id, "create_track", **fields,
+        )
+        track_ids[kind] = result.created_track_id
+
+    story_first = _progression_command(
+        db, project.id, "create_beat",
+        track_id=track_ids["story"], text="Promise",
+        anchor_kind="scene", scene_id=first.id,
+    ).created_beat_id
+    story_second = _progression_command(
+        db, project.id, "create_beat",
+        track_id=track_ids["story"], text="Turn",
+        anchor_kind="scene", scene_id=second.id,
+    ).created_beat_id
+    character_beat = _progression_command(
+        db, project.id, "create_beat",
+        track_id=track_ids["character"], text="Alice doubts herself",
+        anchor_kind="unanchored",
+    ).created_beat_id
+    relationship_beat = _progression_command(
+        db, project.id, "create_beat",
+        track_id=track_ids["relationship"], text="They make a pact",
+        anchor_kind="document_block", anchor_ref="drafter-pact",
+        anchor_label="Pact draft",
+    ).created_beat_id
+
+    graph = build_knowledge_graph(db, project.id).graph
+    track_nodes = graph.nodes_of_type(P.NT_PROGRESSION_TRACK)
+    beat_nodes = graph.nodes_of_type(P.NT_PROGRESSION_BEAT)
+    assert {node.metadata["kind"] for node in track_nodes} == {
+        "story", "character", "relationship", "theme", "world", "custom",
+    }
+    assert {int(node.source_id) for node in beat_nodes} == {
+        story_first, story_second, character_beat, relationship_beat,
+    }
+    assert all(node.source_type == P.SS_PROGRESSIONS for node in track_nodes)
+    assert all(node.source_type == P.SS_PROGRESSIONS for node in beat_nodes)
+
+    character_track_key = node_key(
+        P.NT_PROGRESSION_TRACK, P.SS_PROGRESSIONS, track_ids["character"],
+    )
+    relationship_track_key = node_key(
+        P.NT_PROGRESSION_TRACK, P.SS_PROGRESSIONS,
+        track_ids["relationship"],
+    )
+    subject_edges = [
+        edge for edge in graph.edges
+        if edge.source_system == P.SS_PROGRESSIONS
+        and edge.edge_type == P.ET_RELATES_TO
+    ]
+    assert {
+        (edge.source, edge.target, edge.metadata["subject_role"])
+        for edge in subject_edges
+    } >= {
+        (
+            character_track_key,
+            node_key(P.NT_CHARACTER, "psyke", alice.id),
+            "primary",
+        ),
+        (
+            relationship_track_key,
+            node_key(P.NT_CHARACTER, "psyke", alice.id),
+            "primary",
+        ),
+        (
+            relationship_track_key,
+            node_key(P.NT_CHARACTER, "psyke", bob.id),
+            "secondary",
+        ),
+    }
+
+    first_beat_key = node_key(
+        P.NT_PROGRESSION_BEAT, P.SS_PROGRESSIONS, story_first,
+    )
+    second_beat_key = node_key(
+        P.NT_PROGRESSION_BEAT, P.SS_PROGRESSIONS, story_second,
+    )
+    assert any(
+        edge.source == first_beat_key
+        and edge.target == second_beat_key
+        and edge.edge_type == P.ET_PRECEDES
+        and edge.confidence == P.CONF_CONFIRMED
+        for edge in graph.edges
+    )
+    assert any(
+        edge.source == first_beat_key
+        and edge.target == node_key(P.NT_SCENE, "scene", first.id)
+        and edge.edge_type == P.ET_ADVANCES_IN
+        and edge.provenance == P.PROV_PROGRESSION_BEAT
+        for edge in graph.edges
+    )
+    non_scene_beat_keys = {
+        node_key(P.NT_PROGRESSION_BEAT, P.SS_PROGRESSIONS, character_beat),
+        node_key(P.NT_PROGRESSION_BEAT, P.SS_PROGRESSIONS, relationship_beat),
+    }
+    assert not any(
+        edge.source in non_scene_beat_keys
+        and edge.edge_type == P.ET_ADVANCES_IN
+        for edge in graph.edges
+    )
+
+
+def test_legacy_compatibility_progression_is_not_projected_twice():
+    db = Database()
+    project = db.create_project("Compatibility", narrative_engine="novel")
+    scene = db.create_scene(project.id, "Turn", content="No name here.")
+    alice = db.create_psyke_entry(project.id, "Alice", "character")
+    legacy = db.create_psyke_progression(
+        alice.id, "Alice changes", scene_id=scene.id,
+    )
+
+    graph = build_knowledge_graph(db, project.id).graph
+    assert graph.nodes_of_type(P.NT_PROGRESSION_TRACK) == []
+    assert graph.nodes_of_type(P.NT_PROGRESSION_BEAT) == []
+    progression_edges = [
+        edge for edge in graph.edges
+        if edge.provenance == P.PROV_PSYKE_PROGRESSION
+    ]
+    assert len(progression_edges) == 1
+    assert progression_edges[0].source == node_key(
+        P.NT_CHARACTER, "psyke", alice.id,
+    )
+    assert progression_edges[0].target == node_key(
+        P.NT_SCENE, "scene", scene.id,
+    )
+    assert legacy.id is not None
+
+
+def test_legacy_and_native_subject_scene_evidence_keep_distinct_semantics():
+    db = Database()
+    project = db.create_project("Mixed evidence", narrative_engine="novel")
+    scene = db.create_scene(project.id, "Turn", content="No names here.")
+    alice = db.create_psyke_entry(project.id, "Alice", "character")
+    db.create_psyke_progression(
+        alice.id, "Legacy state", scene_id=scene.id,
+    )
+    native_track = _progression_command(
+        db, project.id, "create_track",
+        track_kind="character", title="Native Alice arc",
+        primary_psyke_entry_id=alice.id,
+    ).created_track_id
+    _progression_command(
+        db, project.id, "create_beat",
+        track_id=native_track, text="Native state",
+        anchor_kind="scene", scene_id=scene.id,
+    )
+
+    graph = build_knowledge_graph(db, project.id).graph
+    source = node_key(P.NT_CHARACTER, "psyke", alice.id)
+    target = node_key(P.NT_SCENE, "scene", scene.id)
+    subject_scene_edges = [
+        edge for edge in graph.edges
+        if edge.source == source and edge.target == target
+    ]
+    assert {
+        (edge.edge_type, edge.provenance, edge.source_system)
+        for edge in subject_scene_edges
+    } >= {
+        (P.ET_APPEARS_IN, P.PROV_PSYKE_PROGRESSION, P.SS_PSYKE),
+        (P.ET_ADVANCES_IN, P.PROV_PROGRESSION_BEAT, P.SS_PROGRESSIONS),
+    }
+
+
+def test_builder_reads_one_progression_snapshot_for_both_projections(monkeypatch):
+    db = Database()
+    project = db.create_project("One read", narrative_engine="novel")
+    scene = db.create_scene(project.id, "Turn")
+    entry = db.create_psyke_entry(project.id, "Alice", "character")
+    db.create_psyke_progression(entry.id, "Legacy state", scene_id=scene.id)
+    real_read = db.read_progression_snapshot
+    calls = []
+
+    def counted_read(project_id):
+        calls.append(project_id)
+        return real_read(project_id)
+
+    monkeypatch.setattr(db, "read_progression_snapshot", counted_read)
+    monkeypatch.setattr(
+        db,
+        "get_psyke_progressions",
+        lambda *_args, **_kwargs: pytest.fail(
+            "graph extraction must not perform per-entry progression reads"
+        ),
+    )
+
+    graph = build_knowledge_graph(db, project.id).graph
+    assert calls == [project.id]
+    assert any(
+        edge.provenance == P.PROV_PSYKE_PROGRESSION
+        for edge in graph.edges
+    )
+
+
+def test_progression_read_failure_preserves_the_rest_of_the_graph(monkeypatch):
+    db = Database()
+    project = db.create_project("Partial graph", narrative_engine="novel")
+    scene = db.create_scene(project.id, "Opening")
+    entry = db.create_psyke_entry(project.id, "Alice", "character")
+    monkeypatch.setattr(
+        db,
+        "read_progression_snapshot",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("progressions unavailable")
+        ),
+    )
+
+    graph = build_knowledge_graph(db, project.id).graph
+    assert graph.unavailable.count(P.SS_PROGRESSIONS) == 1
+    assert node_key(P.NT_SCENE, "scene", scene.id) in graph.nodes
+    assert node_key(P.NT_CHARACTER, "psyke", entry.id) in graph.nodes
+    assert graph.nodes_of_type(P.NT_PROGRESSION_TRACK) == []
+    assert graph.nodes_of_type(P.NT_PROGRESSION_BEAT) == []
+
+
+def test_native_progression_graph_projection_is_project_isolated():
+    db = Database()
+    owner = db.create_project("Owner", narrative_engine="novel")
+    foreign = db.create_project("Foreign", narrative_engine="novel")
+
+    def create_track_and_beat(project_id: int, title: str):
+        track = _progression_command(
+            db, project_id, "create_track",
+            track_kind="story", title=title,
+        ).created_track_id
+        beat = _progression_command(
+            db, project_id, "create_beat",
+            track_id=track, text=f"{title} beat",
+            anchor_kind="unanchored",
+        ).created_beat_id
+        return track, beat
+
+    owner_track, owner_beat = create_track_and_beat(owner.id, "Owner arc")
+    foreign_track, foreign_beat = create_track_and_beat(
+        foreign.id, "Foreign arc",
+    )
+
+    graph = build_knowledge_graph(db, owner.id).graph
+    owner_track_key = node_key(
+        P.NT_PROGRESSION_TRACK, P.SS_PROGRESSIONS, owner_track,
+    )
+    assert owner_track_key in graph.nodes
+    assert node_key(
+        P.NT_PROGRESSION_BEAT, P.SS_PROGRESSIONS, owner_beat,
+    ) in graph.nodes
+    assert node_key(
+        P.NT_PROGRESSION_TRACK, P.SS_PROGRESSIONS, foreign_track,
+    ) not in graph.nodes
+    assert node_key(
+        P.NT_PROGRESSION_BEAT, P.SS_PROGRESSIONS, foreign_beat,
+    ) not in graph.nodes
+
+
+def test_native_progression_projection_caps_are_deterministic():
+    graph = KnowledgeGraph(project_id=7)
+    graph.add_node(KGNode(
+        key=node_key(P.NT_PROJECT, "project", 7),
+        node_type=P.NT_PROJECT,
+        source_type="project",
+        source_id="7",
+        label="Capped",
+    ))
+    rows = []
+    next_beat_id = 1000
+    for track_index in range(101):
+        beats = []
+        for beat_index in range(5):
+            beats.append(SimpleNamespace(
+                id=next_beat_id,
+                track_id=track_index + 1,
+                text=f"Beat {track_index}-{beat_index}",
+                sort_order=beat_index,
+                anchor_kind="unanchored",
+                scene_id=None,
+                anchor_ref=None,
+                anchor_label="",
+            ))
+            next_beat_id += 1
+        rows.append(SimpleNamespace(
+            track=SimpleNamespace(
+                id=track_index + 1,
+                legacy_psyke_entry_id=None,
+                kind="story",
+                title=f"Track {track_index + 1}",
+                description="",
+                sort_order=track_index,
+            ),
+            beats=tuple(beats),
+            primary_entry=None,
+            secondary_entry=None,
+            coverage=SimpleNamespace(
+                total_beats=5,
+                anchored_beats=0,
+                unanchored_beats=5,
+                scene_anchored_beats=0,
+                document_anchored_beats=0,
+                coverage_percent=0.0,
+                status="unanchored",
+                out_of_order_beat_ids=(),
+            ),
+        ))
+    rows.append(SimpleNamespace(
+        track=SimpleNamespace(
+            id=102,
+            legacy_psyke_entry_id=None,
+            kind="custom",
+            title="Overflow empty track",
+            description="",
+            sort_order=101,
+        ),
+        beats=(),
+        primary_entry=None,
+        secondary_entry=None,
+        coverage=SimpleNamespace(
+            total_beats=0,
+            anchored_beats=0,
+            unanchored_beats=0,
+            scene_anchored_beats=0,
+            document_anchored_beats=0,
+            coverage_percent=0.0,
+            status="empty",
+            out_of_order_beat_ids=(),
+        ),
+    ))
+
+    extract_progressions(
+        None,
+        7,
+        graph,
+        progression_snapshot=SimpleNamespace(tracks=tuple(rows)),
+    )
+
+    assert len(graph.nodes_of_type(P.NT_PROGRESSION_TRACK)) == 100
+    assert len(graph.nodes_of_type(P.NT_PROGRESSION_BEAT)) == 400
+    assert node_key(P.NT_PROGRESSION_TRACK, P.SS_PROGRESSIONS, 99) in graph.nodes
+    assert node_key(P.NT_PROGRESSION_TRACK, P.SS_PROGRESSIONS, 100) not in graph.nodes
+    assert node_key(P.NT_PROGRESSION_TRACK, P.SS_PROGRESSIONS, 101) not in graph.nodes
+    assert node_key(P.NT_PROGRESSION_TRACK, P.SS_PROGRESSIONS, 102) in graph.nodes
+    assert graph.warnings == [
+        "Native Progressions extraction capped at 100 tracks.",
+        "Native Progressions extraction capped at 400 beats.",
+    ]
+    cards = build_graph_decision_cards(
+        None,
+        7,
+        result=KnowledgeGraphResult(graph=graph),
+        cap=50,
+    )
+    unanchored = next(
+        card for card in cards
+        if card.id == "kg_progression_unanchored_1"
+    )
+    assert unanchored.evidence_total == 505
+    assert "101 track(s)" in unanchored.title
+    empty = next(
+        card for card in cards
+        if card.id == "kg_progression_empty_102"
+    )
+    assert empty.evidence_total == 1
+    assert empty.graph_focus_key == (
+        f"{P.NT_PROGRESSION_TRACK}:{P.SS_PROGRESSIONS}:102"
+    )
+
+
+def test_only_typed_progression_subjects_satisfy_scene_psyke_coverage():
+    db = Database()
+    project = db.create_project("Coverage", narrative_engine="novel")
+    scene = db.create_scene(project.id, "Quiet", content="No names here.")
+    alice = db.create_psyke_entry(project.id, "Alice", "character")
+    story_track = _progression_command(
+        db, project.id, "create_track",
+        track_kind="story", title="Story arc",
+    ).created_track_id
+    _progression_command(
+        db, project.id, "create_beat",
+        track_id=story_track, text="The plot turns",
+        anchor_kind="scene", scene_id=scene.id,
+    )
+
+    story_only = build_knowledge_graph(db, project.id).graph
+    assert [
+        node.source_id for node in scoring.scenes_without_psyke(story_only)
+    ] == [str(scene.id)]
+
+    character_track = _progression_command(
+        db, project.id, "create_track",
+        track_kind="character", title="Alice arc",
+        primary_psyke_entry_id=alice.id,
+    ).created_track_id
+    character_beat = _progression_command(
+        db, project.id, "create_beat",
+        track_id=character_track, text="Alice makes a choice",
+        anchor_kind="scene", scene_id=scene.id,
+    ).created_beat_id
+
+    with_character = build_knowledge_graph(db, project.id).graph
+    assert scoring.scenes_without_psyke(with_character) == []
+    assert any(
+        edge.source == node_key(P.NT_CHARACTER, "psyke", alice.id)
+        and edge.target == node_key(P.NT_SCENE, "scene", scene.id)
+        and edge.edge_type == P.ET_ADVANCES_IN
+        and edge.provenance == P.PROV_PROGRESSION_BEAT
+        and edge.metadata["beat_id"] == character_beat
+        for edge in with_character.edges
+    )
 
 
 def test_orphan_psyke_detected():
@@ -563,6 +1023,112 @@ def test_graph_decision_cards():
     undefined = next(c for c in cards if c.id == "kg_undefined_terms")
     assert undefined.evidence[0].kind == "term"
     assert undefined.evidence[0].graph_focus_key.startswith("note:note:")
+
+
+def test_progression_decision_cards_are_bounded_traceable_and_actionable():
+    db = Database()
+    project = db.create_project("Progression radar", narrative_engine="novel")
+    early = db.create_scene(project.id, "Early")
+    late = db.create_scene(project.id, "Late")
+
+    ordered = _progression_command(
+        db, project.id, "create_track",
+        track_kind="story", title="Main arc",
+    ).created_track_id
+    _progression_command(
+        db, project.id, "create_beat",
+        track_id=ordered, text="Late turn",
+        anchor_kind="scene", scene_id=late.id,
+    )
+    out_of_order_beat = _progression_command(
+        db, project.id, "create_beat",
+        track_id=ordered, text="Earlier turn",
+        anchor_kind="scene", scene_id=early.id,
+    ).created_beat_id
+    unanchored_beat = _progression_command(
+        db, project.id, "create_beat",
+        track_id=ordered, text="Floating state",
+        anchor_kind="unanchored",
+    ).created_beat_id
+    second_ordered = _progression_command(
+        db, project.id, "create_track",
+        track_kind="story", title="Secondary arc",
+    ).created_track_id
+    _progression_command(
+        db, project.id, "create_beat",
+        track_id=second_ordered, text="Second late turn",
+        anchor_kind="scene", scene_id=late.id,
+    )
+    second_out_of_order_beat = _progression_command(
+        db, project.id, "create_beat",
+        track_id=second_ordered, text="Second earlier turn",
+        anchor_kind="scene", scene_id=early.id,
+    ).created_beat_id
+    second_unanchored_beat = _progression_command(
+        db, project.id, "create_beat",
+        track_id=second_ordered, text="Second floating state",
+        anchor_kind="unanchored",
+    ).created_beat_id
+    empty = _progression_command(
+        db, project.id, "create_track",
+        track_kind="custom", title="Unused arc",
+    ).created_track_id
+    second_empty = _progression_command(
+        db, project.id, "create_track",
+        track_kind="custom", title="Second unused arc",
+    ).created_track_id
+    document_track = _progression_command(
+        db, project.id, "create_track",
+        track_kind="story", title="Drafter arc",
+    ).created_track_id
+    _progression_command(
+        db, project.id, "create_beat",
+        track_id=document_track, text="Draft-only scene",
+        anchor_kind="document_block", anchor_ref="draft-scene-1",
+        anchor_label="Draft scene",
+    )
+
+    cards = build_graph_decision_cards(db, project.id, cap=50)
+    progression_cards = [
+        card for card in cards if card.category == "progression"
+    ]
+    assert len(progression_cards) == 3
+    by_id = {card.id: card for card in progression_cards}
+    expected_ids = {
+        f"kg_progression_order_{ordered}",
+        f"kg_progression_unanchored_{ordered}",
+        f"kg_progression_empty_{empty}",
+    }
+    assert set(by_id) == expected_ids
+    assert all(card.related_section == "Progressions"
+               for card in progression_cards)
+    assert all(card.related_target_type == "progression_track"
+               for card in progression_cards)
+    assert {
+        card.related_target_id for card in progression_cards
+    } == {ordered, empty}
+    assert all(card.graph_focus_key.startswith(
+        f"{P.NT_PROGRESSION_TRACK}:{P.SS_PROGRESSIONS}:",
+    ) for card in progression_cards)
+
+    order_card = by_id[f"kg_progression_order_{ordered}"]
+    assert order_card.evidence_total == 2
+    assert all(item.related_target_type == "progression_beat"
+               for item in order_card.evidence)
+    assert {item.related_target_id for item in order_card.evidence} == {
+        out_of_order_beat, second_out_of_order_beat,
+    }
+    unanchored_card = by_id[f"kg_progression_unanchored_{ordered}"]
+    assert unanchored_card.evidence_total == 2
+    assert {item.related_target_id for item in unanchored_card.evidence} == {
+        unanchored_beat, second_unanchored_beat,
+    }
+    empty_card = by_id[f"kg_progression_empty_{empty}"]
+    assert empty_card.evidence_total == 2
+    assert {item.related_target_id for item in empty_card.evidence} == {
+        empty, second_empty,
+    }
+    assert all(str(document_track) not in card.id for card in progression_cards)
 
 
 def test_graph_decision_cards_reject_a_foreign_precomputed_result():

@@ -26,8 +26,8 @@ def test_http_and_mcp_contract_versions_are_deliberately_independent():
     from logosforge.api.app import API_CONTRACT_VERSION
     from logosforge.librechat.mcp_server import SERVER_VERSION
 
-    assert API_CONTRACT_VERSION == "1.16.0"
-    assert SERVER_VERSION == "1.11.0"
+    assert API_CONTRACT_VERSION == "1.17.0"
+    assert SERVER_VERSION == "1.12.0"
 
 
 def test_project_map_exposes_traceable_graph_and_pretruncation_diagnostics():
@@ -72,6 +72,64 @@ def test_project_map_exposes_traceable_graph_and_pretruncation_diagnostics():
     assert node_by_key[lonely_key]["degree"] == 0
     assert all(edge["source"] in keys and edge["target"] in keys
                for edge in body["edges"])
+
+
+def test_native_progression_track_is_focusable_with_exact_beat_evidence():
+    client, db, project, first, _, alice, _ = _graph_project()
+    snapshot = db.read_progression_snapshot(project.id)
+    assert snapshot is not None
+    created_track = db.execute_progression_command(
+        project.id,
+        kind="create_track",
+        expected_revision=snapshot.revision,
+        track_kind="character",
+        title="Alice learns trust",
+        primary_psyke_entry_id=alice.id,
+    )
+    track_id = created_track.created_track_id
+    assert track_id is not None
+    created_beat = db.execute_progression_command(
+        project.id,
+        kind="create_beat",
+        expected_revision=created_track.snapshot.revision,
+        track_id=track_id,
+        text="Alice accepts help",
+        anchor_kind="scene",
+        scene_id=first.id,
+    )
+    beat_id = created_beat.created_beat_id
+    assert beat_id is not None
+
+    track_key = node_key(
+        P.NT_PROGRESSION_TRACK, P.SS_PROGRESSIONS, track_id,
+    )
+    beat_key = node_key(P.NT_PROGRESSION_BEAT, P.SS_PROGRESSIONS, beat_id)
+    response = client.get(
+        f"/api/projects/{project.id}/knowledge-graph",
+        params={
+            "focus_key": track_key,
+            "depth": 2,
+            "limit": 100,
+            "include_inferred": "false",
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["focus_key"] == track_key
+    nodes = {node["key"]: node for node in body["nodes"]}
+    assert {track_key, beat_key}.issubset(nodes)
+    assert nodes[track_key]["source_type"] == P.SS_PROGRESSIONS
+    assert nodes[track_key]["metadata"]["kind"] == "character"
+    assert nodes[track_key]["metadata"]["legacy_compatibility"] is False
+    assert nodes[beat_key]["metadata"]["scene_id"] == first.id
+    assert any(
+        edge["source"] == beat_key
+        and edge["target"] == node_key(P.NT_SCENE, "scene", first.id)
+        and edge["edge_type"] == P.ET_ADVANCES_IN
+        and edge["provenance"] == P.PROV_PROGRESSION_BEAT
+        for edge in body["edges"]
+    )
+    assert all(not edge["is_inferred"] for edge in body["edges"])
 
 
 def test_project_map_limit_is_bounded_and_reserves_orphan_visibility():

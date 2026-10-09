@@ -30,7 +30,7 @@ from datetime import datetime, timezone
 
 from logosforge.db import Database
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # PSYKE entry kinds, in the order they should be grouped/rendered.
 PSYKE_KIND_ORDER = ("character", "place", "object", "lore", "theme", "other")
@@ -436,6 +436,12 @@ def gather_export(db: Database, project_id: int, opts: ExportOptions) -> dict:
         data["scenes"] = _scenes(db, project_id, opts)
     if opts.any_psyke():
         data["psyke"] = _psyke(db, project_id, opts)
+    if opts.include_psyke_progressions:
+        from logosforge.export import _build_progression_tracks_section
+
+        data["progression_tracks"] = _build_progression_tracks_section(
+            db, project_id,
+        )
     if opts.include_notes:
         data["notes"] = _notes(db, project_id, opts)
     return data
@@ -573,7 +579,12 @@ def _md_named_list(lines: list[str], heading: str, items: list[dict]) -> None:
             lines.append(body)
 
 
-def _md_psyke(lines: list[str], psyke: dict) -> None:
+def _md_psyke(
+    lines: list[str],
+    psyke: dict,
+    *,
+    include_legacy_progressions: bool = True,
+) -> None:
     entries = psyke.get("entries", [])
     grouped: dict[str, list] = {}
     for entry in entries:
@@ -593,7 +604,9 @@ def _md_psyke(lines: list[str], psyke: dict) -> None:
                 f"- {rel.get('source', '')} → {rel.get('target', '')} ({rtype})"
             )
 
-    progressions = psyke.get("progressions", [])
+    progressions = (
+        psyke.get("progressions", []) if include_legacy_progressions else []
+    )
     if progressions:
         lines.append("")
         lines.append("## Progressions")
@@ -613,6 +626,39 @@ def _md_psyke_flat(lines: list[str], entries: list[dict]) -> None:
         _md_named_list(lines, _PSYKE_KIND_LABELS[kind], grouped[kind])
 
 
+def _md_progression_tracks(lines: list[str], tracks: list[dict]) -> None:
+    if not tracks:
+        return
+    lines.append("")
+    lines.append("## Progression Tracks")
+    for track in tracks:
+        lines.append("")
+        lines.append(
+            f"### {track.get('title', '')} ({track.get('kind', 'custom')})"
+        )
+        if track.get("description"):
+            lines.append("")
+            lines.append(track["description"])
+        subjects = [
+            subject.get("name", "")
+            for subject in (
+                track.get("primary_subject"),
+                track.get("secondary_subject"),
+            )
+            if isinstance(subject, dict) and subject.get("name")
+        ]
+        if subjects:
+            lines.append(f"- **Subjects:** {', '.join(subjects)}")
+        for index, beat in enumerate(track.get("beats", []), start=1):
+            anchor = ""
+            if beat.get("anchor_kind") == "scene":
+                scene = beat.get("scene_anchor") or {}
+                anchor = f" @ {scene.get('source_title', '')}"
+            elif beat.get("anchor_kind") == "document_block":
+                anchor = f" @ {beat.get('anchor_label') or beat.get('anchor_ref', '')}"
+            lines.append(f"{index}. {beat.get('text', '')}{anchor}")
+
+
 def to_markdown(data: dict) -> str:
     """Render *data* (either nested or flat/full shape) as readable Markdown."""
     lines: list[str] = []
@@ -630,9 +676,14 @@ def to_markdown(data: dict) -> str:
     if "places" in data:
         _md_named_list(lines, "Places", data["places"])
     if "psyke" in data:
-        _md_psyke(lines, data["psyke"])
+        _md_psyke(
+            lines,
+            data["psyke"],
+            include_legacy_progressions=not bool(data.get("progression_tracks")),
+        )
     elif "psyke_entries" in data:
         _md_psyke_flat(lines, data["psyke_entries"])
+    _md_progression_tracks(lines, data.get("progression_tracks", []))
     if data.get("scenes") is not None:
         _md_named_list(lines, "Scenes", [
             {"name": f"{s.get('order_index', '')}. {s.get('title', '')}",
@@ -738,6 +789,41 @@ def to_csv_files(data: dict) -> dict[str, str]:
         files["psyke_relations.csv"] = _csv_from_rows(psyke_relations)
     if psyke_progressions:
         files["psyke_progressions.csv"] = _csv_from_rows(psyke_progressions)
+
+    if data.get("progression_tracks"):
+        track_rows = []
+        beat_rows = []
+        for track_index, track in enumerate(data["progression_tracks"], start=1):
+            primary = track.get("primary_subject") or {}
+            secondary = track.get("secondary_subject") or {}
+            track_rows.append({
+                "track_order": track_index,
+                "kind": track.get("kind", ""),
+                "title": track.get("title", ""),
+                "description": track.get("description", ""),
+                "color_label": track.get("color_label", ""),
+                "primary_subject": primary.get("name", ""),
+                "primary_subject_type": primary.get("entry_type", ""),
+                "secondary_subject": secondary.get("name", ""),
+                "secondary_subject_type": secondary.get("entry_type", ""),
+                "legacy_compatibility": track.get("legacy_compatibility", False),
+            })
+            for beat_index, beat in enumerate(track.get("beats", []), start=1):
+                scene = beat.get("scene_anchor") or {}
+                beat_rows.append({
+                    "track_order": track_index,
+                    "track_title": track.get("title", ""),
+                    "beat_order": beat_index,
+                    "text": beat.get("text", ""),
+                    "anchor_kind": beat.get("anchor_kind", "unanchored"),
+                    "scene_order": scene.get("source_order", ""),
+                    "scene_title": scene.get("source_title", ""),
+                    "anchor_ref": beat.get("anchor_ref", ""),
+                    "anchor_label": beat.get("anchor_label", ""),
+                })
+        files["progression_tracks.csv"] = _csv_from_rows(track_rows)
+        if beat_rows:
+            files["progression_beats.csv"] = _csv_from_rows(beat_rows)
 
     if data.get("notes"):
         files["notes.csv"] = _csv_from_rows(data["notes"])

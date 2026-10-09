@@ -30,6 +30,8 @@ NT_REWRITE_VARIANT = "rewrite_variant"
 NT_CONTROLLED_APPLY = "controlled_apply_operation"
 NT_DECISION_CARD = "decision_card"
 NT_WORKFLOW_RUN = "workflow_run"
+NT_PROGRESSION_TRACK = "progression_track"
+NT_PROGRESSION_BEAT = "progression_beat"
 
 # PSYKE entry_type -> graph node type.
 PSYKE_TYPE_TO_NODE = {
@@ -62,6 +64,7 @@ ET_BELONGS_TO = "belongs_to"
 ET_DERIVED_FROM = "derived_from"
 ET_INFERRED_FROM = "inferred_from"
 ET_SUGGESTED_BY = "suggested_by"
+ET_ADVANCES_IN = "advances_in"
 
 # -- Confidence -------------------------------------------------------------
 CONF_CONFIRMED = "confirmed"
@@ -96,6 +99,7 @@ SS_REWRITE = "rewrite_sandbox"
 SS_CONTROLLED_APPLY = "controlled_apply"
 SS_RADAR = "decision_radar"
 SS_WORKFLOW = "guided_workflows"
+SS_PROGRESSIONS = "progressions"
 SS_USER = "user"
 
 # -- Provenance (human-readable, traceable) ---------------------------------
@@ -119,3 +123,5 @@ PROV_USER_GRAPH_LINK = "user-created graph link"
 PROV_STORY_LINK = "confirmed story link"
 PROV_SETUP_PAYOFF = "setup/payoff link"
 PROV_WORKFLOW = "guided workflow run"
+PROV_PROGRESSION_TRACK = "native progression track"
+PROV_PROGRESSION_BEAT = "native progression beat"

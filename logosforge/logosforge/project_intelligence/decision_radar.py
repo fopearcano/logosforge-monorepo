@@ -114,7 +114,7 @@ class DecisionCard:
 _CATEGORY_SECTION = {
     "structure": "Structure", "graph": "Graph", "psyke": "PSYKE",
     "rewrite": "Manuscript", "apply": "Manuscript", "continuity": "Continuity",
-    "production": "Export", "export": "Export",
+    "production": "Export", "export": "Export", "progression": "Progressions",
 }
 
 # Per-card override: the exact panel that resolves a specific card (sharper than

@@ -59,6 +59,66 @@ def test_decision_radar_exposes_bounded_traceable_graph_cards():
     assert "Crimson Order" in term_card["evidence"][0]["label"]
 
 
+def test_decision_radar_exposes_native_progression_target_and_beat_evidence():
+    db = Database()
+    project = db.create_project("Progression radar", narrative_engine="novel")
+    early = db.create_scene(project.id, "Early")
+    late = db.create_scene(project.id, "Late")
+    snapshot = db.read_progression_snapshot(project.id)
+    assert snapshot is not None
+    track_result = db.execute_progression_command(
+        project.id,
+        kind="create_track",
+        expected_revision=snapshot.revision,
+        track_kind="story",
+        title="Main arc",
+    )
+    track_id = track_result.created_track_id
+    assert track_id is not None
+    first_result = db.execute_progression_command(
+        project.id,
+        kind="create_beat",
+        expected_revision=track_result.snapshot.revision,
+        track_id=track_id,
+        text="Late turn",
+        anchor_kind="scene",
+        scene_id=late.id,
+    )
+    second_result = db.execute_progression_command(
+        project.id,
+        kind="create_beat",
+        expected_revision=first_result.snapshot.revision,
+        track_id=track_id,
+        text="Earlier turn",
+        anchor_kind="scene",
+        scene_id=early.id,
+    )
+    beat_id = second_result.created_beat_id
+    assert beat_id is not None
+
+    response = TestClient(create_api(db=db)).get(
+        f"/api/projects/{project.id}/decision-radar"
+    )
+
+    assert response.status_code == 200
+    card = next(
+        item for item in response.json()["knowledge_graph_cards"]
+        if item["id"] == f"kg_progression_order_{track_id}"
+    )
+    assert card["related_section"] == "Progressions"
+    assert card["related_target_type"] == "progression_track"
+    assert card["related_target_id"] == track_id
+    assert card["graph_focus_key"] == (
+        f"progression_track:progressions:{track_id}"
+    )
+    assert card["evidence_total"] == 1
+    assert card["evidence"][0]["related_target_type"] == "progression_beat"
+    assert card["evidence"][0]["related_target_id"] == beat_id
+    assert card["evidence"][0]["graph_focus_key"] == (
+        f"progression_beat:progressions:{beat_id}"
+    )
+
+
 def test_decision_radar_graph_failure_is_truthful_and_preserves_base_feed(monkeypatch):
     db, project, *_ = _project()
     import logosforge.api.routes.intelligence as intelligence_route
@@ -233,6 +293,55 @@ def test_continuity_card_contract_rejects_mixed_graph_evidence():
 
     with pytest.raises(ValidationError):
         serializers.decision_card_to_dto(card)
+
+
+@pytest.mark.parametrize(
+    ("target_type", "target_id", "target_key"),
+    [
+        ("progression_track", None, ""),
+        ("progression_track", 1, "not-allowed"),
+        ("progression_beat", 0, ""),
+    ],
+)
+def test_progression_decision_targets_require_one_positive_id(
+    target_type, target_id, target_key,
+):
+    evidence = {
+        "kind": "node",
+        "label": "Progression evidence",
+        "graph_focus_key": "progression_track:progressions:1",
+        "confidence": "confirmed",
+        "related_section": "Progressions",
+        "related_target_type": target_type,
+        "related_target_id": target_id,
+        "related_target_key": target_key,
+    }
+    with pytest.raises(ValidationError):
+        schemas.DecisionEvidenceDTO.model_validate(evidence)
+
+    card = {
+        "id": "kg_bad_progression_target",
+        "category": "progression",
+        "severity": "warning",
+        "confidence": "confirmed",
+        "title": "Bad target",
+        "related_section": "Progressions",
+        "related_target_type": target_type,
+        "related_target_id": target_id,
+        "related_target_key": target_key,
+        "created_from": "knowledge_graph",
+        "graph_focus_key": "progression_track:progressions:1",
+        "graph_view_mode": "project_map",
+        "evidence": [{
+            **evidence,
+            "related_target_type": "progression_track",
+            "related_target_id": 1,
+            "related_target_key": "",
+        }],
+        "evidence_total": 1,
+    }
+    with pytest.raises(ValidationError):
+        schemas.DecisionCardDTO.model_validate(card)
 
 
 def test_python_decision_contract_rejects_client_invalid_vocabularies():

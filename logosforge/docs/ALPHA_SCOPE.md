@@ -113,10 +113,11 @@ These are frozen. Change only to fix a confirmed regression, with tests.
   acceptance of this new surface is still pending. *(B)*
 - **FDX export** — experimental/gated. *(B)*
 - **Grammar / spelling** — rule-based, no external engine; basic accuracy. *(B)*
-- **API** — HTTP 1.16.0 gives the five transactional command families a durable
+- **API** — HTTP 1.17.0 gives the six transactional command families, including
+  canonical Progressions, a durable
   tokenized pending-invalidation outbox plus broker-generation/ring-gap recovery; full-suite
-  and packaged validation are pending. The local MCP gateway remains 1.11.0
-  with 46 tools. **Only authenticated desktop/localhost mode is in Alpha**;
+  and packaged validation are pending. The local MCP gateway is 1.12.0 with
+  48 tools. **Only authenticated desktop/localhost mode is in Alpha**;
   LAN/remote exposure is not a supported release mode. *(B)*
 
 ## 5. Known limitations
@@ -219,7 +220,8 @@ Highest priority, lowest tolerance for change:
 6. Phase 7C source work and its Windows packaged journey are complete; the
    current-source Linux/Xvfb and Intel macOS journeys remain open.
    Phase 7D adds atomic pending invalidations and restart reconciliation for the
-   five transactional command families under HTTP 1.16.0, but its full-suite
+   six transactional command families under HTTP 1.17.0, including
+   Progressions, but its full-suite
    and packaged gate are also pending. Richer later Plot/Timeline concepts,
    custom workflow templates/reminders, and a multi-project workflow dashboard
    are Beta feature work, not blockers for Alpha stability. Multi-process

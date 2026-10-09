@@ -37,7 +37,7 @@ def import_json(db: Database, data: dict) -> int:
 
     # Create characters and build name → id mapping
     char_id_by_name: dict[str, int] = {}
-    psyke_names_seen: set[str] = set()
+    psyke_identities_seen: set[tuple[str, str]] = set()
     for char_data in data.get("characters", []):
         name = char_data.get("name", "").strip()
         if not name:
@@ -48,7 +48,9 @@ def import_json(db: Database, data: dict) -> int:
             description=char_data.get("description", ""),
         )
         char_id_by_name[name] = char.id
-        psyke_names_seen.add(name.lower())
+        # Core identity is exact (name, type): differently-cased names are
+        # legal, distinct bible subjects and must survive a full round-trip.
+        psyke_identities_seen.add((name, "character"))
         entry = db.create_psyke_entry(
             project_id,
             name=name,
@@ -70,7 +72,7 @@ def import_json(db: Database, data: dict) -> int:
             description=place_data.get("description", ""),
         )
         place_id_by_name[name] = place.id
-        psyke_names_seen.add(name.lower())
+        psyke_identities_seen.add((name, "place"))
         db.create_psyke_entry(
             project_id,
             name=name,
@@ -185,32 +187,48 @@ def import_json(db: Database, data: dict) -> int:
         name = entry_data.get("name", "").strip()
         if not name:
             continue
-        if name.lower() in psyke_names_seen:
+        entry_type = entry_data.get("entry_type", "other")
+        identity = (name, entry_type)
+        if identity in psyke_identities_seen:
             for existing in db.get_all_psyke_entries(project_id):
-                if existing.name.lower() == name.lower():
-                    psyke_id_by_name[name] = existing.id
+                if (
+                    existing.name == name
+                    and existing.entry_type == entry_type
+                ):
+                    psyke_id_by_name.setdefault(name, existing.id)
                     break
             continue
-        psyke_names_seen.add(name.lower())
+        psyke_identities_seen.add(identity)
         details_raw = entry_data.get("details")
         details = details_raw if isinstance(details_raw, dict) else None
         entry = db.create_psyke_entry(
             project_id,
             name=name,
-            entry_type=entry_data.get("entry_type", "other"),
+            entry_type=entry_type,
             aliases=entry_data.get("aliases", ""),
             notes=entry_data.get("notes", ""),
             is_global=entry_data.get("is_global", False),
             details=details,
         )
-        psyke_id_by_name[name] = entry.id
+        psyke_id_by_name.setdefault(name, entry.id)
+
+    psyke_id_by_identity = {
+        (entry.name, entry.entry_type): int(entry.id)
+        for entry in db.get_all_psyke_entries(project_id)
+    }
 
     # Build scene title → id mapping for progression linking
     scene_id_by_title: dict[str, int] = {}
     for scene in db.get_all_scenes(project_id):
         scene_id_by_title[scene.title] = scene.id
 
-    # Restore PSYKE relations and progressions
+    canonical_progressions = data.get("progression_tracks")
+    has_canonical_progressions = canonical_progressions is not None
+    if has_canonical_progressions and not isinstance(canonical_progressions, list):
+        raise ValueError("progression_tracks must be a list")
+
+    # Restore PSYKE relations and the legacy projection when no authoritative
+    # canonical section is present (old exports remain import-compatible).
     for entry_data in psyke_raw:
         name = entry_data.get("name", "").strip()
         if name not in psyke_id_by_name:
@@ -233,13 +251,104 @@ def import_json(db: Database, data: dict) -> int:
                         entry_id, psyke_id_by_name[related_name],
                     )
 
-        for prog_data in entry_data.get("progressions", []):
-            text = prog_data.get("text", "").strip()
-            if not text:
-                continue
-            scene_title = prog_data.get("scene_title", "")
-            scene_id = scene_id_by_title.get(scene_title) if scene_title else None
-            db.create_psyke_progression(entry_id, text, scene_id=scene_id)
+        if not has_canonical_progressions:
+            for prog_data in entry_data.get("progressions", []):
+                text = prog_data.get("text")
+                if not isinstance(text, str):
+                    continue
+                scene_title = prog_data.get("scene_title", "")
+                scene_id = scene_id_by_title.get(scene_title) if scene_title else None
+                db.create_psyke_progression(entry_id, text, scene_id=scene_id)
+
+    if has_canonical_progressions:
+        def _subject_id(reference) -> int | None:
+            if reference is None:
+                return None
+            if not isinstance(reference, dict):
+                raise ValueError("Progression subject references must be objects")
+            name = reference.get("name")
+            entry_type = reference.get("entry_type")
+            if not isinstance(name, str):
+                raise ValueError("Progression subject references need a name")
+            resolved = psyke_id_by_identity.get((name, entry_type))
+            if resolved is None and entry_type is None:
+                resolved = psyke_id_by_name.get(name)
+            if resolved is None:
+                raise ValueError(
+                    f"Progression subject {name!r} ({entry_type!r}) was not imported"
+                )
+            return resolved
+
+        def _progression_scene_id(reference) -> int | None:
+            if reference is None:
+                return None
+            if not isinstance(reference, dict):
+                raise ValueError("Progression scene references must be objects")
+            raw_order = reference.get("source_order")
+            if not isinstance(raw_order, bool):
+                try:
+                    resolved = scene_id_by_source_order.get(int(raw_order))
+                except (TypeError, ValueError):
+                    resolved = None
+                if resolved is not None:
+                    return resolved
+            title = reference.get("source_title")
+            if isinstance(title, str) and title:
+                return scene_id_by_title.get(title)
+            return None
+
+        resolved_tracks = []
+        for raw_track in sorted(
+            canonical_progressions,
+            key=lambda row: row.get("sort_order", 0) if isinstance(row, dict) else 0,
+        ):
+            if not isinstance(raw_track, dict):
+                raise ValueError("Each progression track must be an object")
+            legacy_compatibility = raw_track.get(
+                "legacy_compatibility", False,
+            )
+            if not isinstance(legacy_compatibility, bool):
+                raise ValueError(
+                    "Progression legacy_compatibility must be a boolean"
+                )
+            primary_id = _subject_id(raw_track.get("primary_subject"))
+            secondary_id = _subject_id(raw_track.get("secondary_subject"))
+            raw_beats = raw_track.get("beats", [])
+            if not isinstance(raw_beats, list):
+                raise ValueError("Progression track beats must be a list")
+            resolved_beats = []
+            for raw_beat in sorted(
+                raw_beats,
+                key=lambda row: row.get("sort_order", 0) if isinstance(row, dict) else 0,
+            ):
+                if not isinstance(raw_beat, dict):
+                    raise ValueError("Each progression beat must be an object")
+                anchor_kind = raw_beat.get("anchor_kind", "unanchored")
+                scene_id = (
+                    _progression_scene_id(raw_beat.get("scene_anchor"))
+                    if anchor_kind == "scene"
+                    else None
+                )
+                resolved_beats.append({
+                    "text": raw_beat.get("text"),
+                    "anchor_kind": anchor_kind,
+                    "scene_id": scene_id,
+                    "anchor_ref": raw_beat.get("anchor_ref"),
+                    "anchor_label": raw_beat.get("anchor_label", ""),
+                })
+            resolved_tracks.append({
+                "kind": raw_track.get("kind"),
+                "title": raw_track.get("title"),
+                "description": raw_track.get("description", ""),
+                "color_label": raw_track.get("color_label", ""),
+                "primary_psyke_entry_id": primary_id,
+                "secondary_psyke_entry_id": secondary_id,
+                "legacy_psyke_entry_id": (
+                    primary_id if legacy_compatibility else None
+                ),
+                "beats": resolved_beats,
+            })
+        db.restore_progression_tracks(project_id, resolved_tracks)
 
     # Restore outline nodes (optional — absent in older exports)
     outline_data = data.get("outline", [])

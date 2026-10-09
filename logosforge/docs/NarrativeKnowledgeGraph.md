@@ -36,13 +36,18 @@ inferred edges and merges persisted state back in.
 `project, act, chapter, scene, screenplay_block, psyke_entry, character, place,
 object, lore, theme, motif, note, plot_block, timeline_event, setup, payoff,
 revision_impact, rewrite_variant, controlled_apply_operation, decision_card,
-workflow_run`. PSYKE `entry_type` maps to the typed node (character/place/…).
+workflow_run, progression_track, progression_beat`. PSYKE `entry_type` maps to
+the typed node (character/place/…). Native Progressions nodes use exact persisted
+track/beat IDs, so graph evidence can deep-link without matching prose.
 
 ## Edge types
 
 `contains, appears_in, mentions, relates_to, depends_on, precedes, follows,
 causes, contrasts, resolves, sets_up, pays_off, contradicts, revises, risks,
 belongs_to, derived_from, inferred_from, suggested_by`.
+`advances_in` is reserved for an explicitly scene-anchored native progression
+beat (and its typed subject evidence); it does not imply scene-to-scene
+causality or precedence.
 
 Every edge carries **confidence**, **provenance**, **source system** and an
 **explanation**.
@@ -60,13 +65,14 @@ explicit PSYKE relation · PSYKE progression · global PSYKE entry · scene text
 match · outline/chapter/act membership · plot block membership · scene order ·
 note reference/wikilink · revision impact report · rewrite session target ·
 controlled apply target/conflict · confirmed story link · setup/payoff link ·
-guided workflow run · user-created graph link.
+guided workflow run · native progression track/beat · user-created graph link.
 
 ## Confirmed vs inferred
 
 - **Confirmed**: explicit PSYKE relations, name/alias text matches, chapter/act/
   plot membership, explicit `setup_payoff_links`, confirmed `StoryLink`s, applied
-  Controlled-Apply operations, and anything the user confirms.
+  Controlled-Apply operations, native Progressions membership/subject/order/
+  explicit scene anchors, and anything the user confirms.
 - **Inferred**: scene order (`likely`), link-graph wikilinks (`likely`),
   setup/payoff candidates (`possible`), note→PSYKE mentions (`likely`).
 
@@ -74,11 +80,27 @@ Confirmed/user edges **survive a rebuild**; inferred edges are **regenerated**.
 
 ## PSYKE extraction
 
-Entries → typed nodes; explicit relations → `confirmed relates_to`; progressions
-→ scene references; **global entries attach to the project, not flooded across
-every scene**. Scene mentions reuse the existing matcher
+Entries → typed nodes; explicit relations → `confirmed relates_to`; designated
+legacy progressions retain their confirmed `appears_in` scene references;
+**global entries attach to the project, not flooded across every scene**. Scene
+mentions reuse the existing matcher
 (`revision_intelligence.psyke_impact`) — aliases map to one node. No PSYKE
 mutation; orphans are detected, never deleted; relations/mentions are capped.
+
+## Progressions extraction
+
+One canonical Progressions snapshot feeds both legacy PSYKE projection and the
+native extractor, preventing mixed-revision evidence. Native tracks and beats
+are first-class, confirmed graph nodes. Membership, subject, beat-order, and
+explicit scene-anchor edges preserve all six track kinds; subjectless
+story/custom tracks still have useful track/beat evidence. Document-block and
+unanchored beats are never assigned guessed scenes, and beat order never creates
+scene precedence. Native projection is capped at 100 tracks / 400 beats;
+canonical order is retained and the first target for each Progressions Radar
+issue is kept focusable when the track cap applies. Full-snapshot issue totals
+remain authoritative and cap warnings appear in the graph response. If the
+Progressions read fails, `progressions` appears in `graph.unavailable` while structure,
+PSYKE, notes, and other available sources remain readable.
 
 ## Structure extraction
 

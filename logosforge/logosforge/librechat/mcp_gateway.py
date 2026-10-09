@@ -52,6 +52,7 @@ _TIMELINE_RECEIPT_MISS_CODE = "timeline_receipt_not_found"
 _CANVAS_PLOT_RECEIPT_MISS_CODE = "canvas_plot_receipt_not_found"
 _KNOWLEDGE_GRAPH_RECEIPT_MISS_CODE = "knowledge_graph_receipt_not_found"
 _CONTINUITY_RECEIPT_MISS_CODE = "continuity_receipt_not_found"
+_PROGRESSION_RECEIPT_MISS_CODE = "progression_receipt_not_found"
 KNOWLEDGE_GRAPH_VIEW_MODES = frozenset({
     "project_map",
     "structure",
@@ -140,6 +141,24 @@ def _continuity_receipt_request_digest(
         "expected_revision": command["expected_revision"],
         "issue_key": command["issue_id"],
         "expected_issue_fingerprint": command["expected_issue_fingerprint"],
+    })
+
+
+def _progression_receipt_request_digest(
+    project_id: int,
+    command: dict[str, Any],
+) -> str:
+    """Match Core's canonical identity for one Progressions command."""
+    return _digest({
+        "scope": "progression-command-v1",
+        "project_id": int(project_id),
+        "kind": command["kind"],
+        "expected_revision": command["expected_revision"],
+        "fields": {
+            key: value
+            for key, value in command.items()
+            if key not in {"kind", "expected_revision"}
+        },
     })
 
 
@@ -284,6 +303,40 @@ _CONTINUITY_COMMAND_FIELDS: dict[str, set[str]] = {
     }
     for kind in ("defer_issue", "dismiss_issue", "resolve_issue")
 }
+
+_PROGRESSION_COMMAND_FIELDS: dict[str, set[str]] = {
+    "create_track": {
+        "kind", "expected_revision", "track_kind", "title", "description",
+        "color_label", "primary_psyke_entry_id", "secondary_psyke_entry_id",
+        "index",
+    },
+    "update_track": {
+        "kind", "expected_revision", "track_id", "track_kind", "title",
+        "description", "color_label", "primary_psyke_entry_id",
+        "secondary_psyke_entry_id",
+    },
+    "delete_track": {"kind", "expected_revision", "track_id"},
+    "reorder_tracks": {"kind", "expected_revision", "track_ids"},
+    "create_beat": {
+        "kind", "expected_revision", "track_id", "text", "anchor_kind",
+        "scene_id", "anchor_ref", "anchor_label", "index",
+    },
+    "update_beat": {
+        "kind", "expected_revision", "beat_id", "text", "anchor_kind",
+        "scene_id", "anchor_ref", "anchor_label",
+    },
+    "delete_beat": {"kind", "expected_revision", "beat_id"},
+    "reorder_beats": {
+        "kind", "expected_revision", "track_id", "beat_ids",
+    },
+}
+
+_PROGRESSION_TRACK_KINDS = frozenset({
+    "story", "character", "relationship", "theme", "world", "custom",
+})
+_PROGRESSION_ANCHOR_KINDS = frozenset({
+    "unanchored", "scene", "document_block",
+})
 
 
 def _timeline_revision(value: Any) -> str:
@@ -876,6 +929,206 @@ def _normalize_continuity_command(
     }
 
 
+def _progression_revision(value: Any) -> str:
+    if not isinstance(value, str) or _LOWER_SHA256_RE.fullmatch(value) is None:
+        raise GatewayError(
+            "expected_revision must be the exact 64-character lowercase "
+            "revision returned by logosforge_get_progressions."
+        )
+    return value
+
+
+def _progression_integer(
+    value: Any,
+    name: str,
+    *,
+    minimum: int = 1,
+    nullable: bool = False,
+) -> int | None:
+    if nullable and value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        qualifier = "positive" if minimum == 1 else "non-negative"
+        suffix = " or null" if nullable else ""
+        raise GatewayError(f"{name} must be a {qualifier} integer{suffix}.")
+    return value
+
+
+def _progression_string(
+    value: Any,
+    name: str,
+    *,
+    maximum: int,
+    nonempty: bool = False,
+    nullable: bool = False,
+) -> str | None:
+    if nullable and value is None:
+        return None
+    if not isinstance(value, str) or (nonempty and not value.strip()):
+        qualifier = "non-empty " if nonempty else ""
+        suffix = " or null" if nullable else ""
+        raise GatewayError(f"{name} must be a {qualifier}string{suffix}.")
+    if len(value) > maximum:
+        raise GatewayError(f"{name} may contain at most {maximum} characters.")
+    # Whitespace is meaningful in beat prose.  Use ``strip`` only to reject an
+    # all-whitespace required field; preserve the caller's exact validated
+    # value so proposal review, receipt identity, and Core persistence agree.
+    return value
+
+
+def _progression_id_list(value: Any, name: str) -> list[int]:
+    if not isinstance(value, list) or any(
+        isinstance(item, bool) or not isinstance(item, int) or item < 1
+        for item in value
+    ):
+        raise GatewayError(f"{name} must be an array of positive integers.")
+    if len(value) != len(set(value)):
+        raise GatewayError(f"{name} must not contain duplicate ids.")
+    return list(value)
+
+
+def _normalize_progression_command(command: dict[str, Any]) -> dict[str, Any]:
+    """Validate and copy the complete transactional Progressions vocabulary."""
+    if not isinstance(command, dict):
+        raise GatewayError("Progressions command must be an object.")
+    kind = command.get("kind")
+    if not isinstance(kind, str) or kind not in _PROGRESSION_COMMAND_FIELDS:
+        raise GatewayError(
+            "Progressions command kind must be one of: "
+            + ", ".join(sorted(_PROGRESSION_COMMAND_FIELDS))
+            + "."
+        )
+    extra = sorted(set(command) - _PROGRESSION_COMMAND_FIELDS[kind])
+    if extra:
+        raise GatewayError(
+            "Unexpected Progressions command field(s): "
+            + ", ".join(extra)
+            + "."
+        )
+    if "expected_revision" not in command:
+        raise GatewayError("Progressions command requires expected_revision.")
+    normalized: dict[str, Any] = {
+        "kind": kind,
+        "expected_revision": _progression_revision(command["expected_revision"]),
+    }
+
+    if kind in {"create_track", "update_track"}:
+        if kind == "update_track":
+            if "track_id" not in command:
+                raise GatewayError("update_track requires track_id.")
+            normalized["track_id"] = _progression_integer(
+                command["track_id"], "track_id",
+            )
+            if not {
+                "track_kind", "title", "description", "color_label",
+                "primary_psyke_entry_id", "secondary_psyke_entry_id",
+            }.intersection(command):
+                raise GatewayError("update_track must change at least one field.")
+        else:
+            if "track_kind" not in command or "title" not in command:
+                raise GatewayError("create_track requires track_kind and title.")
+            if "index" in command:
+                normalized["index"] = _progression_integer(
+                    command["index"], "index", minimum=0, nullable=True,
+                )
+        if "track_kind" in command:
+            track_kind = command["track_kind"]
+            if track_kind not in _PROGRESSION_TRACK_KINDS:
+                raise GatewayError(
+                    "track_kind must be one of: "
+                    + ", ".join(sorted(_PROGRESSION_TRACK_KINDS))
+                    + "."
+                )
+            normalized["track_kind"] = track_kind
+        for field, maximum, nonempty in (
+            ("title", 500, True),
+            ("description", 10_000, False),
+            ("color_label", 100, False),
+        ):
+            if field in command:
+                normalized[field] = _progression_string(
+                    command[field], field, maximum=maximum, nonempty=nonempty,
+                )
+        for field in ("primary_psyke_entry_id", "secondary_psyke_entry_id"):
+            if field in command:
+                normalized[field] = _progression_integer(
+                    command[field], field, nullable=True,
+                )
+    elif kind == "delete_track":
+        if "track_id" not in command:
+            raise GatewayError("delete_track requires track_id.")
+        normalized["track_id"] = _progression_integer(
+            command["track_id"], "track_id",
+        )
+    elif kind == "reorder_tracks":
+        if "track_ids" not in command:
+            raise GatewayError("reorder_tracks requires track_ids.")
+        normalized["track_ids"] = _progression_id_list(
+            command["track_ids"], "track_ids",
+        )
+    elif kind in {"create_beat", "update_beat"}:
+        if kind == "create_beat":
+            if "track_id" not in command or "text" not in command:
+                raise GatewayError("create_beat requires track_id and text.")
+            normalized["track_id"] = _progression_integer(
+                command["track_id"], "track_id",
+            )
+            if "index" in command:
+                normalized["index"] = _progression_integer(
+                    command["index"], "index", minimum=0, nullable=True,
+                )
+        else:
+            if "beat_id" not in command:
+                raise GatewayError("update_beat requires beat_id.")
+            normalized["beat_id"] = _progression_integer(
+                command["beat_id"], "beat_id",
+            )
+            if not {
+                "text", "anchor_kind", "scene_id", "anchor_ref", "anchor_label",
+            }.intersection(command):
+                raise GatewayError("update_beat must change at least one field.")
+        if "text" in command:
+            normalized["text"] = _progression_string(
+                command["text"], "text", maximum=50_000, nonempty=True,
+            )
+        if "anchor_kind" in command:
+            anchor_kind = command["anchor_kind"]
+            if anchor_kind not in _PROGRESSION_ANCHOR_KINDS:
+                raise GatewayError(
+                    "anchor_kind must be unanchored, scene, or document_block."
+                )
+            normalized["anchor_kind"] = anchor_kind
+        if "scene_id" in command:
+            normalized["scene_id"] = _progression_integer(
+                command["scene_id"], "scene_id", nullable=True,
+            )
+        if "anchor_ref" in command:
+            normalized["anchor_ref"] = _progression_string(
+                command["anchor_ref"], "anchor_ref", maximum=1_000,
+                nullable=True,
+            )
+        if "anchor_label" in command:
+            normalized["anchor_label"] = _progression_string(
+                command["anchor_label"], "anchor_label", maximum=500,
+            )
+    elif kind == "delete_beat":
+        if "beat_id" not in command:
+            raise GatewayError("delete_beat requires beat_id.")
+        normalized["beat_id"] = _progression_integer(
+            command["beat_id"], "beat_id",
+        )
+    else:
+        if "track_id" not in command or "beat_ids" not in command:
+            raise GatewayError("reorder_beats requires track_id and beat_ids.")
+        normalized["track_id"] = _progression_integer(
+            command["track_id"], "track_id",
+        )
+        normalized["beat_ids"] = _progression_id_list(
+            command["beat_ids"], "beat_ids",
+        )
+    return normalized
+
+
 @dataclass
 class Proposal:
     proposal_id: str
@@ -893,7 +1146,7 @@ class Proposal:
     review: dict[str, Any] = field(default_factory=dict)
     # ``indeterminate`` is terminal because no durable protocol proved that a
     # retry is safe. ``recovery_pending`` is reserved for Timeline, Canvas Plot,
-    # Knowledge Graph, and Continuity commands: Core proved receipt support, so
+    # Knowledge Graph, Continuity, and Progressions commands: Core proved receipt support, so
     # the same proposal id may be reconciled or resent later.
     state: str = "pending"  # pending | applying | recovery_pending | applied | failed | indeterminate | discarded
     result: Any = None
@@ -907,6 +1160,8 @@ class Proposal:
     knowledge_graph_receipt_observed: bool = False
     continuity_resend_attempted: bool = False
     continuity_receipt_observed: bool = False
+    progression_resend_attempted: bool = False
+    progression_receipt_observed: bool = False
     error: str = ""
 
     def public(self, include_result: bool = False) -> dict[str, Any]:
@@ -1104,6 +1359,9 @@ class LogosForgeMcpGateway:
     def list_psyke_progressions(self) -> list[dict]:
         return self.client.list_psyke_progressions(self._project_id())
 
+    def get_progressions(self) -> dict[str, Any]:
+        return self.client.get_progressions(self._project_id())
+
     def list_notes(self) -> list[dict]:
         return self.client.list_notes(self._project_id())
 
@@ -1170,6 +1428,9 @@ class LogosForgeMcpGateway:
             "psyke_entries": self.client.list_psyke_entries(pid),
             "psyke_relations": self.client.list_psyke_relations(pid),
             "psyke_progressions": self.client.list_psyke_progressions(pid),
+            "progressions": self._progression_snapshot_summary(
+                self.client.get_progressions(pid),
+            ),
             "notes": [
                 {
                     "id": note.get("id"), "title": note.get("title", ""),
@@ -1202,6 +1463,32 @@ class LogosForgeMcpGateway:
             ],
             "comments_truncated": max(0, len(comments) - comment_limit),
             "event_cursor": events.get("cursor", 0),
+        }
+
+    @staticmethod
+    def _progression_snapshot_summary(snapshot: Any) -> dict[str, Any]:
+        """Keep project snapshots useful without echoing every progression beat."""
+        if not isinstance(snapshot, dict):
+            return {"unavailable": True}
+        tracks = snapshot.get("tracks", [])
+        if not isinstance(tracks, list):
+            tracks = []
+        return {
+            "revision": snapshot.get("revision", ""),
+            "summary": copy.deepcopy(snapshot.get("summary", {})),
+            "tracks": [
+                {
+                    "id": track.get("id"),
+                    "kind": track.get("kind"),
+                    "title": _preview(track.get("title"), 200),
+                    "primary_psyke_entry_id": track.get("primary_psyke_entry_id"),
+                    "secondary_psyke_entry_id": track.get("secondary_psyke_entry_id"),
+                    "coverage": copy.deepcopy(track.get("coverage", {})),
+                }
+                for track in tracks[:100]
+                if isinstance(track, dict)
+            ],
+            "tracks_truncated": max(0, len(tracks) - 100),
         }
 
     def export_project(self, options: dict[str, Any]) -> dict:
@@ -1323,6 +1610,7 @@ class LogosForgeMcpGateway:
                     or self._is_canvas_plot_proposal(proposal)
                     or self._is_knowledge_graph_proposal(proposal)
                     or self._is_continuity_proposal(proposal)
+                    or self._is_progression_proposal(proposal)
                 )
             )
             if proposal.state != "pending" and not recovering:
@@ -1367,7 +1655,9 @@ class LogosForgeMcpGateway:
                 return self._resume_canvas_plot_recovery(proposal)
             if self._is_knowledge_graph_proposal(proposal):
                 return self._resume_knowledge_graph_recovery(proposal)
-            return self._resume_continuity_recovery(proposal)
+            if self._is_continuity_proposal(proposal):
+                return self._resume_continuity_recovery(proposal)
+            return self._resume_progression_recovery(proposal)
 
         try:
             result = self._execute_proposal_request(proposal)
@@ -1382,6 +1672,8 @@ class LogosForgeMcpGateway:
                 return self._recover_ambiguous_knowledge_graph_apply(proposal, exc)
             if self._is_continuity_proposal(proposal):
                 return self._recover_ambiguous_continuity_apply(proposal, exc)
+            if self._is_progression_proposal(proposal):
+                return self._recover_ambiguous_progression_apply(proposal, exc)
             self._raise_indeterminate_apply(proposal, exc)
 
         return self._complete_proposal(proposal, result)
@@ -1392,6 +1684,7 @@ class LogosForgeMcpGateway:
             isinstance(exc, LogosForgeApiError)
             and exc.status_code is not None
             and 400 <= exc.status_code < 500
+            and exc.status_code not in {408, 429}
         )
 
     def _is_timeline_proposal(self, proposal: Proposal) -> bool:
@@ -1448,12 +1741,28 @@ class LogosForgeMcpGateway:
             )
         )
 
+    def _is_progression_proposal(self, proposal: Proposal) -> bool:
+        if (
+            proposal.project_id is None
+            or not proposal.operation.startswith("progression_")
+        ):
+            return False
+        return (
+            proposal.method == "POST"
+            and proposal.path
+            == self.client.project_path(
+                "progressions/commands",
+                proposal.project_id,
+            )
+        )
+
     def _execute_proposal_request(self, proposal: Proposal) -> Any:
         if (
             self._is_timeline_proposal(proposal)
             or self._is_canvas_plot_proposal(proposal)
             or self._is_knowledge_graph_proposal(proposal)
             or self._is_continuity_proposal(proposal)
+            or self._is_progression_proposal(proposal)
         ):
             return self.client.request(
                 proposal.method,
@@ -2901,6 +3210,371 @@ class LogosForgeMcpGateway:
         except Exception as exc:  # noqa: BLE001 - fresh snapshot transport
             self._mark_continuity_recovery_pending(proposal, exc)
 
+    def _progression_receipt(
+        self,
+        proposal_id: str,
+        project_id: int,
+    ) -> dict[str, Any] | None:
+        """Read a Progressions receipt, distinguishing a supported miss."""
+        try:
+            receipt = self.client.get_progression_command_receipt(
+                proposal_id,
+                project_id,
+            )
+        except LogosForgeApiError as exc:
+            if (
+                exc.status_code == 404
+                and exc.error_code == _PROGRESSION_RECEIPT_MISS_CODE
+            ):
+                return None
+            raise
+        if not isinstance(receipt, dict):
+            raise GatewayError(
+                "Core returned an invalid Progressions receipt response."
+            )
+        return receipt
+
+    @staticmethod
+    def _validate_progression_receipt_shape(
+        receipt: Any,
+        project_id: int,
+    ) -> dict[str, Any]:
+        if not isinstance(receipt, dict):
+            raise GatewayError("Core returned an invalid Progressions receipt.")
+        canonical = {
+            "project_id": receipt.get("project_id"),
+            "request_digest": receipt.get("request_digest"),
+            "command_kind": receipt.get("command_kind"),
+            "expected_revision": receipt.get("expected_revision"),
+            "applied_revision": receipt.get("applied_revision"),
+            "original_changed": receipt.get("original_changed"),
+            "original_affected_track_ids": receipt.get(
+                "original_affected_track_ids", []
+            ),
+            "original_affected_beat_ids": receipt.get(
+                "original_affected_beat_ids", []
+            ),
+            "original_created_track_id": receipt.get(
+                "original_created_track_id"
+            ),
+            "original_created_beat_id": receipt.get(
+                "original_created_beat_id"
+            ),
+            "committed_at": receipt.get("committed_at"),
+        }
+
+        def valid_ids(value: Any) -> bool:
+            return (
+                isinstance(value, list)
+                and all(
+                    isinstance(item, int)
+                    and not isinstance(item, bool)
+                    and item > 0
+                    for item in value
+                )
+                and len(value) == len(set(value))
+            )
+
+        def valid_optional_id(value: Any) -> bool:
+            return value is None or (
+                isinstance(value, int)
+                and not isinstance(value, bool)
+                and value > 0
+            )
+
+        changed = canonical["original_changed"]
+        kind = canonical["command_kind"]
+        track_ids = canonical["original_affected_track_ids"]
+        beat_ids = canonical["original_affected_beat_ids"]
+        created_track_id = canonical["original_created_track_id"]
+        created_beat_id = canonical["original_created_beat_id"]
+        no_op_kinds = {
+            "update_track", "reorder_tracks", "update_beat", "reorder_beats",
+        }
+        track_only_kinds = {
+            "create_track", "update_track", "reorder_tracks",
+        }
+        beat_kinds = {
+            "create_beat", "update_beat", "delete_beat", "reorder_beats",
+        }
+        valid = (
+            isinstance(canonical["project_id"], int)
+            and not isinstance(canonical["project_id"], bool)
+            and canonical["project_id"] == project_id
+            and isinstance(canonical["request_digest"], str)
+            and _LOWER_SHA256_RE.fullmatch(canonical["request_digest"])
+            is not None
+            and kind in _PROGRESSION_COMMAND_FIELDS
+            and isinstance(canonical["expected_revision"], str)
+            and _LOWER_SHA256_RE.fullmatch(canonical["expected_revision"])
+            is not None
+            and isinstance(canonical["applied_revision"], str)
+            and _LOWER_SHA256_RE.fullmatch(canonical["applied_revision"])
+            is not None
+            and isinstance(changed, bool)
+            and (
+                (changed and canonical["applied_revision"] != canonical["expected_revision"])
+                or (
+                    not changed
+                    and canonical["applied_revision"] == canonical["expected_revision"]
+                )
+            )
+            and valid_ids(track_ids)
+            and valid_ids(beat_ids)
+            and valid_optional_id(created_track_id)
+            and valid_optional_id(created_beat_id)
+            and not (created_track_id is not None and kind != "create_track")
+            and not (created_beat_id is not None and kind != "create_beat")
+            and not (changed and kind == "create_track" and created_track_id is None)
+            and not (changed and kind == "create_beat" and created_beat_id is None)
+            and not (
+                created_track_id is not None and created_track_id not in track_ids
+            )
+            and not (created_beat_id is not None and created_beat_id not in beat_ids)
+            and not (not changed and kind not in no_op_kinds)
+            and not (
+                not changed
+                and (track_ids or beat_ids or created_track_id or created_beat_id)
+            )
+            and not (changed and not track_ids)
+            and not (changed and kind in track_only_kinds and beat_ids)
+            and not (changed and kind in beat_kinds and not beat_ids)
+            and isinstance(canonical["committed_at"], str)
+            and bool(canonical["committed_at"])
+        )
+        if not valid:
+            raise GatewayError("Core returned an invalid Progressions receipt.")
+        return copy.deepcopy(canonical)
+
+    def _validate_progression_receipt_for_proposal(
+        self,
+        proposal: Proposal,
+        receipt: Any,
+    ) -> dict[str, Any]:
+        assert proposal.project_id is not None
+        canonical = self._validate_progression_receipt_shape(
+            receipt,
+            proposal.project_id,
+        )
+        expected_digest = _progression_receipt_request_digest(
+            proposal.project_id,
+            proposal.body,
+        )
+        if (
+            canonical["command_kind"] != proposal.body.get("kind")
+            or canonical["expected_revision"]
+            != proposal.body.get("expected_revision")
+            or not secrets.compare_digest(
+                canonical["request_digest"],
+                expected_digest,
+            )
+        ):
+            raise GatewayError(
+                "Durable Progressions receipt integrity check failed; do not retry."
+            )
+        return canonical
+
+    def _recovered_progression_result(
+        self,
+        project_id: int,
+        proposal_id: str,
+        receipt: dict[str, Any],
+        *,
+        proposal: Proposal | None = None,
+    ) -> dict[str, Any]:
+        current = self.client.get_progressions(project_id)
+        if (
+            not isinstance(current, dict)
+            or current.get("project_id") != project_id
+            or not isinstance(current.get("revision"), str)
+            or _LOWER_SHA256_RE.fullmatch(current["revision"]) is None
+        ):
+            raise GatewayError(
+                "Core returned an invalid Progressions snapshot during recovery."
+            )
+        raw_confirmation = self._progression_receipt(proposal_id, project_id)
+        if raw_confirmation is None:
+            raise GatewayError(
+                "The durable Progressions receipt disappeared during recovery; "
+                "the project lifetime may have changed."
+            )
+        confirmation = (
+            self._validate_progression_receipt_for_proposal(
+                proposal,
+                raw_confirmation,
+            )
+            if proposal is not None
+            else self._validate_progression_receipt_shape(
+                raw_confirmation,
+                project_id,
+            )
+        )
+        if confirmation != receipt:
+            raise GatewayError(
+                "The durable Progressions receipt changed during recovery; "
+                "the project lifetime may have changed."
+            )
+        return {
+            "progressions": current,
+            "changed": False,
+            "affected_track_ids": [],
+            "affected_beat_ids": [],
+            # Core's direct idempotent replay preserves the ids created by the
+            # original command. Receipt recovery must expose the same result
+            # so callers can keep working with the newly-created object.
+            "created_track_id": receipt["original_created_track_id"],
+            "created_beat_id": receipt["original_created_beat_id"],
+            "replayed": True,
+            "applied_revision": receipt["applied_revision"],
+        }
+
+    def _complete_progression_recovery(
+        self,
+        proposal: Proposal,
+        raw_receipt: Any,
+    ) -> dict[str, Any]:
+        receipt = self._validate_progression_receipt_for_proposal(
+            proposal,
+            raw_receipt,
+        )
+        assert proposal.project_id is not None
+        with self._lock:
+            proposal.receipt = receipt
+            proposal.recovered_from_core = True
+            proposal.progression_receipt_observed = True
+        result = self._recovered_progression_result(
+            proposal.project_id,
+            proposal.proposal_id,
+            receipt,
+            proposal=proposal,
+        )
+        with self._lock:
+            proposal.state = "applied"
+            proposal.error = ""
+            proposal.result = result
+            return proposal.public(include_result=True)
+
+    def _mark_progression_recovery_pending(
+        self,
+        proposal: Proposal,
+        exc: Exception,
+    ) -> None:
+        public_error = (
+            "The Progressions apply is still awaiting durable recovery after "
+            "an ambiguous write. Later, call logosforge_apply_proposal again "
+            "with this same proposal_id; do not create a replacement proposal: "
+            f"{exc}"
+        )
+        with self._lock:
+            proposal.state = "recovery_pending"
+            proposal.error = public_error
+        raise GatewayError(public_error) from exc
+
+    def _keep_progression_recovery_pending(
+        self,
+        proposal: Proposal,
+        detail: str,
+        *,
+        cause: Exception | None = None,
+    ) -> None:
+        public_error = (
+            "The Progressions apply remains recovery_pending. No additional "
+            "mutation was sent. Later, call logosforge_apply_proposal again "
+            "with this same proposal_id to poll its durable receipt: "
+            f"{detail}"
+        )
+        with self._lock:
+            proposal.state = "recovery_pending"
+            proposal.error = public_error
+        if cause is not None:
+            raise GatewayError(public_error) from cause
+        raise GatewayError(public_error)
+
+    def _retry_progression_once(
+        self,
+        proposal: Proposal,
+    ) -> dict[str, Any]:
+        with self._lock:
+            if (
+                proposal.progression_resend_attempted
+                or proposal.progression_receipt_observed
+            ):
+                self._keep_progression_recovery_pending(
+                    proposal,
+                    "No durable receipt is currently visible; the single "
+                    "bounded resend has already been consumed.",
+                )
+            proposal.progression_resend_attempted = True
+        try:
+            result = self._execute_proposal_request(proposal)
+        except Exception as exc:  # noqa: BLE001 - transport boundary
+            if self._is_definite_http_rejection(exc):
+                self._raise_rejected_apply(proposal, exc)
+            self._mark_progression_recovery_pending(proposal, exc)
+        return self._complete_proposal(proposal, result)
+
+    def _recover_ambiguous_progression_apply(
+        self,
+        proposal: Proposal,
+        original_error: Exception,
+    ) -> dict[str, Any]:
+        assert proposal.project_id is not None
+        try:
+            receipt = self._progression_receipt(
+                proposal.proposal_id,
+                proposal.project_id,
+            )
+        except Exception as lookup_error:  # noqa: BLE001 - transport boundary
+            # Receipt support is part of the Progressions protocol. A
+            # transient lookup failure does not revoke the exact command/key,
+            # and must not terminalize a proposal that can be reconciled on a
+            # later call. No resend has been consumed yet.
+            self._mark_progression_recovery_pending(proposal, lookup_error)
+        if receipt is None:
+            return self._retry_progression_once(proposal)
+        try:
+            return self._complete_progression_recovery(proposal, receipt)
+        except GatewayError as exc:
+            self._mark_receipt_validation_failed(proposal, exc)
+        except Exception as exc:  # noqa: BLE001 - fresh snapshot transport
+            self._mark_progression_recovery_pending(proposal, exc)
+
+    def _resume_progression_recovery(
+        self,
+        proposal: Proposal,
+    ) -> dict[str, Any]:
+        assert proposal.project_id is not None
+        try:
+            receipt = self._progression_receipt(
+                proposal.proposal_id,
+                proposal.project_id,
+            )
+        except Exception as lookup_error:  # noqa: BLE001 - transport boundary
+            self._keep_progression_recovery_pending(
+                proposal,
+                f"Receipt lookup was inconclusive: {lookup_error}",
+                cause=lookup_error,
+            )
+        if receipt is None:
+            with self._lock:
+                may_resend = not (
+                    proposal.progression_resend_attempted
+                    or proposal.progression_receipt_observed
+                )
+            if may_resend:
+                return self._retry_progression_once(proposal)
+            self._keep_progression_recovery_pending(
+                proposal,
+                "Core reported that no receipt is currently available and "
+                "the single bounded resend has already been consumed.",
+            )
+        try:
+            return self._complete_progression_recovery(proposal, receipt)
+        except GatewayError as exc:
+            self._mark_receipt_validation_failed(proposal, exc)
+        except Exception as exc:  # noqa: BLE001 - fresh snapshot transport
+            self._mark_progression_recovery_pending(proposal, exc)
+
     def _recover_unknown_durable_proposal(
         self,
         proposal_id: str,
@@ -2919,11 +3593,15 @@ class LogosForgeMcpGateway:
                 proposal_id,
                 project_id,
             )
+            progression_receipt = self._progression_receipt(
+                proposal_id,
+                project_id,
+            )
         except Exception as exc:
             raise GatewayError(
                 "Unknown proposal id; durable command receipt recovery could "
                 "not be verified across Timeline, Canvas Plot, and Knowledge "
-                f"Graph, and Continuity: {exc}"
+                f"Graph, Continuity, and Progressions: {exc}"
             ) from exc
 
         receipts_present = sum(
@@ -2933,12 +3611,14 @@ class LogosForgeMcpGateway:
                 canvas_receipt,
                 graph_receipt,
                 continuity_receipt,
+                progression_receipt,
             )
         )
         if receipts_present > 1:
             raise GatewayError(
                 "Durable receipt capability collision across Timeline, Canvas "
-                "Plot, Knowledge Graph, and Continuity; recovery failed closed."
+                "Plot, Knowledge Graph, Continuity, and Progressions; recovery "
+                "failed closed."
             )
         if timeline_receipt is not None:
             receipt = self._validate_timeline_receipt_shape(
@@ -3026,6 +3706,30 @@ class LogosForgeMcpGateway:
                 "proposal_id": proposal_id,
                 "operation": f"continuity_{receipt['command_kind']}",
                 "summary": "Recovered durable Continuity command receipt.",
+                "project_id": project_id,
+                "state": "applied",
+                "recovered_from_core": True,
+                "request_digest": receipt["request_digest"],
+                "request": None,
+                "review": {"recovered_receipt": copy.deepcopy(receipt)},
+                "requires_user_approval": True,
+                "receipt": receipt,
+                "result": result,
+            }
+        if progression_receipt is not None:
+            receipt = self._validate_progression_receipt_shape(
+                progression_receipt,
+                project_id,
+            )
+            result = self._recovered_progression_result(
+                project_id,
+                proposal_id,
+                receipt,
+            )
+            return {
+                "proposal_id": proposal_id,
+                "operation": f"progression_{receipt['command_kind']}",
+                "summary": "Recovered durable Progressions command receipt.",
                 "project_id": project_id,
                 "state": "applied",
                 "recovered_from_core": True,
@@ -3767,6 +4471,256 @@ class LogosForgeMcpGateway:
             operation=f"canvas_plot_{kind}",
             method="POST",
             path=self.client.project_path("canvas-plot/commands", pid),
+            body=normalized,
+            summary=summary,
+            project_id=pid,
+            review=review,
+        )
+
+    def propose_progression_command(
+        self,
+        command: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Store one exact Progressions command after a revisioned preflight."""
+        pid = self._project_id()
+        normalized = _normalize_progression_command(command)
+        current = self.client.get_progressions(pid)
+        if not isinstance(current, dict):
+            raise GatewayError(
+                "The LogosForge API returned an invalid Progressions snapshot."
+            )
+        if current.get("revision") != normalized["expected_revision"]:
+            raise GatewayError(
+                "expected_revision does not match the current Progressions "
+                "workspace. Read it again with logosforge_get_progressions "
+                "and create a fresh proposal."
+            )
+        tracks = [row for row in current.get("tracks", []) if isinstance(row, dict)]
+        track_by_id = {
+            row.get("id"): row
+            for row in tracks
+            if isinstance(row.get("id"), int)
+        }
+        beats = [
+            beat
+            for track in tracks
+            for beat in track.get("beats", [])
+            if isinstance(track.get("beats", []), list) and isinstance(beat, dict)
+        ]
+        beat_by_id = {
+            row.get("id"): row
+            for row in beats
+            if isinstance(row.get("id"), int)
+        }
+        kind = normalized["kind"]
+
+        def validate_subjects(
+            track_kind: Any,
+            primary_id: Any,
+            secondary_id: Any,
+        ) -> None:
+            if track_kind in {"story", "custom"}:
+                if primary_id is not None or secondary_id is not None:
+                    raise GatewayError(
+                        "Story and custom tracks cannot have PSYKE subjects."
+                    )
+                return
+            if track_kind == "relationship":
+                if (
+                    primary_id is None
+                    or secondary_id is None
+                    or primary_id == secondary_id
+                ):
+                    raise GatewayError(
+                        "Relationship tracks require two distinct PSYKE subjects."
+                    )
+                required_types: dict[int, set[str] | None] = {
+                    primary_id: None,
+                    secondary_id: None,
+                }
+            else:
+                if primary_id is None or secondary_id is not None:
+                    raise GatewayError(
+                        f"{track_kind.capitalize()} tracks require exactly one "
+                        "compatible PSYKE subject."
+                    )
+                required_types = {
+                    primary_id: {
+                        "character": {"character"},
+                        "theme": {"theme"},
+                        "world": {"place", "object", "lore"},
+                    }[track_kind]
+                }
+            entries = self.client.list_psyke_entries(pid)
+            entry_by_id = {
+                row.get("id"): row
+                for row in entries
+                if isinstance(row, dict) and isinstance(row.get("id"), int)
+            }
+            for entry_id, allowed_types in required_types.items():
+                entry = entry_by_id.get(entry_id)
+                if entry is None:
+                    raise GatewayError(
+                        f"PSYKE subject {entry_id} is not present in this project."
+                    )
+                if allowed_types is not None and entry.get("type") not in allowed_types:
+                    raise GatewayError(
+                        f"PSYKE subject {entry_id} is not compatible with a "
+                        f"{track_kind} track."
+                    )
+
+        def validate_anchor(anchor: dict[str, Any]) -> None:
+            anchor_kind = anchor.get("anchor_kind", "unanchored")
+            scene_id = anchor.get("scene_id")
+            anchor_ref = anchor.get("anchor_ref")
+            anchor_label = anchor.get("anchor_label", "")
+            if anchor_kind == "unanchored":
+                valid = (
+                    scene_id is None
+                    and anchor_ref is None
+                    and anchor_label == ""
+                )
+            elif anchor_kind == "scene":
+                valid = scene_id is not None and anchor_ref is None
+            else:
+                valid = (
+                    scene_id is None
+                    and isinstance(anchor_ref, str)
+                    and bool(anchor_ref.strip())
+                )
+            if not valid:
+                raise GatewayError(
+                    "Progression anchor fields do not match anchor_kind: "
+                    "unanchored has no target, scene requires scene_id only, "
+                    "and document_block requires anchor_ref only."
+                )
+
+        review: dict[str, Any] = {
+            "command": copy.deepcopy(normalized),
+            "before_summary": copy.deepcopy(current.get("summary", {})),
+        }
+        destructive = kind in {"delete_track", "delete_beat"}
+        if "track_id" in normalized:
+            track = track_by_id.get(normalized["track_id"])
+            if track is None:
+                raise GatewayError(
+                    f"Progression track {normalized['track_id']} is not present "
+                    "in the current snapshot."
+                )
+            review["track"] = {
+                "id": track.get("id"),
+                "kind": track.get("kind"),
+                "title": _preview(track.get("title"), 500),
+                "beat_count": len(track.get("beats", []))
+                if isinstance(track.get("beats", []), list) else 0,
+            }
+        if "beat_id" in normalized:
+            beat = beat_by_id.get(normalized["beat_id"])
+            if beat is None:
+                raise GatewayError(
+                    f"Progression beat {normalized['beat_id']} is not present "
+                    "in the current snapshot."
+                )
+            review["beat"] = {
+                "id": beat.get("id"),
+                "track_id": beat.get("track_id"),
+                "text": _preview(beat.get("text"), 1_000),
+                "anchor_kind": beat.get("anchor_kind"),
+                "scene_id": beat.get("scene_id"),
+                "anchor_ref": beat.get("anchor_ref"),
+                "anchor_label": _preview(beat.get("anchor_label"), 500),
+            }
+        if kind == "create_track":
+            validate_subjects(
+                normalized["track_kind"],
+                normalized.get("primary_psyke_entry_id"),
+                normalized.get("secondary_psyke_entry_id"),
+            )
+            index = normalized.get("index")
+            if index is not None and index > len(tracks):
+                raise GatewayError("Progression track index is outside the available range.")
+        elif kind == "update_track":
+            track = track_by_id[normalized["track_id"]]
+            # A migrated legacy compatibility track can intentionally carry a
+            # generic PSYKE subject that new canonical tracks cannot create.
+            # Core permits ordinary title/description/color edits while
+            # protecting that legacy subject.  Revalidate only when this
+            # proposal actually attempts to change kind or subject fields.
+            if {
+                "track_kind",
+                "primary_psyke_entry_id",
+                "secondary_psyke_entry_id",
+            }.intersection(normalized):
+                validate_subjects(
+                    normalized.get("track_kind", track.get("kind")),
+                    normalized.get(
+                        "primary_psyke_entry_id",
+                        track.get("primary_psyke_entry_id"),
+                    ),
+                    normalized.get(
+                        "secondary_psyke_entry_id",
+                        track.get("secondary_psyke_entry_id"),
+                    ),
+                )
+        elif kind == "create_beat":
+            validate_anchor({
+                "anchor_kind": normalized.get("anchor_kind", "unanchored"),
+                "scene_id": normalized.get("scene_id"),
+                "anchor_ref": normalized.get("anchor_ref"),
+                "anchor_label": normalized.get("anchor_label", ""),
+            })
+            track = track_by_id[normalized["track_id"]]
+            track_beats = track.get("beats", [])
+            beat_count = len(track_beats) if isinstance(track_beats, list) else 0
+            index = normalized.get("index")
+            if index is not None and index > beat_count:
+                raise GatewayError("Progression beat index is outside the available range.")
+        elif kind == "update_beat":
+            beat = beat_by_id[normalized["beat_id"]]
+            validate_anchor({
+                "anchor_kind": normalized.get(
+                    "anchor_kind", beat.get("anchor_kind", "unanchored"),
+                ),
+                "scene_id": normalized.get("scene_id", beat.get("scene_id")),
+                "anchor_ref": normalized.get("anchor_ref", beat.get("anchor_ref")),
+                "anchor_label": normalized.get(
+                    "anchor_label", beat.get("anchor_label", ""),
+                ),
+            })
+        if kind == "reorder_tracks":
+            current_ids = [row.get("id") for row in tracks]
+            if normalized["track_ids"] != current_ids and set(
+                normalized["track_ids"]
+            ) != set(current_ids):
+                raise GatewayError(
+                    "track_ids must contain every current progression track exactly once."
+                )
+            review["track_order"] = {
+                "before": current_ids,
+                "after": normalized["track_ids"],
+            }
+        elif kind == "reorder_beats":
+            track = track_by_id.get(normalized["track_id"])
+            before = track.get("beats", []) if isinstance(track, dict) else []
+            current_ids = [row.get("id") for row in before if isinstance(row, dict)]
+            if normalized["beat_ids"] != current_ids and set(
+                normalized["beat_ids"]
+            ) != set(current_ids):
+                raise GatewayError(
+                    "beat_ids must contain every current beat in the track exactly once."
+                )
+            review["beat_order"] = {
+                "before": current_ids,
+                "after": normalized["beat_ids"],
+            }
+        summary = kind.replace("_", " ").capitalize() + "."
+        if destructive:
+            summary = "Delete " + kind.removeprefix("delete_").replace("_", " ") + "."
+            review["destructive"] = True
+        return self.propose_request(
+            operation=f"progression_{kind}",
+            method="POST",
+            path=self.client.project_path("progressions/commands", pid),
             body=normalized,
             summary=summary,
             project_id=pid,

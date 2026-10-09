@@ -1814,6 +1814,265 @@ class TimelineCommandReceiptDTO(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Progressions
+# ---------------------------------------------------------------------------
+
+ProgressionKind = Literal[
+    "story", "character", "relationship", "theme", "world", "custom",
+]
+ProgressionAnchorKind = Literal["unanchored", "scene", "document_block"]
+ProgressionCommandKind = Literal[
+    "create_track",
+    "update_track",
+    "delete_track",
+    "reorder_tracks",
+    "create_beat",
+    "update_beat",
+    "delete_beat",
+    "reorder_beats",
+]
+ProgressionPositiveInt = Annotated[int, Field(gt=0, strict=True)]
+
+
+class ProgressionBeatDTO(BaseModel):
+    id: int
+    track_id: int
+    text: str
+    sort_order: int
+    anchor_kind: ProgressionAnchorKind
+    scene_id: int | None = None
+    scene_title: str = ""
+    anchor_ref: str | None = None
+    anchor_label: str = ""
+
+
+class ProgressionCoverageDTO(BaseModel):
+    total_beats: int
+    anchored_beats: int
+    unanchored_beats: int
+    scene_anchored_beats: int
+    document_anchored_beats: int
+    coverage_percent: float
+    status: Literal["empty", "unanchored", "partial", "complete"]
+    out_of_order_beat_ids: list[int] = Field(default_factory=list)
+
+
+class ProgressionTrackDTO(BaseModel):
+    id: int
+    project_id: int
+    kind: ProgressionKind
+    title: str
+    description: str = ""
+    color_label: str = ""
+    sort_order: int
+    primary_psyke_entry_id: int | None = None
+    primary_psyke_entry_name: str = ""
+    primary_psyke_entry_type: str = ""
+    secondary_psyke_entry_id: int | None = None
+    secondary_psyke_entry_name: str = ""
+    secondary_psyke_entry_type: str = ""
+    legacy_compatibility: bool = False
+    beats: list[ProgressionBeatDTO] = Field(default_factory=list)
+    coverage: ProgressionCoverageDTO
+
+
+class ProgressionSummaryDTO(BaseModel):
+    total_tracks: int
+    total_beats: int
+    anchored_beats: int
+    unanchored_beats: int
+    coverage_percent: float
+    by_kind: dict[str, int] = Field(default_factory=dict)
+    by_status: dict[str, int] = Field(default_factory=dict)
+
+
+class ProgressionSnapshotDTO(BaseModel):
+    project_id: int
+    revision: str = Field(
+        min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$",
+    )
+    tracks: list[ProgressionTrackDTO] = Field(default_factory=list)
+    summary: ProgressionSummaryDTO
+
+
+class _ProgressionCommandBase(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: str = Field(
+        min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$",
+    )
+
+
+class ProgressionCreateTrackCommandDTO(_ProgressionCommandBase):
+    kind: Literal["create_track"]
+    track_kind: ProgressionKind
+    title: str = Field(min_length=1, max_length=500)
+    description: str = Field(default="", max_length=10000)
+    color_label: str = Field(default="", max_length=100)
+    primary_psyke_entry_id: int | None = Field(default=None, gt=0, strict=True)
+    secondary_psyke_entry_id: int | None = Field(default=None, gt=0, strict=True)
+    index: int | None = Field(default=None, ge=0, strict=True)
+
+
+class ProgressionUpdateTrackCommandDTO(_ProgressionCommandBase):
+    kind: Literal["update_track"]
+    track_id: int = Field(gt=0, strict=True)
+    track_kind: ProgressionKind | None = None
+    title: str | None = Field(default=None, min_length=1, max_length=500)
+    description: str | None = Field(default=None, max_length=10000)
+    color_label: str | None = Field(default=None, max_length=100)
+    primary_psyke_entry_id: int | None = Field(default=None, gt=0, strict=True)
+    secondary_psyke_entry_id: int | None = Field(default=None, gt=0, strict=True)
+
+    @model_validator(mode="after")
+    def _requires_change(self):
+        mutable = {
+            "track_kind", "title", "description", "color_label",
+            "primary_psyke_entry_id", "secondary_psyke_entry_id",
+        }
+        changed = self.model_fields_set.intersection(mutable)
+        if not changed:
+            raise ValueError("update_track must change at least one field")
+        prohibited_null = changed.intersection({
+            "track_kind", "title", "description", "color_label",
+        })
+        if any(getattr(self, name) is None for name in prohibited_null):
+            raise ValueError("text and kind fields must not be null")
+        return self
+
+
+class ProgressionDeleteTrackCommandDTO(_ProgressionCommandBase):
+    kind: Literal["delete_track"]
+    track_id: int = Field(gt=0, strict=True)
+
+
+class ProgressionReorderTracksCommandDTO(_ProgressionCommandBase):
+    kind: Literal["reorder_tracks"]
+    track_ids: list[ProgressionPositiveInt]
+
+
+class ProgressionCreateBeatCommandDTO(_ProgressionCommandBase):
+    kind: Literal["create_beat"]
+    track_id: int = Field(gt=0, strict=True)
+    text: str = Field(min_length=1, max_length=50000)
+    anchor_kind: ProgressionAnchorKind = "unanchored"
+    scene_id: int | None = Field(default=None, gt=0, strict=True)
+    anchor_ref: str | None = Field(default=None, min_length=1, max_length=1000)
+    anchor_label: str = Field(default="", max_length=500)
+    index: int | None = Field(default=None, ge=0, strict=True)
+
+    @model_validator(mode="after")
+    def _valid_anchor(self):
+        if self.anchor_kind == "unanchored" and (
+            self.scene_id is not None
+            or self.anchor_ref is not None
+            or bool(self.anchor_label)
+        ):
+            raise ValueError("unanchored beats cannot contain anchor data")
+        if self.anchor_kind == "scene" and (
+            self.scene_id is None or self.anchor_ref is not None
+        ):
+            raise ValueError("scene anchors require scene_id only")
+        if self.anchor_kind == "document_block" and (
+            self.scene_id is not None or not (self.anchor_ref or "").strip()
+        ):
+            raise ValueError("document_block anchors require anchor_ref only")
+        return self
+
+
+class ProgressionUpdateBeatCommandDTO(_ProgressionCommandBase):
+    kind: Literal["update_beat"]
+    beat_id: int = Field(gt=0, strict=True)
+    text: str | None = Field(default=None, min_length=1, max_length=50000)
+    anchor_kind: ProgressionAnchorKind | None = None
+    scene_id: int | None = Field(default=None, gt=0, strict=True)
+    anchor_ref: str | None = Field(default=None, min_length=1, max_length=1000)
+    anchor_label: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def _requires_change(self):
+        mutable = {
+            "text", "anchor_kind", "scene_id", "anchor_ref", "anchor_label",
+        }
+        changed = self.model_fields_set.intersection(mutable)
+        if not changed:
+            raise ValueError("update_beat must change at least one field")
+        prohibited_null = changed.intersection({
+            "text", "anchor_kind", "anchor_label",
+        })
+        if any(getattr(self, name) is None for name in prohibited_null):
+            raise ValueError("text, anchor_kind and anchor_label must not be null")
+        if self.anchor_kind == "unanchored" and (
+            self.scene_id is not None
+            or self.anchor_ref is not None
+            or bool(self.anchor_label)
+        ):
+            raise ValueError("unanchored beats cannot contain anchor data")
+        return self
+
+
+class ProgressionDeleteBeatCommandDTO(_ProgressionCommandBase):
+    kind: Literal["delete_beat"]
+    beat_id: int = Field(gt=0, strict=True)
+
+
+class ProgressionReorderBeatsCommandDTO(_ProgressionCommandBase):
+    kind: Literal["reorder_beats"]
+    track_id: int = Field(gt=0, strict=True)
+    beat_ids: list[ProgressionPositiveInt]
+
+
+_ProgressionCommandUnion = Annotated[
+    ProgressionCreateTrackCommandDTO
+    | ProgressionUpdateTrackCommandDTO
+    | ProgressionDeleteTrackCommandDTO
+    | ProgressionReorderTracksCommandDTO
+    | ProgressionCreateBeatCommandDTO
+    | ProgressionUpdateBeatCommandDTO
+    | ProgressionDeleteBeatCommandDTO
+    | ProgressionReorderBeatsCommandDTO,
+    Field(discriminator="kind"),
+]
+
+
+class ProgressionCommandDTO(RootModel[_ProgressionCommandUnion]):
+    """Unwrapped discriminated Progressions command request."""
+
+
+class ProgressionCommandResultDTO(BaseModel):
+    progressions: ProgressionSnapshotDTO
+    changed: bool
+    affected_track_ids: list[int] = Field(default_factory=list)
+    affected_beat_ids: list[int] = Field(default_factory=list)
+    created_track_id: int | None = None
+    created_beat_id: int | None = None
+    replayed: bool
+    applied_revision: str = Field(
+        min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$",
+    )
+
+
+class ProgressionCommandReceiptDTO(BaseModel):
+    project_id: int
+    request_digest: str = Field(
+        min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$",
+    )
+    command_kind: ProgressionCommandKind
+    expected_revision: str = Field(
+        min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$",
+    )
+    applied_revision: str = Field(
+        min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$",
+    )
+    original_changed: bool
+    original_affected_track_ids: list[int] = Field(default_factory=list)
+    original_affected_beat_ids: list[int] = Field(default_factory=list)
+    original_created_track_id: int | None = None
+    original_created_beat_id: int | None = None
+    committed_at: datetime
+
+
+# ---------------------------------------------------------------------------
 # PSYKE
 # ---------------------------------------------------------------------------
 
@@ -2763,6 +3022,13 @@ class DecisionEvidenceDTO(BaseModel):
                 raise ValueError(
                     "continuity issue evidence requires a canonical issue key"
                 )
+        elif self.related_target_type in {
+            "progression_track", "progression_beat",
+        }:
+            if self.related_target_id is None or self.related_target_key:
+                raise ValueError(
+                    "progression evidence requires only related_target_id"
+                )
         elif (
             not self.related_target_type
             and (self.related_target_id is not None or self.related_target_key)
@@ -2783,7 +3049,7 @@ class DecisionCardDTO(BaseModel):
     suggested_action: str = Field(default="", max_length=1000)
     related_section: str = Field(default="", max_length=128)
     related_target_type: str = Field(default="", max_length=128)
-    related_target_id: int | None = None
+    related_target_id: int | None = Field(default=None, ge=1)
     related_target_key: str = Field(default="", max_length=512)
     created_from: str = Field(default="deterministic", min_length=1, max_length=64)
     graph_focus_key: str = Field(default="", max_length=512)
@@ -2812,6 +3078,12 @@ class DecisionCardDTO(BaseModel):
         ):
             raise ValueError(
                 "knowledge_graph cards require a graph focus and evidence"
+            )
+        if self.related_target_type in {
+            "progression_track", "progression_beat",
+        } and (self.related_target_id is None or self.related_target_key):
+            raise ValueError(
+                "progression cards require only related_target_id"
             )
         if self.created_from == "semantic_continuity":
             issue_key_valid = (

@@ -108,9 +108,10 @@ in `logosforge/librechat/mcp_server.py`. It delegates to the supported FastAPI
 routes through `logosforge/librechat/api_client.py`; it never opens the SQLite
 database or exposes arbitrary HTTP, filesystem, or Python execution.
 
-MCP reads cover complete revisioned scenes, outline and PSYKE data, notes,
-complete comment threads, search, events, diagnostics, exports, and desktop
-live context when available. The MCP 1.11.0 surface remains at 46 tools and
+MCP reads cover complete revisioned scenes, outline and PSYKE data, canonical
+Progressions, notes, complete comment threads, search, events, diagnostics,
+exports, and desktop live context when available. The MCP 1.12.0 surface has
+48 tools and
 includes
 `logosforge_list_comments` (paged, with an optional resolved-thread filter),
 `logosforge_propose_comment_reply`, and
@@ -138,7 +139,15 @@ even if SQLite reuses a deleted row's numeric ID, while unrelated prose/title
 edits do not invalidate a safe board operation. Lane deletion preserves its
 events as Unassigned, and event removal preserves the manuscript scene.
 
-MCP 1.11.0 also extends the existing Timeline read with the Phase 7C
+`logosforge_get_progressions` reads Story, Character, Relationship, Theme,
+World, and Custom tracks with ordered beats, explicit scene/document-block
+anchors, anchor coverage, and a coherent revision.
+`logosforge_propose_progression_command` prepares one of the eight strict track
+or beat create/update/delete/reorder commands. Core rechecks the revision and
+subject/anchor invariants atomically on apply and stores a durable same-key
+receipt for lost-response recovery.
+
+MCP 1.12.0 also retains the Timeline read's Phase 7C
 `story_flow` and `mode_projection` fields; it does not add a tool or command.
 Flow points correspond one-to-one with effective Timeline events in their
 effective order, while off-Timeline scenes are excluded. Points expose 0–10
@@ -358,8 +367,9 @@ keeps LibreChat as an *interface*, never an *authority*.
   LogosForge only at the panel chrome level (no LibreChat fork).
 * The MCP gateway is stdio-only. The MCP client is responsible for launching
   it and keeping the process alive while proposals are pending.
-* HTTP 1.16.0 adds a pending-invalidation outbox for changed Timeline, Canvas
-  Plot, Knowledge Graph, Semantic Continuity, and Guided Workflow commands.
+* HTTP 1.17.0 extends the pending-invalidation outbox to changed Progressions
+  commands alongside Timeline, Canvas Plot, Knowledge Graph, Semantic
+  Continuity, and Guided Workflow commands.
   Their invalidation rows commit atomically with mutations/receipts, and the
   broker reconciles and acknowledges rows after commit and on process startup.
   Token-checked acknowledgement distinguishes reused SQLite row generations.
@@ -367,8 +377,8 @@ keeps LibreChat as an *interface*, never an *authority*.
   connection/replacement/gaps, and Pro refetches authoritative state on
   recovery. This is a one-API-process
   boundary: legacy mutation routes remain best-effort, and multi-process fan-out
-  plus independent background delivery remain unsupported. Phase 7D full-suite
-  and packaged validation are pending; MCP stays at 1.11.0 with 46 tools.
+  plus independent background delivery remain unsupported. Packaged validation
+  remains a separate release gate; MCP is 1.12.0 with 48 tools.
 * Project export is a manual checkpoint, not an automatic transactional
   rollback. Manuscript imports and delete operations are intentionally not
   exposed as MCP tools. Comment creation, anchor/root-body editing, and

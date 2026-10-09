@@ -23,6 +23,7 @@ Version **0.9.0-alpha**. Start with the README, then the User Guide.
 
 - **[Writing Modes](WritingModes.md)** · **[Screenplay Mode](ScreenplayMode.md)** · **[Professional Screenplay Output](ProfessionalScreenplayOutput.md)** · **[Production Drafts](ProductionDrafts.md)**
 - **[Logos](Logos.md)** (inline contextual AI) · **[Strategy Layer](StrategyLayer.md)** · **[Narrative Health](NarrativeHealth.md)**
+- **[Progressions](Progressions.md)** — typed story arcs, ordered beats, anchors, transactions, and compatibility.
 - **[Graph](Graph.md)** · **[Plugins](plugins.md)** · **[API](API.md)** (desktop/localhost in alpha)
 - Assistant context: **[context_assistant](context_assistant.md)**
 

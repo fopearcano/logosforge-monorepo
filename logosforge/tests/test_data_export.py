@@ -184,6 +184,237 @@ def test_export_full_project_is_import_compatible():
     assert len(db2.get_all_scenes(new_pid)) == 2
     assert any(e.name == "Justice" for e in db2.get_all_psyke_entries(new_pid))
 
+    # Pre-v2 exports have no canonical section and retain the legacy restore.
+    legacy_payload = json.loads(text)
+    legacy_payload.pop("progression_tracks")
+    db3 = Database()
+    legacy_pid = import_json(db3, legacy_payload)
+    imported_hero = next(
+        entry for entry in db3.get_all_psyke_entries(legacy_pid)
+        if entry.name == "Alice" and entry.entry_type == "character"
+    )
+    assert [
+        row.text for row in db3.get_psyke_progressions(imported_hero.id)
+    ] == ["starts naive"]
+
+
+def test_full_project_roundtrip_preserves_all_canonical_progressions():
+    db = Database()
+    project = db.create_project("Progression Round Trip", narrative_engine="novel")
+    first_scene = db.create_scene(project.id, "Mirror")
+    second_scene = db.create_scene(project.id, "Mirror")
+    character = db.create_psyke_entry(project.id, "Echo", "character")
+    lower_character = db.create_psyke_entry(project.id, "echo", "character")
+    theme = db.create_psyke_entry(project.id, "Echo", "theme")
+    other = db.create_psyke_entry(project.id, "Echo", "other")
+
+    def command(kind: str, **fields):
+        snapshot = db.read_progression_snapshot(project.id)
+        assert snapshot is not None
+        return db.execute_progression_command(
+            project.id,
+            kind=kind,
+            expected_revision=snapshot.revision,
+            **fields,
+        )
+
+    story = command(
+        "create_track",
+        track_kind="story",
+        title="Main arc",
+        description="Story description",
+        color_label="amber",
+    )
+    story_id = story.created_track_id
+    assert story_id is not None
+    command(
+        "create_beat",
+        track_id=story_id,
+        text="Second mirror turn",
+        anchor_kind="scene",
+        scene_id=second_scene.id,
+    )
+    command(
+        "create_beat",
+        track_id=story_id,
+        text="Draft-only turn",
+        anchor_kind="document_block",
+        anchor_ref="chapter:2:block:7",
+        anchor_label="Chapter 2 draft",
+    )
+
+    # A whitespace-only legacy beat is legal historical data and must survive.
+    legacy_beat = db.create_psyke_progression(
+        character.id, "   ", scene_id=first_scene.id,
+    )
+    relationship = command(
+        "create_track",
+        track_kind="relationship",
+        title="Echoes",
+        primary_psyke_entry_id=character.id,
+        secondary_psyke_entry_id=theme.id,
+    )
+    assert relationship.created_track_id is not None
+    command(
+        "create_beat",
+        track_id=relationship.created_track_id,
+        text="Their meanings diverge",
+    )
+    lower_character_track = command(
+        "create_track",
+        track_kind="character",
+        title="Lower-case Echo arc",
+        primary_psyke_entry_id=lower_character.id,
+    )
+    assert lower_character_track.created_track_id is not None
+
+    # Deleting the last compatibility beat intentionally leaves an empty,
+    # metadata-bearing designated track.
+    temporary = db.create_psyke_progression(other.id, "temporary")
+    db.delete_psyke_progression(temporary.id)
+    snapshot = db.read_progression_snapshot(project.id)
+    assert snapshot is not None
+    empty_legacy = next(
+        row.track for row in snapshot.tracks
+        if row.track.legacy_psyke_entry_id == other.id
+    )
+    command(
+        "update_track",
+        track_id=empty_legacy.id,
+        title="Unclassified evolution",
+        description="Empty by design",
+        color_label="violet",
+    )
+    custom = command(
+        "create_track",
+        track_kind="custom",
+        title="Private metric",
+        description="No subject",
+    )
+    assert custom.created_track_id is not None
+
+    exported = build_full_export(db, project.id)
+    assert exported["schema_version"] == 2
+    assert len(exported["progression_tracks"]) == 6
+    assert sum(
+        1 for track in exported["progression_tracks"]
+        if track["legacy_compatibility"]
+    ) == 2
+
+    db2 = Database()
+    imported_id = import_json(db2, json.loads(to_json(exported)))
+    reexported = build_full_export(db2, imported_id)
+    assert reexported["progression_tracks"] == exported["progression_tracks"]
+
+    imported_entries = {
+        (entry.name, entry.entry_type): entry
+        for entry in db2.get_all_psyke_entries(imported_id)
+    }
+    imported_character = imported_entries[("Echo", "character")]
+    imported_lower_character = imported_entries[("echo", "character")]
+    imported_other = imported_entries[("Echo", "other")]
+    assert imported_lower_character.id != imported_character.id
+    assert [
+        progression.text
+        for progression in db2.get_psyke_progressions(imported_character.id)
+    ] == [legacy_beat.text]
+    assert db2.get_psyke_progressions(imported_other.id) == []
+
+
+def test_full_project_import_rejects_non_boolean_legacy_compatibility():
+    db = Database()
+    project = db.create_project("Strict compatibility marker")
+    subject = db.create_psyke_entry(project.id, "Mara", "character")
+    db.create_psyke_progression(subject.id, "Learns the truth")
+    exported = build_full_export(db, project.id)
+    exported["progression_tracks"][0]["legacy_compatibility"] = "false"
+
+    with pytest.raises(
+        ValueError,
+        match="Progression legacy_compatibility must be a boolean",
+    ):
+        import_json(Database(), exported)
+
+
+def test_full_project_export_retries_progressions_changed_during_gather(
+    monkeypatch,
+):
+    db = Database()
+    project = db.create_project("Concurrent progression export")
+    db.create_scene(project.id, "Existing scene")
+    original_get_entries = db.get_all_psyke_entries
+    mutation = {"done": False, "reads": 0}
+
+    def get_entries_with_one_concurrent_write(project_id: int):
+        mutation["reads"] += 1
+        if not mutation["done"]:
+            mutation["done"] = True
+            new_scene = db.create_scene(project_id, "Concurrent scene")
+            snapshot = db.read_progression_snapshot(project_id)
+            assert snapshot is not None
+            created = db.execute_progression_command(
+                project_id,
+                kind="create_track",
+                expected_revision=snapshot.revision,
+                track_kind="story",
+                title="Concurrent arc",
+            )
+            assert created.created_track_id is not None
+            snapshot = db.read_progression_snapshot(project_id)
+            assert snapshot is not None
+            db.execute_progression_command(
+                project_id,
+                kind="create_beat",
+                expected_revision=snapshot.revision,
+                track_id=created.created_track_id,
+                text="The new turn",
+                anchor_kind="scene",
+                scene_id=new_scene.id,
+            )
+        return original_get_entries(project_id)
+
+    monkeypatch.setattr(
+        db, "get_all_psyke_entries", get_entries_with_one_concurrent_write,
+    )
+
+    exported = build_full_export(db, project.id)
+
+    assert mutation["reads"] >= 2
+    assert [scene["title"] for scene in exported["scenes"]] == [
+        "Existing scene",
+        "Concurrent scene",
+    ]
+    assert exported["progression_tracks"] == [{
+        "kind": "story",
+        "title": "Concurrent arc",
+        "description": "",
+        "color_label": "",
+        "sort_order": 0,
+        "primary_subject": None,
+        "secondary_subject": None,
+        "legacy_compatibility": False,
+        "beats": [{
+            "text": "The new turn",
+            "sort_order": 0,
+            "anchor_kind": "scene",
+            "scene_anchor": {
+                "source_order": 2,
+                "source_title": "Concurrent scene",
+            },
+            "anchor_ref": None,
+            "anchor_label": "",
+        }],
+    }]
+
+    imported_db = Database()
+    imported_id = import_json(imported_db, exported)
+    imported_snapshot = imported_db.read_progression_snapshot(imported_id)
+    assert imported_snapshot is not None
+    imported_beat = imported_snapshot.tracks[0].beats[0]
+    assert imported_snapshot.tracks[0].scene_titles_by_id[
+        imported_beat.scene_id
+    ] == "Concurrent scene"
+
 
 def test_full_project_includes_derived_and_settings():
     db = Database()

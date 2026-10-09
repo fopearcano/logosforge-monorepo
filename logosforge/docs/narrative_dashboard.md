@@ -22,7 +22,9 @@ score =  min(characters_present / 4, 1) * 25
 - **characters_present** — count of PSYKE characters mentioned in the scene text
 - **relation_pairs** — how many co-present character pairs are linked in PSYKE relations
 - **keyword_hits** — occurrences of ~50 curated conflict/emotion keywords (fight, betray, reveal, death, escape, rage, sacrifice, …)
-- **progression_count** — number of PSYKE progression entries anchored to the scene
+- **progression_count** — number of canonical scene-anchored progression beats
+  (legacy and native); each beat counts once, including relationship beats with
+  two subjects, while document-block and unanchored beats do not count
 
 **Flags raised**
 - *Flat section* — three consecutive scenes within 5 points

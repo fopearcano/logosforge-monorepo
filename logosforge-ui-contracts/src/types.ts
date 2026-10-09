@@ -1357,6 +1357,183 @@ export interface CanvasPlotCommandReceiptDTO {
   committed_at: string;
 }
 
+// ── Progressions (story/character/relationship/theme/world/custom arcs) ───
+
+export type ProgressionKind =
+  | "story"
+  | "character"
+  | "relationship"
+  | "theme"
+  | "world"
+  | "custom";
+
+export type ProgressionAnchorKind = "unanchored" | "scene" | "document_block";
+
+export type ProgressionCoverageStatus = "empty" | "unanchored" | "partial" | "complete";
+
+export interface ProgressionBeatDTO {
+  id: number;
+  track_id: number;
+  text: string;
+  sort_order: number;
+  anchor_kind: ProgressionAnchorKind;
+  scene_id: number | null;
+  scene_title: string;
+  anchor_ref: string | null;
+  anchor_label: string;
+}
+
+export interface ProgressionCoverageDTO {
+  total_beats: number;
+  anchored_beats: number;
+  unanchored_beats: number;
+  scene_anchored_beats: number;
+  document_anchored_beats: number;
+  coverage_percent: number;
+  status: ProgressionCoverageStatus;
+  out_of_order_beat_ids: number[];
+}
+
+export interface ProgressionTrackDTO {
+  id: number;
+  project_id: number;
+  kind: ProgressionKind;
+  title: string;
+  description: string;
+  color_label: string;
+  sort_order: number;
+  legacy_compatibility: boolean;
+  primary_psyke_entry_id: number | null;
+  primary_psyke_entry_name: string;
+  primary_psyke_entry_type: string;
+  secondary_psyke_entry_id: number | null;
+  secondary_psyke_entry_name: string;
+  secondary_psyke_entry_type: string;
+  beats: ProgressionBeatDTO[];
+  coverage: ProgressionCoverageDTO;
+}
+
+export interface ProgressionSummaryDTO {
+  total_tracks: number;
+  total_beats: number;
+  anchored_beats: number;
+  unanchored_beats: number;
+  coverage_percent: number;
+  by_kind: Record<ProgressionKind, number>;
+  by_status: Record<ProgressionCoverageStatus, number>;
+}
+
+export interface ProgressionSnapshotDTO {
+  project_id: number;
+  revision: string;
+  tracks: ProgressionTrackDTO[];
+  summary: ProgressionSummaryDTO;
+}
+
+interface ProgressionCommandBase {
+  expected_revision: string;
+}
+
+export interface ProgressionCreateTrackCommandDTO extends ProgressionCommandBase {
+  kind: "create_track";
+  track_kind: ProgressionKind;
+  title: string;
+  description?: string;
+  color_label?: string;
+  primary_psyke_entry_id?: number | null;
+  secondary_psyke_entry_id?: number | null;
+  index?: number | null;
+}
+
+export interface ProgressionUpdateTrackCommandDTO extends ProgressionCommandBase {
+  kind: "update_track";
+  track_id: number;
+  track_kind?: ProgressionKind;
+  title?: string;
+  description?: string;
+  color_label?: string;
+  primary_psyke_entry_id?: number | null;
+  secondary_psyke_entry_id?: number | null;
+}
+
+export interface ProgressionDeleteTrackCommandDTO extends ProgressionCommandBase {
+  kind: "delete_track";
+  track_id: number;
+}
+
+export interface ProgressionReorderTracksCommandDTO extends ProgressionCommandBase {
+  kind: "reorder_tracks";
+  track_ids: number[];
+}
+
+export interface ProgressionCreateBeatCommandDTO extends ProgressionCommandBase {
+  kind: "create_beat";
+  track_id: number;
+  text: string;
+  anchor_kind?: ProgressionAnchorKind;
+  scene_id?: number | null;
+  anchor_ref?: string | null;
+  anchor_label?: string;
+  index?: number | null;
+}
+
+export interface ProgressionUpdateBeatCommandDTO extends ProgressionCommandBase {
+  kind: "update_beat";
+  beat_id: number;
+  text?: string;
+  anchor_kind?: ProgressionAnchorKind;
+  scene_id?: number | null;
+  anchor_ref?: string | null;
+  anchor_label?: string;
+}
+
+export interface ProgressionDeleteBeatCommandDTO extends ProgressionCommandBase {
+  kind: "delete_beat";
+  beat_id: number;
+}
+
+export interface ProgressionReorderBeatsCommandDTO extends ProgressionCommandBase {
+  kind: "reorder_beats";
+  track_id: number;
+  beat_ids: number[];
+}
+
+export type ProgressionCommandDTO =
+  | ProgressionCreateTrackCommandDTO
+  | ProgressionUpdateTrackCommandDTO
+  | ProgressionDeleteTrackCommandDTO
+  | ProgressionReorderTracksCommandDTO
+  | ProgressionCreateBeatCommandDTO
+  | ProgressionUpdateBeatCommandDTO
+  | ProgressionDeleteBeatCommandDTO
+  | ProgressionReorderBeatsCommandDTO;
+
+export interface ProgressionCommandResultDTO {
+  progressions: ProgressionSnapshotDTO;
+  changed: boolean;
+  affected_track_ids: number[];
+  affected_beat_ids: number[];
+  created_track_id: number | null;
+  created_beat_id: number | null;
+  replayed: boolean;
+  applied_revision: string;
+}
+
+/** Durable, project-scoped receipt for one idempotent Progressions command. */
+export interface ProgressionCommandReceiptDTO {
+  project_id: number;
+  request_digest: string;
+  command_kind: ProgressionCommandDTO["kind"];
+  expected_revision: string;
+  applied_revision: string;
+  original_changed: boolean;
+  original_affected_track_ids: number[];
+  original_affected_beat_ids: number[];
+  original_created_track_id: number | null;
+  original_created_beat_id: number | null;
+  committed_at: string;
+}
+
 // ── PSYKE (the story bible) ────────────────────────────────────────────────
 export interface PsykeEntryDTO {
   id: number;
@@ -2092,7 +2269,7 @@ export interface WorkflowCommandReceiptDTO {
 
 // ── Decision radar (project intelligence) + Quantum outliner (generative) ────
 export interface DecisionEvidenceDTO {
-  /** Deterministic evidence kind, such as node, edge, term, continuity_issue, scene, or continuity_detail. */
+  /** Deterministic evidence kind, such as node, edge, term, progression_track, progression_beat, continuity_issue, scene, or continuity_detail. */
   kind: string;
   label: string;
   detail: string;
@@ -2112,7 +2289,7 @@ export interface DecisionEvidenceDTO {
 }
 export interface DecisionCardDTO {
   id: string;
-  /** structure | psyke | continuity | rewrite | apply | export | production | graph | notes | writing_mode */
+  /** structure | psyke | progression | continuity | rewrite | apply | export | production | graph | notes | writing_mode */
   category: string;
   /** blocking | warning | suggestion | opportunity | info */
   severity: string;

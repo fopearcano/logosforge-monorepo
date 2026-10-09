@@ -136,10 +136,15 @@ def compute_dashboard(db: Database, project_id: int) -> NarrativeDashboardData:
             all_relations.add(pair)
 
     scene_progressions: dict[int, int] = defaultdict(int)
-    for e in entries:
-        for prog in db.get_psyke_progressions(e.id):
-            if prog.scene_id is not None:
-                scene_progressions[prog.scene_id] += 1
+    progression_snapshot = db.read_progression_snapshot(project_id)
+    if progression_snapshot is not None:
+        # Count each canonical scene-anchored beat exactly once.  This includes
+        # designated legacy tracks and every native kind (including relationship
+        # tracks) without multiplying a two-subject beat by its subject count.
+        for track in progression_snapshot.tracks:
+            for beat in track.beats:
+                if beat.anchor_kind == "scene" and beat.scene_id is not None:
+                    scene_progressions[int(beat.scene_id)] += 1
 
     terms_pattern = _build_terms_pattern(list(term_map.keys()))
 

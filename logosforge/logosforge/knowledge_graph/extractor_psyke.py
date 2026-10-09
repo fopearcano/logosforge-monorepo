@@ -13,6 +13,7 @@ from logosforge.knowledge_graph.models import KGEdge, KGNode, node_key
 
 _MAX_RELATIONS_PER_ENTRY = 12
 _MAX_SCENE_MENTIONS = 400  # global cap on text-match mention edges
+_UNSET = object()
 
 
 def _entry_node_type(entry) -> str:
@@ -24,7 +25,13 @@ def psyke_node_key(entry) -> str:
     return node_key(_entry_node_type(entry), "psyke", entry.id)
 
 
-def extract_psyke(db, project_id: int, graph) -> None:
+def extract_psyke(
+    db,
+    project_id: int,
+    graph,
+    *,
+    progression_snapshot=_UNSET,
+) -> None:
     try:
         entries = db.get_all_psyke_entries(project_id)
     except Exception:
@@ -102,21 +109,45 @@ def extract_psyke(db, project_id: int, graph) -> None:
                     explanation="Name/alias appears in the scene text."))
                 mention_count += 1
 
-    # Progressions → scene/chapter references (confirmed when scene resolves).
-    scene_titles = {(getattr(s, "title", "") or "").lower(): s.id for s in scenes}
-    for e in entries:
+    # Designated legacy compatibility tracks retain the historical direct
+    # PSYKE -> scene projection.  The builder passes the SAME canonical snapshot
+    # to the native extractor, avoiding mixed-revision reads and duplicate
+    # evidence.  A direct extractor call still reads one snapshot for backwards
+    # compatibility with focused unit tests.
+    if progression_snapshot is _UNSET:
         try:
-            progs = db.get_psyke_progressions(e.id)
+            progression_snapshot = db.read_progression_snapshot(project_id)
         except Exception:
-            progs = []
-        for pr in progs[:_MAX_RELATIONS_PER_ENTRY]:
-            ref = (getattr(pr, "scene", "") or getattr(pr, "chapter", "")
-                   or getattr(pr, "label", "") or "").strip()
-            sid = scene_titles.get(ref.lower()) if ref else None
-            if sid is None:
+            progression_snapshot = None
+            if P.SS_PROGRESSIONS not in graph.unavailable:
+                graph.unavailable.append(P.SS_PROGRESSIONS)
+    scene_ids = {int(s.id) for s in scenes}
+    if progression_snapshot is not None:
+        for row in progression_snapshot.tracks:
+            track = row.track
+            legacy_entry_id = track.legacy_psyke_entry_id
+            if legacy_entry_id is None:
                 continue
-            graph.add_edge(KGEdge(
-                source=by_id[e.id], target=node_key(P.NT_SCENE, "scene", sid),
-                edge_type=P.ET_APPEARS_IN, confidence=P.CONF_CONFIRMED,
-                provenance=P.PROV_PSYKE_PROGRESSION, source_system=P.SS_PSYKE,
-                explanation="PSYKE progression references this scene."))
+            source_key = by_id.get(int(legacy_entry_id))
+            if source_key is None:
+                continue
+            for beat in row.beats[:_MAX_RELATIONS_PER_ENTRY]:
+                if beat.anchor_kind != "scene" or beat.scene_id is None:
+                    continue
+                sid = int(beat.scene_id)
+                if sid not in scene_ids:
+                    continue
+                graph.add_edge(KGEdge(
+                    source=source_key,
+                    target=node_key(P.NT_SCENE, "scene", sid),
+                    edge_type=P.ET_APPEARS_IN,
+                    confidence=P.CONF_CONFIRMED,
+                    provenance=P.PROV_PSYKE_PROGRESSION,
+                    source_system=P.SS_PSYKE,
+                    explanation="PSYKE progression references this scene.",
+                    metadata={
+                        "track_id": int(track.id),
+                        "beat_id": int(beat.id),
+                        "legacy_compatibility": True,
+                    },
+                ))
