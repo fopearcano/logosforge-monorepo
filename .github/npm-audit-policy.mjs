@@ -12,8 +12,9 @@ const SEVERITY = Object.freeze({
   critical: 4,
 });
 
-// These advisories currently have no patched release. They are restricted to
-// development-only tools that are excluded from every packaged application:
+// These advisories currently have no compatible patched dependency path for
+// the supported build toolchain. They are restricted to development-only
+// tools that are excluded from every packaged application:
 //
 // - braces is reached only through nodemon's file watcher. LogosForge supplies
 //   the watched path itself; untrusted users cannot submit glob expressions.
@@ -21,6 +22,11 @@ const SEVERITY = Object.freeze({
 //   downloader, which runs on an isolated build host with a private cache.
 // - sprintf-js is reached only through electron-builder's proxy logger. The
 //   affected formatter is development-only and is never shipped in the app.
+// - minimatch is reached only through nodemon and electron-builder packaging.
+//   LogosForge supplies every watched path and packaging glob itself, so an
+//   untrusted user cannot provide the amplified globparts described by the
+//   advisory. npm's suggested force fix would downgrade electron-builder;
+//   upstream has not yet exposed minimatch 11.0.1 through compatible ranges.
 //
 // The production-only audit below must remain clean, and any other advisory —
 // including a severity change for either exception — still fails the gate.
@@ -36,6 +42,10 @@ const TEMPORARY_DEV_ADVISORIES = new Map([
   [
     'https://github.com/advisories/GHSA-hp3w-g68c-fv3c',
     { dependency: 'sprintf-js', severity: 'moderate' },
+  ],
+  [
+    'https://github.com/advisories/GHSA-g3hv-75wg-m249',
+    { dependency: 'minimatch', severity: 'moderate' },
   ],
 ]);
 
@@ -168,7 +178,7 @@ function assertFullAuditMatchesPolicy(report, label) {
     console.log(`${label}: full dependency audit passed with no temporary exceptions.`);
     return;
   }
-  console.warn(`${label}: acknowledged development-tool advisories with no patched release:`);
+  console.warn(`${label}: acknowledged development-tool advisories without a compatible parent release:`);
   for (const [url, expected] of acknowledged) {
     console.warn(`  - ${expected.dependency} (${expected.severity}): ${url}`);
   }
