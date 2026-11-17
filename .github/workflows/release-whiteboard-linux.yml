@@ -30,7 +30,7 @@ on:
         description: "Existing Whiteboard tag to build and publish"
         type: string
         required: false
-        default: "whiteboard-v0.1.21"
+        default: "whiteboard-v0.1.22"
 
 permissions:
   contents: write
