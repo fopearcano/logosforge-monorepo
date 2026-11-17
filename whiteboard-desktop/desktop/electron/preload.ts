@@ -15,6 +15,7 @@ import type {
   PendingDocumentWrite,
   PendingDocumentWriteResult,
 } from './pending-document-persistence';
+import type { CloudSyncRendererApi, RendererCloudState } from './cloud-sync-contract';
 
 /**
  * IMPORTANT: every method is exposed at the TOP LEVEL (flat), not nested under a
@@ -23,7 +24,7 @@ import type {
  * not), which is why Open/Save/Save As silently no-op'd. Flat functions are
  * reliably exposed — the renderer re-composes them into a `files` façade.
  */
-export interface LogosForgeApi {
+export interface LogosForgeApi extends CloudSyncRendererApi {
   getBackendStatus(): Promise<BackendStatus>;
   onBackendStatus(cb: (status: BackendStatus) => void): () => void;
   persistPendingDocument(write: PendingDocumentWrite): Promise<PendingDocumentWriteResult>;
@@ -92,6 +93,49 @@ const api: LogosForgeApi = {
     ipcRenderer.invoke('document:reload-after-abandoning-conflict', recovery),
   deleteDocumentWithPersistenceFence: (documentId, incarnation) =>
     ipcRenderer.invoke('document:delete-with-fence', { documentId, incarnation }),
+
+  cloudSyncGetState: () => ipcRenderer.invoke('cloud-sync:get-state'),
+  cloudSyncChooseFolder: () => ipcRenderer.invoke('cloud-sync:choose-folder'),
+  cloudSyncDisable: () => ipcRenderer.invoke('cloud-sync:disable'),
+  cloudSyncSetAutomatic: (automatic) => ipcRenderer.invoke('cloud-sync:set-automatic', automatic),
+  cloudSyncDigest: (bundle) => ipcRenderer.invoke('cloud-sync:compute-digest', bundle),
+  cloudSyncPublish: (request) => ipcRenderer.invoke('cloud-sync:publish', request),
+  cloudSyncReadSnapshot: (cloudProjectId, snapshotId) => (
+    ipcRenderer.invoke('cloud-sync:read-snapshot', { cloudProjectId, snapshotId })
+  ),
+  cloudSyncSetBinding: (request) => ipcRenderer.invoke('cloud-sync:set-binding', request),
+  cloudSyncMoveBinding: (oldLocalDocumentId, oldLocalIncarnation, next, expectedRetiredDigest) => (
+    ipcRenderer.invoke('cloud-sync:move-binding', {
+      oldLocalDocumentId,
+      oldLocalIncarnation,
+      next,
+      expectedRetiredDigest,
+    })
+  ),
+  cloudSyncForgetBinding: (localDocumentId, localIncarnation, ignoreRemote = true) => (
+    ipcRenderer.invoke('cloud-sync:forget-binding', {
+      localDocumentId,
+      localIncarnation,
+      ignoreRemote,
+    })
+  ),
+  cloudSyncSetRemoteIgnored: (cloudProjectId, ignored) => (
+    ipcRenderer.invoke('cloud-sync:set-remote-ignored', { cloudProjectId, ignored })
+  ),
+  cloudSyncSaveActionReceipt: (request) => (
+    ipcRenderer.invoke('cloud-sync:save-action-receipt', request)
+  ),
+  cloudSyncCompleteActionReceipt: (actionId) => (
+    ipcRenderer.invoke('cloud-sync:complete-action-receipt', actionId)
+  ),
+  cloudSyncRecordRecoveredRemoteHeads: (cloudProjectId, snapshotIds) => (
+    ipcRenderer.invoke('cloud-sync:record-recovered-heads', { cloudProjectId, snapshotIds })
+  ),
+  cloudSyncClearRecoveredRemoteHeads: (cloudProjectId) => (
+    ipcRenderer.invoke('cloud-sync:clear-recovered-heads', cloudProjectId)
+  ),
+  cloudSyncRetryOutbox: () => ipcRenderer.invoke('cloud-sync:retry'),
+  onCloudSyncChanged: (cb) => subscribe<RendererCloudState>('cloud-sync:changed', () => cb()),
 
   fileOpen: () => ipcRenderer.invoke('file:open-dialog'),
   fileSaveAs: (content, suggestedName) =>

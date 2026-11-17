@@ -158,6 +158,12 @@ check(
     EDITOR_TYPEFACES.filter((face) => face !== 'default' && face !== 'installed')
       .every((face) => Boolean(EDITOR_TYPEFACE_STACKS[face])),
   );
+  check('expanded manuscript typeface catalogue is present', EDITOR_TYPEFACES.length >= 38);
+  check(
+    'expanded catalogue spans book, system, mono, and handwritten voices',
+    ['garamond', 'verdana', 'fira-code', 'ocr', 'notebook', 'calligraphic']
+      .every((face) => EDITOR_TYPEFACES.includes(face as (typeof EDITOR_TYPEFACES)[number])),
+  );
   check(
     'typewriter stack stays distinct from bundled screenplay Courier',
     EDITOR_TYPEFACE_STACKS.typewriter !== EDITOR_TYPEFACE_STACKS['courier-prime'] &&
@@ -193,6 +199,9 @@ check(
   check('installed font reaches surface', editorToolsVars(installed)['--wb-editor-typeface'] === '"EB Garamond", var(--wb-mode-typeface)');
   const missingInstalled = { ...DEFAULT_EDITOR_TOOLS, typeface: 'installed' as const };
   check('empty installed font does not gate surface', !('data-editor-typeface' in editorToolsAttrs(missingInstalled)));
+  const legacyCurrentLine = normalizeEditorTools({ currentLineHighlight: true });
+  check('legacy current-line preference is discarded', !('currentLineHighlight' in legacyCurrentLine));
+  check('current-line surface gate is absent', !('data-currentline' in editorToolsAttrs(legacyCurrentLine)));
 }
 
 // --- report ---

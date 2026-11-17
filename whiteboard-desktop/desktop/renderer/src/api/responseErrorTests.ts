@@ -47,6 +47,21 @@ const detail = await responseError(
 );
 check('FastAPI detail message', detail.message === 'Export aborted safely (HTTP 502)');
 
+const structuredDetail = await responseError(
+  new Response(JSON.stringify({
+    detail: { code: 'cloud_retire_content_changed', message: 'The complete project changed.' },
+  }), {
+    status: 409,
+    headers: { 'Content-Type': 'application/json' },
+  }),
+  'Fallback',
+);
+check('FastAPI structured detail code', structuredDetail.code === 'cloud_retire_content_changed');
+check(
+  'FastAPI structured detail preserved',
+  structuredDetail.details.code === 'cloud_retire_content_changed',
+);
+
 const plain = await responseError(new Response('Disk is full', { status: 500 }), 'Fallback');
 check('plain-text message', plain.message === 'Disk is full (HTTP 500)');
 

@@ -18,13 +18,26 @@ export const EDITOR_TYPEFACE_STACKS: Record<PresetTypeface, string> = {
   transitional: "Charter, 'Bitstream Charter', Cambria, 'Noto Serif', serif",
   editorial: "Didot, 'Bodoni 72', Bodoni, 'Bodoni MT', 'Times New Roman', serif",
   slab: "Rockwell, 'Roboto Slab', 'DejaVu Serif', Georgia, serif",
+  garamond: "'EB Garamond', 'Adobe Garamond Pro', Garamond, 'Garamond Premier Pro', 'Iowan Old Style', serif",
+  baskerville: "Baskerville, 'Baskerville Old Face', 'Libre Baskerville', 'Times New Roman', serif",
+  caslon: "'Adobe Caslon Pro', 'Big Caslon', 'Libre Caslon Text', 'Book Antiqua', serif",
+  times: "'Times New Roman', Times, 'Nimbus Roman No9 L', 'Liberation Serif', serif",
+  schoolbook: "'Century Schoolbook', 'New Century Schoolbook', 'URW Bookman L', Georgia, serif",
+  bookman: "'Bookman Old Style', Bookman, 'URW Bookman', Georgia, serif",
   sans: "'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif",
   system: "system-ui, -apple-system, 'Segoe UI', sans-serif",
   humanist: "Optima, Candara, 'Trebuchet MS', 'Segoe UI', sans-serif",
   geometric: "Futura, 'Avenir Next', Avenir, 'Century Gothic', Montserrat, sans-serif",
   rounded: "'Arial Rounded MT Bold', 'SF Pro Rounded', Quicksand, Nunito, system-ui, sans-serif",
+  helvetica: "'Helvetica Neue', Helvetica, Arial, 'Liberation Sans', sans-serif",
+  verdana: "Verdana, Geneva, 'DejaVu Sans', sans-serif",
+  'gill-sans': "'Gill Sans', 'Gill Sans MT', Calibri, 'Trebuchet MS', sans-serif",
   mono: "'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace",
   coding: "'Cascadia Code', 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace",
+  'fira-code': "'Fira Code', 'Fira Mono', Consolas, 'Liberation Mono', monospace",
+  iosevka: "Iosevka, 'Iosevka Fixed', 'Cascadia Mono', Menlo, monospace",
+  'source-code': "'Source Code Pro', 'Source Code Variable', 'Liberation Mono', monospace",
+  ocr: "'OCR A Std', 'OCR A Extended', OCRB, 'OCR B Std', monospace",
   'courier-prime': "'Courier Prime', 'Courier New', 'Liberation Mono', monospace",
   typewriter: "'American Typewriter', 'Lucida Console', Monaco, 'URW Typewriter L', 'DejaVu Sans Mono', monospace",
   'typewriter-modern': "'Special Elite', 'Courier New', 'Nimbus Mono PS', 'Liberation Mono', monospace",
@@ -33,6 +46,8 @@ export const EDITOR_TYPEFACE_STACKS: Record<PresetTypeface, string> = {
   script: "'Segoe Script', 'Snell Roundhand', 'Brush Script MT', cursive",
   chalkboard: "'Chalkboard SE', Chalkboard, Noteworthy, 'Kristen ITC', 'Comic Sans MS', 'Comic Sans', 'URW Chancery L', cursive",
   marker: "'Marker Felt', 'Comic Sans MS', 'Comic Sans', 'Segoe Print', cursive",
+  notebook: "Noteworthy, 'Segoe Print', 'Bradley Hand', Chilanka, cursive",
+  calligraphic: "'Apple Chancery', 'Snell Roundhand', 'URW Chancery L', 'Segoe Script', cursive",
 };
 
 /** A safe, quoted stack for a single user-named OS font. */
@@ -46,7 +61,6 @@ export function editorToolsAttrs(tools: EditorToolsState): Record<string, string
   if (tools.lineNumbers) a['data-linenumbers'] = 'on';
   if (tools.folding) a['data-folding'] = 'on';
   if (tools.syntax) a['data-syntax'] = 'on';
-  if (tools.currentLineHighlight) a['data-currentline'] = 'on';
   if (tools.fontSize != null) a['data-editor-font'] = 'on';
   if (tools.lineHeight != null) a['data-editor-lh'] = 'on';
   if (

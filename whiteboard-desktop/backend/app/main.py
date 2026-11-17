@@ -29,10 +29,12 @@ from app.local_state import (
     migrate_legacy,
     whiteboard_store,
 )
+from app.resource_revision import ResourceProtocolError
 from app.routers import (
+    cloud_sync,
     comments,
-    drafter,
     documents,
+    drafter,
     export,
     littleboy,
     outline,
@@ -42,7 +44,6 @@ from app.routers import (
     whiteboard,
     writing_modes,
 )
-from app.resource_revision import ResourceProtocolError
 
 WRAPPER_VERSION = "0.1.0"
 _AUTH_TOKEN = os.environ.get("LOGOSFORGE_WHITEBOARD_AUTH_TOKEN", "").strip()
@@ -171,6 +172,7 @@ app.include_router(littleboy.router)
 app.include_router(comments.router)
 app.include_router(settings.router)
 app.include_router(export.router)
+app.include_router(cloud_sync.router)
 
 
 @app.get("/api/recovery/notices")

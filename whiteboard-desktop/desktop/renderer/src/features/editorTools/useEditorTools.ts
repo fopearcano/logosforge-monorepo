@@ -15,7 +15,7 @@ import {
 
 const KEY = 'logosforge-editor-tools';
 
-type BoolKey = 'lineNumbers' | 'currentLineHighlight' | 'folding' | 'syntax';
+type BoolKey = 'lineNumbers' | 'folding' | 'syntax';
 
 const TYPEFACE_SET = new Set<string>(EDITOR_TYPEFACES);
 const HEX_COLOR = /^#[0-9a-f]{6}$/i;
@@ -31,10 +31,6 @@ export function normalizeEditorTools(value: unknown): EditorToolsState {
   const raw = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
   return {
     lineNumbers: typeof raw.lineNumbers === 'boolean' ? raw.lineNumbers : DEFAULT_EDITOR_TOOLS.lineNumbers,
-    currentLineHighlight:
-      typeof raw.currentLineHighlight === 'boolean'
-        ? raw.currentLineHighlight
-        : DEFAULT_EDITOR_TOOLS.currentLineHighlight,
     folding: typeof raw.folding === 'boolean' ? raw.folding : DEFAULT_EDITOR_TOOLS.folding,
     syntax: typeof raw.syntax === 'boolean' ? raw.syntax : DEFAULT_EDITOR_TOOLS.syntax,
     fontSize: optionalNumber(raw.fontSize, FONT_SIZE_MIN, FONT_SIZE_MAX),

@@ -232,7 +232,6 @@ const harnessSource = await readFile(
 );
 for (const forbidden of [
   'Import Project (.lfbundle)',
-  'showOpenDialog',
   'LOGOSFORGE_PRO_ACCEPTANCE_EXE',
   'runProJourney',
 ]) {
@@ -249,8 +248,33 @@ assert.match(
 );
 assert.match(
   harnessSource,
+  /configureCloudFolderAndSync\(first, providerFolder, document\)/,
+  'Standalone Whiteboard acceptance must drive the native Cloud Folder Sync picker',
+);
+assert.match(
+  harnessSource,
+  /Cloud snapshot digest mismatch/,
+  'Packaged cloud acceptance must verify snapshot content digests',
+);
+assert.match(
+  harnessSource,
+  /parentSnapshotIds\.includes\(firstCloudSnapshot\.snapshotId\)/,
+  'Packaged cloud acceptance must verify descendant history after relaunch',
+);
+assert.match(
+  harnessSource,
   /validateWhiteboardExportBundle\(JSON\.parse\(raw\.toString\('utf8'\)\)/,
   'Standalone Whiteboard acceptance must parse and validate the written bundle',
+);
+assert.match(
+  harnessSource,
+  /verifyModeLayoutContract\(first\.page\)/,
+  'Standalone Whiteboard acceptance must verify every writing mode layout in the packaged app',
+);
+assert.match(
+  harnessSource,
+  /document\.createRange\(\)/,
+  'Packaged mode-layout acceptance must measure the first rendered glyph, not only the paragraph box',
 );
 assert.match(
   harnessSource,

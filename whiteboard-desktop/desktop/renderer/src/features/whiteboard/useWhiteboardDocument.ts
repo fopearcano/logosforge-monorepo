@@ -131,6 +131,10 @@ interface Result {
   setMode: (mode: string) => Promise<boolean>;
   selectDocument: (id: string) => Promise<boolean>;
   newDocument: (title?: string, mode?: string) => Promise<boolean>;
+  restoreDocument: (
+    restore: () => Promise<WhiteboardDocument>,
+  ) => Promise<WhiteboardDocument | null>;
+  refreshDocuments: () => Promise<void>;
   deleteDocument: (id: string) => Promise<boolean>;
   renameDocument: (title: string) => Promise<boolean>;
 }
@@ -511,6 +515,55 @@ export function useWhiteboardDocument({ baseUrl, ready, onSaved }: Options): Res
     [baseUrl, lifecycleOwner, refreshList],
   );
 
+  /**
+   * Publish a copy-on-write restore as the active document through the same
+   * two-pass durability barrier used by New/Open.  The cloud importer creates
+   * a fresh backend project; accepting it here can therefore never mutate the
+   * manuscript that remains on screen if restore fails partway through.
+   */
+  const restoreDocument = useCallback(
+    async (restore: () => Promise<WhiteboardDocument>) => {
+      if (navigationBusy.current) return null;
+      navigationBusy.current = true;
+      const seq = (switchSeq.current += 1);
+      let finishOperation: (() => void) | null = null;
+      let releaseInteraction: (() => void) | null = null;
+      try {
+        finishOperation = await acquireTrackedDocumentOperation();
+        releaseInteraction = lockDocumentInteraction();
+        if (!isActiveDocumentOperationOwner(lifecycleOwner)) return null;
+        const restoredDocument = await prepareDocumentHandoff(restore);
+        if (
+          seq !== switchSeq.current
+          || !isActiveDocumentOperationOwner(lifecycleOwner)
+        ) return null;
+        seedWhiteboardRecoverySnapshot(restoredDocument);
+        setDoc(restoredDocument);
+        setCurrentDocumentIdentity(restoredDocument.id, restoredDocument.incarnation);
+        saveLastDocId(restoredDocument.id);
+        setSaveStatus('idle');
+        setLoadError(null);
+        await refreshList();
+        return restoredDocument;
+      } catch (err) {
+        if (seq !== switchSeq.current) return null;
+        if (err instanceof DocumentCloseInProgressError) return null;
+        await refreshList();
+        setLoadError(
+          `Cloud restore stopped; your current document is still safe. ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+        return null;
+      } finally {
+        releaseInteraction?.();
+        finishOperation?.();
+        if (seq === switchSeq.current) navigationBusy.current = false;
+      }
+    },
+    [lifecycleOwner, refreshList],
+  );
+
   const deleteDocument = useCallback(
     async (id: string) => {
       if (!id || navigationBusy.current) return false;
@@ -877,6 +930,8 @@ export function useWhiteboardDocument({ baseUrl, ready, onSaved }: Options): Res
     setMode,
     selectDocument,
     newDocument,
+    restoreDocument,
+    refreshDocuments: refreshList,
     deleteDocument,
     renameDocument,
   };

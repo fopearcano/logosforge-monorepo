@@ -232,6 +232,14 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 .statusbar .status { display: inline-flex; align-items: center; gap: 7px; color: var(--text); text-transform: uppercase; }
 .statusbar .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); box-shadow: 0 0 0 3px color-mix(in oklab, var(--muted) 22%, transparent); }
+.statusbar .cloud-status { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); text-transform: uppercase; }
+.cloud-status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--paper-muted); }
+.cloud-status[data-status="checking"] .cloud-status-dot,
+.cloud-status[data-status="syncing"] .cloud-status-dot { background: var(--warning, #e0b341); }
+.cloud-status[data-status="up-to-date"] .cloud-status-dot { background: var(--ok); }
+.cloud-status[data-status="folder-unavailable"] .cloud-status-dot,
+.cloud-status[data-status="attention"] .cloud-status-dot { background: var(--warning, #e0b341); }
+.cloud-status[data-status="error"] .cloud-status-dot { background: var(--error); }
 .statusbar .spacer { flex: 1; }
 .statusbar .version { color: var(--paper-muted); letter-spacing: .04em; }
 
@@ -758,12 +766,11 @@ body.is-col-resizing * { cursor: col-resize !important; }
 .wb-surface[data-invisibles="off"]              .sp-emph-marker { opacity: 0; }
 
 /* =============================================================================
- * NERD MODE — line numbers, current line, folding, syntax (gated by data-*)
+ * NERD MODE — line numbers, folding, syntax (gated by data-*)
  * ========================================================================== */
 .wb-surface[data-linenumbers="on"] .wb-editor { counter-reset: none; }
 .wb-ln { position: relative; padding-left: 3.5ch; }
 .wb-ln::before { content: attr(data-ln); position: absolute; left: 0; width: 2.6ch; text-align: right; color: var(--paper-muted); opacity: .6; font-variant-numeric: tabular-nums; -webkit-user-select: none; user-select: none; }
-.wb-current-line { background: var(--hover); box-shadow: -100vw 0 0 var(--hover), 100vw 0 0 var(--hover); }
 
 .wb-fold-head { position: relative; }
 .wb-fold-toggle { position: absolute; left: -1.4ch; width: 1.2ch; color: var(--paper-muted); cursor: pointer; -webkit-user-select: none; user-select: none; transition: color var(--dur) var(--ease); }
@@ -1198,6 +1205,50 @@ body.is-col-resizing * { cursor: col-resize !important; }
 .settings-btn:disabled { opacity: .5; cursor: default; }
 .settings-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-soft); }
 
+/* Cloud folder sync settings and explicit conflict review */
+.cloud-sync-settings { margin: 0; }
+.cloud-sync-summary { display: grid; gap: 7px; padding: 10px; border: 1px solid var(--border-soft); border-radius: var(--r-md); background: var(--panel); }
+.cloud-sync-state { display: flex; align-items: center; gap: 7px; min-width: 0; font: 500 11px/1.3 var(--font-ui); color: var(--text); }
+.cloud-sync-state > span { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--paper-muted); }
+.cloud-sync-state[data-status="checking"] > span,
+.cloud-sync-state[data-status="syncing"] > span,
+.cloud-sync-state[data-status="folder-unavailable"] > span,
+.cloud-sync-state[data-status="attention"] > span { background: var(--warning, #e0b341); }
+.cloud-sync-state[data-status="up-to-date"] > span { background: var(--ok); }
+.cloud-sync-state[data-status="error"] > span { background: var(--error); }
+.cloud-sync-state small { min-width: 0; margin-left: auto; color: var(--muted); font: 400 10px/1.35 var(--font-ui); text-align: right; overflow-wrap: anywhere; }
+.cloud-sync-path { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: 8px; color: var(--muted); font: 500 10px/1.3 var(--font-ui); }
+.cloud-sync-path code { min-width: 0; color: var(--text); font: 400 10px/1.4 var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cloud-sync-last { color: var(--muted); font: 400 10px/1.35 var(--font-ui); }
+.cloud-sync-last time { color: var(--text); }
+.cloud-sync-automatic { display: inline-flex; align-items: center; gap: 8px; margin-top: 9px; color: var(--text); font: 500 11px/1.3 var(--font-ui); }
+.cloud-sync-automatic input { accent-color: var(--accent); }
+.cloud-sync-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
+.cloud-sync-actions .settings-btn { padding: 7px 10px; }
+.cloud-sync-actions .cloud-sync-disable { margin-left: auto; color: var(--error); }
+.cloud-sync-safety { margin: 8px 1px 0; color: var(--muted); font: 400 10px/1.45 var(--font-ui); }
+
+.cloud-conflict-dialog { width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 40px); overflow-y: auto; background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: 0 24px 60px rgba(0, 0, 0, .4); padding: 18px 20px 16px; }
+.cloud-conflict-dialog .settings-sub strong { color: var(--text); }
+.cloud-conflict-branches { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.cloud-conflict-branches > div { display: grid; gap: 5px; padding: 10px; border: 1px solid var(--border-soft); border-radius: var(--r-md); background: var(--panel); }
+.cloud-conflict-branches span { color: var(--muted); font: 500 9px/1 var(--font-mono); letter-spacing: .09em; text-transform: uppercase; }
+.cloud-conflict-branches strong { color: var(--text); font: 600 12px/1.3 var(--font-ui); }
+.cloud-conflict-branches time { color: var(--muted); font: 400 10px/1.3 var(--font-ui); }
+.cloud-conflict-count { margin: 8px 1px 14px; color: var(--muted); font: 400 10px/1.35 var(--font-ui); }
+.cloud-conflict-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.cloud-conflict-actions .is-primary { margin-right: auto; }
+.cloud-conflict-confirm { padding: 10px; border: 1px solid color-mix(in oklab, var(--error) 45%, var(--border)); border-radius: var(--r-md); background: color-mix(in oklab, var(--error) 8%, transparent); }
+.cloud-conflict-confirm p { margin: 0 0 10px; color: var(--text); font: 400 11px/1.5 var(--font-ui); }
+.cloud-conflict-confirm > div { display: flex; justify-content: flex-end; gap: 8px; }
+.settings-btn.is-danger { color: var(--error); border-color: color-mix(in oklab, var(--error) 50%, var(--border)); }
+.settings-btn.is-danger:hover:not(:disabled) { border-color: var(--error); }
+.cloud-conflict-error { margin: 10px 0 0; padding: 8px 10px; border-radius: var(--r-sm); color: var(--error); background: color-mix(in oklab, var(--error) 10%, transparent); font: 500 11px/1.4 var(--font-ui); }
+@media (max-width: 520px) {
+  .cloud-conflict-branches { grid-template-columns: 1fr; }
+  .cloud-sync-actions .cloud-sync-disable { margin-left: 0; }
+}
+
 /* Logos */
 .logos-box { width: 340px; max-height: min(420px, calc(100vh - 24px)); z-index: 30; overflow-y: auto; opacity: var(--logos-opacity, 1); animation: logos-popover-in var(--dur-slow) var(--ease) both; transition: opacity var(--dur) var(--ease); }
 @keyframes logos-popover-in { from { opacity: 0; transform: translateY(5px) scale(.98); } to { opacity: var(--logos-opacity, 1); transform: none; } }
@@ -1319,9 +1370,9 @@ body.is-col-resizing * { cursor: col-resize !important; }
  *  graphic_novel  : page/panel script — mono accent headings, blocked text
  *  stage_script   : centered character cues, centered indented speech, italic stage dirs
  * ------------------------------------------------------------------------- */
+/* Body Text is position-independent: first, post-heading, and later paragraphs
+ * share the same first-line indent in both Manuscript and Drafter. */
 .wb-editor[data-writing-mode="novel"] p { margin: 0; text-indent: 1.7em; }
-.wb-editor[data-writing-mode="novel"] p:first-child,
-.wb-editor[data-writing-mode="novel"] :is(h1,h2,h3) + p { text-indent: 0; }
 .wb-editor[data-writing-mode="novel"] :is(h1,h2,h3) { text-align: center; font-weight: 600; margin: 2.4em 0 1.1em; letter-spacing: .01em; }
 /* Deliberate book-display heading sizes + tight leading — without these, novel
  * h1/h2/h3 fall back to oversized UA defaults inheriting the body's 1.75 leading. */

@@ -43,6 +43,12 @@ const TYPEFACE_GROUPS: { label: string; options: { value: EditorTypeface; label:
     { value: 'transitional', label: 'Transitional · Charter' },
     { value: 'editorial', label: 'Editorial · Didot / Bodoni' },
     { value: 'slab', label: 'Slab · Rockwell' },
+    { value: 'garamond', label: 'Old style · Garamond' },
+    { value: 'baskerville', label: 'Book classic · Baskerville' },
+    { value: 'caslon', label: 'Historic · Caslon' },
+    { value: 'times', label: 'Newspaper · Times' },
+    { value: 'schoolbook', label: 'Readable · Schoolbook' },
+    { value: 'bookman', label: 'Soft serif · Bookman' },
   ] },
   { label: 'Sans serif', options: [
     { value: 'sans', label: 'IBM Plex' },
@@ -50,10 +56,17 @@ const TYPEFACE_GROUPS: { label: string; options: { value: EditorTypeface; label:
     { value: 'humanist', label: 'Humanist · Optima / Candara' },
     { value: 'geometric', label: 'Geometric · Futura / Avenir' },
     { value: 'rounded', label: 'Rounded · Rounded / Quicksand' },
+    { value: 'helvetica', label: 'Neo-grotesque · Helvetica' },
+    { value: 'verdana', label: 'Screen readable · Verdana' },
+    { value: 'gill-sans', label: 'British humanist · Gill Sans' },
   ] },
   { label: 'Mono & typewriter', options: [
     { value: 'mono', label: 'Modern mono · IBM Plex' },
     { value: 'coding', label: 'Coding · Cascadia / JetBrains' },
+    { value: 'fira-code', label: 'Coding · Fira Code' },
+    { value: 'iosevka', label: 'Narrow mono · Iosevka' },
+    { value: 'source-code', label: 'Editorial mono · Source Code Pro' },
+    { value: 'ocr', label: 'Retro terminal · OCR' },
     { value: 'courier-prime', label: 'Screenplay · Courier Prime' },
     { value: 'typewriter', label: 'Vintage typewriter' },
     { value: 'typewriter-modern', label: 'Modern typewriter' },
@@ -64,6 +77,8 @@ const TYPEFACE_GROUPS: { label: string; options: { value: EditorTypeface; label:
     { value: 'script', label: 'Script' },
     { value: 'chalkboard', label: 'Chalkboard' },
     { value: 'marker', label: 'Marker' },
+    { value: 'notebook', label: 'Notebook' },
+    { value: 'calligraphic', label: 'Calligraphic' },
   ] },
 ];
 
@@ -84,12 +99,15 @@ export function EditorSettingsPopover({ api, onReset }: Props) {
   useEffect(() => setSystemFontDraft(tools.systemFontFamily ?? ''), [tools.systemFontFamily]);
   const normalizedSystemFont = normalizeSystemFontFamily(systemFontDraft);
   const systemFontValid = systemFontDraft.trim() === '' || normalizedSystemFont !== null;
+  const selectedInventoryFamily = normalizedSystemFont
+    ? installedFamilies.find(
+      (family) => family.toLocaleLowerCase() === normalizedSystemFont.toLocaleLowerCase(),
+    ) ?? ''
+    : '';
   const selectedFontMissing = Boolean(
     normalizedSystemFont
       && installedFamilies.length
-      && !installedFamilies.some(
-        (family) => family.toLocaleLowerCase() === normalizedSystemFont.toLocaleLowerCase(),
-      ),
+      && !selectedInventoryFamily,
   );
   const visibleFontInventoryStatus = selectedFontMissing
     ? `${normalizedSystemFont} was not found in the loaded list. Whiteboard will use the mode default if the operating system cannot resolve it.`
@@ -99,7 +117,7 @@ export function EditorSettingsPopover({ api, onReset }: Props) {
     update('systemFontFamily', normalizedSystemFont);
   };
   const loadInstalledFonts = async () => {
-    // Keep this call directly inside the click turn: Local Font Access requires
+    // Keep this call directly inside the user-gesture turn: Local Font Access requires
     // explicit user activation and the adapter performs no permission preflight.
     const pending = queryInstalledFontFamiliesFromUserGesture();
     setLoadingFonts(true);
@@ -122,6 +140,19 @@ export function EditorSettingsPopover({ api, onReset }: Props) {
       setLoadingFonts(false);
     }
   };
+  const selectTypeface = (typeface: EditorTypeface) => {
+    update('typeface', typeface);
+    if (typeface === 'installed' && installedFamilies.length === 0 && !loadingFonts) {
+      // The typeface selector change is itself a user gesture, so the local-font
+      // inventory request can start immediately instead of hiding behind a
+      // second, easy-to-miss button click.
+      void loadInstalledFonts();
+    }
+  };
+  const selectInstalledFamily = (family: string) => {
+    setSystemFontDraft(family);
+    update('systemFontFamily', normalizeSystemFontFamily(family));
+  };
 
   return (
     <Popover label="Editor" title="Editor Settings" align="right">
@@ -134,15 +165,6 @@ export function EditorSettingsPopover({ api, onReset }: Props) {
             <span>
               Show line numbers <kbd>⌘/Ctrl L</kbd>
             </span>
-          </label>
-
-          <label className="wb-field wb-field-check">
-            <input
-              type="checkbox"
-              checked={tools.currentLineHighlight}
-              onChange={() => toggle('currentLineHighlight')}
-            />
-            <span>Highlight current line</span>
           </label>
 
           <label className="wb-field wb-field-check">
@@ -194,7 +216,7 @@ export function EditorSettingsPopover({ api, onReset }: Props) {
 
           <label className="wb-field">
             <span>Typeface</span>
-            <select value={tools.typeface} onChange={(e) => update('typeface', e.target.value as EditorTypeface)}>
+            <select value={tools.typeface} onChange={(e) => selectTypeface(e.target.value as EditorTypeface)}>
               {TYPEFACE_GROUPS.map((group) => (
                 <optgroup key={group.label} label={group.label}>
                   {group.options.map((typeface) => (
@@ -209,7 +231,22 @@ export function EditorSettingsPopover({ api, onReset }: Props) {
 
           {tools.typeface === 'installed' && (
             <div className="wb-system-font">
-              <label htmlFor="wb-system-font-family">Installed font family</label>
+              {installedFamilies.length > 0 && (
+                <label className="wb-field" htmlFor="wb-installed-font-select">
+                  <span>Available on this computer</span>
+                  <select
+                    id="wb-installed-font-select"
+                    value={selectedInventoryFamily}
+                    onChange={(e) => selectInstalledFamily(e.target.value)}
+                  >
+                    <option value="">Choose an installed font…</option>
+                    {installedFamilies.map((family) => (
+                      <option key={family} value={family}>{family}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <label htmlFor="wb-system-font-family">Exact family name</label>
               <div className="wb-system-font-row">
                 <input
                   id="wb-system-font-family"

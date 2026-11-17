@@ -19,6 +19,7 @@
 
 import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { createRequire } from 'node:module';
 import net from 'node:net';
@@ -348,6 +349,119 @@ async function installBundleExportResponder(session, bundlePath) {
   }, { key, bundlePath });
   session.bundleExportDialogKey = key;
   record(session.label, `installed one-shot .lfbundle save responder for ${path.basename(bundlePath)}`);
+}
+
+async function installCloudFolderResponder(session, providerFolder) {
+  assert.ok(path.isAbsolute(providerFolder), 'Cloud provider folder must be absolute');
+  assertPathInside(providerFolder, session.productRoot, 'Cloud provider folder');
+  await fs.mkdir(providerFolder, { recursive: true });
+  const key = `__logosforgeWhiteboardCloudFolder_${session.pid}_${Date.now()}`;
+  await session.app.evaluate(({ dialog }, state) => {
+    const original = dialog.showOpenDialog.bind(dialog);
+    globalThis[state.key] = { used: false, folderPath: state.providerFolder };
+    dialog.showOpenDialog = async (...args) => {
+      const options = args.at(-1) ?? {};
+      const properties = Array.isArray(options.properties) ? options.properties : [];
+      const isCloudFolderRequest = String(options.title ?? '').includes('cloud service')
+        && properties.includes('openDirectory');
+      if (!isCloudFolderRequest) return original(...args);
+      const queue = globalThis[state.key];
+      if (!queue || queue.used) {
+        throw new Error('Packaged Whiteboard cloud folder dialog was invoked more than once.');
+      }
+      if (!properties.includes('createDirectory')) {
+        throw new Error('Cloud folder picker did not permit selecting a new provider directory.');
+      }
+      queue.used = true;
+      return { canceled: false, filePaths: [queue.folderPath] };
+    };
+  }, { key, providerFolder });
+  session.cloudFolderDialogKey = key;
+  record(session.label, `installed one-shot cloud folder responder for ${path.basename(providerFolder)}`);
+}
+
+async function assertCloudFolderDialogUsed(session, providerFolder) {
+  assert.equal(typeof session.cloudFolderDialogKey, 'string', 'Cloud folder dialog responder was not installed');
+  const state = await session.app.evaluate((_electron, key) => {
+    const value = globalThis[key];
+    if (!value) throw new Error(`Missing packaged cloud folder dialog state: ${key}`);
+    return { used: value.used === true, folderPath: value.folderPath };
+  }, session.cloudFolderDialogKey);
+  assert.equal(state.used, true, 'Whiteboard did not use the native cloud folder dialog');
+  assertSamePath(state.folderPath, providerFolder, 'Cloud folder dialog target');
+}
+
+function stableJson(value) {
+  if (Array.isArray(value)) return value.map(stableJson);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stableJson(value[key])]));
+}
+
+function cloudBundleDigest(bundle) {
+  const canonical = structuredClone(bundle);
+  delete canonical.exportedAt;
+  if (canonical.project && typeof canonical.project === 'object') delete canonical.project.id;
+  return createHash('sha256').update(JSON.stringify(stableJson(canonical)), 'utf8').digest('hex');
+}
+
+async function walkProviderTree(root, directory = root) {
+  const stat = await fs.lstat(directory);
+  assert.ok(stat.isDirectory() && !stat.isSymbolicLink(), `Unsafe provider directory: ${directory}`);
+  const files = [];
+  for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+    const target = path.join(directory, entry.name);
+    assertPathInside(target, root, 'Cloud provider entry');
+    const targetStat = await fs.lstat(target);
+    assert.ok(!targetStat.isSymbolicLink(), `Cloud sync created a symbolic link: ${target}`);
+    if (targetStat.isDirectory()) files.push(...await walkProviderTree(root, target));
+    else {
+      assert.ok(targetStat.isFile(), `Cloud sync created a non-regular file: ${target}`);
+      files.push(target);
+    }
+  }
+  return files;
+}
+
+async function readCloudProjectHistory(providerFolder, title, marker) {
+  const fixedRoot = path.join(providerFolder, 'LogosForge Whiteboard');
+  const projectsRoot = path.join(fixedRoot, 'Projects');
+  const files = await walkProviderTree(providerFolder);
+  for (const file of files) assertPathInside(file, fixedRoot, 'Whiteboard cloud artifact');
+  const snapshotFiles = files.filter((file) => path.extname(file).toLowerCase() === '.lfsync');
+  const snapshots = [];
+  for (const file of snapshotFiles) {
+    assertPathInside(file, projectsRoot, 'Whiteboard cloud snapshot');
+    const relative = path.relative(projectsRoot, file).split(path.sep);
+    assert.equal(relative.length, 3, `Cloud snapshot escaped the project/snapshots layout: ${file}`);
+    assert.equal(relative[1], 'snapshots', `Cloud snapshot has an unexpected directory: ${file}`);
+    const before = await fs.lstat(file);
+    assert.ok(before.size > 0 && before.size <= 257 * 1024 * 1024, `Cloud snapshot size is unsafe: ${file}`);
+    const raw = await fs.readFile(file, 'utf8');
+    const after = await fs.lstat(file);
+    assert.equal(after.size, before.size, `Cloud snapshot changed while being verified: ${file}`);
+    assert.equal(after.mtimeMs, before.mtimeMs, `Cloud snapshot timestamp changed while being verified: ${file}`);
+    const envelope = JSON.parse(raw);
+    assert.equal(envelope.format, 'logosforge-whiteboard-cloud-snapshot', 'Cloud snapshot format changed');
+    assert.equal(envelope.version, '1.0', 'Cloud snapshot version changed');
+    assert.match(envelope.cloudProjectId, /^[0-9a-f-]{36}$/i, 'Cloud project id is invalid');
+    assert.match(envelope.snapshotId, /^[0-9a-f-]{36}$/i, 'Cloud snapshot id is invalid');
+    assert.match(envelope.deviceId, /^[0-9a-f-]{36}$/i, 'Cloud device id is invalid');
+    assert.match(envelope.contentDigest, /^[0-9a-f]{64}$/, 'Cloud snapshot digest is invalid');
+    assert.ok(Array.isArray(envelope.parentSnapshotIds), 'Cloud snapshot has no parent list');
+    assert.equal(cloudBundleDigest(envelope.bundle), envelope.contentDigest, 'Cloud snapshot digest mismatch');
+    if (envelope.bundle?.project?.title === title) {
+      validateWhiteboardExportBundle(envelope.bundle, {
+        expectedProjectId: String(envelope.bundle.project.id),
+        expectedTitle: title,
+        expectedMarker: marker,
+      });
+      snapshots.push({ file, envelope });
+    }
+  }
+  return snapshots.sort((left, right) => (
+    left.envelope.generation - right.envelope.generation
+    || left.envelope.createdAt.localeCompare(right.envelope.createdAt)
+  ));
 }
 
 async function assertBundleExportDialogUsed(session, bundlePath) {
@@ -763,6 +877,139 @@ async function waitEditor(page) {
   return waitVisible(page.locator('.wb-editor[contenteditable="true"]'), 'Whiteboard editor', STARTUP_TIMEOUT_MS);
 }
 
+async function verifyModeLayoutContract(page) {
+  const result = await page.evaluate(() => {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'whiteboard';
+    Object.assign(wrapper.style, {
+      position: 'fixed',
+      left: '-10000px',
+      top: '0',
+      width: '960px',
+      opacity: '0',
+      pointerEvents: 'none',
+    });
+    document.body.append(wrapper);
+
+    const surface = (mode, html) => {
+      const element = document.createElement('section');
+      element.className = 'wb-surface';
+      element.dataset.writingMode = mode;
+      if (mode === 'screenplay') element.dataset.screenplay = '';
+      element.innerHTML = `<div class="wb-content"><div class="wb-editor" data-writing-mode="${mode}">${html}</div></div>`;
+      wrapper.append(element);
+      return element;
+    };
+    const glyphLeft = (element) => {
+      const text = element.firstChild;
+      if (!(text instanceof Text) || text.length === 0) throw new Error('Layout fixture has no text node');
+      const range = document.createRange();
+      range.setStart(text, 0);
+      range.setEnd(text, 1);
+      return range.getBoundingClientRect().left;
+    };
+    const metrics = (element) => ({
+      glyphLeft: glyphLeft(element),
+      textIndent: Number.parseFloat(getComputedStyle(element).textIndent) || 0,
+      textAlign: getComputedStyle(element).textAlign,
+    });
+    const collect = (root, selectors) => Object.fromEntries(
+      Object.entries(selectors).map(([name, selector]) => {
+        const element = root.querySelector(selector);
+        if (!(element instanceof HTMLElement)) throw new Error(`Missing layout fixture: ${selector}`);
+        return [name, metrics(element)];
+      }),
+    );
+
+    try {
+      const novel = surface('novel', [
+        '<p data-probe="first">First body paragraph</p>',
+        '<p data-probe="ordinary">Ordinary body paragraph</p>',
+        '<h1 data-probe="heading">Chapter heading</h1>',
+        '<p data-probe="after-heading">Body after heading</p>',
+      ].join(''));
+      const screenplay = surface('screenplay', [
+        '<p class="sp-action" data-probe="action-a">Action one</p>',
+        '<p class="sp-action" data-probe="action-b">Action two</p>',
+        '<p class="sp-character" data-probe="character">WRITER</p>',
+        '<p class="sp-transition" data-probe="transition">CUT TO:</p>',
+      ].join(''));
+      const graphicNovel = surface('graphic_novel', [
+        '<p data-probe="plain-a">Panel action one</p>',
+        '<p data-probe="plain-b">Panel action two</p>',
+        '<p class="gn-cue" data-probe="cue">WRITER</p>',
+        '<p class="gn-dialogue" data-probe="dialogue-a">Dialogue one</p>',
+        '<p class="gn-dialogue" data-probe="dialogue-b">Dialogue two</p>',
+      ].join(''));
+      const stage = surface('stage_script', [
+        '<p class="sp-action" data-probe="action-a">Stage direction one</p>',
+        '<p class="sp-action" data-probe="action-b">Stage direction two</p>',
+        '<p class="sp-character" data-probe="character">WRITER</p>',
+        '<p class="sp-dialogue" data-probe="dialogue-a">Speech one</p>',
+        '<p class="sp-dialogue" data-probe="dialogue-b">Speech two</p>',
+      ].join(''));
+
+      return {
+        novel: collect(novel, {
+          first: '[data-probe="first"]',
+          ordinary: '[data-probe="ordinary"]',
+          heading: '[data-probe="heading"]',
+          afterHeading: '[data-probe="after-heading"]',
+        }),
+        screenplay: collect(screenplay, {
+          actionA: '[data-probe="action-a"]',
+          actionB: '[data-probe="action-b"]',
+          character: '[data-probe="character"]',
+          transition: '[data-probe="transition"]',
+        }),
+        graphicNovel: collect(graphicNovel, {
+          plainA: '[data-probe="plain-a"]',
+          plainB: '[data-probe="plain-b"]',
+          cue: '[data-probe="cue"]',
+          dialogueA: '[data-probe="dialogue-a"]',
+          dialogueB: '[data-probe="dialogue-b"]',
+        }),
+        stage: collect(stage, {
+          actionA: '[data-probe="action-a"]',
+          actionB: '[data-probe="action-b"]',
+          character: '[data-probe="character"]',
+          dialogueA: '[data-probe="dialogue-a"]',
+          dialogueB: '[data-probe="dialogue-b"]',
+        }),
+      };
+    } finally {
+      wrapper.remove();
+    }
+  });
+
+  const aligned = (left, right, label) => {
+    assert.ok(Math.abs(left - right) < 0.5, `${label} is misaligned (${left} vs ${right})`);
+  };
+  assert.ok(result.novel.first.textIndent > 0, 'Novel body paragraphs lost their first-line indent');
+  aligned(result.novel.first.glyphLeft, result.novel.ordinary.glyphLeft, 'Novel first and ordinary body paragraphs');
+  aligned(result.novel.first.glyphLeft, result.novel.afterHeading.glyphLeft, 'Novel body paragraph after a heading');
+  assert.equal(result.novel.heading.textAlign, 'center', 'Novel heading is not centered');
+
+  for (const [mode, first, second] of [
+    ['Screenplay action', result.screenplay.actionA, result.screenplay.actionB],
+    ['Graphic Novel plain body', result.graphicNovel.plainA, result.graphicNovel.plainB],
+    ['Graphic Novel dialogue', result.graphicNovel.dialogueA, result.graphicNovel.dialogueB],
+    ['Stage direction', result.stage.actionA, result.stage.actionB],
+    ['Stage dialogue', result.stage.dialogueA, result.stage.dialogueB],
+  ]) {
+    assert.equal(first.textIndent, 0, `${mode} unexpectedly inherited a text indent`);
+    assert.equal(second.textIndent, 0, `${mode} unexpectedly inherited a text indent`);
+    aligned(first.glyphLeft, second.glyphLeft, mode);
+  }
+  assert.equal(result.screenplay.character.textAlign, 'center', 'Screenplay character cue is not centered');
+  assert.equal(result.screenplay.transition.textAlign, 'right', 'Screenplay transition is not right-aligned');
+  assert.equal(result.graphicNovel.cue.textAlign, 'center', 'Graphic Novel cue is not centered');
+  assert.equal(result.graphicNovel.dialogueA.textAlign, 'center', 'Graphic Novel dialogue is not centered');
+  assert.equal(result.stage.character.textAlign, 'center', 'Stage character cue is not centered');
+  assert.equal(result.stage.dialogueA.textAlign, 'center', 'Stage dialogue is not centered');
+  record('journey', 'verified computed horizontal layout for all four Whiteboard writing modes');
+}
+
 async function readPersistedDocument(session, title, marker) {
   const library = await localGet(session, '/api/documents');
   assert.ok(Array.isArray(library?.documents), 'Whiteboard document library response is invalid');
@@ -820,6 +1067,111 @@ async function createEditAndAutosave(session, title, marker) {
   );
   record('journey', `created, renamed, edited, and autosaved document ${document.id}`);
   return document;
+}
+
+async function openSettings(page) {
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  return waitVisible(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Settings dialog');
+}
+
+async function waitCloudBridgeState(session, predicate, label) {
+  return waitFor(
+    async () => {
+      const state = await session.page.evaluate(async () => {
+        const read = globalThis.logosforge?.cloudSyncGetState;
+        if (typeof read !== 'function') throw new Error('Missing cloudSyncGetState bridge method.');
+        return read();
+      });
+      return predicate(state) ? state : false;
+    },
+    label,
+    UI_TIMEOUT_MS,
+    150,
+  );
+}
+
+async function syncFromSettings(session, dialog) {
+  const syncButton = dialog.getByRole('button', { name: /^(Sync now|Syncing…|Retry)$/ });
+  await waitFor(
+    async () => (await syncButton.count()) === 1 && await syncButton.isEnabled(),
+    'enabled Cloud Sync button',
+  );
+  await syncButton.click();
+  await waitText(
+    dialog.locator('.cloud-sync-state strong'),
+    'Up to date',
+    'Cloud folder sync completion',
+    { exact: true },
+  );
+}
+
+async function configureCloudFolderAndSync(session, providerFolder, document) {
+  await installCloudFolderResponder(session, providerFolder);
+  const dialog = await openSettings(session.page);
+  await dialog.getByRole('button', { name: 'Choose folder…', exact: true }).click();
+  await assertCloudFolderDialogUsed(session, providerFolder);
+  await waitCloudBridgeState(
+    session,
+    (state) => state.enabled === true
+      && state.folderAvailable === true
+      && state.folderPath === providerFolder,
+    'persisted Cloud Folder Sync selection',
+  );
+  const automatic = dialog.getByRole('checkbox', { name: 'Sync automatically', exact: true });
+  if (!await automatic.isChecked()) await automatic.check();
+  await syncFromSettings(session, dialog);
+  const state = await waitCloudBridgeState(
+    session,
+    (candidate) => candidate.enabled === true
+      && candidate.automatic === true
+      && candidate.outboxCount === 0
+      && candidate.bindings.some((binding) => (
+        binding.localDocumentId === String(document.id)
+        && binding.localIncarnation === document.incarnation
+      )),
+    'durable cloud binding for the active Whiteboard document',
+  );
+  assert.equal(state.warnings.length, 0, `Cloud sync reported warnings: ${state.warnings.join('; ')}`);
+  await dialog.getByRole('button', { name: 'Close settings', exact: true }).click();
+  record(session.label, `configured packaged Cloud Folder Sync at ${providerFolder}`);
+}
+
+async function verifyCloudConfigurationAfterRelaunch(session, providerFolder, document) {
+  const state = await waitCloudBridgeState(
+    session,
+    (candidate) => candidate.enabled === true
+      && candidate.folderAvailable === true
+      && candidate.folderPath === providerFolder
+      && candidate.bindings.some((binding) => (
+        binding.localDocumentId === String(document.id)
+        && binding.localIncarnation === document.incarnation
+      )),
+    'Cloud Folder Sync configuration after relaunch',
+  );
+  assert.equal(state.outboxCount, 0, 'Cloud Sync outbox was not empty after relaunch');
+  assert.equal(state.warnings.length, 0, `Cloud sync reported warnings after relaunch: ${state.warnings.join('; ')}`);
+  const dialog = await openSettings(session.page);
+  await waitText(dialog.locator('.cloud-sync-state strong'), 'Up to date', 'reopened Cloud Sync status', { exact: true });
+  await dialog.getByRole('button', { name: 'Close settings', exact: true }).click();
+}
+
+async function appendMarkerAndCloudSync(session, title, marker) {
+  const editor = await waitEditor(session.page);
+  await editor.click();
+  await session.page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End');
+  await session.page.keyboard.press('Enter');
+  await session.page.keyboard.type(marker);
+  await waitText(editor, marker, 'second packaged cloud-sync marker');
+  await waitText(session.page.locator('.wb-draft-saved'), 'Draft saved', 'second Cloud Sync autosave receipt', { exact: true });
+  await waitFor(
+    () => readPersistedDocument(session, title, marker).catch(() => false),
+    'durable manuscript edit before descendant cloud snapshot',
+    UI_TIMEOUT_MS,
+    200,
+  );
+  const dialog = await openSettings(session.page);
+  await syncFromSettings(session, dialog);
+  await dialog.getByRole('button', { name: 'Close settings', exact: true }).click();
 }
 
 async function openAndVerifyPersistedDocument(session, expected, title, marker) {
@@ -1096,6 +1448,8 @@ async function main() {
   const token = `${Date.now()}-${process.pid}`;
   const title = `Packaged Lifecycle ${token}`;
   const marker = `Durable Whiteboard marker ${token}.`;
+  const secondMarker = `Descendant cloud marker ${token}.`;
+  const providerFolder = path.join(productRoot, 'provider-folder');
   const metadata = { startedAt: now(), platform: process.platform, executable, tempRoot, title, marker };
   record('harness', `isolated lifecycle root: ${tempRoot}`);
   let succeeded = false;
@@ -1110,7 +1464,27 @@ async function main() {
     await waitLocalService(first);
     const firstRuntime = await verifyLiveRuntimeBoundary(first);
     await exerciseLiveMcpDiscovery(first, firstRuntime.value.auth_token);
+    await verifyModeLayoutContract(first.page);
     const document = await createEditAndAutosave(first, title, marker);
+    await configureCloudFolderAndSync(first, providerFolder, document);
+    const firstCloudHistory = await waitFor(
+      async () => {
+        try {
+          const snapshots = await readCloudProjectHistory(providerFolder, title, marker);
+          return snapshots.length === 1 ? snapshots : false;
+        } catch (error) {
+          if (error?.code === 'ENOENT') return false;
+          throw error;
+        }
+      },
+      'first packaged Whiteboard cloud snapshot',
+      UI_TIMEOUT_MS,
+      150,
+    );
+    const firstCloudSnapshot = firstCloudHistory[0].envelope;
+    assert.deepEqual(firstCloudSnapshot.parentSnapshotIds, [], 'Initial cloud snapshot was not a history root');
+    assert.equal(firstCloudSnapshot.generation, 0, 'Initial cloud snapshot generation changed');
+    record(first.label, `verified root cloud snapshot ${firstCloudSnapshot.snapshotId}`);
     await captureScreenshot(first, 'autosaved');
     await closeSession(first, { requirePrompt: true });
     await assertRegularFile(path.join(first.dirs.data, 'whiteboard.db'), 'Persisted Whiteboard database');
@@ -1132,6 +1506,50 @@ async function main() {
       'Whiteboard relaunch reused a stale runtime nonce',
     );
     await openAndVerifyPersistedDocument(second, document, title, marker);
+    await verifyCloudConfigurationAfterRelaunch(second, providerFolder, document);
+    const unchangedHistory = await readCloudProjectHistory(providerFolder, title, marker);
+    assert.equal(unchangedHistory.length, 1, 'Relaunch created a duplicate unchanged cloud snapshot');
+    assert.equal(
+      unchangedHistory[0].envelope.snapshotId,
+      firstCloudSnapshot.snapshotId,
+      'Relaunch replaced the root cloud snapshot',
+    );
+    await appendMarkerAndCloudSync(second, title, secondMarker);
+    const descendantHistory = await waitFor(
+      async () => {
+        const snapshots = await readCloudProjectHistory(providerFolder, title, marker);
+        return snapshots.some((snapshot) => (
+          snapshot.envelope.parentSnapshotIds.includes(firstCloudSnapshot.snapshotId)
+        )) ? snapshots : false;
+      },
+      'descendant packaged Whiteboard cloud snapshot',
+      UI_TIMEOUT_MS,
+      150,
+    );
+    const roots = descendantHistory.filter((snapshot) => snapshot.envelope.parentSnapshotIds.length === 0);
+    assert.equal(roots.length, 1, 'Cloud history contains duplicate root snapshots');
+    assert.equal(roots[0].envelope.snapshotId, firstCloudSnapshot.snapshotId, 'Cloud history root changed');
+    const descendants = descendantHistory.filter((snapshot) => (
+      snapshot.envelope.parentSnapshotIds.includes(firstCloudSnapshot.snapshotId)
+    ));
+    assert.equal(descendants.length, 1, 'Cloud history did not create exactly one descendant for the edit');
+    assert.equal(
+      descendants[0].envelope.cloudProjectId,
+      firstCloudSnapshot.cloudProjectId,
+      'Descendant snapshot changed cloud project identity',
+    );
+    assert.equal(
+      descendants[0].envelope.generation,
+      firstCloudSnapshot.generation + 1,
+      'Descendant snapshot generation is not monotonic',
+    );
+    assert.ok(
+      descendants[0].envelope.bundle.project.manuscript.blocks.some((block) => (
+        typeof block?.text === 'string' && block.text.includes(secondMarker)
+      )),
+      'Descendant cloud snapshot omitted the second manuscript edit',
+    );
+    record(second.label, `verified descendant cloud snapshot ${descendants[0].envelope.snapshotId}`);
     const bundlePath = path.join(productRoot, 'packaged-whiteboard-export.lfbundle');
     await exportAndVerifyProjectBundle(second, bundlePath, document, title, marker);
     await captureScreenshot(second, 'reopened');

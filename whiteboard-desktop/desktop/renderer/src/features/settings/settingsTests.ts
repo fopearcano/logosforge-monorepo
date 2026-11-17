@@ -6,6 +6,7 @@ import {
   validateAiSettings,
   type AiSettings,
 } from './settingsApi';
+import { cloudSyncStatusLabel, formatCloudSyncTime } from '../cloudSync/cloudSyncUi';
 
 let passed = 0;
 const failures: string[] = [];
@@ -29,6 +30,11 @@ check(
   validateAiSettings({ ...anthropic, model: 'claude-sonnet-test' }, '', 'OpenAI') ===
     'Enter the Anthropic API key after switching providers.',
 );
+check('cloud sync success status is calm and explicit', cloudSyncStatusLabel('up-to-date') === 'Up to date');
+check('cloud sync conflict status asks for attention', cloudSyncStatusLabel('attention') === 'Attention required');
+check('cloud sync folder failure is actionable', cloudSyncStatusLabel('folder-unavailable') === 'Folder unavailable');
+check('missing cloud sync time is honest', formatCloudSyncTime(null) === 'Not yet');
+check('malformed cloud sync time is safe', formatCloudSyncTime('not-a-date') === 'Unknown');
 check(
   'same provider may keep stored write-only key',
   validateAiSettings({ ...anthropic, model: 'claude-sonnet-test' }, '', 'Anthropic') === null,

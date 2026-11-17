@@ -366,26 +366,45 @@ async def export_project(request: Request, doc: int | None = Query(None)) -> dic
     # Keep the numeric id and its incarnation stable across every subsystem read;
     # DELETE/reuse and all mutations share this same lifecycle lock.
     async with locked_document_request(request, doc) as locked:
-        wb = whiteboard_store.get(locked.document_id)
-        outline_items = outline_items_store.get(locked.document_id)
-        comments = comments_store.get(locked.document_id)
-        drafter_pages = drafter_pages_store.get_document(locked.document_id).pages
-        psyke_elements = await _list_psyke(core, locked.project_id)
-        psyke_relations = await _list_psyke_relations(core, locked.project_id)
-        psyke_progressions = await _list_psyke_progressions(
-            core, locked.project_id
-        )
-        progression_tracks = await _list_progression_tracks(core, locked.project_id)
-        exported_at = datetime.now(timezone.utc).isoformat()
-        return build_project_bundle(
+        return await assemble_project_bundle(
+            core,
             locked.project_id,
-            wb,
-            outline_items,
-            comments,
-            psyke_elements,
-            exported_at,
-            psyke_relations=psyke_relations,
-            psyke_progressions=psyke_progressions,
-            progression_tracks=progression_tracks,
-            drafter_pages=drafter_pages,
+            locked.document_id,
         )
+
+
+async def assemble_project_bundle(
+    core,
+    project_id: int,
+    document_id: str,
+    *,
+    exported_at: str | None = None,
+) -> dict[str, Any]:
+    """Assemble a complete bundle while the caller owns the lifecycle lock.
+
+    Normal exports acquire that lock in :func:`export_project`. Cloud retirement
+    uses this lower-level helper so the final complete-state comparison and the
+    subsequent delete occur within one uninterrupted document critical section.
+    Keeping the lock at the caller prevents a manuscript, Drafter, outline,
+    comment, PSYKE, or Progressions mutation from landing between those steps.
+    """
+    wb = whiteboard_store.get(document_id)
+    outline_items = outline_items_store.get(document_id)
+    comments = comments_store.get(document_id)
+    drafter_pages = drafter_pages_store.get_document(document_id).pages
+    psyke_elements = await _list_psyke(core, project_id)
+    psyke_relations = await _list_psyke_relations(core, project_id)
+    psyke_progressions = await _list_psyke_progressions(core, project_id)
+    progression_tracks = await _list_progression_tracks(core, project_id)
+    return build_project_bundle(
+        project_id,
+        wb,
+        outline_items,
+        comments,
+        psyke_elements,
+        exported_at or datetime.now(timezone.utc).isoformat(),
+        psyke_relations=psyke_relations,
+        psyke_progressions=psyke_progressions,
+        progression_tracks=progression_tracks,
+        drafter_pages=drafter_pages,
+    )

@@ -22,13 +22,26 @@ export const EDITOR_TYPEFACES = [
   'transitional',
   'editorial',
   'slab',
+  'garamond',
+  'baskerville',
+  'caslon',
+  'times',
+  'schoolbook',
+  'bookman',
   'sans',
   'system',
   'humanist',
   'geometric',
   'rounded',
+  'helvetica',
+  'verdana',
+  'gill-sans',
   'mono',
   'coding',
+  'fira-code',
+  'iosevka',
+  'source-code',
+  'ocr',
   'courier-prime',
   'typewriter',
   'typewriter-modern',
@@ -37,6 +50,8 @@ export const EDITOR_TYPEFACES = [
   'script',
   'chalkboard',
   'marker',
+  'notebook',
+  'calligraphic',
   'installed',
 ] as const;
 
@@ -47,7 +62,6 @@ export type EditorLayout = 'flow' | 'paged';
 
 export interface EditorToolsState {
   lineNumbers: boolean;
-  currentLineHighlight: boolean;
   folding: boolean;
   syntax: boolean;
   /** Font-size override in px (null = per-mode default). */
@@ -66,7 +80,6 @@ export interface EditorToolsState {
 
 export const DEFAULT_EDITOR_TOOLS: EditorToolsState = {
   lineNumbers: false,
-  currentLineHighlight: false,
   folding: false,
   // Colour-coding ON by default (writers get visible structure: headings,
   // dialogue, tags). Toggle off in Editor → "Colour-code text" for plain B&W.

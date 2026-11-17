@@ -218,9 +218,10 @@ requireMarkers('Find and Replace command routing', sourceText('features/whiteboa
   'isModalDialogOpen()',
   'isDocumentInteractionLocked()',
 ]);
+const nativeMenuSource = fs.readFileSync(path.join(process.cwd(), 'electron', 'menu.ts'), 'utf8');
 requireMarkers(
   'Native Find and Replace menu',
-  fs.readFileSync(path.join(process.cwd(), 'electron', 'menu.ts'), 'utf8'),
+  nativeMenuSource,
   [
     "label: 'Find and Replace…'",
     "accelerator: 'CmdOrCtrl+F'",
@@ -228,13 +229,26 @@ requireMarkers(
     "editAction('findReplace')",
   ],
 );
+if (nativeMenuSource.includes("label: 'Toggle Theme'")) {
+  failures.push('Native View menu still exposes the redundant Toggle Theme command');
+}
+if (nativeMenuSource.includes("role: 'togglefullscreen'")) {
+  failures.push('Native View menu still duplicates the platform full-screen command');
+}
 requireMarkers('Installed-font user-gesture inventory', sourceText('features/editorTools/EditorSettingsPopover.tsx'), [
   'queryInstalledFontFamiliesFromUserGesture()',
+  'selectTypeface',
+  'Available on this computer',
+  'Choose an installed font…',
   'Load installed fonts',
   'Refresh installed fonts',
   'role="status"',
   'aria-live="polite"',
 ]);
+const editorSettingsSource = sourceText('features/editorTools/EditorSettingsPopover.tsx');
+if (editorSettingsSource.includes('Highlight current line')) {
+  failures.push('Editor Settings still exposes the removed current-line highlight control');
+}
 requireMarkers('Comment navigation modal precedence', sourceText('features/comments/CommentsLayer.tsx'), [
   'if (isModalDialogOpen()) return;',
 ]);
@@ -275,6 +289,44 @@ requireMarkers('Reusable prompt dialog ids', sourceText('components/PromptDialog
 ]);
 requireMarkers('Settings recovery path', sourceText('App.tsx'), [
   'setSettingsOpen((open) => !open)',
+  'title="Settings"',
+  'aria-label="Settings"',
+]);
+requireMarkers('Cloud folder sync settings', sourceText('features/settings/SettingsDialog.tsx'), [
+  'Cloud folder sync',
+  'Google Drive',
+  'Dropbox',
+  'Choose folder…',
+  'Sync now',
+  'Retry',
+  'Disable sync',
+  'Sync automatically',
+  'Review conflict',
+  'role="status"',
+  'aria-live="polite"',
+]);
+requireMarkers('Cloud sync conflict review', sourceText('features/cloudSync/CloudSyncConflictDialog.tsx'), [
+  '<ModalPortal>',
+  'useModalDialog({',
+  'data-wb-modal-layer',
+  'role="dialog"',
+  'aria-modal="true"',
+  'Keep both (recommended)',
+  'Use cloud copy',
+  'Replace cloud with this device',
+  'Confirm resolution',
+  'role="alert"',
+]);
+requireMarkers('Quiet Cloud status bar', sourceText('components/StatusBar.tsx'), [
+  'Cloud:',
+  'aria-live="polite"',
+  'cloudSyncStatusLabel',
+]);
+requireMarkers('Cloud sync help guide', sourceText('features/help/HelpDialog.tsx'), [
+  'Sync across devices',
+  'provider’s desktop app',
+  'Whiteboard never receives your Google, Dropbox, Microsoft, or Apple credentials',
+  'Keep both is the safest default',
 ]);
 requireMarkers('Popover accessible trigger and focus contract', sourceText('components/Popover.tsx'), [
   'aria-label={title}',

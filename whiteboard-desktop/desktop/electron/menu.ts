@@ -147,15 +147,12 @@ export function setAppMenu({ getWindow, reloadWindow }: MenuDeps): void {
         click: () => viewAction('toggleComments'),
       },
       { type: 'separator' },
-      { label: 'Toggle Theme', click: () => viewAction('toggleTheme') },
-      { type: 'separator' },
       {
         label: 'Reload',
         accelerator: 'CmdOrCtrl+R',
         click: () => void reloadWindow(),
       },
       { role: 'toggleDevTools' },
-      { role: 'togglefullscreen' },
     ],
   };
 

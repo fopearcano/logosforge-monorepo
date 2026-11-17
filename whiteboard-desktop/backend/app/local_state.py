@@ -1395,6 +1395,41 @@ class CommentsStore:
         with _STATE_LOCK:
             return self._public(self._load(doc_id))
 
+    def replace_document(
+        self,
+        doc_id: str,
+        comments: list[Comment],
+    ) -> CommentsDocument:
+        """Atomically install one complete, already validated comment snapshot.
+
+        Cloud restore creates a fresh document identity, so this deliberately
+        has no optimistic-concurrency parameters: callers must populate an
+        unpublished document while holding its lifecycle lock.  Keeping the
+        operation on the store (instead of reaching into ``_save`` from a
+        router) preserves the same validation, recovery, and atomic-write
+        boundary as normal comment mutations.
+        """
+        with _STATE_LOCK:
+            # Validate every nested anchor/reply before replacing any file and
+            # reject ambiguous ids that normal incremental creation cannot make.
+            payload = CommentsDocument(comments=list(comments), revision="")
+            comment_ids = [comment.id for comment in payload.comments]
+            if len(comment_ids) != len(set(comment_ids)):
+                raise ValueError("comment ids must be unique")
+            reply_ids = [
+                reply.id
+                for comment in payload.comments
+                for reply in comment.replies
+            ]
+            if len(reply_ids) != len(set(reply_ids)):
+                raise ValueError("comment reply ids must be unique")
+            # Validate/recover a stale file for a reused core id before writing
+            # the replacement, matching the other per-document stores.
+            self._load(doc_id)
+            committed = self._committed(list(payload.comments))
+            self._save(doc_id, committed)
+            return self._public(committed)
+
     @staticmethod
     def _conditional_retry(
         doc: _StoredCommentsDocument,
@@ -1562,6 +1597,226 @@ class CommentsStore:
         return {path.stem for path in self._dir.glob("*.json")}
 
 
+# -- Cloud restore retry receipts -------------------------------------------
+
+_CLOUD_RESTORE_STATE = "cloud-restore-receipts.json"
+_MAX_CLOUD_RESTORE_RECEIPTS = 512
+_MAX_CLOUD_RESTORE_PENDING = 128
+
+
+class CloudRestorePreparedValidators(BaseModel):
+    outline_revision: str
+    drafter_revision: str
+    comments_revision: str
+    psyke_digest: str
+    progressions_revision: str
+
+
+class CloudRestoreValidators(CloudRestorePreparedValidators):
+    whiteboard_revision: str
+
+
+class CloudRestoreReceipt(BaseModel):
+    restore_id: str
+    request_digest: str
+    document_id: str
+    incarnation: str
+    source_project_id: str
+    validators: CloudRestoreValidators
+    committed_at: str
+
+
+class CloudRestorePending(BaseModel):
+    restore_id: str
+    request_digest: str
+    document_id: str
+    source_project_id: str
+    prepared: CloudRestorePreparedValidators | None = None
+    started_at: str
+
+
+class _CloudRestoreReceiptState(BaseModel):
+    receipts: list[CloudRestoreReceipt] = Field(default_factory=list)
+    pending: list[CloudRestorePending] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_unique_restore_ids(self) -> _CloudRestoreReceiptState:
+        receipt_ids = [item.restore_id for item in self.receipts]
+        pending_ids = [item.restore_id for item in self.pending]
+        if len(receipt_ids) != len(set(receipt_ids)):
+            raise ValueError("cloud restore receipt ids must be unique")
+        if len(pending_ids) != len(set(pending_ids)):
+            raise ValueError("pending cloud restore ids must be unique")
+        if set(receipt_ids).intersection(pending_ids):
+            raise ValueError("a cloud restore id cannot be pending and committed")
+        if len(self.receipts) > _MAX_CLOUD_RESTORE_RECEIPTS:
+            raise ValueError("too many cloud restore receipts")
+        if len(self.pending) > _MAX_CLOUD_RESTORE_PENDING:
+            raise ValueError("too many pending cloud restores")
+        return self
+
+
+class CloudRestoreReceiptStore:
+    """Durable, bounded exactly-once metadata for cloud snapshot restores.
+
+    A pending intent closes the crash window between allocating/populating a
+    project and publishing its manuscript. A committed receipt is written only
+    after every restored resource is durable and records validators for all of
+    them, so an old retry can never be confused with a document edited later.
+    """
+
+    def __init__(self, root: Path | None = None) -> None:
+        self._path = (root or _data_dir()) / _CLOUD_RESTORE_STATE
+
+    def _load(self) -> _CloudRestoreReceiptState:
+        state, _recovered = _read_with_recovery(
+            self._path,
+            _CloudRestoreReceiptState.model_validate_json,
+            label="cloud restore retry receipts",
+        )
+        return state or _CloudRestoreReceiptState()
+
+    def _save(self, state: _CloudRestoreReceiptState) -> None:
+        validated = _CloudRestoreReceiptState.model_validate(state.model_dump())
+        _atomic_write_text(self._path, validated.model_dump_json(indent=2))
+
+    def get_receipt(self, restore_id: str) -> CloudRestoreReceipt | None:
+        with _STATE_LOCK:
+            match = next(
+                (item for item in self._load().receipts if item.restore_id == restore_id),
+                None,
+            )
+            return match.model_copy(deep=True) if match is not None else None
+
+    def get_pending(self, restore_id: str) -> CloudRestorePending | None:
+        with _STATE_LOCK:
+            match = next(
+                (item for item in self._load().pending if item.restore_id == restore_id),
+                None,
+            )
+            return match.model_copy(deep=True) if match is not None else None
+
+    def begin(
+        self,
+        restore_id: str,
+        request_digest: str,
+        document_id: str,
+        source_project_id: str,
+    ) -> CloudRestorePending:
+        with _STATE_LOCK:
+            state = self._load()
+            if any(item.restore_id == restore_id for item in state.receipts):
+                raise ValueError("cloud restore is already committed")
+            current = next(
+                (item for item in state.pending if item.restore_id == restore_id),
+                None,
+            )
+            if current is not None and (
+                current.request_digest != request_digest
+                or current.document_id != document_id
+            ):
+                raise ValueError("cloud restore id is already pending for another request")
+            pending = current or CloudRestorePending(
+                restore_id=restore_id,
+                request_digest=request_digest,
+                document_id=document_id,
+                source_project_id=source_project_id,
+                started_at=_now(),
+            )
+            kept = [item for item in state.pending if item.restore_id != restore_id]
+            kept.append(pending)
+            kept.sort(key=lambda item: item.started_at)
+            if len(kept) > _MAX_CLOUD_RESTORE_PENDING:
+                raise ValueError("too many cloud restores are pending")
+            self._save(state.model_copy(update={"pending": kept}))
+            return pending.model_copy(deep=True)
+
+    def mark_prepared(
+        self,
+        restore_id: str,
+        request_digest: str,
+        validators: CloudRestorePreparedValidators,
+    ) -> CloudRestorePending:
+        with _STATE_LOCK:
+            state = self._load()
+            current = next(
+                (item for item in state.pending if item.restore_id == restore_id),
+                None,
+            )
+            if current is None or current.request_digest != request_digest:
+                raise ValueError("pending cloud restore intent was lost or replaced")
+            prepared = current.model_copy(update={"prepared": validators})
+            pending = [
+                prepared if item.restore_id == restore_id else item
+                for item in state.pending
+            ]
+            self._save(state.model_copy(update={"pending": pending}))
+            return prepared.model_copy(deep=True)
+
+    def commit(
+        self,
+        pending: CloudRestorePending,
+        incarnation: str,
+        whiteboard_revision: str,
+    ) -> CloudRestoreReceipt:
+        if pending.prepared is None:
+            raise ValueError("cloud restore cannot commit before preparation")
+        with _STATE_LOCK:
+            state = self._load()
+            current = next(
+                (item for item in state.pending if item.restore_id == pending.restore_id),
+                None,
+            )
+            if current is None or current != pending:
+                raise ValueError("pending cloud restore intent changed before commit")
+            receipt = CloudRestoreReceipt(
+                restore_id=pending.restore_id,
+                request_digest=pending.request_digest,
+                document_id=pending.document_id,
+                incarnation=incarnation,
+                source_project_id=pending.source_project_id,
+                validators=CloudRestoreValidators(
+                    **pending.prepared.model_dump(),
+                    whiteboard_revision=whiteboard_revision,
+                ),
+                committed_at=_now(),
+            )
+            receipts = [
+                item for item in state.receipts
+                if item.restore_id != pending.restore_id
+            ]
+            receipts.append(receipt)
+            receipts.sort(key=lambda item: item.committed_at)
+            receipts = receipts[-_MAX_CLOUD_RESTORE_RECEIPTS:]
+            remaining = [
+                item for item in state.pending
+                if item.restore_id != pending.restore_id
+            ]
+            self._save(_CloudRestoreReceiptState(
+                receipts=receipts,
+                pending=remaining,
+            ))
+            return receipt.model_copy(deep=True)
+
+    def discard_receipt(self, restore_id: str) -> None:
+        with _STATE_LOCK:
+            state = self._load()
+            receipts = [
+                item for item in state.receipts if item.restore_id != restore_id
+            ]
+            if len(receipts) != len(state.receipts):
+                self._save(state.model_copy(update={"receipts": receipts}))
+
+    def discard_pending(self, restore_id: str) -> None:
+        with _STATE_LOCK:
+            state = self._load()
+            pending = [
+                item for item in state.pending if item.restore_id != restore_id
+            ]
+            if len(pending) != len(state.pending):
+                self._save(state.model_copy(update={"pending": pending}))
+
+
 def migrate_legacy(default_doc_id: str) -> None:
     """One-time upgrade: fold the pre-multi-document singleton files
     (``whiteboard.json`` / ``outline.json``) into the default document so an
@@ -1608,3 +1863,4 @@ outline_items_store = OutlineItemsStore()
 drafter_pages_store = DrafterPagesStore()
 comments_store = CommentsStore()
 psyke_revision_store = PsykeRevisionStore()
+cloud_restore_receipt_store = CloudRestoreReceiptStore()

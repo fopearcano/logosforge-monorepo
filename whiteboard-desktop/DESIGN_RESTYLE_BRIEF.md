@@ -96,7 +96,7 @@ Global keyboard shortcuts (`App.tsx`, window `keydown` listener; modifier = Meta
 - `Escape` → tiered handling (see STATES). Each handled shortcut calls `e.preventDefault()`.
 - Note: `Cmd/Ctrl+K` is intentionally NOT bound here (reserved for Logos).
 
-Native View-menu actions (`onMenuView` from `fileApi`, mouse-driven menu): actions `toggleTopPanel`, `toggleOutline`, `togglePsyke`, `focusMode`, `toggleTheme` map to the same handlers. Menu and keyboard share handlers via `actionsRef` (a ref kept in sync each render so listeners subscribe once).
+Native View-menu actions (`onMenuView` from `fileApi`, mouse-driven menu): actions `toggleTopPanel`, `toggleOutline`, `togglePsyke`, `toggleStoryMap`, `focusMode`, and `toggleComments` map to the same handlers. Menu and keyboard share handlers via `actionsRef` (a ref kept in sync each render so listeners subscribe once).
 
 Outline navigation: `OutlinePanel onNavigate={(item) => scrollToBlock(item.blockIndex)}` → `scrollToBlock` queries `.wb-editor`, indexes `children[index]`, and calls `scrollIntoView({behavior:'smooth', block:'center'})`.
 
@@ -117,7 +117,7 @@ Popover (`Popover.tsx`): trigger button toggles `open`; when open, an outside `m
 ### DATA & API
 - **Backend status**: `bridge` from `./api/backend` (type `BackendStatus`). `bridge.getBackendStatus()` (one-shot Promise) + `bridge.onBackendStatus(cb)` (subscription returning an unsubscribe fn). `BackendStatus` shape used here: `{ state: 'connecting'|'connected'|'error', baseUrl, managed, detail?, apiVersion?, version? }`. `baseUrl = status.baseUrl || DEFAULT_BASE_URL` (`DEFAULT_BASE_URL` from `features/whiteboard/whiteboardApi`).
 - **UI visibility store**: `useUiVisibility()` from `./state/uiVisibilityStore` — exposes `outlineVisible`, `topPanelVisible`, `statusBarVisible`, `psykeButtonVisible`, `focusModeActive`, and actions `toggleOutline`, `toggleTopPanel`, `enterFocusMode`, `exitFocusMode`, `handleEscape`.
-- **Theme**: `useTheme()` (`{themeId, setThemeId}`) + `PREDEFINED_THEMES` (cycled by `cycleTheme`), `ThemeSelector`, `ThemeProvider`, and `applyStoredTheme()` (called in `main.tsx` before render to avoid theme flash). From `./styles/themes/*`.
+- **Theme**: `ThemeSelector`, `ThemeProvider`, and `applyStoredTheme()` (called in `main.tsx` before render to avoid theme flash). From `./styles/themes/*`. Theme choice lives in the title-bar selector rather than the native View menu.
 - **Menu bridge**: `onMenuView(cb)` from `./features/files/fileApi` (native View-menu events).
 - **Feature pages (contract owners, not restyled here)**: `WhiteboardPage` props `{ baseUrl, ready, onOutlineChange, onModeChange }`; `OutlinePanel` props `{ derivedItems, onNavigate, baseUrl, ready, mode }`; `PsykeWindow` props `{ baseUrl, initialQuery, onClose }`. `OutlineItem` type from `features/outline/types` (renders via `item.blockIndex`).
 - **Global stylesheet**: `./styles/app.css` imported in `main.tsx` — all shell class names below are styled there.
@@ -673,7 +673,7 @@ A narrow (320px) dark floating panel hugging the right edge, separated by a hair
 ## Files, Import/Export, Editor Tools, Writing Modes
 
 ### PURPOSE
-This area covers everything around getting a document *in and out of the Whiteboard* and *configuring the editing surface*: native disk file management (New / Open / Save / Save As), multi-format Import/Export, the optional "Nerd Mode" editor view aids (line numbers, current-line highlight, folding, syntax highlighting, typography overrides), and the Writing Mode selector that switches the document's structural model (novel / screenplay / graphic_novel / stage / series / notes). It is deliberately minimal — every editor aid defaults to off so the page stays a clean writing surface until the writer opts in.
+This area covers everything around getting a document *in and out of the Whiteboard* and *configuring the editing surface*: native disk file management (New / Open / Save / Save As), multi-format Import/Export, the optional "Nerd Mode" editor view aids (line numbers, folding, syntax highlighting, typography overrides), and the Writing Mode selector that switches the document's structural model (novel / screenplay / graphic_novel / stage / series / notes). It is deliberately minimal — editor aids remain quiet until the writer opts in.
 
 ---
 
@@ -685,9 +685,9 @@ All surfaces live on the single `wb-statusline` bar at the top of `WhiteboardPag
 3. **Inferred screenplay element chip** (`sp-element`) — `wb-statusline-left`, only in screenplay mode. Read-only, not part of this area's owned logic but adjacent.
 4. **Draft / autosave indicator** (`wb-draft`) — `wb-statusline-right`. The *backend session* save state, deliberately distinct from file state. Not owned here but must not be conflated with #5.
 5. **File state label** (`wb-filestate`) — `wb-statusline-right`. The source of truth for "saved to disk": shows "Untitled", "name.fountain — Saved to file", "… — Modified", "… — Saving…", or "… — Save failed". Tooltip shows the absolute path (or "Not saved to a file yet").
-6. **Editor Settings popover** — `wb-statusline-right`, rightmost (`align="right"`). Trigger labeled "Editor" opens the `wb-settings` panel: an "Editor View" heading, four checkboxes (line numbers, current-line highlight, folding, syntax), three dropdowns (syntax theme, font size, line height, typeface), and a "Reset editor view" button.
+6. **Editor Settings popover** — `wb-statusline-right`, rightmost (`align="right"`). Trigger labeled "Editor" opens the `wb-settings` panel: an "Editor View" heading, three checkboxes (line numbers, folding, syntax), typography and layout selectors, an installed-system-font picker, and a "Reset editor view" button.
 7. **Import/Export feedback toast** (`wb-toast`) — floating, bottom of `<main className="whiteboard">`. Transient success/error message, click-to-dismiss, auto-clears after 3.6 s.
-8. **Inline editor decorations** — rendered *inside* the TipTap writing surface, not the toolbar: the line-number gutter, current-line band, fold toggle carets (`▸`/`▾`), and syntax token coloring. These are ProseMirror decorations, not React DOM.
+8. **Inline editor decorations** — rendered *inside* the TipTap writing surface, not the toolbar: the line-number gutter, fold toggle carets (`▸`/`▾`), and syntax token coloring. These are ProseMirror decorations, not React DOM.
 9. **Native OS dialogs** — Open/Save file pickers, the unsaved-changes prompt (Save / Don't Save / Cancel), and the import-mode prompt (Replace / Append / Cancel) are all native Electron dialogs driven over IPC; they are not styleable in the renderer.
 
 ---
@@ -720,7 +720,7 @@ All surfaces live on the single `wb-statusline` bar at the top of `WhiteboardPag
 
 **Writing Mode** — selecting an option calls `onChange` → `setMode`. Disabled when no document is loaded or `modes` is empty.
 
-**Editor Settings** — checkboxes call `toggle('lineNumbers' | 'currentLineHighlight' | 'folding' | 'syntax')`; dropdowns call `update(key, value)` (font size / line height accept "Default" = `null`; typeface/syntax theme are enums). "Reset editor view" → `onReset` (`resetEditorView` = `reset()` tool state + `clearFolds()`).
+**Editor Settings** — checkboxes call `toggle('lineNumbers' | 'folding' | 'syntax')`; selectors call `update(key, value)` (font size / line height accept "Default" = `null`; typeface and layout are enums). "Reset editor view" → `onReset` (`resetEditorView` = `reset()` tool state + `clearFolds()`).
 
 **Keyboard shortcuts** (registered in `WhiteboardPage.tsx` keydown handler; work in every mode):
 - `Ctrl/Cmd+L` → toggle line numbers.
@@ -741,7 +741,7 @@ All surfaces live on the single `wb-statusline` bar at the top of `WhiteboardPag
 - **Dirty flag** — set on any edit via `markDirty`; suppressed during a programmatic load (`suppressDirty` ref). Cleared only by explicit Save/Open/New. Mirrored to main via `fileApi.setDirty`.
 - **No-bridge / browser fallback** — when not running in Electron, `filesAvailable()` / `importExportAvailable()` are false and every bridge call resolves to a safe error result (`NO_BRIDGE`) or a no-op; guard prompts default to `'dont-save'`, import mode to `'cancel'`.
 - **Writing modes loading** — `useWritingModes` exposes `loading` / `error`; until loaded, the selector shows a single fallback `<option>` of the current value and the default mode is `'novel'`.
-- **Editor tools toggles** — each of the four boolean aids is independently on/off; the extension renders nothing (`return null`) when all four are off. Typography overrides (`fontSize`, `lineHeight`) are `null` = "use mode default"; `typeface` `'default'` = per-mode typeface.
+- **Editor tools toggles** — each of the three boolean aids is independently on/off; the extension renders nothing (`return null`) when all three are off. Typography overrides (`fontSize`, `lineHeight`) are `null` = "use mode default"; `typeface` `'default'` = per-mode typeface.
 - **Writing-mode variants** affect behavior here:
   - *Folding:* headings fold in **all** modes; **screenplay** additionally folds multi-block Notes (`[[ … ]]`) and boneyard (`/* … */`).
   - *Syntax:* **screenplay** uses the Fountain classifier (scene_heading/character/dialogue/etc. + title-page + boneyard tokens); **prose modes** classify Markdown-ish chapter/heading/subheading/bullet/checkbox. Inline tokens (emphasis, note, todo, tag, link, checkbox, psyke) are shared, except checkbox/tag are skipped in screenplay.
@@ -779,16 +779,16 @@ All surfaces live on the single `wb-statusline` bar at the top of `WhiteboardPag
 - The file-state and draft indicators' look: `wb-filestate` (and `is-dirty`), `wb-draft` / `wb-draft-*` — text content is generated by `fileStateLabel` but the chrome is free.
 - The toast look/motion: `wb-toast`, `wb-toast-ok`, `wb-toast-error`.
 - The **syntax theme palettes** in `syntaxThemes.ts` (`minimal`, `paper`, `writer-dark`, `sublime-dark`) and the `--syn-*` color values — these are pure color and may be retuned, themes added/relabeled.
-- The fold caret glyphs/animation, current-line band styling, and gutter appearance — purely decorative.
+- The fold caret glyphs/animation and gutter appearance — purely decorative.
 - The HTML export's embedded `<style>` block in `buildHtml` is independent of app chrome and may be restyled (it ships inside exported files).
 
 ---
 
 ### LOGIC INVARIANTS (must preserve)
 **DOM hooks the editor-decoration logic and CSS gating depend on** — renaming any of these silently breaks a feature:
-- Decoration classes emitted by `editorToolsExtension.ts:build()`: `wb-ln` (+ `data-ln` attribute = line number), `wb-current-line`, `wb-folded-hidden`, `wb-fold-head`, `wb-fold-collapsed`, and `wb-syn-<token>` (block + inline). The `data-ln` attribute is the line-number value; the CSS gutter renders it via `::before`.
+- Decoration classes emitted by `editorToolsExtension.ts:build()`: `wb-ln` (+ `data-ln` attribute = line number), `wb-folded-hidden`, `wb-fold-head`, `wb-fold-collapsed`, and `wb-syn-<token>` (block + inline). The `data-ln` attribute is the line-number value; the CSS gutter renders it via `::before`.
 - The fold-toggle widget (`foldToggleDOM`): class `wb-fold-toggle`, glyphs `▸`/`▾`, `role="button"`, `aria-label` "Expand block"/"Collapse block", `contenteditable="false"`, and its `mousedown`→`preventDefault` behavior. Do not remove the mousedown guard or the click handler.
-- Surface gating attributes from `editorToolsSurface.ts:editorToolsAttrs`: `data-linenumbers`, `data-folding`, `data-syntax`, `data-currentline`, `data-editor-font`, `data-editor-lh`, `data-editor-typeface`. CSS keys off these to show/hide each tool, so the styling must stay attribute-gated.
+- Surface gating attributes from `editorToolsSurface.ts:editorToolsAttrs`: `data-linenumbers`, `data-folding`, `data-syntax`, `data-editor-font`, `data-editor-lh`, `data-editor-typeface`. CSS keys off these to show/hide each tool, so the styling must stay attribute-gated.
 - CSS custom properties from `editorToolsVars` / `themeCssVars`: `--wb-font-px`, `--wb-line-height`, and `--syn-*`. Also `--measure` and `--wb-scale` set alongside them on the surface.
 
 **Data-flow / behavioral contracts:**
@@ -808,7 +808,7 @@ All surfaces live on the single `wb-statusline` bar at the top of `WhiteboardPag
 ---
 
 ### CURRENT LOOK
-A single slim status bar (`wb-statusline`) spans the top of the writing area, split left/right. Left: a text-trigger "File" popover button, the "Mode" labeled dropdown with a small slash-joined vocabulary chip, and (in screenplay) an inferred-element chip. Right: a muted backend "Draft/autosave" pill, a "name — Saved/Modified" file-state pill (asterisk-free; dirtiness shown as " — Modified" text + `is-dirty` class), and an "Editor" popover button. The File popover is a plain vertical list of text buttons with two labeled sections (Import / Export) separated by thin rules, scrollable, ending in a greyed-out "Export as PDF… (planned)". The Editor Settings popover is a compact form: a small title, stacked checkbox rows with inline `<kbd>` shortcut hints, four native `<select>` dropdowns, and a "Reset editor view" text button. Inside the editor, enabled aids appear as a numbered left gutter, a faint current-line band, small triangle fold carets at heading/note/boneyard heads, and low-saturation token coloring driven by the selected palette. Feedback from import/export appears as a small floating toast near the bottom.
+A single slim status bar (`wb-statusline`) spans the top of the writing area, split left/right. Left: a text-trigger "File" popover button, the "Mode" labeled dropdown with a small slash-joined vocabulary chip, and (in screenplay) an inferred-element chip. Right: a muted backend "Draft/autosave" pill, a "name — Saved/Modified" file-state pill (asterisk-free; dirtiness shown as " — Modified" text + `is-dirty` class), and an "Editor" popover button. The File popover is a plain vertical list of text buttons with two labeled sections (Import / Export) separated by thin rules, scrollable, ending in a greyed-out "Export as PDF… (planned)". The Editor Settings popover is a compact form: a small title, stacked checkbox rows with inline `<kbd>` shortcut hints, typography/layout selectors, installed-font controls, and a "Reset editor view" text button. Inside the editor, enabled aids appear as a numbered left gutter, small triangle fold carets at heading/note/boneyard heads, and low-saturation token coloring driven by the selected palette. Feedback from import/export appears as a small floating toast near the bottom.
 
 ---
 
@@ -835,10 +835,10 @@ A consolidated, deduplicated checklist of behaviors, contracts, and DOM hooks th
 
 ### Editor surface attributes & decoration classes (set by feature code; restyle the rules, never rename the attribute/value names or classes)
 - On `.wb-editor`: `data-writing-mode` ∈ `novel/screenplay/graphic_novel/stage/series` — source of per-mode typography and `isScreenplay` gating.
-- On `.wb-surface`: `data-screenplay`; document-settings attrs `data-scene-style` (normal/bold/underline/bold-underline), `data-scene-blank` (1/2), `data-typeface` (courier-prime/courier/monospace), `data-invisibles` (on/off); editor-tools attrs `data-linenumbers`, `data-folding`, `data-syntax`, `data-currentline`, `data-editor-font`, `data-editor-lh`, `data-editor-typeface`; the `.is-preview` modifier. CSS must stay attribute-gated. Preview reads the same attrs to stay in sync.
+- On `.wb-surface`: `data-screenplay`; document-settings attrs `data-scene-style` (normal/bold/underline/bold-underline), `data-scene-blank` (1/2), `data-typeface` (courier-prime/courier/monospace), `data-invisibles` (on/off); editor-tools attrs `data-linenumbers`, `data-folding`, `data-syntax`, `data-editor-font`, `data-editor-lh`, `data-editor-typeface`; the `.is-preview` modifier. CSS must stay attribute-gated. Preview reads the same attrs to stay in sync.
 - `--measure` is the editor column width source (per-mode, e.g. `63ch` screenplay); `--wb-scale` drives font scale — don't hardcode widths over them.
 - Screenplay element classes emitted by ProseMirror decorations / Preview (renaming silently breaks formatting): `sp-{FountainType}` (`sp-scene_heading`, `sp-character`, `sp-dialogue`, `sp-parenthetical`, `sp-transition`, `sp-section`, `sp-synopsis`, `sp-note`, `sp-centered`, `sp-page_break`), `sp-title-page`, `sp-boneyard`, and inline `sp-bold/sp-italic/sp-bold-italic/sp-underline/sp-emph-marker`. Preview reuses these same classes.
-- Editor-tools decoration classes: `wb-ln` (+ `data-ln` = line number, rendered via `::before`), `wb-current-line`, `wb-folded-hidden`, `wb-fold-head`, `wb-fold-collapsed`, `wb-syn-<token>` (block + inline). Fold-toggle widget: class `wb-fold-toggle`, glyphs `▸`/`▾`, `role="button"`, `aria-label` Expand/Collapse block, `contenteditable="false"`, `mousedown`→`preventDefault` (keep the guard + click handler).
+- Editor-tools decoration classes: `wb-ln` (+ `data-ln` = line number, rendered via `::before`), `wb-folded-hidden`, `wb-fold-head`, `wb-fold-collapsed`, `wb-syn-<token>` (block + inline). Fold-toggle widget: class `wb-fold-toggle`, glyphs `▸`/`▾`, `role="button"`, `aria-label` Expand/Collapse block, `contenteditable="false"`, `mousedown`→`preventDefault` (keep the guard + click handler).
 
 ### Keyboard contracts (global + per-area)
 - **`Cmd/Ctrl+K` must stay unbound everywhere except Logos** (legacy alias to toggle Logos). Reserved app-wide.

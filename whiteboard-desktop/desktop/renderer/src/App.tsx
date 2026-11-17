@@ -36,9 +36,8 @@ import {
   toggleLogos,
 } from './state/littleBoyControl';
 import { useUiVisibility } from './state/uiVisibilityStore';
-import { PREDEFINED_THEMES } from './styles/themes/predefinedThemes';
+import { useCloudSyncUiState } from './features/cloudSync/cloudSyncStore';
 import { ThemeSelector } from './styles/themes/ThemeSelector';
-import { useTheme } from './styles/themes/useTheme';
 import logoUrl from './assets/logo.png';
 
 function currentSelectionText(): string {
@@ -65,8 +64,8 @@ const clampOutlineWidth = (w: number) => Math.min(OUTLINE_W_MAX, Math.max(OUTLIN
 
 export function App() {
   const ui = useUiVisibility();
+  const cloudSync = useCloudSyncUiState();
   const currentDocId = useCurrentDocId();
-  const { themeId, setThemeId } = useTheme();
   const [status, setStatus] = useState<BackendStatus>({
     state: 'connecting',
     baseUrl: '',
@@ -247,11 +246,6 @@ export function App() {
     }
   }, [ui]);
 
-  const cycleTheme = useCallback(() => {
-    const i = PREDEFINED_THEMES.findIndex((t) => t.id === themeId);
-    setThemeId(PREDEFINED_THEMES[(i + 1) % PREDEFINED_THEMES.length].id);
-  }, [themeId, setThemeId]);
-
   const togglePsyke = useCallback(
     () =>
       setPsykeOpen((o) => {
@@ -272,7 +266,6 @@ export function App() {
     toggleTopPanel: ui.toggleTopPanel,
     toggleStoryMap: ui.toggleStoryMap,
     toggleFocus,
-    cycleTheme,
     togglePsyke,
     handleEscape: ui.handleEscape,
   });
@@ -281,7 +274,6 @@ export function App() {
     toggleTopPanel: ui.toggleTopPanel,
     toggleStoryMap: ui.toggleStoryMap,
     toggleFocus,
-    cycleTheme,
     togglePsyke,
     handleEscape: ui.handleEscape,
   };
@@ -315,7 +307,6 @@ export function App() {
         else if (action === 'togglePsyke') a.togglePsyke();
         else if (action === 'toggleStoryMap') a.toggleStoryMap();
         else if (action === 'focusMode') a.toggleFocus();
-        else if (action === 'toggleTheme') a.cycleTheme();
         else if (action === 'toggleComments') toggleCommentsPanel();
       }),
     [],
@@ -510,8 +501,8 @@ export function App() {
             type="button"
             className={`icon-toggle${settingsOpen ? ' is-active' : ''}`}
             onClick={() => setSettingsOpen((open) => !open)}
-            title="AI provider settings"
-            aria-label="AI provider settings"
+            title="Settings"
+            aria-label="Settings"
           >
             ⚙
           </button>
@@ -623,7 +614,7 @@ export function App() {
         </RenderErrorBoundary>
       )}
       <HelpDialog open={helpOpen} onClose={() => setHelpOpen(false)} />
-      {ui.statusBarVisible && <StatusBar status={status} />}
+      {ui.statusBarVisible && <StatusBar status={status} cloudSync={cloudSync} />}
       {focusHint && <div className="focus-hint">Focus Mode — press Esc to exit</div>}
     </div>
   );

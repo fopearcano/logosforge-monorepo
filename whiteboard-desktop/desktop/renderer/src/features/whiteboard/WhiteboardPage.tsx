@@ -53,6 +53,8 @@ import { setDocumentMenuApi } from '../../state/documentMenu';
 import { captureDocumentIdentity } from '../../state/currentDocument';
 import { LittleBoyProvider } from '../littleboy/LittleBoyProvider';
 import { SettingsDialog } from '../settings/SettingsDialog';
+import { CloudSyncConflictDialog } from '../cloudSync/CloudSyncConflictDialog';
+import { useCloudSync } from '../cloudSync/useCloudSync';
 import { PreviewView } from '../screenplay/PreviewView';
 import { printScreenplayPdf } from '../screenplay/printScreenplay';
 import { toFountainBlocks } from '../screenplay/screenplayExport';
@@ -67,7 +69,7 @@ import { modeBehavior } from './modes';
 import { ProseToolbar } from './ProseToolbar';
 import { ScreenplayToolbar } from './ScreenplayToolbar';
 import { StoryMap } from './StoryMap';
-import type { SaveStatus, WhiteboardBlock } from './types';
+import type { SaveStatus, WhiteboardBlock, WhiteboardDocument } from './types';
 import { useDocumentSettings } from './useDocumentSettings';
 import { useEditorScale } from './useEditorScale';
 import { useWhiteboardDocument } from './useWhiteboardDocument';
@@ -160,6 +162,8 @@ export function WhiteboardPage({
     setMode,
     selectDocument,
     newDocument: createNewDoc,
+    restoreDocument,
+    refreshDocuments,
     deleteDocument: deleteDoc,
     renameDocument,
   } = useWhiteboardDocument({ baseUrl, ready });
@@ -989,6 +993,24 @@ export function WhiteboardPage({
     onNewDocument: () => createNewDoc(),
   });
   const markFileDirty = fileDoc.markDirty;
+  const restoreActiveCloudDocument = useCallback(async (
+    restore: () => Promise<WhiteboardDocument>,
+  ) => {
+    const restored = await restoreDocument(restore);
+    if (restored) fileDoc.resetForDocument();
+    return restored;
+  }, [fileDoc.resetForDocument, restoreDocument]);
+  const cloudSync = useCloudSync({
+    baseUrl,
+    ready,
+    documentsLoaded: !loading,
+    document: doc,
+    documents: docList,
+    saveStatus,
+    restoreActiveDocument: restoreActiveCloudDocument,
+    deleteLocalDocument: deleteDoc,
+    refreshDocuments,
+  });
   const switchStoredDocument = useCallback(
     async (id: string) => {
       if (id === doc?.id) return;
@@ -1005,15 +1027,27 @@ export function WhiteboardPage({
   const deleteStoredDocument = useCallback(
     async (id: string) => {
       const deletingCurrent = id === doc?.id;
+      const deletingSummary = docList.find((candidate) => candidate.id === id) ?? null;
       if (deletingCurrent && fileDoc.filePath) {
         const proceed = await fileDoc.confirmProceedPastUnsavedChanges(
           'Save file changes before deleting this Whiteboard document?',
         );
         if (!proceed) return;
       }
-      if ((await deleteDoc(id)) && deletingCurrent) fileDoc.resetForDocument();
+      if (await deleteDoc(id)) {
+        if (deletingSummary) await cloudSync.forgetDeletedDocument(deletingSummary);
+        if (deletingCurrent) fileDoc.resetForDocument();
+      }
     },
-    [deleteDoc, doc?.id, fileDoc.filePath, fileDoc.confirmProceedPastUnsavedChanges, fileDoc.resetForDocument],
+    [
+      cloudSync.forgetDeletedDocument,
+      deleteDoc,
+      doc?.id,
+      docList,
+      fileDoc.filePath,
+      fileDoc.confirmProceedPastUnsavedChanges,
+      fileDoc.resetForDocument,
+    ],
   );
 
   const replaceDrafterPagesForRecovery = useCallback((pages: DrafterPage[]): boolean => {
@@ -1740,10 +1774,22 @@ export function WhiteboardPage({
             open
             baseUrl={baseUrl}
             writingSettingsApi={settingsApi}
+            cloudSync={cloudSync.controls}
             onClose={onCloseSettings}
           />
         </RenderErrorBoundary>
       )}
+      <CloudSyncConflictDialog
+        open={cloudSync.conflictOpen}
+        conflict={cloudSync.controls.state.conflict ?? null}
+        busy={cloudSync.controls.state.busy}
+        error={cloudSync.conflictError}
+        onClose={cloudSync.closeConflict}
+        onKeepBoth={cloudSync.keepBoth}
+        onUseCloudCopy={cloudSync.useCloudCopy}
+        onReplaceCloud={cloudSync.replaceCloud}
+        onRecoverRemote={cloudSync.recoverRemote}
+      />
       {editor && doc && (
         <RenderErrorBoundary
           name="Comments"
@@ -1763,8 +1809,38 @@ export function WhiteboardPage({
         </RenderErrorBoundary>
       )}
 
-      {(importExport.feedback || (doc && loadError) || recoveryNotices[0] || commentsApi.error || drafter.error || drafterFeedback) && (
+      {(importExport.feedback
+        || (doc && loadError)
+        || recoveryNotices[0]
+        || commentsApi.error
+        || drafter.error
+        || drafterFeedback
+        || cloudSync.controls.state.conflict
+        || cloudSync.controls.state.status === 'error'
+        || cloudSync.controls.state.status === 'folder-unavailable') && (
         <div className="wb-toast-stack" role="region" aria-label="Notifications">
+          {(cloudSync.controls.state.conflict
+            || cloudSync.controls.state.status === 'error'
+            || cloudSync.controls.state.status === 'folder-unavailable') && (
+            <div className="wb-toast wb-toast-error wb-toast-cloud-sync" role="alert" aria-atomic="true">
+              <span className="wb-toast-message">
+                {cloudSync.controls.state.conflict
+                  ? `Cloud sync needs attention for ${cloudSync.controls.state.conflict.projectTitle}. Both versions are safe.`
+                  : cloudSync.controls.state.detail || 'Cloud folder sync needs attention.'}
+              </span>
+              <span className="wb-toast-actions">
+                {cloudSync.controls.state.conflict ? (
+                  <button type="button" className="wb-toast-action" onClick={cloudSync.openConflict}>
+                    Review conflict
+                  </button>
+                ) : (
+                  <button type="button" className="wb-toast-action" onClick={() => void cloudSync.controls.onRetry()}>
+                    Retry
+                  </button>
+                )}
+              </span>
+            </div>
+          )}
           {recoveryNotices[0] && (
             <div
               className="wb-toast wb-toast-recovery"

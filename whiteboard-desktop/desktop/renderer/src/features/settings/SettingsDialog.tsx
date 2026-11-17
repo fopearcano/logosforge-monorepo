@@ -1,15 +1,19 @@
 /**
- * AI provider settings — a modal to point the Whiteboard's AI (Billy + Logos)
- * at an endpoint. Reads/writes the CORE's global assistant settings through the
- * Whiteboard backend passthrough. The API key is write-only (blank keeps the
- * stored one). "Test connection" saves the current form, then round-trips a
- * trivial prompt so you can confirm the provider actually responds.
+ * Application settings. Cloud folder controls are applied immediately; AI
+ * settings are read/written through the Whiteboard backend passthrough. The API
+ * key is write-only (blank keeps the stored one). "Test connection" saves the
+ * current AI form, then round-trips a trivial prompt.
  */
 
 import { useEffect, useRef, useState } from 'react';
 
 import { ModalPortal } from '../../components/ModalPortal';
 import { useModalDialog } from '../../components/useModalDialog';
+import {
+  cloudSyncStatusLabel,
+  formatCloudSyncTime,
+  type CloudSyncControls,
+} from '../cloudSync/cloudSyncUi';
 import {
   AI_PROVIDERS,
   PROVIDER_DEFAULT_URL,
@@ -32,6 +36,7 @@ interface Props {
   open: boolean;
   baseUrl: string;
   writingSettingsApi: DocumentSettingsApi;
+  cloudSync?: CloudSyncControls;
   onClose: () => void;
 }
 
@@ -65,7 +70,7 @@ const SLANG_LEVELS: { value: SlangLevel; label: string }[] = [
 
 const EMPTY: AiSettings = { provider: 'LM Studio', model: '', base_url: '', timeout: 0 };
 
-export function SettingsDialog({ open, baseUrl, writingSettingsApi, onClose }: Props) {
+export function SettingsDialog({ open, baseUrl, writingSettingsApi, cloudSync, onClose }: Props) {
   const [form, setForm] = useState<AiSettings>(EMPTY);
   const [apiKey, setApiKey] = useState('');
   const [loading, setLoading] = useState(false);
@@ -239,6 +244,67 @@ export function SettingsDialog({ open, baseUrl, writingSettingsApi, onClose }: P
           </label>
         </div>
 
+        {cloudSync && (
+          <section className="cloud-sync-settings" aria-labelledby="cloud-sync-settings-title">
+            <h3 id="cloud-sync-settings-title" className="settings-section-title">Cloud folder sync</h3>
+            <p className="settings-section-note">
+              Sync complete Whiteboard projects through a folder managed by Google Drive, Dropbox,
+              OneDrive, iCloud Drive, Syncthing, or another desktop sync app. Whiteboard stores no
+              cloud-account credentials.
+            </p>
+            <div className="cloud-sync-summary">
+              <div className="cloud-sync-state" data-status={cloudSync.state.status} role="status" aria-live="polite">
+                <span aria-hidden="true" />
+                <strong>{cloudSyncStatusLabel(cloudSync.state.status)}</strong>
+                {cloudSync.state.detail && <small>{cloudSync.state.detail}</small>}
+              </div>
+              <div className="cloud-sync-path">
+                <span>Sync folder</span>
+                <code title={cloudSync.state.folderPath ?? undefined}>
+                  {cloudSync.state.folderPath ?? 'No folder selected'}
+                </code>
+              </div>
+              <div className="cloud-sync-last">
+                Last successful sync: <time>{formatCloudSyncTime(cloudSync.state.lastSuccessfulSyncAt)}</time>
+              </div>
+            </div>
+            <label className="cloud-sync-automatic">
+              <input
+                type="checkbox"
+                checked={cloudSync.state.automatic}
+                disabled={!cloudSync.state.enabled || cloudSync.state.busy}
+                onChange={(event) => void cloudSync.onAutomaticChange(event.target.checked)}
+              />
+              <span>Sync automatically</span>
+            </label>
+            <div className="cloud-sync-actions">
+              <button type="button" className="settings-btn" disabled={cloudSync.state.busy} onClick={() => void cloudSync.onChooseFolder()}>
+                Choose folder…
+              </button>
+              {cloudSync.state.status === 'folder-unavailable' || cloudSync.state.status === 'error' ? (
+                <button type="button" className="settings-btn" disabled={cloudSync.state.busy} onClick={() => void cloudSync.onRetry()}>
+                  Retry
+                </button>
+              ) : (
+                <button type="button" className="settings-btn" disabled={!cloudSync.state.enabled || cloudSync.state.busy} onClick={() => void cloudSync.onSyncNow()}>
+                  {cloudSync.state.status === 'syncing' ? 'Syncing…' : 'Sync now'}
+                </button>
+              )}
+              {cloudSync.state.conflict && (
+                <button type="button" className="settings-btn is-primary" disabled={cloudSync.state.busy} onClick={cloudSync.onReviewConflict}>
+                  Review conflict
+                </button>
+              )}
+              {cloudSync.state.enabled && (
+                <button type="button" className="settings-btn cloud-sync-disable" disabled={cloudSync.state.busy} onClick={() => void cloudSync.onDisable()}>
+                  Disable sync
+                </button>
+              )}
+            </div>
+            <p className="cloud-sync-safety">Local writing stays available while the folder or network is unavailable. Concurrent edits are preserved for review.</p>
+          </section>
+        )}
+
         <h3 className="settings-section-title">AI provider</h3>
         <p className="settings-section-note">Stored locally. A blank API-key field keeps the saved key for the current provider.</p>
 
@@ -326,7 +392,7 @@ export function SettingsDialog({ open, baseUrl, writingSettingsApi, onClose }: P
             {status}
           </span>
           <button type="button" className="settings-btn is-primary" onClick={save} disabled={busy}>
-            {saving ? 'Saving…' : 'Save'}
+            {saving ? 'Saving…' : 'Save AI settings'}
           </button>
         </div>
       </div>

@@ -24,8 +24,9 @@ const BASICS: [string, string][] = [
   ['PSYKE', 'Your per-project story bible — characters, places, objects, lore, themes, and ordered Progressions. Open an entry, then choose Progressions to build its arcs.'],
   ['Comments', 'On the Manuscript or any Drafter page, highlight text and click Comment to leave a threaded note pinned to that writing page.'],
   ['Find & Replace', 'Edit → Find and Replace… (Ctrl/Cmd+F) searches the active Manuscript or Drafter page without covering your prose. It supports case-sensitive and whole-word searches, Replace, and Replace all.'],
-  ['Editor typefaces', 'Editor Settings → Typeface includes serif, sans, mono, typewriter, and handwritten presets. Choose Installed system font… to load or enter a family installed on this computer.'],
+  ['Editor typefaces', 'Editor Settings → Typeface includes an expanded set of serif, sans, mono, typewriter, and handwritten presets. Choose Installed system font… to browse fonts installed on this computer or enter a family directly.'],
   ['AI — Billy & Logos', 'Billy is a chat assistant; Logos works inline. Point them at your provider in Settings ⚙.'],
+  ['Cloud folder sync', 'Settings ⚙ can sync complete projects through a folder managed by Google Drive, Dropbox, OneDrive, iCloud Drive, Syncthing, or a similar desktop app.'],
   ['Export & backup', 'Export Project (.lfbundle) saves manuscript, Drafter pages, document settings, outline, comments, PSYKE, and Progression tracks. Incomplete exports are blocked.'],
 ];
 
@@ -35,6 +36,17 @@ interface Guide {
 }
 
 const GUIDES: Guide[] = [
+  {
+    title: 'Sync across devices',
+    rows: [
+      ['Prepare the provider', 'Install and sign in to the provider’s desktop app so its cloud folder is available on this computer. Whiteboard never receives your Google, Dropbox, Microsoft, or Apple credentials.'],
+      ['Choose once per device', 'Open Settings → Cloud folder sync and select the same provider-managed folder on every device. Whiteboard writes only inside its own LogosForge Whiteboard subfolder.'],
+      ['Automatic & offline', 'Enable Sync automatically for background snapshots. You can keep writing offline; Whiteboard retries after the folder or network returns.'],
+      ['Complete projects', 'Each version carries the Manuscript, Drafter pages, writing settings, outline, comments, PSYKE, and Progressions together.'],
+      ['Concurrent edits', 'If two devices change the same project before syncing, both immutable versions are preserved. Choose Review conflict; Keep both is the safest default.'],
+      ['Deleting locally', 'Removing a local document does not erase its cloud history or silently delete it from another device.'],
+    ],
+  },
   {
     title: 'Progressions',
     rows: [
@@ -59,8 +71,8 @@ const GUIDES: Guide[] = [
   {
     title: 'Typefaces & installed fonts',
     rows: [
-      ['Presets', 'Choose a grouped Serif, Sans serif, Mono & typewriter, or Handwritten voice in Editor Settings → Typeface.'],
-      ['Use an OS font', 'Choose Installed system font…, then Load installed fonts and allow access when your operating system asks.'],
+      ['Presets', 'Choose from the expanded Serif, Sans serif, Mono & typewriter, or Handwritten groups in Editor Settings → Typeface.'],
+      ['Use an OS font', 'Choose Installed system font… Whiteboard loads the local inventory; allow access when your operating system asks, then choose a family from the list.'],
       ['Install another font', 'Install it through Windows, macOS, or Linux first, then return here and refresh the installed-font list.'],
       ['Enter it directly', 'You can type the exact family name and Apply without loading the list. Whiteboard falls back to the mode default if the OS cannot resolve it.'],
       ['Local preference', 'Typography overrides stay on this computer; they do not embed or redistribute font files in project exports.'],
@@ -280,7 +292,7 @@ export function HelpDialog({ open, onClose }: Props) {
             ))}
           </ul>
 
-          <div className="help-eyebrow">Find, replace &amp; fonts</div>
+          <div className="help-eyebrow">Guides</div>
           <div className="help-keys-grid">
             {GUIDES.map((guide) => (
               <div key={guide.title} className="help-group">

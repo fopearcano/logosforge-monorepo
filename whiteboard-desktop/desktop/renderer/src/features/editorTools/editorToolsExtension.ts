@@ -6,7 +6,6 @@
  * in via a meta transaction (no DOM-timing races). The extension renders, all as
  * non-destructive decorations:
  *   - line numbers  (node deco `data-ln` + CSS gutter ::before),
- *   - current line  (node deco `wb-current-line`),
  *   - folding       (node deco `wb-folded-hidden` to hide bodies, `wb-fold-*`
  *                    on heads, + a clickable gutter widget toggle),
  *   - syntax        (node + inline `wb-syn-*` classes, coloured by the theme).
@@ -25,7 +24,6 @@ import { classifySyntax } from './syntax/syntaxClassifier';
 
 export interface EditorToolsPluginState {
   lineNumbers: boolean;
-  currentLineHighlight: boolean;
   folding: boolean;
   syntax: boolean;
   mode: string;
@@ -34,7 +32,6 @@ export interface EditorToolsPluginState {
 
 const INITIAL: EditorToolsPluginState = {
   lineNumbers: false,
-  currentLineHighlight: false,
   folding: false,
   syntax: false,
   mode: 'novel',
@@ -55,7 +52,6 @@ export function editorToolsMeta(
 ): EditorToolsPluginState {
   return {
     lineNumbers: tools.lineNumbers,
-    currentLineHighlight: tools.currentLineHighlight,
     folding: tools.folding,
     syntax: tools.syntax,
     mode,
@@ -95,7 +91,6 @@ function build(
   const hidden = s.folding ? hiddenBlocks(regions, folded) : new Set<number>();
   const heads = new Set(regions.map((r) => r.head));
   const syntax = s.syntax ? classifySyntax(blocks, s.mode) : null;
-  const currentBlock = s.currentLineHighlight ? state.selection.$from.index(0) : -1;
 
   const decos: Decoration[] = [];
   let index = 0;
@@ -109,7 +104,6 @@ function build(
       classes.push('wb-ln');
       attrs['data-ln'] = String(index + 1);
     }
-    if (index === currentBlock) classes.push('wb-current-line');
     if (s.folding) {
       if (hidden.has(index)) classes.push('wb-folded-hidden');
       if (heads.has(index)) {
@@ -171,7 +165,7 @@ export const EditorTools = Extension.create<EditorToolsOptions>({
           decorations(state) {
             const s = editorToolsKey.getState(state);
             if (!s) return null;
-            if (!s.lineNumbers && !s.currentLineHighlight && !s.folding && !s.syntax) return null;
+            if (!s.lineNumbers && !s.folding && !s.syntax) return null;
             return build(state, s, onToggleFold);
           },
         },

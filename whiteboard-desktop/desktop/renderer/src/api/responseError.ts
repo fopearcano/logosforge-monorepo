@@ -78,6 +78,10 @@ export async function responseError(res: Response, fallback: string): Promise<Ba
         message = error.trim();
       }
       if (!message && typeof detail === 'string') message = detail.trim();
+      if (detail && typeof detail === 'object' && !Array.isArray(detail) && !error) {
+        details = detail as Record<string, unknown>;
+        if (typeof details.code === 'string') code = details.code;
+      }
       if (!message && detail && typeof detail === 'object') {
         const nested = (detail as Record<string, unknown>).message;
         if (typeof nested === 'string') message = nested.trim();

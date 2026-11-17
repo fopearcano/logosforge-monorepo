@@ -6,6 +6,7 @@ import {
   type WebContents,
   type IpcMainEvent,
   type IpcMainInvokeEvent,
+  type OpenDialogOptions,
 } from 'electron';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -54,6 +55,13 @@ import {
   validateResourceRevision,
 } from './pending-document-persistence';
 import { FilePendingDocumentRecoveryJournal } from './pending-document-recovery-journal';
+import {
+  CloudSyncManager,
+  type CloudSyncForgetBindingRequest,
+  type CloudSyncPublishRequest,
+  type CloudSyncReadSnapshotRequest,
+} from './cloud-sync-manager';
+import type { RendererCloudActionReceiptRequest } from './cloud-sync-contract';
 
 // Keep packaged user data under the product identity rather than the npm name.
 // This must run before the first user-data path lookup below.
@@ -88,6 +96,7 @@ const mainFileWrites = new PendingOperationTracker();
 const documentRecoveryJournal = ownsSingleInstance
   ? new FilePendingDocumentRecoveryJournal(app.getPath('userData'))
   : null;
+const cloudSync = new CloudSyncManager(app.getPath('userData'));
 const documentPersistence = new PendingDocumentPersistence(async (
   write,
   signal,
@@ -777,6 +786,273 @@ function createWindow(): void {
   });
 }
 
+let cloudStateBroadcastSequence = 0;
+
+function cloudSnapshotForRenderer(snapshot: Awaited<ReturnType<typeof cloudSync.getState>>['projects'][number]['snapshots'][number]) {
+  return {
+    snapshotId: snapshot.snapshotId,
+    parentSnapshotIds: snapshot.parentSnapshotIds,
+    generation: snapshot.generation,
+    digest: snapshot.contentDigest,
+    createdAt: snapshot.createdAt,
+    deviceId: snapshot.deviceId,
+    title: snapshot.projectTitle,
+  };
+}
+
+function cloudBindingForRenderer(binding: Awaited<ReturnType<typeof cloudSync.getState>>['bindings'][number]) {
+  if (!binding.lastSnapshotId || !binding.lastContentDigest) return null;
+  return {
+    localDocumentId: binding.localDocumentId,
+    localIncarnation: binding.localIncarnation,
+    cloudProjectId: binding.cloudProjectId,
+    lastSnapshotId: binding.lastSnapshotId,
+    lastDigest: binding.lastContentDigest,
+  };
+}
+
+function cloudStateForRenderer(state: Awaited<ReturnType<typeof cloudSync.getState>>) {
+  return {
+    enabled: state.enabled,
+    automatic: state.automatic,
+    folderPath: state.folderPath,
+    folderAvailable: state.folderAvailable,
+    warnings: state.warnings,
+    deviceId: state.deviceId,
+    lastSuccessfulSyncAt: state.lastSuccessfulSyncAt,
+    lastError: state.lastError ?? (
+      state.enabled && !state.folderAvailable
+        ? 'The selected cloud folder is unavailable. Local writing is still safe.'
+        : null
+    ),
+    outboxCount: state.pendingDeliveries,
+    bindings: state.bindings.map(cloudBindingForRenderer).filter((binding) => binding !== null),
+    retiredLocalDocuments: state.retiredLocalDocuments.map((identity) => ({
+      localDocumentId: identity.localDocumentId,
+      localIncarnation: identity.localIncarnation,
+      expectedDigest: identity.expectedContentDigest,
+    })),
+    actionReceipts: state.actionReceipts.map((receipt) => ({
+      actionId: receipt.actionId,
+      kind: receipt.kind,
+      phase: receipt.phase,
+      sourceLocalDocumentId: receipt.sourceLocalDocumentId,
+      sourceLocalIncarnation: receipt.sourceLocalIncarnation,
+      originalCloudProjectId: receipt.originalCloudProjectId,
+      intendedCloudProjectId: receipt.intendedCloudProjectId,
+      snapshotId: receipt.snapshotId,
+      snapshotDigest: receipt.snapshotContentDigest,
+      parentSnapshotIds: [...receipt.parentSnapshotIds],
+      expectedSourceDigest: receipt.expectedSourceDigest,
+      restoredLocalDocumentId: receipt.restoredLocalDocumentId,
+      restoredLocalIncarnation: receipt.restoredLocalIncarnation,
+      createdAt: receipt.createdAt,
+      updatedAt: receipt.updatedAt,
+    })),
+    recoveredRemoteHeads: state.recoveredRemoteHeads.map((entry) => ({
+      cloudProjectId: entry.cloudProjectId,
+      snapshotIds: [...entry.snapshotIds],
+    })),
+    ignoredCloudProjectIds: state.ignoredCloudProjectIds,
+    projects: state.projects.map((project) => ({
+      cloudProjectId: project.cloudProjectId,
+      snapshots: project.snapshots.map(cloudSnapshotForRenderer),
+      headSnapshotIds: project.heads.map((head) => head.snapshotId),
+    })),
+  };
+}
+
+async function currentCloudStateForRenderer() {
+  return cloudStateForRenderer(await cloudSync.getState());
+}
+
+function broadcastCloudSyncState(): void {
+  const win = mainWindow;
+  if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return;
+  const sequence = ++cloudStateBroadcastSequence;
+  void currentCloudStateForRenderer().then((state) => {
+    if (
+      sequence === cloudStateBroadcastSequence
+      && mainWindow === win
+      && !win.isDestroyed()
+      && !win.webContents.isDestroyed()
+    ) {
+      win.webContents.send('cloud-sync:changed', state);
+    }
+  }).catch((error) => {
+    console.error('[cloud-sync] could not broadcast state:', error);
+  });
+}
+
+function registerCloudSyncIpc(): void {
+  ipcMain.handle('cloud-sync:get-state', (event) => {
+    requireMainRenderer(event);
+    return currentCloudStateForRenderer();
+  });
+  ipcMain.handle('cloud-sync:get-inventory', (event) => {
+    requireMainRenderer(event);
+    return currentCloudStateForRenderer().then((state) => state.projects);
+  });
+  ipcMain.handle('cloud-sync:choose-folder', async (event) => {
+    requireMainRenderer(event);
+    const options: OpenDialogOptions = {
+      title: 'Choose a folder managed by your cloud service',
+      buttonLabel: 'Use for Whiteboard sync',
+      properties: ['openDirectory', 'createDirectory'],
+    };
+    const result = mainWindow
+      ? await dialog.showOpenDialog(mainWindow, options)
+      : await dialog.showOpenDialog(options);
+    if (result.canceled || result.filePaths.length !== 1) return currentCloudStateForRenderer();
+    await cloudSync.setFolder(result.filePaths[0]);
+    return currentCloudStateForRenderer();
+  });
+  ipcMain.handle('cloud-sync:disable', (event) => {
+    requireMainRenderer(event);
+    return cloudSync.disable().then(cloudStateForRenderer);
+  });
+  ipcMain.handle('cloud-sync:set-automatic', (event, automatic: unknown) => {
+    requireMainRenderer(event);
+    if (typeof automatic !== 'boolean') throw new Error('Automatic sync flag is invalid.');
+    return cloudSync.setAutomatic(automatic).then(cloudStateForRenderer);
+  });
+  ipcMain.handle('cloud-sync:compute-digest', (event, bundle: unknown) => {
+    requireMainRenderer(event);
+    return cloudSync.computeDigest(bundle);
+  });
+  ipcMain.handle('cloud-sync:publish', async (event, request: CloudSyncPublishRequest) => {
+    requireMainRenderer(event);
+    const result = await cloudSync.publish(request);
+    const binding = cloudBindingForRenderer(result.binding);
+    if (!binding) throw new Error('Cloud snapshot binding was incomplete.');
+    return {
+      binding,
+      snapshot: cloudSnapshotForRenderer(result.snapshot),
+      queued: !result.delivered,
+    };
+  });
+  ipcMain.handle('cloud-sync:read-snapshot', async (event, request: CloudSyncReadSnapshotRequest) => {
+    requireMainRenderer(event);
+    const envelope = await cloudSync.readSnapshot(request);
+    return {
+      format: envelope.format,
+      version: envelope.version,
+      cloudProjectId: envelope.cloudProjectId,
+      snapshot: cloudSnapshotForRenderer({
+        ...envelope,
+        projectTitle: typeof envelope.bundle === 'object' && envelope.bundle && !Array.isArray(envelope.bundle)
+          && typeof envelope.bundle.project === 'object' && envelope.bundle.project && !Array.isArray(envelope.bundle.project)
+          && typeof envelope.bundle.project.title === 'string'
+          ? envelope.bundle.project.title
+          : 'Untitled Project',
+        pendingDelivery: false,
+      }),
+      bundle: envelope.bundle,
+    };
+  });
+  ipcMain.handle('cloud-sync:set-binding', async (event, request: {
+    localDocumentId: string;
+    localIncarnation: string;
+    cloudProjectId: string;
+    snapshotId: string;
+    digest: string;
+  }) => {
+    requireMainRenderer(event);
+    await cloudSync.setBinding({
+      localDocumentId: request?.localDocumentId,
+      localIncarnation: request?.localIncarnation,
+      cloudProjectId: request?.cloudProjectId,
+      lastSnapshotId: request?.snapshotId,
+      lastContentDigest: request?.digest,
+    });
+    return currentCloudStateForRenderer();
+  });
+  ipcMain.handle('cloud-sync:move-binding', async (event, request: {
+    oldLocalDocumentId: string;
+    oldLocalIncarnation: string;
+    next: {
+      localDocumentId: string;
+      localIncarnation: string;
+      snapshotId: string;
+      digest: string;
+    };
+    expectedRetiredDigest?: string | null;
+  }) => {
+    requireMainRenderer(event);
+    await cloudSync.moveBinding({
+      fromLocalDocumentId: request?.oldLocalDocumentId,
+      fromLocalIncarnation: request?.oldLocalIncarnation,
+      toLocalDocumentId: request?.next?.localDocumentId,
+      toLocalIncarnation: request?.next?.localIncarnation,
+      lastSnapshotId: request?.next?.snapshotId,
+      lastContentDigest: request?.next?.digest,
+      expectedRetiredContentDigest: request?.expectedRetiredDigest,
+    });
+    return currentCloudStateForRenderer();
+  });
+  ipcMain.handle('cloud-sync:forget-binding', async (event, request: CloudSyncForgetBindingRequest) => {
+    requireMainRenderer(event);
+    await cloudSync.forgetBinding(request);
+    return currentCloudStateForRenderer();
+  });
+  ipcMain.handle('cloud-sync:set-remote-ignored', (event, payload: unknown) => {
+    requireMainRenderer(event);
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      throw new Error('Ignored cloud project request is invalid.');
+    }
+    const value = payload as { cloudProjectId?: unknown; ignored?: unknown };
+    if (typeof value.cloudProjectId !== 'string' || typeof value.ignored !== 'boolean') {
+      throw new Error('Ignored cloud project request is invalid.');
+    }
+    return cloudSync.setRemoteIgnored(value.cloudProjectId, value.ignored);
+  });
+  ipcMain.handle('cloud-sync:save-action-receipt', async (
+    event,
+    request: RendererCloudActionReceiptRequest,
+  ) => {
+    requireMainRenderer(event);
+    await cloudSync.saveActionReceipt({
+      ...request,
+      snapshotContentDigest: request?.snapshotDigest,
+    });
+    return currentCloudStateForRenderer();
+  });
+  ipcMain.handle('cloud-sync:complete-action-receipt', async (event, actionId: unknown) => {
+    requireMainRenderer(event);
+    if (typeof actionId !== 'string') throw new Error('Cloud sync action id is invalid.');
+    await cloudSync.completeActionReceipt(actionId);
+    return currentCloudStateForRenderer();
+  });
+  ipcMain.handle('cloud-sync:record-recovered-heads', async (event, payload: unknown) => {
+    requireMainRenderer(event);
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      throw new Error('Recovered remote heads request is invalid.');
+    }
+    const value = payload as { cloudProjectId?: unknown; snapshotIds?: unknown };
+    if (typeof value.cloudProjectId !== 'string' || !Array.isArray(value.snapshotIds)
+      || value.snapshotIds.some((item) => typeof item !== 'string')) {
+      throw new Error('Recovered remote heads request is invalid.');
+    }
+    await cloudSync.recordRecoveredRemoteHeads(
+      value.cloudProjectId,
+      value.snapshotIds as string[],
+    );
+    return currentCloudStateForRenderer();
+  });
+  ipcMain.handle('cloud-sync:clear-recovered-heads', async (event, cloudProjectId: unknown) => {
+    requireMainRenderer(event);
+    if (typeof cloudProjectId !== 'string') {
+      throw new Error('Recovered remote cloud project id is invalid.');
+    }
+    await cloudSync.clearRecoveredRemoteHeads(cloudProjectId);
+    return currentCloudStateForRenderer();
+  });
+  ipcMain.handle('cloud-sync:retry', (event) => {
+    requireMainRenderer(event);
+    return cloudSync.retryOutbox().then(() => currentCloudStateForRenderer());
+  });
+}
+
 function registerFileIpc(): void {
   ipcMain.handle('document:persist', async (event, payload: unknown) => {
     requireMainRenderer(event);
@@ -957,7 +1233,7 @@ if (!ownsSingleInstance) {
     mainWindow.focus();
   });
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     if (documentRecoveryJournal?.startupWarnings.length) {
       const quarantined = documentRecoveryJournal.startupWarnings
         .map((warning) => warning.quarantinedPath)
@@ -985,6 +1261,13 @@ if (!ownsSingleInstance) {
       mainWindow?.webContents.send('backend:status', status);
     });
 
+    try {
+      await cloudSync.initialize();
+      cloudSync.onChanged(broadcastCloudSyncState);
+      registerCloudSyncIpc();
+    } catch (error) {
+      console.error('[cloud-sync] could not initialize; local writing remains available:', error);
+    }
     registerFileIpc();
     setAppMenu({
       getWindow: () => mainWindow,
@@ -992,6 +1275,11 @@ if (!ownsSingleInstance) {
     });
 
     createWindow();
+    try {
+      cloudSync.start();
+    } catch (error) {
+      console.error('[cloud-sync] background polling is unavailable:', error);
+    }
     void backend.start();
 
     app.on('activate', () => {
@@ -1021,6 +1309,7 @@ async function drainPersistenceBeforeQuit(): Promise<void> {
       console.error('[persistence] shutdown drain failed; retrying without stopping the backend:', error);
     },
   });
+  await cloudSync.stop();
 }
 
 app.on('will-quit', (event) => {
