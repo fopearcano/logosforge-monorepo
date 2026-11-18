@@ -56,6 +56,47 @@ export interface LiveContextUpdateResultDTO {
   selection_length: number;
 }
 export interface ProjectActionResultDTO { ok: boolean; project_id: number }
+
+/**
+ * Complete, portable, schema-driven project snapshot used only by Pro cloud
+ * folder sync. `tables` is intentionally opaque to frontends: the Core owns
+ * validation, PK/FK remapping and transactional restore.
+ */
+export interface CloudProjectSnapshotDTO {
+  format: "logosforge-pro-project-snapshot";
+  version: "1.0";
+  schema_version: number;
+  project_identity: string;
+  project: {
+    title: string;
+    sync_id: string;
+    [key: string]: unknown;
+  };
+  tables: Record<string, Array<Record<string, unknown>>>;
+  digest: string;
+}
+
+export interface CloudProjectImportDTO {
+  /** Durable idempotency capability persisted by the desktop before the write. */
+  restore_id: string;
+  snapshot: CloudProjectSnapshotDTO;
+  mode: "import" | "fork";
+}
+
+export interface CloudProjectRestoreDTO {
+  /** Durable idempotency capability persisted by the desktop before the write. */
+  restore_id: string;
+  snapshot: CloudProjectSnapshotDTO;
+  /** Compare-and-swap guard over the complete current project graph. */
+  expected_current_digest?: string | null;
+}
+
+export interface CloudProjectApplyResultDTO {
+  project_id: number;
+  project_identity: string;
+  digest: string;
+  mode: "import" | "fork" | "replace";
+}
 export interface DeleteResultDTO { ok: boolean; deleted: number | string }
 export interface RemovedResultDTO { ok: boolean; removed: number }
 export interface UpdatedResultDTO { ok: boolean; updated: number }

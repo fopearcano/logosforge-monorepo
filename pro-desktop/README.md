@@ -10,6 +10,8 @@ own: it **spawns the logosforge core API** and composes the
 ```
 electron/                 main process (CommonJS → dist-electron/)
   core-manager.ts         connect to / spawn `python -m logosforge.api --mode desktop`
+  cloud-sync-manager.ts   immutable provider-folder snapshots + durable retry/recovery
+  cloud-sync-contract.ts  context-bridge-safe cloud synchronization contract
   mcp-runtime.ts          private runtime descriptor for the packaged MCP gateway
   file-manager.ts         open/save dialogs + per-project layout persistence
   preload.ts              flat `window.logosforge` bridge (contextBridge)
@@ -93,6 +95,32 @@ directory and reopens it through the normal project handoff lifecycle on the nex
 launch. Corrupt, obsolete, or missing session state falls back to the first project
 without blocking the workspace.
 
+Cloud Folder Sync is provider-neutral and local-first. The writer chooses a folder
+already managed by an installed Google Drive, Dropbox, OneDrive, iCloud Drive or
+Syncthing client; LogosForge never requests or stores a provider account token.
+After the shared project save barrier drains, Pro writes a complete, validated,
+immutable project snapshot to a durable local outbox and atomically delivers it to
+that folder. The desktop host discovers snapshots written by other devices and
+retries interrupted delivery without losing the local copy.
+
+Automatic pull is conservative: it runs only when the complete local digest still
+matches the last installed snapshot and the provider history has one descendant
+head. Divergent histories remain separate immutable branches and require an
+explicit Keep Both, Use Cloud, or Replace Cloud decision. Transactional Core restore
+receipts and desktop action receipts make those operations safe to retry after a
+crash. Provider-folder snapshots contain complete project writing data, but exclude
+device-local paths, UI cursor state, runtime outboxes and command receipts. Files are
+plain JSON unless the selected provider or disk supplies at-rest encryption.
+Beta automatic publishing checks every ten minutes; Sync Now remains immediate.
+Each changed publish is a full immutable recovery version, so provider usage grows
+until the writer deliberately removes old history. LogosForge does not silently
+prune versions that another device may still need.
+Provider delivery requires a normal local filesystem capable of an atomic,
+no-clobber immutable commit. Mirrored/offline Google Drive, Dropbox, OneDrive,
+iCloud Drive and ordinary Syncthing folders on NTFS, APFS or ext4 satisfy that
+boundary. A streaming/FUSE placeholder that rejects it leaves the durable outbox
+untouched; make the folder locally available or choose another synced folder.
+
 The HTTP client owns an abort controller and every live transport. Replacing the
 core disposes the old client after a StrictMode-safe lease handoff, aborting its
 in-flight fetches and closing polling/SSE. Transport limits are classed by work:
@@ -142,8 +170,9 @@ mode changes only while a project is an empty scaffold. The workspace is also
 remounted at the project boundary, so drafts, chat results and loading-state data
 from one project can never appear inside another.
 
-Each project also owns a versioned workspace layout. All 37 Pro panels,
-including Manuscript and the host-composed AI Companions panel, can move among
+Each project also owns a versioned workspace layout. All 39 Pro workspace panels
+(the 38 shared panels plus the host-composed AI Companions panel), including
+Manuscript, can move among
 the left, center, right and bottom tab stacks or detach into secure, modeless
 native windows. These are independent top-level operating-system windows, not
 overlays clipped by the Studio frame, so they can be moved and resized outside

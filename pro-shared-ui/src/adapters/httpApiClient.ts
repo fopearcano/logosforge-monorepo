@@ -28,6 +28,8 @@ import {
   validateOutlineNodeDTO,
   validateProjectDTO,
   validateProjectActionResultDTO,
+  validateCloudProjectSnapshotDTO,
+  validateCloudProjectApplyResultDTO,
   validateProjectListDTO,
   validateProjectSearchResponseDTO,
   validatePsykeConsoleCommandPlanDTO,
@@ -646,6 +648,15 @@ export function createHttpApiClient(
     openProject: (id) => post(ROUTES.projectOpen(id), undefined, validateProjectDTO),
     saveProject: (id) => post(ROUTES.projectSave(id), undefined, validateProjectActionResultDTO),
     closeProject: (id) => post(ROUTES.projectClose(id), undefined, validateProjectActionResultDTO),
+    getCloudProjectSnapshot: (id) => get(
+      ROUTES.cloudProjectSnapshot(id), validateCloudProjectSnapshotDTO,
+    ),
+    importCloudProject: (body) => writePost(
+      ROUTES.cloudProjectImport, body, validateCloudProjectApplyResultDTO,
+    ),
+    restoreCloudProject: (id, body) => writePost(
+      ROUTES.cloudProjectRestore(id), body, validateCloudProjectApplyResultDTO,
+    ),
     getSettings: (id) => get(ROUTES.projectSettings(id), validateSettingsDTO),
     patchSettings: (id, b) => patch(ROUTES.projectSettings(id), b, validateSettingsDTO),
     searchProject: (p, q, kinds, signal) => {

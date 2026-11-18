@@ -12,6 +12,10 @@ import type {
   ProjectSearchResponseDTO,
   HealthDTO,
   ProjectActionResultDTO,
+  CloudProjectSnapshotDTO,
+  CloudProjectImportDTO,
+  CloudProjectRestoreDTO,
+  CloudProjectApplyResultDTO,
   DeleteResultDTO,
   RemovedResultDTO,
   UpdatedResultDTO,
@@ -189,6 +193,17 @@ export interface ApiClient {
   openProject(id: number): Promise<ProjectDTO>;
   saveProject(id: number): Promise<ProjectActionResultDTO>;
   closeProject(id: number): Promise<ProjectActionResultDTO>;
+  /** Complete canonical project graph for desktop Cloud Folder Sync. */
+  getCloudProjectSnapshot?(id: number): Promise<CloudProjectSnapshotDTO>;
+  /** Create a separately owned local project from a cloud snapshot. */
+  importCloudProject?(
+    body: CloudProjectImportDTO,
+  ): Promise<CloudProjectApplyResultDTO>;
+  /** Atomically replace one unchanged local project from a cloud snapshot. */
+  restoreCloudProject?(
+    id: number,
+    body: CloudProjectRestoreDTO,
+  ): Promise<CloudProjectApplyResultDTO>;
   getSettings(id: number): Promise<SettingsDTO>;
   patchSettings(id: number, body: SettingsDTO): Promise<SettingsDTO>;
   searchProject(

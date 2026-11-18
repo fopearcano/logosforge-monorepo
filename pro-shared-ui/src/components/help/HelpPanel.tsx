@@ -22,7 +22,7 @@ const SHORTCUTS: [string, string][] = [
   ["Enter  /  Space", "Activate the focused button, toggle or selectable card"],
   ["↑ ↓ · Enter · Esc", "In the palette: move · run the highlighted command · close"],
   ["⌘S  /  Ctrl+S", "Save now in the Manuscript (scenes also autosave as you type)"],
-  ["38 panel shortcuts", "Every panel has a direct open/focus shortcut; the complete key map appears below"],
+  ["39 panel shortcuts", "Every panel has a direct open/focus shortcut; the complete key map appears below"],
   ["Alt+↑  /  Alt+↓", "In the Manuscript: cycle backward / forward through open anchored comments"],
   ["⌘/Ctrl + Enter (comment)", "Post a new comment or thread reply"],
   ["Enter", "Send your message to Billy   (Shift+Enter = new line)"],
@@ -36,6 +36,7 @@ const GUIDE: { title: string; items: [string, string][] }[] = [
   { title: "① Get started", items: [
     ["Projects", "Create a project — pick a project mode (novel · screenplay · graphic novel · stage · series) — or open one. The mode follows each project and locks once it contains work, preventing accidental reinterpretation. You can also ⇩ Import Whiteboard (.json) or ⇩ Import Project (.lfbundle)."],
     ["AI Settings", "Point Studio at your AI model — LM Studio, Ollama, OpenAI, Anthropic, OpenRouter or a custom endpoint. Use Save to accept credentials/configuration or Revert to discard them; Studio will stop navigation while this sensitive form is unsaved."],
+    ["Cloud Sync", "In the desktop app, choose a locally available or mirrored folder already managed by Google Drive, Dropbox, OneDrive, iCloud Drive or Syncthing. LogosForge writes complete, immutable project snapshots there without provider accounts or tokens. A streaming-only placeholder that rejects an atomic commit leaves the snapshot safely queued until the folder is made available offline. Beta automatic publishing runs every 10 minutes; Sync Now is immediate, and immutable versions consume provider storage until you remove them deliberately. Automatic pull happens only when the complete local digest is unchanged. Divergent copies and superseded provider heads remain recoverable after Keep Both, Use Cloud or Replace Cloud review. ⌘/Ctrl+Alt+Shift+1 opens the panel."],
     ["Manuscript", "Write. Scenes autosave; panel changes, project changes, and app close wait for pending manuscript, Note and PSYKE saves. Create, delete, reorder and manual-save failures stay visible. If a scene changed elsewhere, your local draft is preserved and you choose Reload or an explicit Overwrite. In very long manuscripts, off-screen scenes remain readable but use a lightweight view; scrolling near them or clicking their prose activates the full editor. ＋ SCENE adds one; FOCUS temporarily projects Manuscript full-center without changing its saved placement."],
     ["Comments", "Select text in a scene title or prose, choose ＋ COMMENT, and write. Drag from prose in one scene into another to anchor one cross-scene thread. Saved passages stay visibly marked; activate a mark for its anchored thread popover, or open the full Comments panel with ⌘/Ctrl+Shift+C."],
     ["Comment threads", "Reply, edit the original comment, delete replies or whole threads, and Resolve/Reopen. ALL / OPEN is remembered and also controls resolved marks. Export the full review as Markdown. Mention @assistant or @counterpart in a reply for a project-aware AI answer in the thread."],
@@ -107,7 +108,7 @@ export function HelpPanel(props: PanelProps) {
           <div style={{ maxWidth: 760 }}>
             <p style={{ fontSize: 12, color: "var(--txt2)", lineHeight: 1.6, marginTop: 16 }}>
               <span style={{ color: "var(--strong)", fontWeight: 600 }}>LogosForge Studio</span> is a complete writing workstation: a manuscript editor
-              wrapped in story intelligence and a set of always-on AI companions. Everything is local-first — your work stays on your machine, and the
+              wrapped in story intelligence and a set of always-on AI companions. Everything is local-first — your authoritative work stays on your machine, and the
               AI runs against the model you choose in <span style={{ color: "var(--accent)" }}>AI Settings</span>.
             </p>
 

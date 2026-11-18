@@ -65,6 +65,7 @@ import {
   parseRecentProjectIds,
   rememberRecentProject,
   LiveContextPublishController,
+  ProCloudSyncController,
   useSelection,
 } from '@logosforge/pro-shared-ui';
 import { WRITING_MODES, type WritingMode, type ProjectDTO } from '@logosforge/ui-contracts';
@@ -1409,6 +1410,7 @@ export function App() {
         }}
       >
         <ProLiveContextPublisher projectId={projectId} activePanelId={focusedPanelId} />
+        <ProCloudSyncController />
         <WorkspaceShell
           writingMode={mode}
           layout={workspaceLayout.preset}

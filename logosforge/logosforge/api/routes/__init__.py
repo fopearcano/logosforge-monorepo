@@ -4,6 +4,7 @@ from logosforge.api.routes import (
     assistant,
     canvas_plot,
     characters,
+    cloud_sync,
     comments,
     connector,
     dashboard,
@@ -37,6 +38,7 @@ from logosforge.api.routes import (
 # Ordered list of every router mounted under the /api prefix.
 ALL_ROUTERS = [
     projects.router,
+    cloud_sync.router,
     live_context.router,
     search.router,
     scenes.router,

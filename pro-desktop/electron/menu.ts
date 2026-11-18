@@ -143,6 +143,7 @@ export function buildAppMenu(getWin: () => BrowserWindow | null): Menu {
             { label: 'Connector', accelerator: 'CmdOrCtrl+Alt+Shift+C', click: () => send('nav:connector') },
             { label: 'Export', accelerator: 'CmdOrCtrl+E', click: () => send('nav:export') },
             { label: 'AI Settings', accelerator: 'CmdOrCtrl+Alt+Shift+Z', click: () => send('nav:ai-settings') },
+            { label: 'Cloud Sync', accelerator: 'CmdOrCtrl+Alt+Shift+1', click: () => send('nav:cloud-sync') },
             { label: 'Settings', accelerator: 'CmdOrCtrl+,', click: () => send('nav:settings') },
             { label: 'Help', accelerator: 'CmdOrCtrl+Alt+Shift+D', click: () => send('nav:help') },
           ],

@@ -2,6 +2,14 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 
 import type { CoreStatus, RendererLiveContextPayload } from './core-manager';
 import type {
+  RendererCloudActionReceiptRequest,
+  RendererCloudBindingRequest,
+  RendererCloudPublishRequest,
+  RendererCloudPublishResult,
+  RendererCloudSnapshotEnvelope,
+  RendererCloudState,
+} from './cloud-sync-contract';
+import type {
   DesktopSessionState,
   DialogFilter,
   LayoutSaveOptions,
@@ -57,6 +65,47 @@ export interface LogosForgeDesktop {
   loadProgressionCommandRecovery(storageKey: string): Promise<string | null>;
   saveProgressionCommandRecovery(storageKey: string, value: string): Promise<void>;
   removeProgressionCommandRecovery(storageKey: string, expectedValue: string): Promise<boolean>;
+  cloudSyncGetState(): Promise<RendererCloudState>;
+  cloudSyncChooseFolder(): Promise<RendererCloudState>;
+  cloudSyncDisable(): Promise<RendererCloudState>;
+  cloudSyncSetAutomatic(automatic: boolean): Promise<RendererCloudState>;
+  cloudSyncDigest(bundle: unknown): Promise<string>;
+  cloudSyncPublish(request: RendererCloudPublishRequest): Promise<RendererCloudPublishResult>;
+  cloudSyncReadSnapshot(
+    cloudProjectId: string,
+    snapshotId: string,
+  ): Promise<RendererCloudSnapshotEnvelope>;
+  cloudSyncSetBinding(request: RendererCloudBindingRequest): Promise<RendererCloudState>;
+  cloudSyncMoveBinding(
+    oldLocalProjectId: string,
+    oldLocalIncarnation: string,
+    next: RendererCloudBindingRequest,
+    expectedRetiredDigest?: string | null,
+  ): Promise<RendererCloudState>;
+  cloudSyncForgetBinding(
+    localProjectId: string,
+    localIncarnation: string,
+    ignoreRemote?: boolean,
+  ): Promise<RendererCloudState>;
+  cloudSyncSetRemoteIgnored(
+    cloudProjectId: string,
+    ignored: boolean,
+  ): Promise<RendererCloudState>;
+  cloudSyncSaveActionReceipt(
+    request: RendererCloudActionReceiptRequest,
+  ): Promise<RendererCloudState>;
+  cloudSyncCompleteActionReceipt(actionId: string): Promise<RendererCloudState>;
+  cloudSyncRecordRecoveredRemoteHeads(
+    cloudProjectId: string,
+    snapshotIds: string[],
+  ): Promise<RendererCloudState>;
+  cloudSyncClearRecoveredRemoteHeads(cloudProjectId: string): Promise<RendererCloudState>;
+  cloudSyncRemoveRecoveredRemoteHead(
+    cloudProjectId: string,
+    snapshotId: string,
+  ): Promise<RendererCloudState>;
+  cloudSyncRetryOutbox(): Promise<RendererCloudState>;
+  onCloudSyncChanged(cb: () => void): () => void;
   onSaveBeforeClose(cb: (attemptId: number) => void): () => void;
   onCloseCancelled(cb: () => void): () => void;
   sendCloseResult(attemptId: number, saved: boolean): void;
@@ -114,6 +163,61 @@ const api: LogosForgeDesktop = {
     'progression-command:remove',
     { storageKey, expectedValue },
   ),
+  cloudSyncGetState: () => ipcRenderer.invoke('cloud-sync:get-state'),
+  cloudSyncChooseFolder: () => ipcRenderer.invoke('cloud-sync:choose-folder'),
+  cloudSyncDisable: () => ipcRenderer.invoke('cloud-sync:disable'),
+  cloudSyncSetAutomatic: (automatic) => ipcRenderer.invoke('cloud-sync:set-automatic', automatic),
+  cloudSyncDigest: (bundle) => ipcRenderer.invoke('cloud-sync:compute-digest', bundle),
+  cloudSyncPublish: (request) => ipcRenderer.invoke('cloud-sync:publish', request),
+  cloudSyncReadSnapshot: (cloudProjectId, snapshotId) => ipcRenderer.invoke(
+    'cloud-sync:read-snapshot',
+    { cloudProjectId, snapshotId },
+  ),
+  cloudSyncSetBinding: (request) => ipcRenderer.invoke('cloud-sync:set-binding', request),
+  cloudSyncMoveBinding: (
+    oldLocalProjectId,
+    oldLocalIncarnation,
+    next,
+    expectedRetiredDigest,
+  ) => ipcRenderer.invoke('cloud-sync:move-binding', {
+    oldLocalProjectId,
+    oldLocalIncarnation,
+    next,
+    expectedRetiredDigest,
+  }),
+  cloudSyncForgetBinding: (localProjectId, localIncarnation, ignoreRemote = true) => (
+    ipcRenderer.invoke('cloud-sync:forget-binding', {
+      localProjectId,
+      localIncarnation,
+      ignoreRemote,
+    })
+  ),
+  cloudSyncSetRemoteIgnored: (cloudProjectId, ignored) => ipcRenderer.invoke(
+    'cloud-sync:set-remote-ignored',
+    { cloudProjectId, ignored },
+  ),
+  cloudSyncSaveActionReceipt: (request) => ipcRenderer.invoke(
+    'cloud-sync:save-action-receipt',
+    request,
+  ),
+  cloudSyncCompleteActionReceipt: (actionId) => ipcRenderer.invoke(
+    'cloud-sync:complete-action-receipt',
+    actionId,
+  ),
+  cloudSyncRecordRecoveredRemoteHeads: (cloudProjectId, snapshotIds) => ipcRenderer.invoke(
+    'cloud-sync:record-recovered-heads',
+    { cloudProjectId, snapshotIds },
+  ),
+  cloudSyncClearRecoveredRemoteHeads: (cloudProjectId) => ipcRenderer.invoke(
+    'cloud-sync:clear-recovered-heads',
+    cloudProjectId,
+  ),
+  cloudSyncRemoveRecoveredRemoteHead: (cloudProjectId, snapshotId) => ipcRenderer.invoke(
+    'cloud-sync:remove-recovered-head',
+    { cloudProjectId, snapshotId },
+  ),
+  cloudSyncRetryOutbox: () => ipcRenderer.invoke('cloud-sync:retry'),
+  onCloudSyncChanged: (cb) => subscribe<RendererCloudState>('cloud-sync:changed', () => cb()),
   onSaveBeforeClose: (cb) => subscribe<number>('app:save-before-close', cb),
   onCloseCancelled: (cb) => subscribe<void>('app:close-cancelled', () => cb()),
   sendCloseResult: (attemptId, saved) => ipcRenderer.send('app:close-result', attemptId, saved),

@@ -19,6 +19,8 @@ import type {
   OutlineNodeDTO,
   ProjectDTO,
   ProjectActionResultDTO,
+  CloudProjectSnapshotDTO,
+  CloudProjectApplyResultDTO,
   ProjectSearchKind,
   ProjectSearchMatchDTO,
   ProjectSearchResponseDTO,
@@ -213,6 +215,68 @@ function project(value: unknown, path: string): ProjectDTO {
   stringValue(requireField(dto, "default_writing_format", path), fieldPath(path, "default_writing_format"));
   stringValue(requireField(dto, "format_mode", path), fieldPath(path, "format_mode"));
   return value as ProjectDTO;
+}
+
+function cloudProjectSnapshot(value: unknown, path: string): CloudProjectSnapshotDTO {
+  const dto = record(value, path);
+  const formatPath = fieldPath(path, "format");
+  const versionPath = fieldPath(path, "version");
+  if (stringValue(requireField(dto, "format", path), formatPath) !== "logosforge-pro-project-snapshot") {
+    return fail(formatPath, "logosforge-pro-project-snapshot", dto.format);
+  }
+  if (stringValue(requireField(dto, "version", path), versionPath) !== "1.0") {
+    return fail(versionPath, "version 1.0", dto.version);
+  }
+  const schemaVersion = integerValue(
+    requireField(dto, "schema_version", path), fieldPath(path, "schema_version"),
+  );
+  if (schemaVersion < 1) fail(fieldPath(path, "schema_version"), "a positive integer", schemaVersion);
+  const identity = stringValue(
+    requireField(dto, "project_identity", path), fieldPath(path, "project_identity"),
+  );
+  if (!identity.trim() || identity.length > 128) {
+    fail(fieldPath(path, "project_identity"), "a non-empty portable identity", identity);
+  }
+  const projectPath = fieldPath(path, "project");
+  const projectDto = record(requireField(dto, "project", path), projectPath);
+  const title = stringValue(requireField(projectDto, "title", projectPath), fieldPath(projectPath, "title"));
+  if (!title.trim()) fail(fieldPath(projectPath, "title"), "a non-empty string", title);
+  const syncId = stringValue(
+    requireField(projectDto, "sync_id", projectPath), fieldPath(projectPath, "sync_id"),
+  );
+  if (syncId !== identity) fail(fieldPath(projectPath, "sync_id"), "the project identity", syncId);
+  const tablesPath = fieldPath(path, "tables");
+  const tables = record(requireField(dto, "tables", path), tablesPath);
+  for (const [tableName, rows] of Object.entries(tables)) {
+    if (!tableName.trim() || tableName.length > 128) {
+      fail(fieldPath(tablesPath, tableName), "a table with a valid name", rows);
+    }
+    recordArray(rows, fieldPath(tablesPath, tableName));
+  }
+  const digest = stringValue(requireField(dto, "digest", path), fieldPath(path, "digest"));
+  if (!/^[0-9a-f]{64}$/.test(digest)) {
+    fail(fieldPath(path, "digest"), "a lowercase SHA-256 digest", digest);
+  }
+  return value as CloudProjectSnapshotDTO;
+}
+
+function cloudProjectApplyResult(value: unknown, path: string): CloudProjectApplyResultDTO {
+  const dto = record(value, path);
+  const projectId = integerValue(requireField(dto, "project_id", path), fieldPath(path, "project_id"));
+  if (projectId <= 0) fail(fieldPath(path, "project_id"), "a positive integer", projectId);
+  const identity = stringValue(
+    requireField(dto, "project_identity", path), fieldPath(path, "project_identity"),
+  );
+  if (!identity.trim()) fail(fieldPath(path, "project_identity"), "a non-empty string", identity);
+  const digest = stringValue(requireField(dto, "digest", path), fieldPath(path, "digest"));
+  if (!/^[0-9a-f]{64}$/.test(digest)) {
+    fail(fieldPath(path, "digest"), "a lowercase SHA-256 digest", digest);
+  }
+  const mode = stringValue(requireField(dto, "mode", path), fieldPath(path, "mode"));
+  if (mode !== "import" && mode !== "fork" && mode !== "replace") {
+    fail(fieldPath(path, "mode"), "import, fork, or replace", mode);
+  }
+  return value as CloudProjectApplyResultDTO;
 }
 
 const DECISION_SEVERITIES = new Set(["blocking", "warning", "suggestion", "opportunity", "info"]);
@@ -3849,6 +3913,10 @@ export const validateProjectListDTO: RuntimeDtoValidator<ProjectDTO[]> = (value)
   arrayOf(value, "$", project);
 export const validateProjectActionResultDTO: RuntimeDtoValidator<ProjectActionResultDTO> = (value) =>
   projectActionResult(value, "$");
+export const validateCloudProjectSnapshotDTO: RuntimeDtoValidator<CloudProjectSnapshotDTO> = (value) =>
+  cloudProjectSnapshot(value, "$");
+export const validateCloudProjectApplyResultDTO: RuntimeDtoValidator<CloudProjectApplyResultDTO> = (value) =>
+  cloudProjectApplyResult(value, "$");
 export const validateProjectSearchResponseDTO: RuntimeDtoValidator<ProjectSearchResponseDTO> = (value) =>
   projectSearchResponse(value, "$");
 export const validateDeleteResultDTO: RuntimeDtoValidator<DeleteResultDTO> = (value) =>

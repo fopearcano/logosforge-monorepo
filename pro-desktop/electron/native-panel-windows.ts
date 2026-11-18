@@ -47,6 +47,7 @@ export const NATIVE_PANEL_IDS = [
   'graph',
   'plugins',
   'connector',
+  'cloud-sync',
   'export',
   'ai-settings',
   'settings',

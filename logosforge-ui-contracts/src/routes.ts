@@ -24,6 +24,9 @@ export const ROUTES = {
   projectClose: (id: number) => `/api/projects/${id}/close`,
   projectSettings: (id: number) => `/api/projects/${id}/settings`,
   projectSearch: (id: number) => `/api/projects/${id}/search`,
+  cloudProjectSnapshot: (id: number) => `/api/projects/${id}/cloud-sync/snapshot`,
+  cloudProjectImport: "/api/cloud-sync/projects/import",
+  cloudProjectRestore: (id: number) => `/api/projects/${id}/cloud-sync/restore`,
 
   // Per-project domains (p = project id)
   scenes: (p: number) => `/api/projects/${p}/scenes`,

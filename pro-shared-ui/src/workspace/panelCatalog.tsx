@@ -36,6 +36,7 @@ import { CrossCutting, ExportDialog, VoiceHud } from "../components/formatpanels
 import { CharacterLinks, ProgressionsPanel, PsykeBible, ThemeScenes } from "../components/bible";
 import { CanvasPlot, KnowledgeGraph, TimelinePanel } from "../components/spatialcanvas";
 import { HelpPanel } from "../components/help";
+import { CloudSyncPanel } from "../features/cloudSync";
 import type { DockRegionId } from "./layoutModel";
 import { studioPanelShortcut } from "./panelShortcuts";
 
@@ -146,6 +147,7 @@ export const STUDIO_PANEL_GROUPS: readonly StudioPanelGroup[] = [
       panel({ id: "connector", label: "Connector", node: <ConnectorPanel /> }),
       panel({ id: "export", label: "Export", node: <ExportDialog /> }),
       panel({ id: "ai-settings", label: "AI Settings", node: <AiSettingsPanel /> }),
+      panel({ id: "cloud-sync", label: "Cloud Sync", node: <CloudSyncPanel /> }),
       panel({ id: "settings", label: "Settings", node: <CrossCutting /> }),
       panel({ id: "help", label: "Help", node: <HelpPanel /> }),
     ],

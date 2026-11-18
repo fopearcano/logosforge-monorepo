@@ -16,8 +16,8 @@ function check(label, condition) {
   passed += 1;
 }
 
-check('the fixed host allowlist has all 38 unique workspace panels',
-  NATIVE_PANEL_IDS.length === 38 && new Set(NATIVE_PANEL_IDS).size === 38);
+check('the fixed host allowlist has all 39 unique workspace panels',
+  NATIVE_PANEL_IDS.length === 39 && new Set(NATIVE_PANEL_IDS).size === 39);
 const panelCatalogSource = fs.readFileSync(
   path.join(__dirname, '..', '..', 'pro-shared-ui', 'src', 'workspace', 'panelCatalog.tsx'),
   'utf8',

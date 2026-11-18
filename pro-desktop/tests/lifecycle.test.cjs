@@ -336,17 +336,17 @@ const shortcutDefinitions = [...panelShortcuts.matchAll(
 const nativeNavEntries = [...menu.matchAll(
   /accelerator: '([^']+)', click: \(\) => send\('nav:([^']+)'\)/g,
 )].map((match) => ({ accelerator: match[1], panelId: match[2] }));
-if (shortcutDefinitions.length !== 38) {
-  failures.push(`Canonical panel shortcut catalog has ${shortcutDefinitions.length} entries instead of 38`);
+if (shortcutDefinitions.length !== 39) {
+  failures.push(`Canonical panel shortcut catalog has ${shortcutDefinitions.length} entries instead of 39`);
 }
-if (nativeNavEntries.length !== 38) {
-  failures.push(`Native menu has ${nativeNavEntries.length} accelerated panel entries instead of 38`);
+if (nativeNavEntries.length !== 39) {
+  failures.push(`Native menu has ${nativeNavEntries.length} accelerated panel entries instead of 39`);
 }
-if (new Set(nativeNavEntries.map((entry) => entry.accelerator)).size !== 38) {
+if (new Set(nativeNavEntries.map((entry) => entry.accelerator)).size !== 39) {
   failures.push('Native panel accelerators are not unique');
 }
-if (new Set(nativeNavEntries.map((entry) => entry.panelId)).size !== 38) {
-  failures.push('Native menu does not target 38 unique panel ids');
+if (new Set(nativeNavEntries.map((entry) => entry.panelId)).size !== 39) {
+  failures.push('Native menu does not target 39 unique panel ids');
 }
 const nativeByPanelId = new Map(nativeNavEntries.map((entry) => [entry.panelId, entry.accelerator]));
 for (const expected of shortcutDefinitions) {
@@ -387,7 +387,7 @@ for (const marker of [
   'requireMainRenderer(event);\n    return loadDesktopSessionState();',
   'return saveLastActiveProjectId(p.projectId);',
   'await core.suspendLiveContext();',
-  'await core.stop();',
+  'await Promise.all([stopCloudSync(), core.stop()]);',
   'drainDesktopSessionSaves(),',
   'drainProgressionCommandRecoveryOperations(),',
   'core.resumeLiveContext();',

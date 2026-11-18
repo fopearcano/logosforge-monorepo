@@ -54,6 +54,7 @@ export const STUDIO_PANEL_SHORTCUTS: readonly StudioPanelShortcutDefinition[] = 
   { id: "connector", label: "Connector", group: "SYSTEM", shortcut: "Primary+Alt+Shift+C" },
   { id: "export", label: "Export", group: "SYSTEM", shortcut: "Primary+E" },
   { id: "ai-settings", label: "AI Settings", group: "SYSTEM", shortcut: "Primary+Alt+Shift+Z" },
+  { id: "cloud-sync", label: "Cloud Sync", group: "SYSTEM", shortcut: "Primary+Alt+Shift+1" },
   { id: "settings", label: "Settings", group: "SYSTEM", shortcut: "Primary+Comma" },
   { id: "help", label: "Help", group: "SYSTEM", shortcut: "Primary+Alt+Shift+D" },
 

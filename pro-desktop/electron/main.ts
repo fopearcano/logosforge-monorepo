@@ -2,6 +2,23 @@ import { app, BrowserWindow, Menu, dialog, ipcMain, screen, type IpcMainEvent, t
 import * as path from 'node:path';
 
 import { CoreManager, type CoreStatus } from './core-manager';
+import {
+  CloudSyncManager,
+  type CloudSyncActionReceipt,
+  type CloudSyncBinding,
+  type CloudSyncForgetBindingRequest,
+  type CloudSyncPublishRequest,
+  type CloudSyncReadSnapshotRequest,
+  type CloudSyncSnapshotMetadata,
+  type CloudSyncState,
+} from './cloud-sync-manager';
+import type {
+  RendererCloudActionReceipt,
+  RendererCloudActionReceiptRequest,
+  RendererCloudBinding,
+  RendererCloudSnapshotMetadata,
+  RendererCloudState,
+} from './cloud-sync-contract';
 import { serveStatic, type StaticServer } from './static-server';
 import {
   openFile,
@@ -60,6 +77,7 @@ const installedMcpPath = mcpCompanionPath(
   app.getPath('userData'),
   bundledMcpExecutableName(process.platform),
 );
+const cloudSync = new CloudSyncManager(app.getPath('userData'));
 
 let mainWindow: BrowserWindow | null = null;
 let rendererServer: StaticServer | null = null;
@@ -71,6 +89,7 @@ let shutdownPrepared = false;
 let shutdownInProgress = false;
 let nextCloseAttemptId = 1;
 let pendingCloseResult: { attemptId: number; finish: (saved: boolean) => void } | null = null;
+let cloudSyncStopPromise: Promise<void> | null = null;
 
 interface NativePanelWindowEntry {
   panelId: NativePanelId;
@@ -95,6 +114,108 @@ function requireMainRenderer(event: IpcMainInvokeEvent): void {
   if (!win || event.sender !== win.webContents || event.senderFrame !== win.webContents.mainFrame) {
     throw new Error('Rejected IPC call from an untrusted renderer frame.');
   }
+}
+
+function cloudSnapshotForRenderer(snapshot: CloudSyncSnapshotMetadata): RendererCloudSnapshotMetadata {
+  return {
+    snapshotId: snapshot.snapshotId,
+    parentSnapshotIds: [...snapshot.parentSnapshotIds],
+    generation: snapshot.generation,
+    digest: snapshot.contentDigest,
+    createdAt: snapshot.createdAt,
+    deviceId: snapshot.deviceId,
+    title: snapshot.projectTitle,
+    queued: snapshot.pendingDelivery,
+  };
+}
+
+function cloudBindingForRenderer(binding: CloudSyncBinding): RendererCloudBinding | null {
+  // A migrated binding without a committed baseline is manager-internal
+  // recovery state, not a renderer baseline. Exposing empty tokens would make
+  // the DAG controller infer a phantom divergence.
+  if (!binding.lastSnapshotId || !binding.lastContentDigest) return null;
+  return {
+    localProjectId: binding.localProjectId,
+    localIncarnation: binding.localIncarnation,
+    cloudProjectId: binding.cloudProjectId,
+    lastSnapshotId: binding.lastSnapshotId,
+    lastDigest: binding.lastContentDigest,
+  };
+}
+
+function cloudActionForRenderer(receipt: CloudSyncActionReceipt): RendererCloudActionReceipt {
+  return {
+    actionId: receipt.actionId,
+    kind: receipt.kind,
+    phase: receipt.phase,
+    sourceLocalProjectId: receipt.sourceLocalProjectId,
+    sourceLocalIncarnation: receipt.sourceLocalIncarnation,
+    originalCloudProjectId: receipt.originalCloudProjectId,
+    intendedCloudProjectId: receipt.intendedCloudProjectId,
+    snapshotId: receipt.snapshotId,
+    snapshotDigest: receipt.snapshotContentDigest,
+    parentSnapshotIds: [...receipt.parentSnapshotIds],
+    expectedSourceDigest: receipt.expectedSourceDigest,
+    restoredLocalProjectId: receipt.restoredLocalProjectId,
+    restoredLocalIncarnation: receipt.restoredLocalIncarnation,
+    createdAt: receipt.createdAt,
+    updatedAt: receipt.updatedAt,
+  };
+}
+
+function cloudStateForRenderer(state: CloudSyncState): RendererCloudState {
+  return {
+    enabled: state.enabled,
+    automatic: state.automatic,
+    folderPath: state.folderPath,
+    folderAvailable: state.folderAvailable,
+    warnings: [...state.warnings],
+    deviceId: state.deviceId,
+    lastSuccessfulSyncAt: state.lastSuccessfulSyncAt,
+    lastError: state.lastError,
+    outboxCount: state.pendingDeliveries,
+    syncing: state.syncing,
+    bindings: state.bindings.flatMap((binding) => {
+      const rendered = cloudBindingForRenderer(binding);
+      return rendered ? [rendered] : [];
+    }),
+    retiredLocalProjects: state.retiredLocalProjects.map((item) => ({
+      localProjectId: item.localProjectId,
+      localIncarnation: item.localIncarnation,
+      expectedDigest: item.expectedContentDigest,
+    })),
+    actionReceipts: state.actionReceipts.map(cloudActionForRenderer),
+    recoveredRemoteHeads: state.recoveredRemoteHeads.map((item) => ({
+      cloudProjectId: item.cloudProjectId,
+      snapshotIds: [...item.snapshotIds],
+    })),
+    ignoredCloudProjectIds: [...state.ignoredCloudProjectIds],
+    projects: state.projects.map((project) => ({
+      cloudProjectId: project.cloudProjectId,
+      title: project.projectTitle,
+      snapshots: project.snapshots.map(cloudSnapshotForRenderer),
+      headSnapshotIds: project.heads.map((snapshot) => snapshot.snapshotId),
+    })),
+  };
+}
+
+async function currentCloudStateForRenderer(): Promise<RendererCloudState> {
+  return cloudStateForRenderer(await cloudSync.getState());
+}
+
+async function broadcastCloudSyncState(): Promise<void> {
+  const win = mainWindow;
+  if (!win || win.webContents.isDestroyed() || win.webContents.isLoadingMainFrame()) return;
+  try {
+    win.webContents.send('cloud-sync:changed', await currentCloudStateForRenderer());
+  } catch (error) {
+    console.error('[cloud-sync] could not broadcast state:', error);
+  }
+}
+
+function stopCloudSync(): Promise<void> {
+  cloudSyncStopPromise ??= cloudSync.stop();
+  return cloudSyncStopPromise;
 }
 
 function requireNativePanelPayload(payload: unknown): NativePanelWindowRequest {
@@ -440,7 +561,7 @@ async function handleCloseRequest(): Promise<void> {
     // Child panel windows must not get a chance to veto app shutdown or publish
     // layout mutations after the renderer's save barrier has completed.
     destroyNativePanelWindows();
-    await core.stop();
+    await Promise.all([stopCloudSync(), core.stop()]);
     shutdownPrepared = true;
     closeInProgress = false;
     allowClose = true;
@@ -456,7 +577,7 @@ async function handleCloseRequest(): Promise<void> {
     // promote this ordinary window close to a full app shutdown here.
     if (isQuitting) {
       destroyNativePanelWindows();
-      await core.stop();
+      await Promise.all([stopCloudSync(), core.stop()]);
       shutdownPrepared = true;
       closeInProgress = false;
       allowClose = true;
@@ -583,6 +704,185 @@ function registerIpc(): void {
     requireMainRenderer(event);
     return removeProgressionCommandRecovery(p?.storageKey, p?.expectedValue);
   });
+  ipcMain.handle('cloud-sync:get-state', (event) => {
+    requireMainRenderer(event);
+    return currentCloudStateForRenderer();
+  });
+  ipcMain.handle('cloud-sync:choose-folder', async (event) => {
+    requireMainRenderer(event);
+    const options = {
+      title: 'Choose a cloud-synced folder',
+      buttonLabel: 'Use Folder',
+      properties: ['openDirectory', 'createDirectory'] as Array<'openDirectory' | 'createDirectory'>,
+    };
+    const result = mainWindow
+      ? await dialog.showOpenDialog(mainWindow, options)
+      : await dialog.showOpenDialog(options);
+    if (result.canceled || !result.filePaths[0]) return currentCloudStateForRenderer();
+    const state = await cloudSync.setFolder(result.filePaths[0]);
+    return cloudStateForRenderer(state);
+  });
+  ipcMain.handle('cloud-sync:disable', async (event) => {
+    requireMainRenderer(event);
+    return cloudStateForRenderer(await cloudSync.disable());
+  });
+  ipcMain.handle('cloud-sync:set-automatic', async (event, automatic: unknown) => {
+    requireMainRenderer(event);
+    if (typeof automatic !== 'boolean') throw new Error('Automatic cloud sync flag is invalid.');
+    return cloudStateForRenderer(await cloudSync.setAutomatic(automatic));
+  });
+  ipcMain.handle('cloud-sync:compute-digest', (event, bundle: unknown) => {
+    requireMainRenderer(event);
+    return cloudSync.computeDigest(bundle);
+  });
+  ipcMain.handle('cloud-sync:publish', async (event, request: CloudSyncPublishRequest) => {
+    requireMainRenderer(event);
+    const result = await cloudSync.publish(request);
+    const binding = cloudBindingForRenderer(result.binding);
+    if (!binding) throw new Error('Cloud publish did not commit a complete binding.');
+    return {
+      binding,
+      snapshot: cloudSnapshotForRenderer(result.snapshot),
+      queued: !result.delivered,
+    };
+  });
+  ipcMain.handle('cloud-sync:read-snapshot', async (
+    event,
+    request: CloudSyncReadSnapshotRequest,
+  ) => {
+    requireMainRenderer(event);
+    const envelope = await cloudSync.readSnapshot(request);
+    return {
+      format: envelope.format,
+      version: envelope.version,
+      cloudProjectId: envelope.cloudProjectId,
+      snapshot: cloudSnapshotForRenderer({
+        cloudProjectId: envelope.cloudProjectId,
+        snapshotId: envelope.snapshotId,
+        deviceId: envelope.deviceId,
+        parentSnapshotIds: envelope.parentSnapshotIds,
+        generation: envelope.generation,
+        createdAt: envelope.createdAt,
+        contentDigest: envelope.contentDigest,
+        projectTitle: typeof envelope.bundle === 'object'
+          && envelope.bundle !== null
+          && !Array.isArray(envelope.bundle)
+          && typeof envelope.bundle.project === 'object'
+          && envelope.bundle.project !== null
+          && !Array.isArray(envelope.bundle.project)
+          && typeof envelope.bundle.project.title === 'string'
+          ? envelope.bundle.project.title
+          : 'Untitled Project',
+        pendingDelivery: false,
+      }),
+      bundle: envelope.bundle,
+    };
+  });
+  ipcMain.handle('cloud-sync:set-binding', async (event, request: {
+    localProjectId: unknown;
+    localIncarnation: unknown;
+    cloudProjectId: unknown;
+    snapshotId: unknown;
+    digest: unknown;
+  }) => {
+    requireMainRenderer(event);
+    await cloudSync.setBinding({
+      localProjectId: request?.localProjectId as string,
+      localIncarnation: request?.localIncarnation as string,
+      cloudProjectId: request?.cloudProjectId as string,
+      lastSnapshotId: request?.snapshotId as string,
+      lastContentDigest: request?.digest as string,
+    });
+    return currentCloudStateForRenderer();
+  });
+  ipcMain.handle('cloud-sync:move-binding', async (event, request: {
+    oldLocalProjectId: unknown;
+    oldLocalIncarnation: unknown;
+    next?: {
+      localProjectId?: unknown;
+      localIncarnation?: unknown;
+      snapshotId?: unknown;
+      digest?: unknown;
+    };
+    expectedRetiredDigest?: unknown;
+  }) => {
+    requireMainRenderer(event);
+    await cloudSync.moveBinding({
+      fromLocalProjectId: request?.oldLocalProjectId as string,
+      fromLocalIncarnation: request?.oldLocalIncarnation as string,
+      toLocalProjectId: request?.next?.localProjectId as string,
+      toLocalIncarnation: request?.next?.localIncarnation as string,
+      lastSnapshotId: request?.next?.snapshotId as string,
+      lastContentDigest: request?.next?.digest as string,
+      expectedRetiredContentDigest: request?.expectedRetiredDigest as string | null | undefined,
+    });
+    return currentCloudStateForRenderer();
+  });
+  ipcMain.handle('cloud-sync:forget-binding', async (
+    event,
+    request: CloudSyncForgetBindingRequest,
+  ) => {
+    requireMainRenderer(event);
+    await cloudSync.forgetBinding(request);
+    return currentCloudStateForRenderer();
+  });
+  ipcMain.handle('cloud-sync:set-remote-ignored', async (
+    event,
+    payload: { cloudProjectId?: unknown; ignored?: unknown },
+  ) => {
+    requireMainRenderer(event);
+    if (typeof payload?.ignored !== 'boolean') throw new Error('Ignored flag is invalid.');
+    await cloudSync.setRemoteIgnored(payload?.cloudProjectId as string, payload.ignored);
+    return currentCloudStateForRenderer();
+  });
+  ipcMain.handle('cloud-sync:save-action-receipt', async (
+    event,
+    request: RendererCloudActionReceiptRequest,
+  ) => {
+    requireMainRenderer(event);
+    await cloudSync.saveActionReceipt({
+      ...request,
+      snapshotContentDigest: request?.snapshotDigest,
+    });
+    return currentCloudStateForRenderer();
+  });
+  ipcMain.handle('cloud-sync:complete-action-receipt', async (event, actionId: unknown) => {
+    requireMainRenderer(event);
+    await cloudSync.completeActionReceipt(actionId as string);
+    return currentCloudStateForRenderer();
+  });
+  ipcMain.handle('cloud-sync:record-recovered-heads', async (
+    event,
+    payload: { cloudProjectId?: unknown; snapshotIds?: unknown },
+  ) => {
+    requireMainRenderer(event);
+    await cloudSync.recordRecoveredRemoteHeads(
+      payload?.cloudProjectId as string,
+      payload?.snapshotIds as string[],
+    );
+    return currentCloudStateForRenderer();
+  });
+  ipcMain.handle('cloud-sync:clear-recovered-heads', async (event, cloudProjectId: unknown) => {
+    requireMainRenderer(event);
+    await cloudSync.clearRecoveredRemoteHeads(cloudProjectId as string);
+    return currentCloudStateForRenderer();
+  });
+  ipcMain.handle('cloud-sync:remove-recovered-head', async (
+    event,
+    payload: { cloudProjectId?: unknown; snapshotId?: unknown },
+  ) => {
+    requireMainRenderer(event);
+    await cloudSync.removeRecoveredRemoteHead(
+      payload?.cloudProjectId as string,
+      payload?.snapshotId as string,
+    );
+    return currentCloudStateForRenderer();
+  });
+  ipcMain.handle('cloud-sync:retry', async (event) => {
+    requireMainRenderer(event);
+    await cloudSync.retryOutbox();
+    return currentCloudStateForRenderer();
+  });
   ipcMain.handle(NATIVE_PANEL_WINDOW_CHANNELS.show, (event, payload: unknown) => {
     requireMainRenderer(event);
     const { panelId, token } = requireNativePanelPayload(payload);
@@ -676,7 +976,7 @@ if (!app.requestSingleInstanceLock()) {
     }
   });
 
-  void app.whenReady().then(() => {
+  void app.whenReady().then(async () => {
     if (bundledMcpPath) {
       try {
         installMcpCompanion(bundledMcpPath, installedMcpPath);
@@ -684,6 +984,13 @@ if (!app.requestSingleInstanceLock()) {
         const detail = error instanceof Error ? error.message : String(error);
         console.error(`[mcp] Could not install the local MCP companion: ${detail}`);
       }
+    }
+    try {
+      await cloudSync.initialize();
+      cloudSync.onChanged(() => { void broadcastCloudSyncState(); });
+      cloudSync.start();
+    } catch (error) {
+      console.error('[cloud-sync] could not initialize; local writing remains available:', error);
     }
     registerIpc();
     Menu.setApplicationMenu(buildAppMenu(() => mainWindow));
@@ -717,6 +1024,7 @@ app.on('before-quit', (event) => {
   void Promise.all([
     drainDesktopSessionSaves(),
     drainProgressionCommandRecoveryOperations(),
+    stopCloudSync(),
   ]).then(() => core.stop()).finally(() => {
     destroyNativePanelWindows();
     shutdownPrepared = true;
@@ -729,6 +1037,7 @@ app.on('will-quit', () => {
   // before-quit normally awaited this. Keep an idempotent fallback for host
   // shutdown paths that do not complete the ordinary window-close protocol.
   destroyNativePanelWindows();
+  void stopCloudSync();
   void core.stop();
   rendererServer?.close();
   rendererServer = null;

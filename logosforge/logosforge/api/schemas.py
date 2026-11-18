@@ -100,6 +100,40 @@ class ProjectActionResultDTO(BaseModel):
     project_id: int
 
 
+class CloudProjectSnapshotDTO(BaseModel):
+    """Canonical one-project payload used by desktop cloud-folder sync."""
+
+    format: Literal["logosforge-pro-project-snapshot"]
+    version: Literal["1.0"]
+    schema_version: int = Field(ge=1)
+    project_identity: str
+    project: dict[str, Any]
+    tables: dict[str, list[dict[str, Any]]]
+    digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class CloudProjectImportDTO(BaseModel):
+    snapshot: CloudProjectSnapshotDTO
+    mode: Literal["import", "fork"] = "import"
+    restore_id: str = Field(pattern=r"^[0-9a-fA-F-]{36}$")
+
+
+class CloudProjectRestoreDTO(BaseModel):
+    snapshot: CloudProjectSnapshotDTO
+    restore_id: str = Field(pattern=r"^[0-9a-fA-F-]{36}$")
+    expected_current_digest: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+
+class CloudProjectApplyResultDTO(BaseModel):
+    project_id: int = Field(ge=1)
+    project_identity: str
+    digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    mode: Literal["replace", "import", "fork"]
+
+
 ProjectSearchKind = Literal["scene", "note", "psyke", "comment"]
 
 

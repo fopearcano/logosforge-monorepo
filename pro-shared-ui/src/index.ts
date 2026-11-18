@@ -26,3 +26,4 @@ export * from "./adapters/selection";
 export * from "./commands";
 export * from "./workspace";
 export * from "./components";
+export * from "./features/cloudSync";

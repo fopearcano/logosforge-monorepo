@@ -68,6 +68,7 @@ const EXPECTED_PANEL_IDS = [
   "connector",
   "export",
   "ai-settings",
+  "cloud-sync",
   "settings",
   "help",
 ] as const;
@@ -109,12 +110,12 @@ check(
     && STUDIO_WORKSPACE_PANEL_IDS.filter((id) => id === STUDIO_AI_COMPANIONS_PANEL_ID).length === 1,
   "workspace IDs must add the host-owned AI companion surface exactly once",
 );
-check(STUDIO_PANELS.length === 37, "the shared catalog must expose all 37 shared Pro panels");
+check(STUDIO_PANELS.length === 38, "the shared catalog must expose all 38 shared Pro panels");
 check(
-  STUDIO_PANEL_SHORTCUTS.length === 38
+  STUDIO_PANEL_SHORTCUTS.length === 39
     && STUDIO_PANEL_SHORTCUTS.map((definition) => definition.id).join("\n")
       === STUDIO_WORKSPACE_PANEL_IDS.join("\n"),
-  "canonical shortcuts must cover the 37 shared panels plus AI Companions exactly once",
+  "canonical shortcuts must cover the 38 shared panels plus AI Companions exactly once",
 );
 check(
   STUDIO_PANELS.every((panel) => {
@@ -132,7 +133,7 @@ check(
   aiShortcut?.label === "AI Companions"
     && aiShortcut.shortcut === "Primary+J"
     && studioPanelShortcut(STUDIO_AI_COMPANIONS_PANEL_ID) === aiShortcut.shortcut,
-  "AI Companions must complete the 38-panel shortcut catalog",
+  "AI Companions must complete the 39-panel shortcut catalog",
 );
 for (const [field, values] of [
   ["ids", STUDIO_PANEL_SHORTCUTS.map((definition) => definition.id.toLowerCase())],

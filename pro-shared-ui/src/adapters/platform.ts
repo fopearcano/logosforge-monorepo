@@ -35,6 +35,172 @@ export interface DurableRecoveryStorage {
   removeItem(key: string, expectedValue?: string): Promise<boolean | void> | boolean | void;
 }
 
+/** Immutable snapshot metadata discovered in a provider-managed cloud folder. */
+export interface CloudSyncSnapshotMetadata {
+  snapshotId: string;
+  parentSnapshotIds: string[];
+  generation: number;
+  digest: string;
+  createdAt: string;
+  deviceId: string;
+  title: string;
+  queued: boolean;
+}
+
+export interface CloudSyncBinding {
+  /** Device-local numeric Core id, serialized because host bindings are opaque. */
+  localProjectId: string;
+  /** Portable project identity carried by the canonical Core snapshot. */
+  localIncarnation: string;
+  cloudProjectId: string;
+  lastSnapshotId: string;
+  lastDigest: string;
+}
+
+export interface CloudSyncProjectInventory {
+  cloudProjectId: string;
+  title: string;
+  snapshots: CloudSyncSnapshotMetadata[];
+  headSnapshotIds: string[];
+}
+
+export type CloudSyncActionKind =
+  | "pull"
+  | "replace-cloud"
+  | "keep-both"
+  | "use-cloud"
+  | "discover"
+  | "remote-recovery";
+export type CloudSyncActionPhase =
+  | "prepared"
+  | "local-forked"
+  | "restored"
+  | "binding-installed";
+
+export interface CloudSyncActionReceipt {
+  actionId: string;
+  kind: CloudSyncActionKind;
+  phase: CloudSyncActionPhase;
+  sourceLocalProjectId: string;
+  sourceLocalIncarnation: string;
+  originalCloudProjectId: string;
+  intendedCloudProjectId: string | null;
+  snapshotId: string;
+  snapshotDigest: string;
+  parentSnapshotIds: string[];
+  expectedSourceDigest: string;
+  restoredLocalProjectId: string | null;
+  restoredLocalIncarnation: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CloudSyncState {
+  enabled: boolean;
+  automatic: boolean;
+  folderPath: string | null;
+  folderAvailable: boolean;
+  warnings: string[];
+  deviceId: string;
+  lastSuccessfulSyncAt: string | null;
+  lastError: string | null;
+  outboxCount: number;
+  syncing: boolean;
+  bindings: CloudSyncBinding[];
+  retiredLocalProjects: Array<{
+    localProjectId: string;
+    localIncarnation: string;
+    expectedDigest: string | null;
+  }>;
+  actionReceipts: CloudSyncActionReceipt[];
+  recoveredRemoteHeads: Array<{ cloudProjectId: string; snapshotIds: string[] }>;
+  ignoredCloudProjectIds: string[];
+  projects: CloudSyncProjectInventory[];
+}
+
+export interface CloudSyncBindingRequest {
+  localProjectId: string;
+  localIncarnation: string;
+  cloudProjectId: string;
+  snapshotId: string;
+  digest: string;
+}
+
+export interface CloudSyncPublishRequest {
+  localProjectId: string;
+  localIncarnation: string;
+  bundle: unknown;
+  cloudProjectId?: string | null;
+  parentSnapshotIds?: string[];
+  createNewProject?: boolean;
+  newCloudProjectId?: string | null;
+}
+
+export interface CloudSyncPublishResult {
+  binding: CloudSyncBinding;
+  snapshot: CloudSyncSnapshotMetadata;
+  queued: boolean;
+}
+
+export interface CloudSyncSnapshotEnvelope {
+  format: "logosforge-pro-cloud-snapshot";
+  version: "1.0";
+  cloudProjectId: string;
+  snapshot: CloudSyncSnapshotMetadata;
+  bundle: unknown;
+}
+
+export interface CloudSyncActionReceiptRequest {
+  actionId: string;
+  kind: CloudSyncActionKind;
+  phase: CloudSyncActionPhase;
+  sourceLocalProjectId: string;
+  sourceLocalIncarnation: string;
+  originalCloudProjectId: string;
+  intendedCloudProjectId?: string | null;
+  snapshotId: string;
+  snapshotDigest: string;
+  parentSnapshotIds: string[];
+  expectedSourceDigest: string;
+  restoredLocalProjectId?: string | null;
+  restoredLocalIncarnation?: string | null;
+}
+
+/**
+ * Desktop-owned provider-folder transport. It never receives provider tokens:
+ * Google Drive, Dropbox, OneDrive, iCloud and Syncthing perform their ordinary
+ * filesystem synchronization outside LogosForge.
+ */
+export interface CloudSyncHost {
+  getState(): Promise<CloudSyncState>;
+  chooseFolder(): Promise<CloudSyncState>;
+  disable(): Promise<CloudSyncState>;
+  setAutomatic(automatic: boolean): Promise<CloudSyncState>;
+  digest(bundle: unknown): Promise<string>;
+  publish(request: CloudSyncPublishRequest): Promise<CloudSyncPublishResult>;
+  readSnapshot(cloudProjectId: string, snapshotId: string): Promise<CloudSyncSnapshotEnvelope>;
+  setBinding(request: CloudSyncBindingRequest): Promise<CloudSyncState>;
+  moveBinding(
+    oldLocalProjectId: string,
+    oldLocalIncarnation: string,
+    next: CloudSyncBindingRequest,
+    expectedRetiredDigest?: string | null,
+  ): Promise<CloudSyncState>;
+  forgetBinding(
+    localProjectId: string,
+    localIncarnation: string,
+    ignoreRemote?: boolean,
+  ): Promise<CloudSyncState>;
+  setRemoteIgnored(cloudProjectId: string, ignored: boolean): Promise<CloudSyncState>;
+  saveActionReceipt(request: CloudSyncActionReceiptRequest): Promise<CloudSyncState>;
+  completeActionReceipt(actionId: string): Promise<CloudSyncState>;
+  recordRecoveredRemoteHeads(cloudProjectId: string, snapshotIds: string[]): Promise<CloudSyncState>;
+  clearRecoveredRemoteHeads(cloudProjectId: string): Promise<CloudSyncState>;
+  removeRecoveredRemoteHead(cloudProjectId: string, snapshotId: string): Promise<CloudSyncState>;
+  retryOutbox(): Promise<CloudSyncState>;
+  onChanged(callback: () => void): () => void;
+}
+
 export interface PlatformAdapter {
   /**
    * Stable, non-secret identity for the backing Core/account used to scope
@@ -62,6 +228,8 @@ export interface PlatformAdapter {
   /** Optional prior generation, validated by shared UI before recovery. */
   loadLayoutBackup?(projectId: number): Promise<unknown | null>;
   saveLayout?(projectId: number, layout: unknown, options?: { preserveBackup?: boolean }): Promise<void>;
+  /** Desktop-only complete-project cloud-folder transport. Browser hosts omit it. */
+  readonly cloudSync?: CloudSyncHost;
   /** True on Electron desktop (enables local-only features like Dexter's Room). */
   readonly isDesktop: boolean;
 }
