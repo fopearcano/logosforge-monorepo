@@ -27,6 +27,13 @@ const SEVERITY = Object.freeze({
 //   untrusted user cannot provide the amplified globparts described by the
 //   advisory. npm's suggested force fix would downgrade electron-builder;
 //   upstream has not yet exposed minimatch 11.0.1 through compatible ranges.
+// - picomatch is reached only through Vite and tsup development/build tooling.
+//   The latest published picomatch release is still 4.0.7, which is inside the
+//   affected range, so no patched npm release exists yet. LogosForge supplies
+//   the repository-authored build globs; external users cannot submit the
+//   repeated extglobs described by the advisory. It is never packaged into the
+//   desktop runtime. Remove this exception as soon as picomatch >4.0.7 is
+//   published through compatible Vite/tsup dependency ranges.
 //
 // The production-only audit below must remain clean, and any other advisory —
 // including a severity change for either exception — still fails the gate.
@@ -46,6 +53,10 @@ const TEMPORARY_DEV_ADVISORIES = new Map([
   [
     'https://github.com/advisories/GHSA-g3hv-75wg-m249',
     { dependency: 'minimatch', severity: 'moderate' },
+  ],
+  [
+    'https://github.com/advisories/GHSA-fc5q-39xc-vjpf',
+    { dependency: 'picomatch', severity: 'high' },
   ],
 ]);
 
