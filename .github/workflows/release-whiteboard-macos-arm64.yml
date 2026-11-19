@@ -1,0 +1,451 @@
+name: Release — LogosForge Whiteboard (macOS, Apple Silicon)
+
+# Manual Apple Silicon release repair/build. This workflow intentionally runs
+# only on GitHub's current hosted macOS arm64 image; it never targets the
+# self-hosted Monterey Intel runner used by release-whiteboard-macos.yml.
+on:
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Attach the verified Apple Silicon DMG to the existing prerelease"
+        type: boolean
+        default: false
+      release_tag:
+        description: "Existing Whiteboard tag to build"
+        type: string
+        required: true
+        default: "whiteboard-v0.1.22"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-whiteboard-macos-arm64-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+jobs:
+  build-macos-apple-silicon:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Verify GitHub-hosted Apple Silicon runner
+        run: |
+          set -euo pipefail
+          if [ "${RUNNER_ENVIRONMENT:-}" != "github-hosted" ]; then
+            echo "::error::This release must run on a GitHub-hosted runner."
+            exit 1
+          fi
+          host_arch="$(uname -m)"
+          if [ "$host_arch" != "arm64" ]; then
+            echo "::error::Apple Silicon release requires native arm64; runner reported $host_arch."
+            exit 1
+          fi
+          host_version="$(sw_vers -productVersion)"
+          echo "GitHub-hosted Apple Silicon runner: macOS $host_version ($host_arch)"
+
+      - name: Checkout exact Whiteboard release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (Node 24)
+        with:
+          ref: ${{ inputs.release_tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up native Node.js 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0 (Node 24)
+        with:
+          node-version: "22.23.3"
+          architecture: arm64
+
+      - name: Set up native Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0 (Node 24)
+        with:
+          python-version: "3.12"
+          architecture: arm64
+
+      - name: Resolve and verify release metadata
+        id: release
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          case "$RELEASE_TAG" in
+            whiteboard-v*) ;;
+            *) echo "::error::Release tag must start with whiteboard-v."; exit 1 ;;
+          esac
+          git check-ref-format "refs/tags/$RELEASE_TAG" >/dev/null || {
+            echo "::error::Invalid release tag: $RELEASE_TAG"
+            exit 1
+          }
+          tag_commit="$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")"
+          source_sha="$(git rev-parse HEAD)"
+          if [ "$source_sha" != "$tag_commit" ]; then
+            echo "::error::Checkout mismatch: expected $tag_commit, found $source_sha."
+            exit 1
+          fi
+
+          version="$(node - <<'NODE'
+          const fs = require('node:fs');
+          const pkg = JSON.parse(fs.readFileSync('whiteboard-desktop/desktop/package.json', 'utf8'));
+          const lock = JSON.parse(fs.readFileSync('whiteboard-desktop/desktop/package-lock.json', 'utf8'));
+          const versions = [pkg.version, lock.version, lock.packages?.['']?.version];
+          if (versions.some((value) => typeof value !== 'string') || new Set(versions).size !== 1) {
+            console.error('::error::Whiteboard package versions are inconsistent: ' + JSON.stringify(versions));
+            process.exit(1);
+          }
+          process.stdout.write(pkg.version);
+          NODE
+          )"
+          expected_tag="whiteboard-v${version}"
+          notes_path="whiteboard-desktop/release-notes/${expected_tag}.md"
+          if [ "$RELEASE_TAG" != "$expected_tag" ]; then
+            echo "::error::Tag $RELEASE_TAG does not match package version $version."
+            exit 1
+          fi
+          [ -s "$notes_path" ] || { echo "::error::Missing release notes: $notes_path"; exit 1; }
+          {
+            echo "version=$version"
+            echo "tag=$RELEASE_TAG"
+            echo "source_sha=$source_sha"
+            echo "notes_path=$notes_path"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Require the existing published prerelease
+        if: inputs.publish_release == true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from urllib.parse import quote
+          from urllib.request import Request, urlopen
+
+          repo = os.environ["REPOSITORY"]
+          tag = os.environ["RELEASE_TAG"]
+          request = Request(
+              f"https://api.github.com/repos/{repo}/releases/tags/{quote(tag, safe='')}",
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}",
+                  "X-GitHub-Api-Version": "2022-11-28",
+                  "User-Agent": "LogosForge-arm64-release-preflight/1",
+              },
+          )
+          with urlopen(request, timeout=30) as response:
+              release = json.load(response)
+          if release.get("tag_name") != tag:
+              raise SystemExit("::error::Resolved release tag does not match the requested tag.")
+          if release.get("draft") is not False or release.get("prerelease") is not True:
+              raise SystemExit("::error::The target must already be a published prerelease.")
+          print(f"Existing published prerelease verified: {tag} (release {release.get('id')})")
+          PY
+
+      - name: Verify native toolchain and monorepo inputs
+        run: |
+          set -euo pipefail
+          node -e 'if (process.arch !== "arm64") throw new Error(`Node architecture is ${process.arch}`)'
+          python - <<'PY'
+          import platform
+          import sys
+          if platform.machine() != "arm64":
+              raise SystemExit(f"::error::Python architecture is {platform.machine()}")
+          if sys.version_info < (3, 11):
+              raise SystemExit(f"::error::Python is too old: {sys.version}")
+          print(f"Python {sys.version.split()[0]} ({platform.machine()})")
+          PY
+          for path in \
+            logosforge \
+            whiteboard-desktop/backend/logosforge-whiteboard-backend.spec \
+            whiteboard-desktop/backend/logosforge-whiteboard-mcp.spec \
+            whiteboard-desktop/backend/smoke-frozen-mcp.py \
+            whiteboard-desktop/backend/smoke-packaged-mcp.py \
+            whiteboard-desktop/desktop/package.json \
+            whiteboard-desktop/desktop/electron-builder.yml \
+            whiteboard-desktop/desktop/scripts/whiteboard-packaged-acceptance.mjs \
+            whiteboard-desktop/scripts/check-macos-deployment-targets.py
+          do
+            [ -e "$path" ] || { echo "::error::Missing release input: $path"; exit 1; }
+          done
+
+      - name: Build and test native backend and MCP companion
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "12.0"
+        run: |
+          set -euo pipefail
+          python -m venv build-venv
+          ./build-venv/bin/python -m pip install --upgrade pip
+          ./build-venv/bin/python -m pip install "./logosforge[export]" \
+            -r whiteboard-desktop/backend/requirements.txt pytest pyinstaller
+          ./build-venv/bin/python -m pytest whiteboard-desktop/backend/tests -q
+          ./build-venv/bin/python -m compileall -q \
+            whiteboard-desktop/backend/app \
+            whiteboard-desktop/backend/whiteboard-mcp-entry.py \
+            whiteboard-desktop/backend/smoke-frozen-mcp.py \
+            whiteboard-desktop/backend/smoke-packaged-mcp.py
+          ./build-venv/bin/python -m pip check
+          cd whiteboard-desktop/backend
+          ../../build-venv/bin/python -m PyInstaller logosforge-whiteboard-backend.spec --noconfirm --clean --log-level WARN
+          ../../build-venv/bin/python -m PyInstaller logosforge-whiteboard-mcp.spec --noconfirm --clean --log-level WARN
+
+      - name: Smoke-test frozen backend
+        run: |
+          set -euo pipefail
+          data_dir="$(mktemp -d "${RUNNER_TEMP:?}/logosforge-whiteboard-arm64-smoke.XXXXXX")"
+          log_file="$data_dir/backend.log"
+          port="$(./build-venv/bin/python -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
+          nonce="$(./build-venv/bin/python -c 'import secrets; print(secrets.token_hex(16))')"
+          expected_core="$(./build-venv/bin/python -c 'import logosforge; print(logosforge.__version__)')"
+          backend="whiteboard-desktop/backend/dist/logosforge-whiteboard-backend/logosforge-whiteboard-backend"
+          cleanup() {
+            rc=$?
+            trap - EXIT INT TERM
+            if [ -n "${backend_pid:-}" ] && kill -0 "$backend_pid" 2>/dev/null; then kill "$backend_pid" 2>/dev/null || true; fi
+            if [ "$rc" -ne 0 ]; then cat "$log_file" 2>/dev/null || true; fi
+            rm -rf -- "$data_dir"
+            exit "$rc"
+          }
+          trap cleanup EXIT INT TERM
+          LOGOSFORGE_WHITEBOARD_INSTANCE_NONCE="$nonce" \
+            LOGOSFORGE_DATA_DIR="$data_dir" \
+            LOGOSFORGE_DB_PATH="$data_dir/logosforge.db" \
+            "$backend" --host 127.0.0.1 --port "$port" >"$log_file" 2>&1 &
+          backend_pid=$!
+          healthy=""
+          for attempt in $(seq 1 30); do
+            sleep 1
+            health="$(curl -fsS --max-time 2 "http://127.0.0.1:${port}/health" 2>/dev/null || true)"
+            if printf '%s' "$health" | EXPECTED_CORE="$expected_core" EXPECTED_NONCE="$nonce" \
+              ./build-venv/bin/python -c 'import json,os,sys; d=json.load(sys.stdin); e={"status":"ok","service":"logosforge-whiteboard-backend","core_version":os.environ["EXPECTED_CORE"],"instance_nonce":os.environ["EXPECTED_NONCE"]}; raise SystemExit(0 if all(d.get(k)==v for k,v in e.items()) else 1)' 2>/dev/null
+            then
+              healthy=yes
+              break
+            fi
+            kill -0 "$backend_pid" 2>/dev/null || break
+          done
+          [ "$healthy" = yes ] || { echo "::error::Frozen arm64 backend failed its health check."; exit 1; }
+          file "$backend" | grep -q 'arm64' || { echo "::error::Frozen backend is not arm64."; exit 1; }
+
+      - name: Smoke-test frozen MCP companion
+        run: >-
+          ./build-venv/bin/python whiteboard-desktop/backend/smoke-frozen-mcp.py
+          whiteboard-desktop/backend/dist/logosforge-whiteboard-backend/logosforge-whiteboard-backend
+          whiteboard-desktop/backend/dist/logosforge-whiteboard-mcp
+
+      - name: Install and test Whiteboard desktop
+        working-directory: whiteboard-desktop/desktop
+        run: |
+          set -euo pipefail
+          npm ci
+          npm test
+          node ../../.github/npm-audit-policy.mjs
+
+      - name: Build unsigned Apple Silicon DMG
+        working-directory: whiteboard-desktop/desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          MACOSX_DEPLOYMENT_TARGET: "12.0"
+        run: npm run dist:mac -- --arm64
+
+      - name: Verify packaged Apple Silicon application
+        working-directory: whiteboard-desktop/desktop
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          app="release/mac-arm64/LogosForge Whiteboard.app"
+          executable="$app/Contents/MacOS/LogosForge Whiteboard"
+          backend="$app/Contents/Resources/backend/logosforge-whiteboard-backend"
+          mcp="$app/Contents/Resources/mcp/logosforge-whiteboard-mcp"
+          dmg="release/LogosForge Whiteboard-${VERSION}-arm64.dmg"
+          for path in "$executable" "$backend" "$mcp" "$dmg"; do
+            [ -s "$path" ] || { echo "::error::Missing packaged output: $path"; exit 1; }
+          done
+          minimum="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$app/Contents/Info.plist")"
+          [ "$minimum" = "12.0.0" ] || { echo "::error::Expected macOS floor 12.0.0, found $minimum."; exit 1; }
+
+          macho_count=0
+          while IFS= read -r -d '' path; do
+            if file "$path" | grep -q 'Mach-O'; then
+              macho_count=$((macho_count + 1))
+              archs="$(lipo -archs "$path")"
+              case " $archs " in
+                *" arm64 "*) ;;
+                *) echo "::error::Mach-O file lacks arm64: $path ($archs)"; exit 1 ;;
+              esac
+            fi
+          done < <(find "$app" -type f -print0)
+          [ "$macho_count" -gt 0 ] || { echo "::error::No Mach-O files found in packaged app."; exit 1; }
+          packaged_electron="$(ELECTRON_RUN_AS_NODE=1 "$executable" -p 'process.versions.electron')"
+          case "$packaged_electron" in 43.*) ;; *) echo "::error::Expected Electron 43.x, found $packaged_electron."; exit 1 ;; esac
+          shasum -a 256 "$dmg"
+          echo "Verified $macho_count arm64 Mach-O files; Electron $packaged_electron; macOS floor $minimum."
+
+      - name: Verify packaged Mach-O deployment targets
+        run: |
+          set -euo pipefail
+          ./build-venv/bin/python whiteboard-desktop/scripts/check-macos-deployment-targets.py --self-test
+          ./build-venv/bin/python whiteboard-desktop/scripts/check-macos-deployment-targets.py \
+            "whiteboard-desktop/desktop/release/mac-arm64/LogosForge Whiteboard.app" \
+            --maximum 12.0.0
+
+      - name: Exercise packaged MCP bridge
+        run: >-
+          ./build-venv/bin/python whiteboard-desktop/backend/smoke-packaged-mcp.py
+          "whiteboard-desktop/desktop/release/LogosForge Whiteboard-${{ steps.release.outputs.version }}-arm64.dmg"
+          --timeout 120
+
+      - name: Exercise standalone packaged Whiteboard lifecycle
+        working-directory: whiteboard-desktop/desktop
+        env:
+          LOGOSFORGE_WHITEBOARD_ACCEPTANCE_EXE: ${{ github.workspace }}/whiteboard-desktop/desktop/release/mac-arm64/LogosForge Whiteboard.app/Contents/MacOS/LogosForge Whiteboard
+          LOGOSFORGE_WHITEBOARD_PACKAGED_ACCEPTANCE_ROOT: ${{ runner.temp }}/logosforge-whiteboard-arm64-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+        run: npm run test:packaged:whiteboard
+
+      - name: Prepare Apple Silicon release notes
+        id: notes
+        env:
+          SOURCE_NOTES: ${{ steps.release.outputs.notes_path }}
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/whiteboard-release-notes-arm64.md"
+          SOURCE_NOTES="$SOURCE_NOTES" OUTPUT_NOTES="$output" python - <<'PY'
+          import os
+          from pathlib import Path
+
+          source = Path(os.environ["SOURCE_NOTES"])
+          output = Path(os.environ["OUTPUT_NOTES"])
+          text = source.read_text(encoding="utf-8")
+          old_platform = (
+              "- macOS Intel x64: DMG for macOS 12 Monterey or newer. Apple Silicon and\n"
+              "  universal packages remain deferred."
+          )
+          new_platform = (
+              "- macOS Intel x64: DMG for macOS 12 Monterey or newer.\n"
+              "- macOS Apple Silicon arm64: native DMG built on GitHub's current hosted macOS runner.\n"
+              "  Universal packages remain deferred."
+          )
+          old_limit = (
+              "- Native packages are unsigned; code signing, notarization, and Apple Silicon\n"
+              "  packaging remain future work."
+          )
+          new_limit = (
+              "- Native packages are unsigned; code signing and notarization remain future\n"
+              "  work. Intel and Apple Silicon are distributed as separate DMGs."
+          )
+          if old_platform not in text or old_limit not in text:
+              raise SystemExit("::error::Release-note compatibility text did not match the reviewed source.")
+          output.write_text(
+              text.replace(old_platform, new_platform).replace(old_limit, new_limit),
+              encoding="utf-8",
+          )
+          PY
+          echo "path=$output" >> "$GITHUB_OUTPUT"
+
+      - name: Stage release asset with public filename
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          source="whiteboard-desktop/desktop/release/LogosForge Whiteboard-${VERSION}-arm64.dmg"
+          destination="whiteboard-desktop/desktop/release-assets/LogosForge.Whiteboard-${VERSION}-arm64.dmg"
+          [ -s "$source" ] || { echo "::error::Verified Apple Silicon DMG is missing: $source"; exit 1; }
+          mkdir -p "$(dirname "$destination")"
+          cp -p -- "$source" "$destination"
+          [ -s "$destination" ] || { echo "::error::Staged Apple Silicon DMG is missing: $destination"; exit 1; }
+          shasum -a 256 "$destination"
+
+      - name: Upload verified Apple Silicon candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (Node 24)
+        with:
+          name: logosforge-whiteboard-macos-arm64-${{ steps.release.outputs.version }}
+          path: whiteboard-desktop/desktop/release-assets/LogosForge.Whiteboard-${{ steps.release.outputs.version }}-arm64.dmg
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Attach Apple Silicon DMG to existing prerelease
+        if: inputs.publish_release == true
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3 (Node 24)
+        with:
+          tag_name: ${{ steps.release.outputs.tag }}
+          name: LogosForge Whiteboard ${{ steps.release.outputs.version }} (Alpha)
+          body_path: ${{ steps.notes.outputs.path }}
+          draft: false
+          prerelease: true
+          make_latest: false
+          fail_on_unmatched_files: true
+          files: whiteboard-desktop/desktop/release-assets/LogosForge.Whiteboard-${{ steps.release.outputs.version }}-arm64.dmg
+
+      - name: Verify published release asset and digest
+        if: inputs.publish_release == true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          from urllib.parse import quote
+          from urllib.request import Request, urlopen
+
+          repo = os.environ["REPOSITORY"]
+          tag = os.environ["RELEASE_TAG"]
+          version = os.environ["VERSION"]
+          token = os.environ["GITHUB_TOKEN"]
+          asset_name = f"LogosForge.Whiteboard-{version}-arm64.dmg"
+          local = Path("whiteboard-desktop/desktop/release-assets") / asset_name
+          request = Request(
+              f"https://api.github.com/repos/{repo}/releases/tags/{quote(tag, safe='')}",
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {token}",
+                  "X-GitHub-Api-Version": "2022-11-28",
+                  "User-Agent": "LogosForge-arm64-release-verifier/1",
+              },
+          )
+          with urlopen(request, timeout=30) as response:
+              release = json.load(response)
+          matches = [item for item in release.get("assets", []) if item.get("name") == asset_name]
+          if len(matches) != 1:
+              raise SystemExit(f"::error::Expected one published {asset_name}, found {len(matches)}.")
+          asset = matches[0]
+          local_size = local.stat().st_size
+          local_digest = "sha256:" + hashlib.sha256(local.read_bytes()).hexdigest()
+          if asset.get("state") != "uploaded" or asset.get("size") != local_size:
+              raise SystemExit("::error::Published Apple Silicon asset state or size is invalid.")
+          if asset.get("digest") != local_digest:
+              raise SystemExit(
+                  f"::error::Published digest mismatch: expected {local_digest}, found {asset.get('digest')}."
+              )
+          if "Apple Silicon arm64" not in release.get("body", ""):
+              raise SystemExit("::error::Release body does not advertise the Apple Silicon build.")
+          print(f"Verified {asset_name}: {local_digest}")
+          PY
+
+      - name: Summarize Apple Silicon release
+        if: always()
+        env:
+          PUBLISH: ${{ inputs.publish_release }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          {
+            echo "### Whiteboard Apple Silicon"
+            echo
+            echo "- Runner: GitHub-hosted macos-latest (arm64)"
+            echo "- Tag: \`${RELEASE_TAG:-unresolved}\`"
+            echo "- Asset: \`LogosForge.Whiteboard-${VERSION:-unknown}-arm64.dmg\`"
+            echo "- Published: \`${PUBLISH}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
